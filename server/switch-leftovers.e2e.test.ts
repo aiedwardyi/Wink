@@ -1,7 +1,8 @@
-// An engine switch carries what the last turn left open: its unkept "I'll" lines and the
-// questions a steer talked over, filed in the asks list the next engine already reads.
+// An engine switch carries what the last turn may have left open: its "I'll" lines and the
+// questions no reply answered, filed unchecked in the asks list the next engine already reads.
+// Nothing a reply says closes one: the next engine checks, then closes it or sets it building by ID.
 import type { ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
@@ -23,6 +24,7 @@ const EXPORT = "I'll run the data export in the background.";
 let child: ChildProcess;
 let home: string;
 let prompts: string;
+let dump: string;
 let stderr = "";
 
 type Body = { text: string } | { modelSelection: { instanceId: string; model: string } };
@@ -44,6 +46,16 @@ const waitFor = async (predicate: () => Promise<boolean>, what: string) => {
 };
 const sent = () => existsSync(prompts) ? readFileSync(prompts, "utf8").split("\n").filter(Boolean).map((line) => z.object({ text: z.string() }).parse(JSON.parse(line)).text) : [];
 const asks = (threadId: string) => readTaskResumePacket(threadId, { dir: join(home, ".orbit", "task-state") })?.asks ?? [];
+/** What the engine's update_task_state call does, with the token its turn was handed. */
+const updateAsks = async (botId: string, threadId: string, updates: { id: string; status: string; ref?: string }[]) => {
+  const token = JSON.parse(readFileSync(dump, "utf8")).mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
+  const res = await globalThis.fetch(`${BASE}/api/internal/task-state`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ fromBotId: botId, fromThreadId: threadId, asks: updates }),
+  });
+  expect(res.status).toBe(200);
+};
 
 async function bot(instanceId: string, model: string): Promise<{ id: string; threadId: string }> {
   const created = (await api("POST", "/api/bots")).body.bot;
@@ -63,8 +75,9 @@ async function claudeTurn(id: string, text: string): Promise<string> {
   return input;
 }
 /** Switches the bot to fake Claude and returns the text its first turn was sent. */
-async function switched(id: string, text: string): Promise<string> {
-  await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId: "claude", model: "claude-fake" } });
+async function switched(id: string, text: string, instanceId = "claude"): Promise<string> {
+  rmSync(dump, { force: true });
+  await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId, model: "claude-fake" } });
   return claudeTurn(id, text);
 }
 
@@ -74,6 +87,7 @@ beforeAll(async () => {
   // the user already said no to importing memory, so no turn carries an import offer
   writeFileSync(join(home, ".orbit", "about-you", "declined"), "");
   prompts = join(home, "claude-prompts.ndjson");
+  dump = join(home, "claude-dump.json");
   const leave = join(home, "claude-leave.json");
   const result = (id: string) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: "notes" }] }] } });
   // a promise, a call, then a last line that finished nothing
@@ -86,17 +100,20 @@ beforeAll(async () => {
   fixture(leave, "I'll update the picker labels.", "Back soon.");
   fixture(join(home, "claude-export.json"), EXPORT, "Back soon.");
   fixture(join(home, "claude-running.json"), EXPORT, "Export running as PID 4128, leave it alone.");
+  // a reply that says the work is done: only the ID update closes anything
+  fixture(join(home, "claude-done.json"), "Checking the transcript and files first.", "The keyboard shortcuts are in GUIDE.md. I updated the picker labels.");
   const claude = (environment: Record<string, string>) => ({ driver: "claudeAgent", environment: { FAKE_CLAUDE_PROMPT_LOG: prompts, ...environment }, config: { cli: `"${process.execPath}" "${FAKE_CLAUDE}"`, permissionMode: "bypassPermissions" } });
   const codex = (environment: Record<string, string>) => ({ driver: "codex", environment, config: { cli: `"${process.execPath}" "${FAKE_CODEX}"` } });
   writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({
     instances: {
       // two promises in commentary, then a steered color question the final answers alone
       codex: codex({ FAKE_CODEX_MODE: "steer", FAKE_CODEX_COMMENTARY: JSON.stringify([{ text: ANSWER, phase: "commentary" }, { text: PICKER, phase: "commentary" }]), FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "Blue.", phase: "final_answer" }]) }),
+      codexPlain: codex({ FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "You're welcome.", phase: "final_answer" }]) }),
       codexLogs: codex({ FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "I'll check the logs first.", phase: "commentary" }, { text: "Logs are clean.", phase: "final_answer" }]) }),
       // a promise in hidden notes and a question a steer talked over, then another engine that answers and finishes both
       codexLeave: codex({ FAKE_CODEX_MODE: "steer", FAKE_CODEX_COMMENTARY: JSON.stringify([{ text: "I'll update the picker labels.", phase: "commentary" }]), FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "Blue.", phase: "final_answer" }]) }),
-      codexDone: codex({ FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "The keyboard shortcuts are in GUIDE.md. I updated the picker labels.", phase: "final_answer" }]) }),
-      claude: claude({}),
+      claude: claude({ FAKE_CLAUDE_DUMP: dump }),
+      claudeDone: claude({ FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_REPLY_FIXTURE: join(home, "claude-done.json") }),
       claudeLeave: claude({ FAKE_CLAUDE_REPLY_FIXTURE: leave }),
       claudeExport: claude({ FAKE_CLAUDE_REPLY_FIXTURE: join(home, "claude-export.json") }),
       claudeRunning: claude({ FAKE_CLAUDE_REPLY_FIXTURE: join(home, "claude-running.json") }),
@@ -122,7 +139,7 @@ beforeAll(async () => {
   await waitFor(async () => Boolean((await globalThis.fetch(`${BASE}/api/health`).catch(() => null))?.ok), "the server");
   await waitFor(async () => {
     const instances = (await api("GET", "/api/instances")).body.instances;
-    return ["codex", "codexLogs", "codexLeave", "codexDone", "claude", "claudeLeave", "claudeExport", "claudeRunning"].every((id) => instances.find((row: any) => row.instanceId === id)?.snapshot.state === "available");
+    return ["codex", "codexPlain", "codexLogs", "codexLeave", "claude", "claudeDone", "claudeLeave", "claudeExport", "claudeRunning"].every((id) => instances.find((row: any) => row.instanceId === id)?.snapshot.state === "available");
   }, "the engines");
 }, 60_000);
 
@@ -135,7 +152,7 @@ afterAll(async () => {
   removeTestData(home);
 });
 
-it("carries Codex's two unkept promises to Claude's first turn after a steered question took the reply", async () => {
+it("carries Codex's two promises and the questions no reply answered to Claude's first turn, unchecked", async () => {
   const { id, threadId } = await bot("codex", "gpt-fake-default");
   const first = "How does Wink keep my work when I switch models? Also keep the picker changes moving: 60 fps clips, font, label numbers.";
   expect((await api("POST", `/api/bots/${id}/messages`, { text: first })).status).toBe(202);
@@ -144,46 +161,67 @@ it("carries Codex's two unkept promises to Claude's first turn after a steered q
   expect(steer.body).toMatchObject({ steered: true });
   await waitFor(async () => (await getBot(id)).busy === false, "the Codex turn to settle");
   expect((await getBot(id)).messages.some((row: any) => row.text === "Blue.")).toBe(true);
+  expect(asks(threadId).map((ask) => [ask.ask.slice(0, 30), ask.status, ask.kind])).toEqual([
+    [ANSWER.slice(0, 30), "open", "promise"],
+    [PICKER.slice(0, 30), "open", "promise"],
+    ["How does Wink keep my work whe", "open", undefined],
+    ["What color should the ramp be?", "open", undefined],
+  ]);
 
   const input = await switched(id, "ok");
-  const list = input.slice(input.indexOf(ASKS_LIST)).split("\n");
-  expect(input).toContain(ASKS_LIST);
-  expect(list).toEqual(expect.arrayContaining([
-    expect.stringMatching(/^- A\d+ open promise \d\d-\d\d: I'll answer the model-switch question/),
-    expect.stringMatching(/^- A\d+ open promise \d\d-\d\d: I'll keep the picker changes moving\.$/),
+  expect(input).toContain("check the transcript, files and running processes first");
+  expect(input.split("\n")).toEqual(expect.arrayContaining([
+    expect.stringMatching(/^- A\d+ open promise unchecked \d\d-\d\d: I'll answer the model-switch question/),
+    expect.stringMatching(/^- A\d+ open promise unchecked \d\d-\d\d: I'll keep the picker changes moving\.$/),
   ]));
-  // the switch question is the answer promise, never a second item
-  expect(asks(threadId).filter((ask) => ask.status === "open")).toHaveLength(2);
 
   // the next turns file nothing again
   await turn(id, "thanks");
-  expect(asks(threadId).filter((ask) => ask.status === "open")).toHaveLength(2);
+  expect(asks(threadId).filter((ask) => ask.status === "open")).toHaveLength(4);
 }, 90_000);
 
-it("files nothing when the turn did what it said, and the next engine gets no asks list", async () => {
-  const { id, threadId } = await bot("codexLogs", "gpt-fake-default");
-  await turn(id, "Check the logs please");
+it("files nothing on an ordinary turn, and the next engine gets no asks list", async () => {
+  const { id, threadId } = await bot("codexPlain", "gpt-fake-default");
+  await turn(id, "Thanks again");
   expect(asks(threadId)).toEqual([]);
   const input = await switched(id, "thanks");
   expect(input).not.toContain(ASKS_LIST);
   if (process.env.LEFTOVERS_PROMPT_OUT) writeFileSync(process.env.LEFTOVERS_PROMPT_OUT, input);
 }, 90_000);
 
-it("closes what the next engine answered and finished, so switching back carries nothing", async () => {
+it("shows finished work once, unchecked, and the engine that checks closes it by ID so it is never redone", async () => {
   const { id, threadId } = await bot("codexLeave", "gpt-fake-default");
   expect((await api("POST", `/api/bots/${id}/messages`, { text: "Where are the keyboard shortcuts documented?" })).status).toBe(202);
   await waitFor(async () => (await getBot(id)).messages.some((row: any) => row.text === "I'll update the picker labels."), "Codex's promise");
   expect((await api("POST", `/api/bots/${id}/messages`, { text: "What color should the ramp be?" })).body).toMatchObject({ steered: true });
   await waitFor(async () => (await getBot(id)).busy === false, "the Codex turn to settle");
-  expect(asks(threadId).map((ask) => [ask.ask, ask.status])).toEqual([["I'll update the picker labels.", "open"], ["Where are the keyboard shortcuts documented?", "open"]]);
+  const filed = asks(threadId);
+  expect(filed.map((ask) => [ask.ask, ask.status])).toEqual([["I'll update the picker labels.", "open"], ["Where are the keyboard shortcuts documented?", "open"], ["What color should the ramp be?", "open"]]);
 
-  await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId: "codexDone", model: "gpt-fake-default" } });
-  await turn(id, "go on");
-  const input = await switched(id, "ok");
-  expect(input).not.toContain(ASKS_LIST);
-  expect(asks(threadId).map((ask) => ask.status)).toEqual(["done", "done"]);
+  // Claude says it is done; the words close nothing
+  const input = await switched(id, "go on", "claudeDone");
+  expect(input).toMatch(/^- A1 open promise unchecked \d\d-\d\d: I'll update the picker labels\.$/m);
+  expect(asks(threadId).map((ask) => ask.status)).toEqual(["open", "open", "open"]);
+  // its update_task_state call does
+  await updateAsks(id, threadId, filed.map((ask) => ({ id: ask.id, status: "done" })));
+  expect(asks(threadId).map((ask) => ask.status)).toEqual(["done", "done", "done"]);
+
+  const back = await switched(id, "ok");
+  expect(back).not.toContain(ASKS_LIST);
+  expect(back).not.toContain("unchecked");
   await turn(id, "thanks");
-  expect(asks(threadId).map((ask) => ask.status)).toEqual(["done", "done"]);
+  expect(asks(threadId).map((ask) => ask.status)).toEqual(["done", "done", "done"]);
+}, 90_000);
+
+it("files in-turn work the turn reported as one unchecked line, closed by ID on the next turn", async () => {
+  const { id, threadId } = await bot("codexLogs", "gpt-fake-default");
+  await turn(id, "Check the logs please");
+  expect(asks(threadId)).toMatchObject([{ id: "A1", ask: "I'll check the logs first.", status: "open", kind: "promise" }]);
+  const input = await switched(id, "thanks");
+  expect(input).toMatch(/^- A1 open promise unchecked \d\d-\d\d: I'll check the logs first\.$/m);
+  await updateAsks(id, threadId, [{ id: "A1", status: "done" }]);
+  expect(await claudeTurn(id, "ok")).not.toContain("I'll check the logs first.");
+  expect(asks(threadId)).toMatchObject([{ id: "A1", status: "done" }]);
 }, 90_000);
 
 it("gives a resumed session what its last turn left open, once", async () => {
@@ -191,19 +229,24 @@ it("gives a resumed session what its last turn left open, once", async () => {
   await turn(id, "Keep going on the picker");
   expect(asks(threadId)).toMatchObject([{ id: "A1", ask: "I'll update the picker labels.", status: "open", kind: "promise" }]);
   const next = await claudeTurn(id, "ok");
-  expect(next).toMatch(/^- A1 open promise \d\d-\d\d: I'll update the picker labels\.$/m);
+  expect(next).toMatch(/^- A1 open promise unchecked \d\d-\d\d: I'll update the picker labels\.$/m);
   expect(await claudeTurn(id, "thanks")).not.toContain("I'll update the picker labels.");
   expect(asks(threadId)).toHaveLength(1);
 }, 90_000);
 
-it("tells the next engine a filed job a later turn started is running, never to start it", async () => {
+it("never marks a filed job building from a running line; the next engine checks and sets it building by ID", async () => {
   const { id, threadId } = await bot("claudeExport", "claude-fake");
   await turn(id, "Export the data");
   expect(asks(threadId)).toMatchObject([{ id: "A1", ask: EXPORT, status: "open", kind: "promise" }]);
   await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId: "claudeRunning", model: "claude-fake" } });
   await turn(id, "go on");
-  expect(asks(threadId)).toMatchObject([{ id: "A1", status: "building", ref: "Export running as PID 4128" }]);
+  expect(asks(threadId)).toEqual([expect.objectContaining({ id: "A1", status: "open" })]);
+  expect(asks(threadId)[0]).not.toHaveProperty("ref");
   const input = await switched(id, "ok");
-  expect(input).toMatch(/^- A1 building promise \d\d-\d\d: I'll run the data export in the background\. \(Export running as PID 4128\)$/m);
-  expect(input).toContain("never start it again");
+  expect(input).toMatch(/^- A1 open promise unchecked \d\d-\d\d: I'll run the data export in the background\.$/m);
+  expect(input).toContain("Export running as PID 4128");
+  expect(input).toContain("never start one twice");
+  await updateAsks(id, threadId, [{ id: "A1", status: "building", ref: "PID 4128" }]);
+  expect(asks(threadId)).toMatchObject([{ id: "A1", status: "building", ref: "PID 4128" }]);
+  expect(await claudeTurn(id, "status?")).toMatch(/^- A1 building promise \d\d-\d\d: I'll run the data export in the background\. \(PID 4128\)$/m);
 }, 90_000);

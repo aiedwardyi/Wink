@@ -54,8 +54,8 @@ export const isStatusTurn = (text: string): boolean => STATUS_TURN.test(text);
 export const isOpenAsk = (ask: TaskAsk): boolean => ask.status !== "done" && ask.status !== "declined";
 const isQuestion = (ask: TaskAsk) => ask.kind === "question";
 const isPromise = (ask: TaskAsk) => ask.kind === "promise";
-const isRunning = (ask: TaskAsk) => isPromise(ask) && ask.status === "building";
-const RUNNING_NOTE = " One building is already running: check on it, never start it again.";
+// what Wink filed from a turn's words is unchecked: only an engine that looked closes it, by ID
+const CHECK = "check the transcript, files and running processes first, then close each by ID or set it building with the job's ref through update_task_state; never start one twice.";
 const QUESTION_MARK = /[?？]$/;
 const isParked = (ask: TaskAsk, now: number) => isOpenAsk(ask) && ask.until !== undefined && ask.until > now;
 // a skipped question waits for a natural pause, so it never nags an ordinary turn
@@ -142,58 +142,38 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
   return { asks, lastAskId };
 }
 
-const ASKED = new Set("a an the i me my you your we us our it its this that to of for on in at with from and or is are was were be do does did have has will would can could should shall may might must what why how when where which who ll s".split(" "));
-// every word of any length, "the API" and "CI" too
-const gist = (text: string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((word) => !ASKED.has(word)).map((word) => word.replace(/(?<=[a-z]{3})s$/, "")));
-// #2073's: "PC A" and "PC B", or 4 pm and 5 pm: a number or one-letter name only one of them has keeps them apart
-const marks = (text: string) => [...new Set(text.replace(/\b(\d{1,2}):00\b/g, "$1").match(/\p{N}+|(?<![\p{L}\p{N}'’])\p{Lu}(?![\p{L}\p{N}'’])/gu)?.filter((mark) => mark !== "I"))].sort().join(" ");
+// a repeat is the same words of the same kind; "I'll update the icon and layout" is new work beside a done "update the icon"
+const same = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
+// a narrated turn files its first few; the rest wait in the transcript the next engine reads
+const MAX_TURN_PROMISES = 3;
 
-// #2073's: a promise's words after "I'll" are all in the other's or theirs in its, so "update the main desktop toolbar icon" is never "... layout"
-const clause = (text: string) => gist(text.replace(/^.*?\bi(?:['’]ll| will)\b/i, ""));
-const within = (a: string, b: string) => {
-  const [p, q] = [clause(a), clause(b)];
-  return [...p].every((term) => q.has(term)) || [...q].every((term) => p.has(term));
-};
-
-// a reworded repeat: most of the shorter one's words, or between a question and an ask three and half of them
-function sameAsk(a: string, b: string, promises: boolean, promise: boolean): boolean {
-  const [x, y] = [gist(a), gist(b)];
-  const least = Math.min(x.size, y.size);
-  const shared = [...x].filter((term) => y.has(term)).length;
-  return words(a) === words(b) || (least > 0 && marks(a) === marks(b) && (!promise || within(a, b)) && (shared >= 0.8 * least || (!promises && shared >= 3 && shared * 2 >= least)));
-}
-
-/** Closes the settled ids or narrows them to what is left, then files what a turn left open, a promise as kind promise, building with its line when it said the work is running, and the user's question as their ask; one an ask already has, open, done or declined, stays that ask, and goes building when it is the running one. Null when nothing changes. */
-export function fileLeftovers(book: AskBook | undefined, left: readonly { ask: string; promise?: true; running?: string }[], now: number, settled: readonly { id: string; ask?: string }[] = []): SavedAsks | null {
+/** Files what a turn may have left open, unchecked: a promise as kind promise with any running line as its ref, never its status, and the user's question as their ask. It only adds: a filed ask, open, done or declined, takes nothing but an exact repeat. Null when nothing changes. */
+export function fileLeftovers(book: AskBook | undefined, left: readonly { ask: string; promise?: true; note?: string }[], now: number): SavedAsks | null {
   const asks = (book?.asks ?? []).map((item) => ({ ...item }));
-  let lastAskId = lastAskIdOf(book);
-  let changed = false;
-  for (const item of asks) {
-    const done = isOpenAsk(item) ? settled.find(({ id }) => id === item.id) : undefined;
-    if (!done) continue;
-    // shown 0: what changed rides to the next turn, so no engine redoes the finished part
-    Object.assign(item, done.ask ? { ask: clip(done.ask, ASK_LIMITS.ask), changedAt: now, shown: 0 } : { status: "done", changedAt: now });
-    changed = true;
-  }
+  const first = lastAskIdOf(book);
+  let lastAskId = first;
+  const promises: TaskAsk[] = [];
+  let more = 0;
   for (const item of left) {
     // a long question keeps its "?" so a later turn still reads it as one
     const mark = item.promise ? undefined : QUESTION_MARK.exec(item.ask.trim())?.[0];
     const ask = mark ? `${clip(item.ask.trim().slice(0, -1), ASK_LIMITS.ask - 1)}${mark}` : clip(item.ask, ASK_LIMITS.ask);
-    const repeat = ask ? asks.find((filed) => sameAsk(filed.ask, ask, isPromise(filed) && item.promise === true, item.promise === true)) : undefined;
-    if (repeat && item.running && isOpenAsk(repeat) && repeat.status !== "building") {
-      Object.assign(repeat, { status: "building", ref: clip(item.running, ASK_LIMITS.ref), changedAt: now, shown: 0 });
-      changed = true;
+    if (!ask || asks.some((filed) => isPromise(filed) === Boolean(item.promise) && !isQuestion(filed) && same(filed.ask) === same(ask))) continue;
+    if (item.promise && promises.length === MAX_TURN_PROMISES) {
+      more += 1;
+      continue;
     }
-    if (!ask || repeat) continue;
     lastAskId += 1;
     // shown 0: no turn showed it yet, so the next one does, resumed or not
-    const filed: TaskAsk = { id: `A${lastAskId}`, ask, status: item.running ? "building" : "open", shown: 0, at: now, changedAt: now };
+    const filed: TaskAsk = { id: `A${lastAskId}`, ask, status: "open", shown: 0, at: now, changedAt: now };
     if (item.promise) filed.kind = "promise";
-    if (item.running) filed.ref = clip(item.running, ASK_LIMITS.ref);
+    if (item.note) filed.ref = clip(item.note, ASK_LIMITS.ref);
     asks.push(filed);
-    changed = true;
+    if (item.promise) promises.push(filed);
   }
-  if (!changed) return null;
+  const lastPromise = promises.at(-1);
+  if (lastPromise && more) lastPromise.ref = clip(`${lastPromise.ref ? `${lastPromise.ref}; ` : ""}${more} more "I'll" in that turn's transcript`, ASK_LIMITS.ref);
+  if (lastAskId === first) return null;
   trimClosed(asks);
   return { asks, lastAskId };
 }
@@ -216,9 +196,9 @@ function day(at: number): string {
   return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-const askLine = (ask: TaskAsk, now: number) => isParked(ask, now)
+const askLine = (ask: TaskAsk, now: number, carried = false) => isParked(ask, now)
   ? `- ${ask.id} parked back ${day(ask.until!)}: ${ask.ask}`
-  : `- ${ask.id} ${ask.status}${ask.kind ? ` ${ask.kind}` : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
+  : `- ${ask.id} ${ask.status}${ask.kind ? ` ${ask.kind}` : ""}${carried || (isPromise(ask) && ask.status === "open") ? " unchecked" : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
 
 /** Open asks, needing a verdict first and then oldest, then parked ones by return day; past MAX_STATUS_ASKS_BYTES the least recently shown come first and the rest wait. */
 function listed(asks: readonly TaskAsk[] | undefined, now: number) {
@@ -257,7 +237,7 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, sta
   const waiting = ordered.length + parked.length - shown.length;
   const rotated = !waiting ? "" : verdictOnly ? ` ${waiting} more show on a status question.` : ` ${waiting} more wait for the next turn, least recently shown first.`;
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
-  const promises = shown.some(isPromise) ? ` A promise is your own "I'll" a turn left undone, maybe on another engine: check what exists first (this list, merged PRs, files) and close it done if it is; never redo it.${shown.some(isRunning) ? RUNNING_NOTE : ""}` : "";
+  const promises = shown.some(isPromise) ? ` A promise is your own "I'll" Wink read from a turn, maybe on another engine, and may be done or running already: ${CHECK}` : "";
   return [
     `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}${promises}]`,
     ...shown.map(line),
@@ -290,8 +270,8 @@ function named(asks: readonly TaskAsk[], text: string): TaskAsk[] {
 function leftBlock(asks: readonly TaskAsk[], now: number): string {
   if (!asks.length) return "";
   return [
-    `[Wink asks the last turn left open - ${asks.length}: check what exists first, close done ones and never redo them.${asks.some(isRunning) ? RUNNING_NOTE : ""}]`,
-    ...asks.map((ask) => askLine(ask, now)),
+    `[Wink asks the last turn may have left open, unchecked - ${asks.length}: ${CHECK}]`,
+    ...asks.map((ask) => askLine(ask, now, true)),
   ].join("\n");
 }
 

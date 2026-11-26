@@ -312,7 +312,7 @@ import { TurnWatchdog } from "./turn-watchdog.ts";
 import { foldContinuationStart, joinRunningTurn } from "./continuation-turn.ts";
 import "./pending-model.ts";
 import { botClears, groupClears } from "./wire-clears.ts";
-import { settledAsks, turnLeftovers } from "./turn-leftovers.ts";
+import { answeredRows, turnLeftovers } from "./turn-leftovers.ts";
 import { ownTurnReply, turnAddedMessage, turnSummaries, turnUnread } from "./turn-reply.ts";
 import { terminalReadGrant } from "./terminal-grant.ts";
 import { updateBridgeResponse, updateStateFromMessage } from "./update-proxy.ts";
@@ -3039,16 +3039,10 @@ function saveHarnessAsks(threadId: string, change: (book: AskBook | undefined) =
   if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
 }
 
-// what a turn said it would do or skipped rides to the next reply on any engine, and what it finished closes
+// what a turn said it would do or skipped rides to the next reply on any engine, unchecked; only an engine closes it, by ID
 function fileTurnLeftovers(threadId: string, rows: readonly Message[]): void {
-  // the message that started the turn landed before the turn's first row
-  const opening = rows[0]?.parentId ? store.row(threadId, rows[0].parentId) : undefined;
-  const turn = opening?.role === "user" ? [opening, ...rows] : rows;
-  const left = turnLeftovers(turn);
-  saveHarnessAsks(threadId, (book) => {
-    const done = settledAsks(turn, book?.asks);
-    return left.length || done.length ? fileLeftovers(book, left, Date.now(), done) : null;
-  });
+  const left = turnLeftovers([...answeredRows(rows[0], (id) => store.row(threadId, id)), ...rows]);
+  if (left.length) saveHarnessAsks(threadId, (book) => fileLeftovers(book, left, Date.now()));
 }
 
 function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }, seen: readonly TaskAsk[] = []): TaskResumePacket | null {
