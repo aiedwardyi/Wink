@@ -5278,7 +5278,8 @@ test("a user typing at a blip leaves the pane to the STALLED note", async (t) =>
 
 const UNIX_SHELLS = [["bash", process.platform === "win32" ? path.join(process.env.ProgramFiles || "C:\\Program Files", "Git", "bin", "bash.exe") : "/bin/bash"], ["zsh", "/bin/zsh"]];
 for (const [name, shell] of UNIX_SHELLS) for (const platform of ["linux", "darwin"]) {
-  test(`a ${platform} ${name} pane reads idle at its own prompt and unknown while a command runs`, { skip: !fs.existsSync(shell) }, async (t) => {
+  // The pane's own shell, args and env, read over pipes: it loads the user's file, then marks each prompt and command.
+  const marked = async (t, input) => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-unix-home-"));
     const rc = name === "zsh" ? ".zshrc" : platform === "darwin" ? ".bash_profile" : ".bashrc";
     fs.writeFileSync(path.join(home, rc), "PS1='user-rc$ '\n");
@@ -5288,7 +5289,6 @@ for (const [name, shell] of UNIX_SHELLS) for (const platform of ["linux", "darwi
     t.after(async () => { await f.host.dispose(); fs.rmSync(home, { recursive: true, force: true }); });
     await f.host.openForBot("bot-1", { label: "shell" });
     const child = f.children[0];
-    // The pane's own shell, args and env, read over pipes: it loads the user's file, then marks each prompt and command.
     const output = await new Promise((resolve, reject) => {
       const run = spawn(child.shell, [...child.args, "-i"], { cwd: home, env: child.options.env, windowsHide: true });
       let text = "";
@@ -5296,20 +5296,38 @@ for (const [name, shell] of UNIX_SHELLS) for (const platform of ["linux", "darwi
       run.stderr.on("data", (chunk) => { text += chunk; });
       run.on("error", reject);
       run.on("close", () => resolve(text));
-      run.stdin.end("true\nexit\n");
+      run.stdin.end(input);
     });
     assert.match(output, /user-rc\$ /);
     // Bash writes the prompt mark to stdout and PS0 to stderr, so only each kind's own order is fixed.
     const marks = output.match(/\x1b\]133;[CD];[^\x07]*\x07/g) ?? [];
     const [prompts, starts] = ["D", "C"].map((kind) => marks.filter((mark) => mark[6] === kind));
+    return { child, prompts, starts, output, unknown: () => f.host.livePanesForAccount("claude").unknown };
+  };
+
+  test(`a ${platform} ${name} pane reads idle at its own prompt and unknown while a command runs`, { skip: !fs.existsSync(shell) }, async (t) => {
+    const { child, prompts, starts, output, unknown } = await marked(t, "true\nexit\n");
     assert.ok(prompts.length >= 2 && starts.length >= 1, JSON.stringify(output.slice(-300)));
-    const unknown = () => f.host.livePanesForAccount("claude").unknown;
     assert.equal(unknown(), 1);
     child.data(prompts[0]);
     assert.equal(unknown(), 0);
     child.data(starts[0]);
     assert.equal(unknown(), 1);
     child.data(prompts[1]);
+    assert.equal(unknown(), 0);
+  });
+
+  test(`a ${platform} ${name} pane stays unknown at its prompt while a background job runs`, { skip: !fs.existsSync(shell) }, async (t) => {
+    // The job outlives the next prompt and is gone by the one after "sleep 2".
+    const { child, prompts, output, unknown } = await marked(t, "sleep 1 &\ntrue\nsleep 2\nexit\n");
+    assert.ok(prompts.length >= 4, JSON.stringify(output.slice(-300)));
+    child.data(prompts[0]);
+    assert.equal(unknown(), 0);
+    child.data(prompts[1]);
+    assert.equal(unknown(), 1);
+    child.data(prompts[2]);
+    assert.equal(unknown(), 1);
+    child.data(prompts[3]);
     assert.equal(unknown(), 0);
   });
 }

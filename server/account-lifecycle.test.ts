@@ -1277,6 +1277,16 @@ describe("account HTTP routes", () => {
     expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(true);
   });
 
+  it("refuses a stale single-account Sign Out on the instance route before the provider runs", async () => {
+    const f = await fixture(vi.fn());
+    f.statuses.set("codex", { state: "available", authenticated: true, account: "replacement@example.test" });
+    await f.registry.describe({ refresh: true });
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/instances/codex/sign-out", { login: "first@example.test" })).toMatchObject({ status: 409, body: { code: "login-changed" } });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(false);
+    expect(f.registry.accountAvailable("codex", true)).toBe(true);
+  });
+
   it("uses the same removal guard for legacy managed-instance sign-out", async () => {
     const f = await fixture();
     const added = await f.add();

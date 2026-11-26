@@ -32,7 +32,7 @@ export function useUsageBoard() {
     invalidateUsageBoard();
   }, [key, preview]);
   const board = useSyncExternalStore(preview ? cachedBoard : subscribeUsageBoard, usageBoardState, usageBoardState);
-  const signIns = board.board?.engines.flatMap((engine) => engine.accounts.map((account) => `${account.id}\u0000${account.signIn}`)).join("\u0001") ?? null;
+  const signIns = board.board?.engines.flatMap((engine) => engine.accounts.map((account) => `${account.id}\u0000${account.signIn}\u0000${account.login ?? 0}`)).join("\u0001") ?? null;
   useEffect(() => {
     if (preview || signIns === null || seenSignIns === signIns) return;
     const changed = seenSignIns !== null;

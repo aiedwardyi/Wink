@@ -497,6 +497,17 @@ it("reloads the engine rows once when the board shows a sign-in another client c
   expect(reloads()).toBe(before + 1);
 });
 
+it("reloads the engine rows once when the board shows one login replaced by another", async () => {
+  await mount();
+  const reloads = () => calls.filter((call) => call.path === "/api/instances").length;
+  const before = reloads();
+  board.engines[0]!.accounts[0]!.login = 1;
+  board.revision += 1;
+  await act(async () => m.client.usageBoardFrame(board.revision));
+  await settle();
+  expect(reloads()).toBe(before + 1);
+});
+
 it("shows a base signed in as an added account once, as Usage does", async () => {
   const claude = board.engines[0]!;
   const kept = claude.accounts.filter((account) => account.id !== "claude");

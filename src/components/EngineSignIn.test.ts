@@ -386,7 +386,7 @@ describe("engine sign-in row", () => {
     expect(host.querySelector("[data-account-row]")!.textContent).toBe("codexSign Out");
     expect(host.querySelector("input, select, code, a")).toBeNull();
     await click("Sign Out");
-    expect(fetchMock).toHaveBeenCalledWith("/api/instances/codex/sign-out", expect.objectContaining({ method: "POST", body: "{}" }));
+    expect(fetchMock).toHaveBeenCalledWith("/api/instances/codex/sign-out", expect.objectContaining({ method: "POST", body: '{"login":""}' }));
     expect(host.textContent).toContain("Sign In");
     expect(host.textContent).not.toContain("Connected");
   });

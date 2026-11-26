@@ -42,6 +42,8 @@ export type UsageBoardAccount = {
   bots: UsageBoardBot[];
   // null means unknown (host miss or old host), never "no workers".
   workers: UsageBoardRun[] | null;
+  // Counts this boot's sign-in changes, so a client sees one login replace another without being told either.
+  login?: number;
   // Runs on the saved OpenAI key: no plan windows, never Main.
   credit?: true;
   codexPromo?: true;
