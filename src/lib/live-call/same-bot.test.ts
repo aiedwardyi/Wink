@@ -279,6 +279,72 @@ it("its own voice transcribed after the read ended is still its own, and what he
     }
   });
 
+  it("a sound during the read that Google gives no turn does not hold back his answer after it", async () => {
+    const question = "Should I go ahead and deploy it, or keep the old build?";
+    for (const during of ["", "should i go ahead and deploy it"]) {
+      for (const his of ["Yes.", "Okay.", "네.", "Go ahead.", "Deploy it.", "Keep the old build."]) {
+        const s = await started();
+        answered(s, question);
+        s.engine().events.answering();
+        s.engine().events.audio(new Int16Array(4));
+        s.engine().events.said(question);
+        s.engine().events.turnDone();
+        s.audio.mic!(loudFrame());
+        if (during) s.engine().events.heard(during);
+        s.audio.flush();
+        s.audio.onIdle();
+        say(s, his);
+        expect(s.sent).toEqual(["tell me", his]);
+      }
+    }
+    const s = await started();
+    answered(s, "First I checked the build. Then I ran the tests. Finally I looked at the deploy log.");
+    for (const part of ["First I checked the build.", "Then I ran the tests.", "Finally I looked at the deploy log."]) {
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(part);
+      if (part.startsWith("First")) s.audio.mic!(loudFrame());
+      s.engine().events.turnDone();
+    }
+    s.audio.flush();
+    s.audio.onIdle();
+    say(s, "Yes.");
+    expect(s.sent).toEqual(["tell me", "Yes."]);
+  });
+
+  it("words held as maybe its own voice after the read are his once Google's turn for them ends, unless they go on its own words", async () => {
+    const question = "Should I go ahead and deploy it?";
+    for (const his of ["Yes, go ahead.", "Go ahead.", "Deploy it."]) {
+      const s = await started();
+      answered(s, question);
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(question);
+      s.engine().events.turnDone();
+      s.audio.mic!(loudFrame());
+      s.audio.flush();
+      s.audio.onIdle();
+      s.engine().events.heard(his);
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(["tell me", his]);
+    }
+    const s = await started();
+    answered(s, question);
+    s.engine().events.answering();
+    s.engine().events.audio(new Int16Array(4));
+    s.engine().events.said(question);
+    s.engine().events.turnDone();
+    s.audio.mic!(loudFrame());
+    s.engine().events.heard("should i go ahead and");
+    s.audio.flush();
+    s.audio.onIdle();
+    s.engine().events.heard(" deploy it");
+    s.engine().events.answering();
+    s.engine().events.turnDone();
+    expect(s.sent).toEqual(["tell me"]);
+  });
+
   it("his own words heard after the read ended still go to the bot once", async () => {
     const s = await started();
     answered(s, "A reply long enough to be read aloud for a while.");

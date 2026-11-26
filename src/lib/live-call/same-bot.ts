@@ -59,8 +59,12 @@ export class SameBotCall {
   private said = "";
   /** Heard while it reads, not yet his: it may be the voice coming back. */
   private over = "";
-  /** A sound reached Google while it read: until Google's turn for that sound ends, its words may be the voice's own, even once the read is over. */
+  /** A sound reached Google while it read: until his next sound or Google's turn for it, its words may be the voice's own, even once the read is over. */
   private overSound = false;
+  /** Its own voice already dropped from what was heard over it: a held tail that goes on it is the voice's too. */
+  private echoed = "";
+  /** What is held came after the read: his unless it goes on its own voice. */
+  private overLate = false;
   private lastSaid = "";
   /** Whose words the voice is answering: his (never played) or a [READ] it was sent. */
   private turn: "user" | "read" | null = null;
@@ -174,7 +178,10 @@ export class SameBotCall {
     this.micOpen = true;
     if (loud(pcm)) {
       if (this.speaking) this.overSound = true;
-      else this.loudAt = this.now();
+      else {
+        this.overSound = false;
+        this.loudAt = this.now();
+      }
     }
     this.engine?.sendAudio(pcm);
   }
@@ -198,7 +205,7 @@ export class SameBotCall {
       heard: (text) => {
         if (!mine()) return;
         if (this.speaking || this.overSound) return this.overlap(text);
-        this.over = "";
+        this.keepHeld();
         this.heard += text;
         this.caption("user", this.heard);
       },
@@ -220,7 +227,7 @@ export class SameBotCall {
           this.lastSaid += ` ${this.said}`;
         } else {
           this.overSound = false;
-          this.over = "";
+          this.keepHeld();
           this.commit();
         }
         this.turn = null;
@@ -255,17 +262,36 @@ export class SameBotCall {
 
   /** Words heard while it reads: its own voice coming back, even behind a nod, is dropped and a nod lets it go on; anything else stops it like a tap and is his line. */
   private overlap(text: string) {
+    if (!this.speaking && !this.overLate) {
+      this.overLate = true;
+      this.echoed += this.over;
+      this.over = "";
+    }
     this.over += text;
     const words = afterNods(spokenText(this.over));
     if (!words) return;
     const echo = echoOf(words, `${this.lastSaid} ${this.said}`, true);
-    if (echo === "echo") this.over = "";
+    if (echo === "echo") {
+      this.echoed += this.over;
+      this.over = "";
+    }
     if (echo !== "no") return;
     this.interrupt();
     this.overSound = false;
     this.heard += this.over;
     this.over = "";
+    this.echoed = "";
+    this.overLate = false;
     this.caption("user", this.heard);
+  }
+
+  /** Words held after the read as maybe its own voice are his, unless they go on its own words. */
+  private keepHeld() {
+    const held = afterNods(spokenText(this.over));
+    if (this.overLate && held && echoOf(afterNods(spokenText(`${this.echoed} ${this.over}`)), `${this.lastSaid} ${this.said}`, true) !== "echo") this.heard += this.over;
+    this.over = "";
+    this.echoed = "";
+    this.overLate = false;
   }
 
   private caption(who: "user" | "voice", text: string) {
