@@ -156,6 +156,13 @@ describe("applyPicks", () => {
     expect(picksBlock(text)).toContain("Do not deploy until I approve.");
   });
 
+  it("shows a tweak whole after a long answer", () => {
+    const key = "Which release plan should we follow for the desktop builds?";
+    const first = applyPicks("", [pick(key, "x".repeat(395), "x".repeat(395), at(17, 10))])!.text;
+    const tweaked = applyPicks(first, [{ kind: "tweak", key, said: "Do not deploy until I approve.", at: at(18, 10) }])!.text;
+    expect(picksBlock(tweaked)).toContain('+ tweaks: "Do not deploy until I approve."');
+  });
+
   it("never cuts an emoji in half", () => {
     const said = `${"x".repeat(396)}\u{1F600} and more`;
     const { text } = applyPicks("", [pick("forum look", "C - Reddit cards", said, at(17, 10))])!;

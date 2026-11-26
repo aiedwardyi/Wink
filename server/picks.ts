@@ -18,9 +18,10 @@ const PICKED_MAX = 400;
 // a goal shown in words gets at least this much; past that many goals, the oldest are listed by name
 const GOAL_TOKENS_MIN = 16;
 const SAID_MAX = PICKED_MAX;
-const LINE_MAX = KEY_MAX + PICKED_MAX + 20;
 const TWEAKS_SHOWN = 3;
 const TWEAK_SHOWN_MAX = 80;
+// room for the head and every shown tweak, so a long answer never hides a later restriction
+const LINE_MAX = KEY_MAX + PICKED_MAX + TWEAKS_SHOWN * (TWEAK_SHOWN_MAX + 16) + 80;
 const KEYS_LISTED = 40;
 const KEYS_DETAILED = 10;
 const CAPTION_MAX = 80;
