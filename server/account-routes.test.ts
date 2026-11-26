@@ -191,7 +191,7 @@ describe("lone base sign-in", () => {
     };
     try {
       registry.blockAccount("claude", true);
-      expect(await request("POST", "/api/instances/claude/sign-out")).toMatchObject({ handled: true, status: 404, data: { error: "Unknown engine sign-out" } });
+      expect(await request("POST", "/api/instances/claude/sign-out")).toMatchObject({ handled: true, status: 409, data: { error: "This engine's only account is already signed out" } });
       expect(await request("POST", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 200, data: { url: "https://claude.com/cai/oauth/authorize?fixture" } });
       await lifecycle.settled("claude");
       expect(registry.accountBlocked("claude")).toBe(false);

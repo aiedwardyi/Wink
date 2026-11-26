@@ -33,6 +33,7 @@ export class AccountLifecycle {
   private drainTimer?: ReturnType<typeof setTimeout>;
   private retries = new Map<string, { delay: number; timer?: ReturnType<typeof setTimeout> }>();
   private disposed = false;
+  private stopProbed: () => void;
   private results = new Map<string, { state: "failed" | "cancelled"; error?: LoginCapture["error"] } | { state: "duplicate"; existingId: string }>();
   readonly accounts: AccountService;
   private readonly registry: ProviderRegistry;
@@ -45,6 +46,10 @@ export class AccountLifecycle {
     this.hooks = hooks;
     this.bots = bots;
     registry.onAccountIdentity((id, snapshot) => this.observe(id, snapshot));
+    // Any confirmed login on a base ends its user Sign Out, also one made outside Wink: when it expires later its Sign In row stays.
+    this.stopProbed = registry.onProbed((id) => {
+      if (accounts.isBase(id) && registry.accountAvailable(id, true)) void accounts.markSignedOut(id, false).catch(() => { console.error("Signed-in base could not be saved"); });
+    });
     for (const account of accounts.snapshot) if (account.state !== "ready") registry.blockAccount(account.id, true);
     for (const id of Object.keys(accounts.drains)) registry.blockAccount(id, true);
   }
@@ -95,6 +100,7 @@ export class AccountLifecycle {
 
   dispose() {
     this.disposed = true;
+    this.stopProbed();
     clearTimeout(this.drainTimer);
     for (const retry of this.retries.values()) clearTimeout(retry.timer);
     this.retries.clear();
@@ -255,18 +261,23 @@ export class AccountLifecycle {
           await this.registry.cancelSignIn(id);
           await this.pending.get(id);
         }
-        const guarded = this.accounts.snapshot.length > 0;
-        if (guarded) {
-          const blocked = this.registry.accountBlocked(id);
-          this.registry.blockAccount(id, true);
-          try {
-            if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) throw new AccountError("This account is still used by a turn, helper or pane");
-          } catch (error) {
-            this.registry.blockAccount(id, blocked);
-            throw error;
-          }
+        // A lone base that is already signed out has nothing to sign out, and Usage and Connections keep it as the engine's Sign In row.
+        if (!this.accounts.snapshot.some((row) => row.of === id && !this.accounts.drains[row.id]) && !this.registry.accountAvailable(id)) {
+          throw new AccountError("This engine's only account is already signed out", 409);
         }
-        this.signedOutBase(await this.registry.signOut(id));
+        const guarded = this.accounts.snapshot.length > 0;
+        const blocked = this.registry.accountBlocked(id);
+        this.registry.blockAccount(id, true);
+        try {
+          if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) throw new AccountError("This account is still used by a turn, helper or pane");
+        } catch (error) {
+          this.registry.blockAccount(id, blocked);
+          throw error;
+        }
+        let success;
+        // With no added accounts a signed-out base stays unblocked, as before.
+        try { success = await this.registry.signOut(id); } finally { if (!guarded) this.registry.blockAccount(id, blocked); }
+        this.signedOutBase(success);
         // A base can't be retired: it stays in the store, marked, and leaves Usage and Connections while another account is listed.
         await this.accounts.markSignedOut(id, true).catch(() => { console.error("Signed-out base could not be saved"); });
         if (guarded) {

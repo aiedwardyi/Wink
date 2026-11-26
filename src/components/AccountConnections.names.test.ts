@@ -455,6 +455,15 @@ it.each([[false, "en"], [true, "ko"]] as const)("gives a signed-out row a signed
   expect(row()).toBeNull();
 });
 
+it.each([false, true])("offers no Remove on a lone signed-out base, which nothing would clear (phone=%s)", async (phone) => {
+  accounts = [Object.assign(accounts[0]!, { accountMain: true, snapshot: { state: "available", authenticated: false } })];
+  board.engines[0]!.accounts = board.engines[0]!.accounts.filter((account) => account.id === "claude");
+  await mount({ phone });
+  expect(button("Sign In", row())).toBeTruthy();
+  if (phone) await click(row()!.querySelector<HTMLElement>("[data-connection-menu]"));
+  expect(row()!.querySelector("[data-remove-account]")).toBeNull();
+});
+
 it("shows a base signed in as an added account once, as Usage does", async () => {
   const claude = board.engines[0]!;
   const kept = claude.accounts.filter((account) => account.id !== "claude");

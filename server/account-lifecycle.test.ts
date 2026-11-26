@@ -1082,13 +1082,14 @@ describe("account lifecycle", () => {
   });
 });
 
-async function request(f: Pick<Awaited<ReturnType<typeof fixture>>, "controller" | "registry">, method: string, path: string, value: unknown = {}, contentType = "application/json") {
+async function request(f: Pick<Awaited<ReturnType<typeof fixture>>, "controller" | "registry">, method: string, path: string, value: unknown = {}, contentType = "application/json",
+  deps?: Parameters<NonNullable<typeof routes>["createAccountRoutes"]>[2]) {
   expect(routes, "account routes exist").not.toBeNull();
   const req = Object.assign(Readable.from([JSON.stringify(value)]), { headers: { "content-type": contentType } }) as unknown as IncomingMessage;
   let status = 0;
   let output = "";
   const res = { writeHead: (code: number) => { status = code; }, end: (body: string) => { output = body; } } as unknown as ServerResponse;
-  const handled = await routes!.createAccountRoutes(f.controller, f.registry)(req, res, method, path, "pc:");
+  const handled = await routes!.createAccountRoutes(f.controller, f.registry, deps)(req, res, method, path, "pc:");
   return { handled, status, body: output ? JSON.parse(output) : undefined };
 }
 
@@ -1219,6 +1220,24 @@ describe("account HTTP routes", () => {
     expect(f.start).not.toHaveBeenCalled();
   });
 
+  it("hands Main to the first ready account in the saved Usage order, not the order accounts were added", async () => {
+    const f = await fixture(vi.fn());
+    const first = await f.add();
+    const second = await f.add();
+    const usageOrder = () => ({ claude: ["claude", second.id, first.id] });
+    expect(await request(f, "GET", "/api/accounts/claude/destination", {}, "application/json", { usageOrder })).toMatchObject({ status: 200, body: { destinationId: second.id } });
+  });
+
+  it.each([false, true])("refuses a base Sign Out while a worker is busy on it and keeps the login (another engine's account=%s)", async (other) => {
+    const f = await fixture();
+    if (other) await f.add("codex");
+    (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async (id) => id === "claude";
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/accounts/claude/sign-out")).toMatchObject({ status: 409 });
+    expect(f.start).not.toHaveBeenCalled();
+    expect(f.registry.accountBlocked("claude")).toBe(false);
+  });
+
   it("uses the same removal guard for legacy managed-instance sign-out", async () => {
     const f = await fixture();
     const added = await f.add();
@@ -1331,6 +1350,41 @@ describe("a user Sign Out removes the account from Usage and Connections", () =>
     const f = await fixture(vi.fn());
     await f.controller.remove("codex");
     expect(await listed(f, "codex")).toMatchObject({ usage: ["codex"], connections: ["codex"], signIn: { codex: "signed-out" } });
+  });
+
+  it.each(["signed out", "expired"])("refuses Remove on a lone %s base, which it could not clear", async (how) => {
+    const f = await fixture(vi.fn());
+    if (how === "signed out") await f.controller.remove("codex");
+    else {
+      f.statuses.set("codex", { state: "available", authenticated: false });
+      await f.controller.signedOut("codex");
+    }
+    f.start.mockClear();
+    await expect(f.controller.remove("codex")).rejects.toMatchObject({ status: 409 });
+    expect(f.start).not.toHaveBeenCalled();
+    expect(await listed(f, "codex")).toMatchObject({ usage: ["codex"], connections: ["codex"], signIn: { codex: "signed-out" } });
+  });
+
+  it.each(["codex", "claude"])("keeps the Sign In row of a later %s login that expires after an earlier Sign Out", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await f.controller.useForBots(added.id);
+    await f.controller.remove(base);
+    // Another login lands on the base outside Wink; the next start confirms it.
+    f.statuses.delete(base);
+    const accounts = new core!.AccountService(f.dir, () => f.bases);
+    const registry = new ProviderRegistry(f.drivers);
+    registries.push(registry);
+    await registry.load(instanceConfigs({ instances: f.bases }, accounts.snapshot));
+    const controller = new lifecycle!.AccountLifecycle(accounts, registry, {
+      reload: async () => {}, referenced: async () => false, invalidate: vi.fn(), changed: vi.fn(), configBusy: () => false,
+    });
+    controllers.push(controller);
+    await registry.describe({ refresh: true });
+    await vi.waitFor(() => expect(accounts.list().find((row) => row.id === base)?.userSignedOut).toBeUndefined());
+    f.statuses.set(base, { state: "available", authenticated: false });
+    await controller.signedOut(base);
+    expect(await listed({ ...f, accounts, registry, controller }, base, accounts)).toMatchObject({ usage: [base, added.id], signIn: { [base]: "signed-out" } });
   });
 
   it("lists the base again once it signs back in", async () => {

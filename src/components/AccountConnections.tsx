@@ -97,13 +97,15 @@ export function SignInRow({ instance, mark, name, after, head, onUpdated }: {
   );
 }
 
-function ConnectionAccount({ account, label, named, revision, busy, disabled, signOut, reload, reorder }: {
+function ConnectionAccount({ account, label, named, revision, busy, disabled, removable, signOut, reload, reorder }: {
   account: UsageAccount;
   label: string;
   named?: UsageBoardAccount;
   revision: number;
   busy: boolean;
   disabled: boolean;
+  /** Remove clears this row: another account of the engine stays listed, or it is an added account. */
+  removable: boolean;
   signOut: () => void;
   reload: () => Promise<void>;
   reorder: boolean;
@@ -152,7 +154,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
       onClick={() => { inlineEditor.current = false; setMenu(false); setEditing(true); }}>{t("accounts.name.edit")}</button>}
     {(ready || account.drain?.phase === "failed") && <button type="button" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
-    {signInRow && remove}
+    {signInRow && removable && remove}
   </>;
   const toggleMenu = () => afterFold(`${id}-actions`, () => setMenu(!menu));
   const more = <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu} aria-controls={`${id}-actions`}
@@ -168,7 +170,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   return (
     <div data-connection-account={account.instanceId} data-account-row={account.instanceId} tabIndex={-1} {...(reorder && reorderable(t("usage.desk.reorder", { name: name?.name ?? account.displayName })))} className={ACCOUNT_ROW}>
       {/* A signed-out row keeps a signed-in row's shape: its status where the address goes, Sign In beside Remove (desktop) or the menu (phone). */}
-      {signInRow ? <SignInRow instance={account} onUpdated={() => void reload()} head={name ? (signIn, status) => head(<>{!phone && remove}{signIn}{phone && more}</>, status) : undefined} />
+      {signInRow ? <SignInRow instance={account} onUpdated={() => void reload()} head={name ? (signIn, status) => head(<>{!phone && removable && remove}{signIn}{phone && (canName || removable) && more}</>, status) : undefined} />
         : head(control, !checking && label)}
       {named?.codexPromo && <p className="pb-2 text-[12px] text-ink-secondary">{t("usage.desk.codexPromo")}</p>}
       <Fold open={menu} id={`${id}-actions`} onOpened={() => revealOnOpen(actions.current)}>
@@ -273,6 +275,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
           const hasDestination = accounts.some((other) => other !== account && accountReady(other));
           return (
             <ConnectionAccount key={account.instanceId} reorder={shown.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
+              removable={account.instanceId !== base || shown.some((other) => other !== account && !other.drain)}
               named={board?.engines.flatMap((engine) => engine.accounts).find((row) => row.id === account.instanceId)} revision={board?.revision ?? -1}
               reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)} />
           );

@@ -14,7 +14,11 @@ const removalSchema = z.object({ destinationId: z.string().refine(isInstanceId).
 const codeSchema = z.object({ generation: z.number().int().positive(), code: z.string().min(1).max(4096).refine((code) => !/[^!-~]/.test(code)) }).strict();
 const nameSchema = z.object({ nickname: z.string().nullable() }).strict();
 
-export function createAccountRoutes(lifecycle: AccountLifecycle, registry: ProviderRegistry, deps: { names?: AccountNames; onNamesChanged?: () => void } = {}) {
+export function createAccountRoutes(lifecycle: AccountLifecycle, registry: ProviderRegistry, deps: {
+  names?: AccountNames; onNamesChanged?: () => void;
+  /** The saved Usage order (#2218), by engine base. */
+  usageOrder?: () => Record<string, string[]> | undefined;
+} = {}) {
   /** `owner` names the requesting session (signInOwner); only the session that started a sign-in may answer or cancel it. */
   return async (req: IncomingMessage, res: ServerResponse, method: string, path: string, owner: string): Promise<boolean> => {
     const route = /^\/api\/accounts(?:\/([^/]+)(?:\/(sign-in\/code|sign-in|sign-out|default|destination))?)?$/.exec(path);
@@ -60,7 +64,10 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
       } else if (id && action === "destination" && method === "GET") {
         if (!lifecycle.bots) throw new AccountError("Bot account routing is unavailable", 503);
         const instances = await registry.describeCached();
-        const destination = lifecycle.accounts.list().find((account) => {
+        // Main goes to the first ready account in the order Usage and Connections show.
+        const order = deps.usageOrder?.()?.[lifecycle.accounts.get(id)?.of ?? id] ?? [];
+        const rank = (accountId: string) => order.includes(accountId) ? order.indexOf(accountId) : order.length;
+        const destination = lifecycle.accounts.list().sort((a, b) => rank(a.id) - rank(b.id)).find((account) => {
           const instance = instances.find((row) => row.instanceId === account.id);
           if (instance?.snapshot.state !== "available" || instance.snapshot.authenticated !== true) return false;
           try { lifecycle.bots!.destination(id, account.id); return true; }
