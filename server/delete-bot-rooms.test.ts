@@ -169,6 +169,8 @@ describe("a Gemini standby whose chat or room has ended", () => {
     ["room delete", async (store: any, _bot: any, room: any) => { store.deleteGroup(room.id); }],
     ["engine pick", async (store: any, bot: any) => { store.patchBot(bot.id, { modelSelection: codex }); }],
     ["room member's engine pick", async (store: any, bot: any) => { store.patchBot(bot.id, { modelSelection: codex }); }],
+    ["archive", async (store: any, bot: any) => { store.patchBot(bot.id, { hidden: true }); }],
+    ["room member's archive", async (store: any, bot: any) => { store.patchBot(bot.id, { hidden: true }); }],
     ["mid-reply pick", async (store: any, bot: any) => {
       store.patchBot(bot.id, { pendingModelSelection: codex });
       store.patchBot(bot.id, { modelSelection: codex, pendingModelSelection: undefined });

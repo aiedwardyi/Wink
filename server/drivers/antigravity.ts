@@ -795,7 +795,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // a standby started beside a running turn would load the conversation before that turn's messages
       if (disposed || active.has(threadId) || keyringSignOut.pending || mcpExclusiveWanted()) return finalizeMcp();
       const args = buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd, model: turn.model, resumeCursor: conversation, readOnly: turn.readOnly });
-      const lease = warmPool.reserve(warmKey(threadId), launchFingerprint(config.cli, args, cwd, childEnv, turn), captured(threadId), "speculative");
+      const lease = warmPool.reserve(warmKey(threadId), launchFingerprint(config.cli, args, cwd, childEnv, turn), captured(threadId), "speculative", { evict: true });
       if (typeof lease !== "object" || standbys.has(lease)) return finalizeMcp();
       let child: ReturnType<typeof spawnCli>;
       try {
@@ -1400,7 +1400,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         clearTimeout(terminationEscalation);
         standby?.lease.release("used");
         // agy has saved the turn once it exits
-        if (next && !mcpFinalized && epoch === warmPool.generation(warmKey(threadId))) {
+        // a room's next turn sends no cursor, so a loaded standby could never serve it
+        if (next && !turn.hosted && !mcpFinalized && epoch === warmPool.generation(warmKey(threadId))) {
           mcpFinalized = true;
           startStandby(threadId, next, turn, cwd, childEnv, { restoreMcp, releaseMcpLock });
         } else finalizeMcp();

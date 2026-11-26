@@ -47,6 +47,8 @@ type Entry = {
   /** Prepares sharing a pending lease; each releases once. */
   holders: number;
   cursor?: { value: unknown };
+  /** Evicted: its slot is free while it closes. */
+  freed?: boolean;
   close(reason: string): void;
 };
 
@@ -138,8 +140,9 @@ export class WarmPool {
     return (this.generations.get("") ?? 0) + (this.generations.get(`e:${key.engine}`) ?? 0) + (this.generations.get(`i:${key.instanceId}`) ?? 0) + thread;
   }
 
-  /** A same-key reserve joins a pending lease; every caller that got it releases once. `pendingMs` bounds a prepare that never becomes ready. */
-  reserve(key: WarmKey, fingerprint: string, captured: Captured, kind: Kind, opts: { pendingMs?: number } = {}): Lease | "busy" | "denied" {
+  /** A same-key reserve joins a pending lease; every caller that got it releases once. `pendingMs` bounds a prepare that never becomes ready.
+   * `evict` frees the engine's least recently used idle slots when its caps are full, so a slot no one will use cannot block the next chat. */
+  reserve(key: WarmKey, fingerprint: string, captured: Captured, kind: Kind, opts: { pendingMs?: number; evict?: boolean } = {}): Lease | "busy" | "denied" {
     if (this.final) return "denied";
     this.reap();
     const existing = this.byKey.get(keyOf(key));
@@ -151,8 +154,8 @@ export class WarmPool {
     }
     if (existing) this.drop(existing, "replaced");
     const among = [...this.entries].filter((entry) => entry !== existing);
-    if (kind !== "handshake" && !this.admits(key.engine, among)) return "denied";
     if (kind === "speculative" && this.freemem() < this.floor()) return "denied";
+    if (kind !== "handshake" && !this.admits(key.engine, among) && !(opts.evict && this.evict(key.engine, among))) return "denied";
     return this.add(key, fingerprint, captured, kind, opts.pendingMs ?? PENDING_TTL_MS);
   }
 
@@ -362,12 +365,30 @@ export class WarmPool {
     if (this.paused || this.final) return false;
     this.reap();
     // an orphan still closing frees its slot now: its owner can never use it
-    const held = among.filter((entry) => entry.state !== "taken" && !this.orphaned(entry.lease.key));
+    const held = among.filter((entry) => entry.state !== "taken" && !entry.freed && !this.orphaned(entry.lease.key));
     if (this.smaller()) return held.length < 1 && !this.liveTurns() && !among.some((entry) => entry.state === "taken");
     return held.length < TOTAL_CAP && held.filter((entry) => entry.lease.key.engine === engine).length < ENGINE_CAP;
   }
 
   private drop(entry: Entry, reason: string) { entry.close(reason); }
+
+  /** Closes nothing unless closing enough of them admits `engine`. */
+  private evict(engine: string, among: Entry[]): boolean {
+    const idle = among.filter((entry) => entry.state === "idle" && entry.lease.key.engine === engine).sort((a, b) => a.idleSince - b.idleSince);
+    const victims: Entry[] = [];
+    let rest = among;
+    while (!this.admits(engine, rest)) {
+      const victim = idle.shift();
+      if (!victim) return false;
+      victims.push(victim);
+      rest = rest.filter((entry) => entry !== victim);
+    }
+    for (const victim of victims) {
+      victim.freed = true;
+      this.drop(victim, "evicted");
+    }
+    return true;
+  }
 
   private orphaned(key: WarmKey) { return this.owners.get(key.engine)?.(key) === false; }
 

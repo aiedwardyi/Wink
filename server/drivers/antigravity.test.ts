@@ -3232,7 +3232,7 @@ require(${JSON.stringify(fake)});
         expect(first.pid).toBe(spawns()[1]!.pid);
       });
 
-      it("starts one agy per chat however often it is opened, and two chats at most", async () => {
+      it("starts one agy per chat however often it is opened, and a third chat retires the least recently opened", async () => {
         const instance = await make("open-cap");
         const spawn = vi.spyOn(procs, "spawnCli");
         try {
@@ -3241,7 +3241,39 @@ require(${JSON.stringify(fake)});
           await open(instance);
           await open(instance, { threadId: "t-standby-2" });
           await open(instance, { threadId: "t-standby-3" });
-          expect(spawn.mock.calls.filter(([, args]) => args.includes("--input-format"))).toHaveLength(2);
+          expect(spawn.mock.calls.filter(([, args]) => args.includes("--input-format"))).toHaveLength(3);
+          await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(3);
+          await expect.poll(() => spawns().map(({ pid }) => alive(pid)), { timeout: 5_000 }).toEqual([false, true, true]);
+          const third = await turn(instance, { ...chat, threadId: "t-standby-3", text: "one" });
+          expect(third.pid).toBe(spawns()[2]!.pid);
+        } finally {
+          spawn.mockRestore();
+        }
+      });
+
+      it("leaves no standby after room turns, which never resume, so the next chat still gets one", async () => {
+        const gemini = await make("room-turns");
+        const spawn = vi.spyOn(procs, "spawnCli");
+        const agys = () => spawn.mock.calls.filter(([, args]) => args.includes("--input-format"));
+        try {
+          for (const threadId of ["t-room-1", "t-room-2"]) {
+            const recorder = recordEvents(gemini.adapter);
+            try {
+              const { turnId } = await gemini.adapter.sendTurn({ ...chat, threadId, text: threadId, hosted: true });
+              const child = spawn.mock.results[spawn.mock.calls.lastIndexOf(agys().at(-1)!)]!.value as ReturnType<typeof procs.spawnCli>;
+              const closed = new Promise((done) => child.once("close", done));
+              await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+              await closed;
+            } finally {
+              recorder.stop();
+            }
+          }
+          expect(agys()).toHaveLength(2);
+          await open(gemini, { threadId: "t-room-chat" });
+          expect(agys()).toHaveLength(3);
+          await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(3);
+          expect(spawns()[2]!.argv).not.toContain("--conversation");
+          expect(alive(spawns()[2]!.pid)).toBe(true);
         } finally {
           spawn.mockRestore();
         }
