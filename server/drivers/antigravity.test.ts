@@ -2967,7 +2967,7 @@ describe("Antigravity computer MCP config", () => {
         return false;
       }
     };
-    /** Turn processes in start order: a standby is logged when it starts, before any prompt. */
+    /** Turn processes in the order each logged its start, before any prompt: two quick starts can log in either order. */
     const spawns = (): Array<{ pid: number; argv: string[] }> =>
       existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
     const make = async (name: string, environment: Record<string, string> = {}) => {
@@ -2994,7 +2994,7 @@ describe("Antigravity computer MCP config", () => {
         recorder.stop();
       }
     };
-    /** Turn processes in spawn order: spawns() is in the order each got to log, which two quick starts can swap. */
+    /** Turn processes in spawn order. */
     const started = (spawn: MockInstance<typeof procs.spawnCli>): number[] =>
       spawn.mock.calls.flatMap(([, args], i) => (args.includes("--input-format") ? [spawn.mock.results[i]!.value.pid] : []));
     const standbyAfter = async (count: number) => {
