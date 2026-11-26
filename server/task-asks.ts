@@ -16,8 +16,8 @@ export const taskAskSchema = z.object({
   ask: z.string().min(1).max(ASK_LIMITS.ask),
   status: z.enum(ASK_STATUSES),
   ref: z.string().min(1).max(ASK_LIMITS.ref).optional(),
-  /** the bot's own ask_user card left unanswered; Wink adds these, not the bot */
-  kind: z.literal("question").optional(),
+  /** question: the bot's own ask_user card left unanswered; promise: its own "I'll do X" a turn left undone. Wink adds these, not the bot */
+  kind: z.enum(["question", "promise"]).optional(),
   choices: z.string().min(1).max(ASK_LIMITS.ref).optional(),
   due: z.number().int().nonnegative().optional(),
   /** the wake Wink set for due, so moving or closing the ask cancels it */
@@ -53,6 +53,7 @@ const STATUS_TURN = /\b(summar(y|ies|i[sz]e)|recap|status|stand-?up|morning|brie
 export const isStatusTurn = (text: string): boolean => STATUS_TURN.test(text);
 export const isOpenAsk = (ask: TaskAsk): boolean => ask.status !== "done" && ask.status !== "declined";
 const isQuestion = (ask: TaskAsk) => ask.kind === "question";
+const isPromise = (ask: TaskAsk) => ask.kind === "promise";
 const isParked = (ask: TaskAsk, now: number) => isOpenAsk(ask) && ask.until !== undefined && ask.until > now;
 // a skipped question waits for a natural pause, so it never nags an ordinary turn
 const needsVerdict = (ask: TaskAsk, now: number) =>
@@ -138,6 +139,33 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
   return { asks, lastAskId };
 }
 
+// half the shorter one's words, and two unless it has one: a reworded repeat of the same ask
+function sameAsk(a: string, b: string): boolean {
+  const [x, y] = [terms(a), terms(b)];
+  const least = Math.min(x.size, y.size);
+  const shared = [...x].filter((term) => y.has(term)).length;
+  return least > 0 && shared >= Math.min(2, least) && shared * 2 >= least;
+}
+
+/** Files what a turn left open, a promise as kind promise and the user's question as their ask; one an ask already has, open, done or declined, stays that ask. Null when nothing is new. */
+export function fileLeftovers(book: AskBook | undefined, left: readonly { ask: string; promise?: true }[], now: number): SavedAsks | null {
+  const asks = (book?.asks ?? []).map((item) => ({ ...item }));
+  let lastAskId = lastAskIdOf(book);
+  for (const item of left) {
+    const ask = clip(item.ask, ASK_LIMITS.ask);
+    if (!ask || asks.some((filed) => sameAsk(filed.ask, ask))) continue;
+    lastAskId += 1;
+    const filed: TaskAsk = { id: `A${lastAskId}`, ask, status: "open", at: now, changedAt: now };
+    if (item.promise) filed.kind = "promise";
+    asks.push(filed);
+  }
+  if (lastAskId === lastAskIdOf(book)) return null;
+  trimClosed(asks);
+  return { asks, lastAskId };
+}
+
+export const askTerms = (text: string): Set<string> => terms(text);
+
 /** A card answered after its question was filed: one filed for this card goes, an older one closes done. Null when none matches. */
 export function answerQuestionAsk(existing: readonly TaskAsk[] | undefined, question: string, cardAt: number, now: number): TaskAsk[] | null {
   const ask = words(clip(question, ASK_LIMITS.ask));
@@ -156,7 +184,7 @@ function day(at: number): string {
 
 const askLine = (ask: TaskAsk, now: number) => isParked(ask, now)
   ? `- ${ask.id} parked back ${day(ask.until!)}: ${ask.ask}`
-  : `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
+  : `- ${ask.id} ${ask.status}${ask.kind ? ` ${ask.kind}` : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
 
 /** Open asks, needing a verdict first and then oldest, then parked ones by return day; past MAX_STATUS_ASKS_BYTES the least recently shown come first and the rest wait. */
 function listed(asks: readonly TaskAsk[] | undefined, now: number) {
@@ -195,8 +223,9 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, sta
   const waiting = ordered.length + parked.length - shown.length;
   const rotated = !waiting ? "" : verdictOnly ? ` ${waiting} more show on a status question.` : ` ${waiting} more wait for the next turn, least recently shown first.`;
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
+  const promises = shown.some(isPromise) ? " A promise is your own \"I'll\" a turn left undone, maybe on another engine: check what exists first (this list, merged PRs, files) and close it done if it is; never redo it." : "";
   return [
-    `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}]`,
+    `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}${promises}]`,
     ...shown.map(line),
   ].join("\n");
 }

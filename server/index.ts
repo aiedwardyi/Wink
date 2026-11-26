@@ -280,7 +280,7 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, fileLeftovers, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { sweepDroppedAsks } from "./task-dropped.ts";
@@ -312,6 +312,7 @@ import { TurnWatchdog } from "./turn-watchdog.ts";
 import { foldContinuationStart, joinRunningTurn } from "./continuation-turn.ts";
 import "./pending-model.ts";
 import { botClears, groupClears } from "./wire-clears.ts";
+import { turnLeftovers } from "./turn-leftovers.ts";
 import { ownTurnReply, turnAddedMessage, turnSummaries, turnUnread } from "./turn-reply.ts";
 import { terminalReadGrant } from "./terminal-grant.ts";
 import { updateBridgeResponse, updateStateFromMessage } from "./update-proxy.ts";
@@ -3032,6 +3033,20 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
   return store.taskPacket(threadId);
 }
 
+function saveHarnessAsks(threadId: string, change: (book: AskBook | undefined) => SavedAsks | null): void {
+  const current = taskPacketForWrite(threadId);
+  const saved = current && change(current);
+  if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
+}
+
+// what a turn said it would do, or let a steer talk over, rides to the next reply on any engine
+function fileTurnLeftovers(threadId: string, rows: readonly Message[]): void {
+  // only a steer needs the message that started the turn, which landed before the turn's first row
+  const opening = rows.some((row) => row.role === "user" && row.steered) && rows[0]?.parentId ? store.row(threadId, rows[0].parentId) : undefined;
+  const left = turnLeftovers(opening?.role === "user" ? [opening, ...rows] : rows);
+  if (left.length) saveHarnessAsks(threadId, (book) => fileLeftovers(book, left, Date.now()));
+}
+
 function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }, seen: readonly TaskAsk[] = []): TaskResumePacket | null {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) clearTimeout(pending.timer);
@@ -4555,7 +4570,8 @@ bus.subscribe((event: RuntimeEvent) => {
       lastReply.delete(event.threadId);
       // summaries are hidden, so a turn that wrote nothing else shows them instead; a pane-note turn may end silent
       for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchRow(event.threadId, id, { summarized: undefined });
-      const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => store.rowsSince(event.threadId, start));
+      let turnRows: readonly Message[] = [];
+      const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => (turnRows = store.rowsSince(event.threadId, start)));
       const lastReported = turnUsage.get(event.threadId);
       turnUsage.delete(event.threadId);
       roomTurnInstruction.delete(event.threadId);
@@ -4647,6 +4663,7 @@ bus.subscribe((event: RuntimeEvent) => {
               turnsAtWrite: usage?.turns ?? packet.turnsAtWrite,
               interrupted,
             }));
+            if (event.ok && !interrupted) fileTurnLeftovers(event.threadId, turnRows);
           }
           boardCalls.turnEnded(event.threadId, event.ok && !interrupted);
           limitWaits.settled(event.threadId, event.turnId, event.ok);
@@ -4816,11 +4833,7 @@ bus.subscribe((event: RuntimeEvent) => {
 
 // ask_user cards wait for the asking turn's reply.
 const askHold = watchAskHold(store, bus);
-watchSkippedQuestions(store, (threadId, change) => {
-  const current = taskPacketForWrite(threadId);
-  const saved = current && change(current);
-  if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
-});
+watchSkippedQuestions(store, saveHarnessAsks);
 
 // Drain queued delegations for a source thread after its turn settles.
 // Run as a separate subscriber so the drain logic stays out of the main
