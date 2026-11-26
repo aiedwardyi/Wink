@@ -5387,8 +5387,8 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
 // turn mounts something only a send may set up (a remote or VM computer, connected apps).
 function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullable<PrepareFocus["fresh"]> | null {
   const task = store.taskByThread(bot.id, bot.threadId);
-  // only Claude starts a session ahead of Send; other engines' prepare ignores this shape
-  if (instance.driverKind !== "claudeAgent" || !task || task.resumeCursors[instance.instanceId]) return null;
+  // Claude starts a session and Gemini an agy ahead of Send; other engines' prepare ignores this shape
+  if (!["claudeAgent", "antigravityAgent"].includes(instance.driverKind) || !task || task.resumeCursors[instance.instanceId]) return null;
   if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) return null;
   if (bot.computer !== undefined && bot.computer !== "off") return null;
   if (bot.cloudBackend === "vps" || box.boxConfigured(cfg)) return null;

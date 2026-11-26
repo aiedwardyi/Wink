@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as auth from "./antigravity-auth.ts";
 
 import { DATA_DIR, ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
-import type { ProviderInstance } from "../contracts.ts";
+import type { PrepareFocus, ProviderInstance } from "../contracts.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { summaryInstance } from "../summary-instance.ts";
 import { AGENTS_IDENTITY, expectAgentsBudget, listAgentsTools } from "../testing/agents-tools.ts";
@@ -3176,6 +3176,90 @@ require(${JSON.stringify(fake)});
       const standby = await standbyAfter(2);
       await instance.dispose();
       await expect.poll(() => alive(standby.pid), { timeout: 5_000 }).toBe(false);
+    });
+
+    describe("prepared on chat open", () => {
+      const open = (instance: ProviderInstance, focus: Partial<PrepareFocus> = {}) =>
+        instance.prepare?.(undefined, { threadId: chat.threadId, fresh: { integrations: chat.integrations }, ...focus });
+
+      it("runs a new chat's first turn on the agy its prewarm started, with the prompt a cold spawn gets", async () => {
+        const instance = await make("open");
+        await open(instance);
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(1);
+        const standby = spawns()[0]!;
+        expect(standby.argv).not.toContain("--conversation");
+        // nothing reaches agy before Send
+        expect(existsSync(dump)).toBe(false);
+        // notes saved after the prewarm ride this turn's system text
+        const first = await turn(instance, { ...chat, text: "one", system: "Notes: saved after open" });
+        expect(first.pid).toBe(standby.pid);
+        expect(first.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+        const cold = await turn(await make("cold"), { ...chat, threadId: "t-standby-cold", text: "one", system: "Notes: saved after open" });
+        expect(first.prompt).toBe(cold.prompt);
+        expect(first.prompt).toContain("Notes: saved after open");
+      });
+
+      it.each([
+        ["model", { model: "gemini-4-neon-low" }],
+        ["effort", { effort: "high" as const }],
+        ["folder", { cwd: tmpdir() }],
+      ])("retires the prepared agy when the %s changed before Send", async (_change, change) => {
+        const instance = await make("open-refuse");
+        await open(instance);
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(1);
+        const standby = spawns()[0]!;
+        const first = await turn(instance, { ...chat, text: "one", ...change });
+        expect(first.pid).not.toBe(standby.pid);
+        expect(first.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+        expect(alive(standby.pid)).toBe(false);
+      });
+
+      it("swaps the prepared agy when the chat's model changes on open", async () => {
+        const instance = await make("open-swap");
+        await open(instance);
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(1);
+        const stale = spawns()[0]!;
+        await open(instance, { model: "gemini-4-neon-low" });
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(2);
+        await expect.poll(() => alive(stale.pid), { timeout: 5_000 }).toBe(false);
+        const first = await turn(instance, { ...chat, text: "one", model: "gemini-4-neon-low" });
+        expect(first.pid).toBe(spawns()[1]!.pid);
+      });
+
+      it("starts one agy per chat however often it is opened, and two chats at most", async () => {
+        const instance = await make("open-cap");
+        await open(instance);
+        await open(instance);
+        await open(instance, { threadId: "t-standby-2" });
+        await open(instance, { threadId: "t-standby-3" });
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(2);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(spawns()).toHaveLength(2);
+      });
+
+      it("starts none beside a running turn or for a chat that resumes", async () => {
+        const instance = await make("open-busy");
+        rmSync(join(dir, "go"));
+        await instance.adapter.sendTurn({ ...chat, text: "one" });
+        await expect.poll(() => existsSync(dump) && JSON.parse(readFileSync(dump, "utf8")).prompt, { timeout: 5_000 }).toBe("one");
+        await open(instance);
+        await open(instance, { threadId: "t-standby-resume", fresh: undefined });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(spawns()).toHaveLength(1);
+        writeFileSync(join(dir, "go"), "");
+      });
+
+      it("retires the prepared agy on Stop (a bot delete stops its chat) and on dispose", async () => {
+        const instance = await make("open-stop");
+        await open(instance);
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(1);
+        await instance.adapter.interruptTurn(chat.threadId);
+        await expect.poll(() => alive(spawns()[0]!.pid), { timeout: 5_000 }).toBe(false);
+        await open(instance);
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(2);
+        await instance.dispose();
+        await expect.poll(() => alive(spawns()[1]!.pid), { timeout: 5_000 }).toBe(false);
+      });
     });
 
     // sign-in first: agy's sign-out is module state that outlives the registry
