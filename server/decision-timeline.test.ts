@@ -461,6 +461,22 @@ describe("decision timeline", () => {
       expect(picksBlock(timeline())).toBe("");
     });
 
+    it("keeps a pick live when the user adds to it after its PR merged", async () => {
+      const mergedAt = Date.now() + MINUTE;
+      pass.dispose();
+      pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged: () => [{ number: 2194, mergedAt }] });
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Merge", subtitle: "Merge PR 2194 once CI is green?", options: ["Yes", "No"], askUser: true } });
+      answer(card, "Yes");
+      reply();
+      await settle();
+      expect(picksBlock(timeline())).toBe("");
+      await vi.advanceTimersByTimeAsync(10 * MINUTE);
+      say("also deploy it to staging");
+      reply({ kind: "tweak", key: "Merge PR 2194 once CI is green?", fact: "Also deploy it to staging", quote: "also deploy it to staging" });
+      await settle();
+      expect(picksBlock(timeline())).toContain("also deploy it to staging");
+    });
+
     it("replaces a card's tap with a revised answer the note-taker files under its own key", async () => {
       const card = swapCard();
       answer(card, "Yes, swap");

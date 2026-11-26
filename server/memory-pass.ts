@@ -785,7 +785,9 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     // "PR #41 and #42": a PR the reader missed keeps the pick
     if (!prs.length || [...ref.matchAll(PR_LIST)].some(([list]) => list.match(/\d+/g)!.some((number) => !prs.some((pr) => pr.number === Number(number))))) return false;
     const checked = deps.merged?.(botId, threadId, ref, true);
-    return Boolean(checked?.length && checked.every((pr) => (pr.mergedAt ?? 0) > entryTime(entry)));
+    // a tweak after the merge is work the merge did not finish
+    const since = Math.max(entryTime(entry), ...entry.tweaks.map(({ at }) => entryTime({ id: at })));
+    return Boolean(checked?.length && checked.every((pr) => (pr.mergedAt ?? 0) > since));
   };
 
   let claim = false;
