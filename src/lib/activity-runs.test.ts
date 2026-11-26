@@ -482,7 +482,7 @@ describe("localizeServerLine", () => {
     ["Delegation to @Atlas denied by user", "@Atlas에게 한 위임을 사용자가 거부했습니다"],
     ["the user denied this handoff", "사용자가 이 위임을 거부했습니다"],
     ["interrupted by a restart", "재시작으로 중단되었습니다"],
-    ["@Atlas finished task t1 in Release", "@Atlas - Release에서 작업 t1 완료"],
+    ["@Atlas finished a task in Release", "@Atlas - Release에서 작업 완료"],
     ["Delivered to @Atlas", "@Atlas에게 전달됨"],
     ["@Atlas replied", "@Atlas 답장 도착"],
     ["Atlas answered Edward in its own chat instead", "Atlas - 대신 자기 채팅에서 Edward에게 답변함"],
@@ -504,6 +504,17 @@ describe("localizeServerLine", () => {
 
   it.each(samples.filter(([line]) => !line.startsWith("error:")))("leaves %s as written in English", (line) => {
     expect(localizeServerLine(line, en)).toBe(line);
+  });
+
+  it("never shows the task id in the finished-in-room chip, new row or stored one", () => {
+    const id = "5600b894-8592-492b-a83e-82d8e50cc5e2";
+    for (const line of [`@Marketing finished task ${id} in marketing`, "@Marketing finished a task in marketing"]) {
+      expect(isServerLine(line), line).toBe(true);
+      expect(localizeServerLine(line, en)).toBe("@Marketing finished a task in marketing");
+      expect(localizeServerLine(line, ko)).toBe("@Marketing - marketing에서 작업 완료");
+      expect(localizeServerLine(line, en)).not.toContain(id);
+      expect(localizeServerLine(line, ko)).not.toContain(id);
+    }
   });
 
   it("maps a line without its error prefix, as the error row shows it", () => {
