@@ -288,6 +288,22 @@ describe("motion", () => {
     }
   });
 
+  it.each(["touch", "mouse"] as const)("a %s press on Close whose click lands beside it: touch closes once, mouse stays open", async (pointerType) => {
+    const anchor = document.createElement("button");
+    host.append(anchor);
+    anchor.getBoundingClientRect = () => ({ top: 700, left: 24, right: 300, bottom: 730, width: 276, height: 30, x: 24, y: 700, toJSON: () => ({}) });
+    const onClose = vi.fn();
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageQuickView, {
+      engine: engine(), account: engine().accounts[0]!, board, state: h.state, anchor: { current: anchor }, onClose,
+    }))));
+    // A refresh grew the view mid-tap: the finger went down on Close, the click hit the title the view slid under it.
+    document.querySelector("[data-quick-close]")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType }));
+    await act(async () => { document.querySelector<HTMLElement>("[data-engine-name]")!.click(); });
+    expect(onClose).toHaveBeenCalledTimes(pointerType === "touch" ? 1 : 0);
+    await act(async () => { document.querySelector<HTMLElement>("[data-engine-name]")!.click(); });
+    expect(onClose).toHaveBeenCalledTimes(pointerType === "touch" ? 1 : 0);
+  });
+
   it("fades the desk in when the board arrives after loading, not when it is already there", async () => {
     const desk = () => host.querySelector("[data-usage-desk]")!;
     h.state = { board: null, status: "loading", pending: {}, failed: new Set() } as unknown as UsageBoardState;

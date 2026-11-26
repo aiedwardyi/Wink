@@ -150,8 +150,10 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
 
   useEffect(() => {
     if (closing) return;
+    let pressedClose = false;
     const away = (event: PointerEvent) => {
       const target = event.target as Node;
+      pressedClose = event.pointerType === "touch" && Boolean(box.current?.querySelector("[data-quick-close]")?.contains(target));
       if (box.current?.contains(target) || anchor.current?.contains(target)) return;
       // An open account menu inside the view is the top layer; its own listener closes it.
       if (box.current?.querySelector('[role="menu"]')) return;
@@ -162,10 +164,21 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
       event.preventDefault();
       closeRef.current();
     };
+    // The view grows up from its line, so a refresh landing mid-tap moves Close from under the finger and its click lands beside it.
+    const tapped = (event: MouseEvent) => {
+      if (!pressedClose) return;
+      pressedClose = false;
+      if (event.target instanceof Node && box.current?.querySelector("[data-quick-close]")?.contains(event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeRef.current();
+    };
     document.addEventListener("pointerdown", away, true);
+    document.addEventListener("click", tapped, true);
     document.addEventListener("keydown", key);
     return () => {
       document.removeEventListener("pointerdown", away, true);
+      document.removeEventListener("click", tapped, true);
       document.removeEventListener("keydown", key);
     };
   }, [anchor, closing]);
