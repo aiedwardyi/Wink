@@ -282,8 +282,8 @@ export const Transcript = memo(function Transcript({
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
   // the waiting cards the composer's dock holds take no row, so no asker label stands over an empty one;
   // an archive has no dock, so its cards stay
-  const asksDocked = !readOnly && Boolean(pinnedQuestion(group.messages));
-  const dockedAsks = useMemo(() => new Set(asksDocked ? openQuestions(group.messages).map((m) => m.id) : []), [asksDocked, group.messages]);
+  const dockedAsks = useMemo(() => new Set(!readOnly && pinnedQuestion(group.messages) ? openQuestions(group.messages).map((m) => m.id) : []), [readOnly, group.messages]);
+  const asksDocked = dockedAsks.size > 0;
   const items = useMemo(
     () => groupActivityRuns(
       streamingMessage ? [...messages, streamingMessage] : messages,
