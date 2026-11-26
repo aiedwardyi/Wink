@@ -243,6 +243,6 @@ describe("turn leftovers", () => {
     expect(filed[0]!.ask).toHaveLength(80);
     expect(filed[0]!.ask.endsWith("?")).toBe(true);
     const late = 9 + ASK_VERDICT_MS;
-    for (const nudge of [asksNudge(filed, late, "Thanks"), asksNudge([ask("A1", "Where are the keyboard shortcuts documented?", "open"), ask("A2", "I'll update the picker labels.", "open", "promise")], late, "Thanks")]) expect(nudge).not.toMatch(/build, park or close|needs? (a )?verdict/);
+    for (const nudge of [asksNudge(filed, late, "Thanks"), asksNudge([{ ...ask("A1", "Where are the keyboard shortcuts documented?", "open"), key: "a".repeat(64) }, ask("A2", "I'll update the picker labels.", "open", "promise")], late, "Thanks")]) expect(nudge).not.toMatch(/build, park or close|needs? (a )?verdict/);
   });
 });

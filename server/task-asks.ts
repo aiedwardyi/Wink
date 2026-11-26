@@ -67,7 +67,7 @@ const QUESTION_MARK = /[?？]$/;
 const isParked = (ask: TaskAsk, now: number) => isOpenAsk(ask) && ask.until !== undefined && ask.until > now;
 // a skipped question waits for a natural pause, so it never nags an ordinary turn
 const needsVerdict = (ask: TaskAsk, now: number) =>
-  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !isPromise(ask) && !QUESTION_MARK.test(ask.ask) && !ask.ref && now - Math.max(ask.changedAt, ask.until ?? 0) >= ASK_VERDICT_MS;
+  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !isPromise(ask) && ask.key === undefined && !ask.ref && now - Math.max(ask.changedAt, ask.until ?? 0) >= ASK_VERDICT_MS;
 const words = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -149,10 +149,8 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
   return { asks, lastAskId };
 }
 
-// an exact repeat of the same kind: case, spacing, apostrophe style and closing punctuation aside, so "the icon and layout"
-// is new work beside a done "the icon", src/foo.ts is not src-foo.ts, and a clipped ask proves no repeat
-const same = (text: string) => /…\??$/.test(text) ? Symbol() : text.toLowerCase().replace(/[‘’]/g, "'").replace(/[\s.!?]+$/, "").replace(/\s+/g, " ").trim();
-// the same over the full words before the clip, and a path keeps its case: src/Header.ts is not src/header.ts
+// an exact repeat of the same kind over the full words before the clip: case, spacing, apostrophe style and closing
+// punctuation aside, so "the icon and layout" is new work beside a done "the icon", and a path keeps its case: src/Header.ts is not src/header.ts
 const keyOf = (text: string) => createHash("sha256").update(text.replace(/[‘’]/g, "'").replace(/[\s.!?]+$/, "").trim().split(/\s+/)
   .map((word) => /[\\/]|[\p{L}\p{N}_-]\.[\p{L}\p{N}]/u.test(word) ? word : word.toLowerCase()).join(" ")).digest("hex");
 
@@ -161,18 +159,21 @@ export function fileLeftovers(book: AskBook | undefined, left: readonly { ask: s
   const asks = (book?.asks ?? []).map((item) => ({ ...item }));
   const first = lastAskIdOf(book);
   let lastAskId = first;
+  // an ask filed without a key (an engine's own, or older) matches on its text; a clipped one proves no repeat
+  const keys = asks.map((filed) => filed.key ?? (/…\??$/.test(filed.ask) ? undefined : keyOf(filed.ask)));
   for (const item of left) {
     // a long question keeps its "?" so a later turn still reads it as one
     const mark = item.promise ? undefined : QUESTION_MARK.exec(item.ask.trim())?.[0];
     const ask = mark ? `${clip(item.ask.trim().slice(0, -1), ASK_LIMITS.ask - 1)}${mark}` : clip(item.ask, ASK_LIMITS.ask);
     const key = keyOf(item.ask);
-    if (!ask || asks.some((filed) => isPromise(filed) === Boolean(item.promise) && !isQuestion(filed) && (filed.key ? filed.key === key : same(filed.ask) === same(ask)))) continue;
+    if (!ask || asks.some((filed, index) => isPromise(filed) === Boolean(item.promise) && !isQuestion(filed) && keys[index] === key)) continue;
     lastAskId += 1;
     // shown 0: no turn showed it yet, so the next one does, resumed or not
     const filed: TaskAsk = { id: `A${lastAskId}`, ask, status: "open", shown: 0, key, at: now, changedAt: now };
     if (item.promise) filed.kind = "promise";
     if (item.note) filed.ref = clip(item.note, ASK_LIMITS.ref);
     asks.push(filed);
+    keys.push(key);
   }
   if (lastAskId === first) return null;
   trimClosed(asks);
