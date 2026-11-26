@@ -19,6 +19,7 @@ import { BUILT_IN_DRIVERS } from "./builtIn.ts";
 import { ClaudeDriver } from "./claude.ts";
 import { CodexDriver, READ_ONLY_FEATURES_OFF } from "./codex.ts";
 import { MspMuseAgentDriver } from "./msp/muse.ts";
+import { lineWords } from "../replies.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fake = (name: string) => join(here, "..", "testing", name);
@@ -302,6 +303,22 @@ describe("a room guest's read-only turn reads no host file", () => {
     expect(await read("t-grok-owner", OWNER_TURN)).toBe(CANARY);
     // the guest's tools come from its launch, not the saved session: the owner's next turn has them all
     expect(await read("t-grok-guest", { ...OWNER_TURN, resumeCursor: "fake-acp-session" })).toBe(CANARY);
+  });
+
+  // GATE-REVIEW-2239C: grok inlines an @path with no tool, so a guest's words must reach it with every @ broken
+  it("Grok: a guest's @path inlines no file in any form grok expands; the owner's own @path still does", async () => {
+    const out = join(scratch, "grok-at.txt");
+    setEnv("FAKE_ACP_MODE", "read");
+    setEnv("FAKE_ACP_READ_OUT", out);
+    const instance = await GrokAgentDriver.create({ instanceId: "at-grok", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-acp-cli.ts"), fullAuto: true } });
+    live.push(instance);
+    const elsewhere = join(scratch, "elsewhere.txt");
+    writeFileSync(elsewhere, "outside canary");
+    const read = reader(instance, hostProject(), out);
+    const ask = ["", "\u200B", ":", ",", "-", "/", "=", "\\"].map((before) => `${before}@notes.txt and ${before}@${elsewhere}`).join(", ");
+    const mina = { author: { kind: "person", id: "p1", name: "Mina" } };
+    expect(await read("t-grok-at-guest", { ...GUEST_ASK, text: lineWords(mina, ask, true) })).toBeNull();
+    expect(await read("t-grok-at-owner", { ...OWNER_TURN, text: lineWords({ author: { kind: "host" } }, ask, true) })).toContain("outside canary");
   });
 
   it("Muse: a guest's ask works in an empty folder and never resumes a session rooted in the host's project", async () => {

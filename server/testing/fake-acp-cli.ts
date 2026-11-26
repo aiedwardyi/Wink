@@ -38,7 +38,10 @@
 //                     shell tool, runs unasked in every mode, plan included.
 //                     --tools and --disallowed-tools are ignored there; only an
 //                     --agent-profile `tools:` list removes the rest. What it
-//                     read goes to FAKE_ACP_READ_OUT)
+//                     read goes to FAKE_ACP_READ_OUT. An `@path` in the prompt
+//                     is inlined with no tool and no ask, as grok 1.0.92 does,
+//                     after the start, whitespace, U+200B or one of : , - / = \
+//                     — relative to that cwd, or absolute — and appended there)
 //   FAKE_ACP_DUMP   path to write {argv, env} as JSON, so a test can assert
 //                   argv shape (agent/stdio flags) and env hygiene. Per-session
 //                   settings land next to it in `<path>.config.json`, so a test
@@ -62,9 +65,9 @@
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const mode = process.env.FAKE_ACP_MODE ?? "happy";
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -521,6 +524,13 @@ function handle(msg: any) {
         out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "read-1", title: reader === "read_file" ? "read_file" : "cat notes.txt", kind: reader === "read_file" ? "read" : "execute" } } });
         if (existsSync(path)) writeFileSync(process.env.FAKE_ACP_READ_OUT ?? "read.txt", readFileSync(path));
         out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "read-1", status: "completed" } } });
+      }
+      if (mode === "read" && sessionCwd) {
+        const said = (msg.params?.prompt ?? []).map((part: { text?: string }) => part?.text ?? "").join("\n");
+        for (const [, named] of said.matchAll(/(?:^|[\s\u200B:,\-/=\\])@([^\s"'`<>()[\]]+)/g)) {
+          const path = resolve(sessionCwd, named!.replace(/[.,;:!?]+$/, ""));
+          if (existsSync(path) && statSync(path).isFile()) appendFileSync(process.env.FAKE_ACP_READ_OUT ?? "read.txt", readFileSync(path));
+        }
       }
       if (mode === "hang") {
         // never resolve the prompt — lets tests exercise interrupt

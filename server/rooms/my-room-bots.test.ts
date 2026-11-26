@@ -220,7 +220,7 @@ describe("this PC's bot in a joined room", () => {
     turns.heard(ROOM, host);
     await settle();
     expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual([host.text]);
-    expect(deps.startTurn.mock.calls[0]![2]).toContain('"Edward" asked you: \u200B@Pete-Coder chart Q3');
+    expect(deps.startTurn.mock.calls[0]![2]).toContain('"Edward" asked you: @\u200BPete-Coder chart Q3');
     thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "Chart's up." });
     deps.client.botSend.mockResolvedValueOnce({ ok: true, value: { seq: seq + 1 } });
     await turns.settled("task-1", true);
@@ -401,7 +401,7 @@ describe("a room bot's @ to this PC's bot", () => {
     const [, , prompt, typed] = deps.startTurn.mock.calls[0]!;
     expect(typed).toBe(ask.text);
     expect(prompt).toContain('"Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Peter has to turn this on for you." Bots here: "EdBot" ("Edward"), "Mini" ("Mina"). Each is on its owner\'s PC; only @ here reaches it. @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.)');
-    expect(prompt).toContain('"EdBot" ("Edward"\'s bot) asked you: \u200B@Pete-Coder what works for Peter on Saturday?');
+    expect(prompt).toContain('"EdBot" ("Edward"\'s bot) asked you: @\u200BPete-Coder what works for Peter on Saturday?');
     thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "@EdBot Peter is free after 7." });
     await turns.settled("task-1", true);
     expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "@EdBot Peter is free after 7.", ask.id);
@@ -622,8 +622,8 @@ describe("a room bot's @ to this PC's bot", () => {
     turns.sent(ROOM, line(peter, "@Pete-Coder open @C:/Users/peter/plan.md", { replyToId: quoted.id }));
     await settle();
     const prompt = deps.startTurn.mock.calls[0]![2] as string;
-    expect(prompt).toContain("Room lines since your last answer:\nMina: see \u200B@C:/Users/peter/.ssh/id_ed25519\nEdward: and \u200B@~/notes.txt\nEdBot: \u200B@C:/Users/peter/secret.txt\nPete-Coder: saved \u200B@C:/Users/peter/q3.md\n");
-    expect(prompt).toContain("They replied to: Mina: \u200B@C:/x.txt\n");
+    expect(prompt).toContain("Room lines since your last answer:\nMina: see @\u200BC:/Users/peter/.ssh/id_ed25519\nEdward: and @\u200B~/notes.txt\nEdBot: @\u200BC:/Users/peter/secret.txt\nPete-Coder: saved @\u200BC:/Users/peter/q3.md\n");
+    expect(prompt).toContain("They replied to: Mina: @\u200BC:/x.txt\n");
     expect(prompt).toContain('"Peter" asked you: @Pete-Coder open @C:/Users/peter/plan.md');
   });
 

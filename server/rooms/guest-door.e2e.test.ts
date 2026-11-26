@@ -1079,7 +1079,7 @@ describe("bots in two homes hand work to each other", () => {
       "스타줌: Done: Sat 7:30 at Mapo. @Edward @JJ",
     ]);
     expect(joinedLog()).toEqual(log());
-    expect(prompts[0]).toContain('"Rando" ("Edward"\'s bot) asked you: \u200B@스타줌 Edward is free Sat after 6');
+    expect(prompts[0]).toContain('"Rando" ("Edward"\'s bot) asked you: @\u200B스타줌 Edward is free Sat after 6');
   });
 
   it("answers the host's @ on the teammate's PC, and runs a teammate's two asks in a row", async () => {
