@@ -66,6 +66,7 @@ import { warmViews } from "@/lib/warm-views";
 import { markColdOpen, noteCacheShown, noteChatShown, noteTerminalOpened, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
+import { useUsageOrderSync } from "@/lib/usage-order";
 import { trackFeature, trackScreen } from "@/lib/usage-stats";
 import "@/components/VerifyWatch.css";
 
@@ -142,6 +143,7 @@ function PhoneChatPages({ id, enabled, menuVisible, hidden, rider, order, onSele
 function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
+  useUsageOrderSync();
   const latestState = useRef(state);
   const handledTerminalAttention = useRef(new Set<string>());
   const pendingTerminalAcknowledgements = useRef(new Map<string, Set<string>>());

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { makeIdentityCanary, scanForCanary, type IdentityCanary } from "@/lib/identity-canary";
 import { usageBoardFixture } from "@/lib/usage-board.fixture";
 import type { UsageBoard } from "@/lib/usage-board";
+import { usageOrderHost } from "@/lib/usage-order.test-host";
 import type { AppSettingsSection, InstanceInfo } from "@/state/store";
 
 let m: {
@@ -24,6 +25,7 @@ let reply: (() => Promise<Response>) | null;
 let boardReply: (() => Promise<Response>) | null;
 let mutationReply: (() => Promise<Response>) | null;
 let calls: { path: string; init?: RequestInit }[];
+let wink: ReturnType<typeof usageOrderHost>;
 const matchMedia = window.matchMedia;
 const row = () => host.querySelector<HTMLElement>('[data-connection-account="claude"]');
 const button = (label: string, scope: ParentNode | null = host) => [...(scope?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((node) => node.textContent === label);
@@ -78,6 +80,7 @@ beforeEach(async () => {
     install: { login: { args: ["login"], deviceArgs: ["login", "--device"] } },
   }));
   calls = [];
+  wink = usageOrderHost();
   reply = null;
   boardReply = null;
   mutationReply = null;
@@ -85,6 +88,8 @@ beforeEach(async () => {
     const path = String(url);
     calls.push({ path, init });
     if (path.startsWith("/api/usage/board")) return boardReply ? boardReply() : Response.json(structuredClone(board));
+    const order = wink.answer(path, init);
+    if (order) return Response.json(await order);
     if (path.endsWith("/name")) return reply ? reply() : Response.json({ id: "claude", number: 1, nickname: "Studio", name: "Studio" });
     if (path === "/api/accounts" && init?.method === "POST" && mutationReply) return mutationReply();
     return new Promise<Response>(() => {});
@@ -377,7 +382,8 @@ it("persists Connections order in Usage and brings Usage changes back", async ()
   await move(row(), "ArrowDown");
   const changed = [ids[1], ids[0], ids[2]];
   expect(connectionOrder()).toEqual(changed);
-  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).claude).toEqual(changed);
+  await settle();
+  expect(wink.orders?.claude).toEqual(changed);
   await act(async () => store.dispatch({ type: "toggleAppSettings", section: "usage", open: true }));
   await settle();
   expect(usageOrder()).toEqual(changed);

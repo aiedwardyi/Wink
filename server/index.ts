@@ -145,6 +145,7 @@ import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
+import { nextUsageOrder, parseUsageOrderBody, usageOrderStatus } from "./usage-order.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse, usageReportWithAge } from "./usage-refresh.ts";
 import { createUsageSwapRefresh } from "./usage-swap-refresh.ts";
 import { usageStatusText } from "./usage-status.ts";
@@ -8213,6 +8214,7 @@ function configStatus() {
       googlePhoto: googlePhotoOffered(googleAccount.idToken(), googleAccount.owner()?.sub, cfg.profile),
     },
     rooms: { turnTimeoutMinutes: roomTurnTimeoutMinutes(cfg) },
+    usageOrder: usageOrderStatus(cfg.usageOrder),
     localVm: {
       mode: localVmMode(cfg),
       maxInstances: localVmMaxInstances(cfg),
@@ -9857,6 +9859,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (changingLocalVmMode) localVmModeChangeBusy = false;
         providerConfigBusy = false;
       }
+    }
+
+    // The order the user drags on Usage and Connections. It is a config.json setting so the
+    // config frame carries it to every client; a write needs none of the provider reload above.
+    if (method === "PUT" && path === "/api/usage-order") {
+      const next = nextUsageOrder(cfg.usageOrder, parseUsageOrderBody(await readBody(req)));
+      if (next) {
+        saveConfig({ usageOrder: next });
+        Object.assign(cfg, loadConfig());
+        broadcast({ kind: "config", ...configStatus() });
+      }
+      return json(res, 200, { usageOrder: usageOrderStatus(cfg.usageOrder) });
     }
 
     // ── voice ─────────────────────────────────────────────────────────
