@@ -167,6 +167,20 @@ describe("corpus", () => {
     expect(ask(lookup, botId, "osprey trellis")[0]).toContain("memory/decisions.md");
   });
 
+  it("finds a retired pick", async () => {
+    const botId = `bot-${randomUUID()}`;
+    sideFile(botId, "decisions.md", [
+      "# Decision timeline",
+      "",
+      "## 2026-11-18 17:32 | memory audit fix timing | current",
+      "- Picked: Fix tonight, in the amber quokka update",
+      "- Retired: 2026-11-19",
+      "",
+    ].join("\n"));
+    const { lookup } = await lookupFor(FILLER, { botId });
+    expect(ask(lookup, botId, "amber quokka")[0]).toContain("memory/decisions.md");
+  });
+
   it("finds every current pick, whatever date one of them names", async () => {
     const botId = `bot-${randomUUID()}`;
     sideFile(botId, "decisions.md", [

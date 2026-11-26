@@ -35,7 +35,7 @@ const DONE = "Done";
 const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2}\.\d{3})?)?(?: \(\d+\))?`;
 const ENTRY = new RegExp(String.raw`^## (${ID}) \| (.+?) \| (?:current|replaced by (${ID}))\s*$`);
 const TWEAK = new RegExp(String.raw`^- Tweak (${ID}): "(.*)"\s*$`);
-const FIELD = /^- (Picked|Kind|Done|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Thread|Message|Question|Binding): ?(.*?)\s*$/;
+const FIELD = /^- (Picked|Kind|Done|Retired|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Thread|Message|Question|Binding): ?(.*?)\s*$/;
 const SEPARATOR = "; ";
 /** An option's letter or number before its words, like "C - Reddit cards". */
 export const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
@@ -54,6 +54,8 @@ export type PickEntry = {
   /** A standing goal or spec: shown in every prompt in words until a done entry replaces it. */
   kind?: "goal";
   done?: boolean;
+  /** Day a finished one-off left the prompt; it stays on file, so lookup still finds it. */
+  retired?: string;
   picture?: Picture;
   over: string[];
   overPictures: Picture[];
@@ -154,6 +156,7 @@ export function parseTimeline(text: string): Timeline {
     else if (field === "Picked") entry.picked = value.replace(/^~~(.*)~~$/, "$1");
     else if (field === "Kind" && value === "goal") entry.kind = "goal";
     else if (field === "Done" && value === "yes") entry.done = true;
+    else if (field === "Retired" && /^\d{4}-\d{2}-\d{2}$/.test(value)) entry.retired = value;
     else if (field === "Picture") entry.picture = value ? pictureOf(value) : undefined;
     else if (field === "Over") entry.over = list(value);
     else if (field === "Over pictures") entry.overPictures = list(value).map(pictureOf);
@@ -179,6 +182,7 @@ export function renderTimeline({ head, entries }: Timeline): string {
       `- Picked: ${entry.replacedBy ? `~~${entry.picked}~~` : entry.picked}`,
       ...(entry.kind ? [`- Kind: ${entry.kind}`] : []),
       ...(entry.done ? ["- Done: yes"] : []),
+      ...(entry.retired ? [`- Retired: ${entry.retired}`] : []),
       ...(entry.picture ? [`- Picture: ${pictureText(entry.picture)}`] : []),
       ...(entry.over.length ? [`- Over: ${entry.over.join(SEPARATOR)}`] : []),
       ...(entry.overPictures.length ? [`- Over pictures: ${entry.overPictures.map(pictureText).join(SEPARATOR)}`] : []),
@@ -256,6 +260,8 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
       // a retried batch or an ask said twice in a row adds nothing; asking again after a reversal does
       if (!current || !said || (last && same(last.said, said)) || current.tweaks.some((tweak) => tweak.at === stamp && same(tweak.said, said))) continue;
       current.tweaks.push({ at: stamp, said });
+      // the user spoke to it again, so it is live until its newest words are done
+      delete current.retired;
       tweaks += 1;
       continue;
     }
@@ -389,12 +395,13 @@ export function mergeTimelines(a: string, b: string): string | null {
       const typed = Boolean(before.tapped) !== Boolean(entry.tapped) ? (before.tapped ? entry : before) : undefined;
       const bound = typed ?? (before.binding === "verified" ? before : entry.binding === "verified" ? entry : before.messageId ? before : entry);
       if (bound.messageId || bound.binding === "unbound") {
-        merged.set(key, { ...bound, source: key, replacedBy: undefined, tweaks: said(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra) });
+        merged.set(key, { ...bound, source: key, replacedBy: undefined, retired: before.retired ?? entry.retired, tweaks: said(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra) });
         continue;
       }
       const both: PickEntry = {
         ...before,
         picture: before.picture ?? entry.picture,
+        retired: before.retired ?? entry.retired,
         over: union(before.over, entry.over), overPictures: union(before.overPictures, entry.overPictures),
         files: union(before.files, entry.files), tweaks: said(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra),
       };
@@ -538,7 +545,7 @@ function goalsBlock(text: string | null | undefined, max = GOALS_PROMPT_TOKENS):
 /** The prompt's open goals, then its current picks, newest first, within `max` estimated tokens (every pick in full by default): whole lines while every other key still fits, then the pick alone, then its key. Empty when there are none. */
 export function picksBlock(text: string | null | undefined, max = Infinity): string {
   const goals = goalsBlock(text);
-  const live = currentPicks(text).reverse();
+  const live = currentPicks(text).filter((entry) => !entry.retired).reverse();
   if (!live.length) return goals;
   let out = HEADER;
   const listed: PickEntry[] = [];
@@ -564,4 +571,32 @@ export function currentOnly(text: string): string {
       return replaced ? "" : line;
     })
     .join("\n");
+}
+
+// a word that dates the action to the day it was said; "for now" and "from now on" do not
+const DATED = /(?<![\w.@])(?:tonight|today|right now|after \d{1,2}:\d{2})\b|(?<![\w.@]|\b(?:for|from) )now\b(?! on\b)/i;
+// a tweak is the user's raw words, so it dates the pick only by these
+const DATED_SAID = /(?<![\w.@])(?:tonight|expires? today|right now|after \d{1,2}:\d{2})\b/i;
+
+/** Marks current picks that are finished one-offs as retired today: their newest words date the action to a day now past, or done() says the PRs they name merged since. Null when none. */
+export function retirePicks(text: string, now: number, done: (entry: PickEntry) => boolean = () => false): string | null {
+  const timeline = parseTimeline(text);
+  const today = pickStamp(now).slice(0, 10);
+  let retired = 0;
+  for (const entry of timeline.entries) {
+    if (entry.replacedBy || entry.kind || entry.retired) continue;
+    const tweak = entry.tweaks.at(-1);
+    // a card question can say what holds "right now" before or after what it asks
+    const asked = entry.key.match(/[^.?!]*\?/g)?.join(" ") ?? entry.key;
+    const day = tweak ? DATED_SAID.test(tweak.said) && tweak.at.slice(0, 10) : DATED.test(`${asked}\n${entry.picked}`) && entry.id.slice(0, 10);
+    if (!(day && day < today) && !done(entry)) continue;
+    entry.retired = today;
+    retired += 1;
+  }
+  return retired ? renderTimeline(timeline) : null;
+}
+
+/** The prompt lines retired picks had, so a resumed session that still holds them is not told they no longer apply. */
+export function retiredLines(text: string | null | undefined): string[] {
+  return currentPicks(text).filter((entry) => entry.retired).flatMap((entry) => [pickLine(entry), shortLine(entry)]);
 }

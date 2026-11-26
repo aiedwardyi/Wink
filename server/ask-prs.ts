@@ -205,7 +205,7 @@ export function createAskPrs(deps: AskPrsDeps) {
       return once(told, threadId, kept.map(({ ask }) => closedAskLine(ask)).join("\n"), full);
     },
     /** Each PR the ask's ref names with when it merged, whatever the ask's status: undefined while one is unchecked, null once one is open, gone or failed. start begins the checks still owed. */
-    merged(botId: string, threadId: string, ask: TaskAsk, start = false): MergedPr[] | null | undefined {
+    merged(botId: string, threadId: string, ask: Pick<TaskAsk, "ref">, start = false): MergedPr[] | null | undefined {
       const dir = deps.repoDir(botId, threadId);
       const each = refPrs(ask.ref).map((pr) => ({ pr, last: placed(botId, dir, pr, start) }));
       if (!each.length || each.some(({ last }) => last && last.state !== "merged")) return null;

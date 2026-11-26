@@ -2,13 +2,14 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
+import { refPrs, type MergedPr } from "./ask-prs.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { AGY_TEXT_MODEL, exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
 import { isSignOut } from "./drivers/signout.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
-import { applyPicks, currentPicks, LABELED, parseTimeline, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
+import { applyPicks, currentPicks, entryTime, LABELED, parseTimeline, PICKS_FILE, pickKey, pickKeysList, retirePicks, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { loadProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
 import { redactRoomMemory, redactSecretsInText } from "./redact.ts";
@@ -95,6 +96,8 @@ export interface MemoryPassDeps {
   /** The bot's Auto notes switch, read live. */
   enabled(botId: string): boolean;
   busy(botId: string, threadId: string): boolean;
+  /** Each PR this text names with when it merged, as the last gh check found; start begins the checks still owed. */
+  merged?(botId: string, threadId: string, ref: string, start: boolean): MergedPr[] | null | undefined;
   dataDir: string;
   /** This PC; pending ids restored from another PC stay that PC's work while this copy syncs chats with it. */
   host?: string;
@@ -766,6 +769,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     return room ? deps.store.groupByThread(room[1])?.memberIds?.includes(room[0]) ? deps.store.bot?.(room[0]) : undefined : deps.store.botByThread(key);
   };
   const busy = (botId: string, key: string) => deps.busy(botId, sourceThread(key));
+  // every PR the pick names merged after it was picked
+  const prsMerged = (botId: string, threadId: string, entry: PickEntry) => {
+    const ref = [entry.key, entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n");
+    if (!refPrs(ref).length) return false;
+    const prs = deps.merged?.(botId, threadId, ref, true);
+    return Boolean(prs?.length && prs.every((pr) => (pr.mergedAt ?? 0) > entryTime(entry)));
+  };
 
   let claim = false;
   try {
@@ -903,9 +913,10 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     }
     // before MEMORY.md drops a replaced decision line, so a failed write never loses it; a retry lands each pick once
     const landed = changes.length ? applyPicks(timeline, changes) : null;
-    if (landed) {
+    const retired = retirePicks(landed?.text ?? timeline, now(), (entry) => prsMerged(botId, entry.thread ?? threadId, entry));
+    if (landed || retired) {
       try {
-        writeFileAtomic(join(ensureWorkspace(botId), "memory", PICKS_FILE), landed.text, { mode: 0o600 });
+        writeFileAtomic(join(ensureWorkspace(botId), "memory", PICKS_FILE), retired ?? landed!.text, { mode: 0o600 });
       } catch (error) {
         held.set(threadId, batch);
         log({ botId, threadId, facts: accepted.length, ms, result: "error" });

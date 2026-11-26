@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createBotRoutes } from "./bot-routes.ts";
 import { acceptFacts, attachedImages, createMemoryPass, type MemoryPass, type NoteGenerator } from "./memory-pass.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
-import { currentPicks, parseTimeline } from "./picks.ts";
+import { currentPicks, parseTimeline, picksBlock } from "./picks.ts";
 import type { GroupRecord, Message, StoreChange } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 import { timelinePicks } from "./timeline-picks.ts";
@@ -445,6 +445,20 @@ describe("decision timeline", () => {
       reply();
       await settle();
       expect(timeline()).toBe("");
+    });
+
+    it("retires a card pick once the PR it names merged after the tap", async () => {
+      const merged = vi.fn(() => [{ number: 2194, mergedAt: Date.now() }]);
+      pass.dispose();
+      pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged });
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Merge", subtitle: "Merge PR 2194 once CI is green?", options: ["Yes", "No"], askUser: true } });
+      answer(card, "Yes");
+      reply();
+      await settle();
+      expect(merged).toHaveBeenCalledWith(BOT, "t1", expect.stringContaining("PR 2194"), true);
+      expect(picks()).toEqual([["Merge PR 2194 once CI is green?", "Yes", card.id]]);
+      expect(timeline()).toMatch(/^- Retired: \d{4}-\d{2}-\d{2}$/m);
+      expect(picksBlock(timeline())).toBe("");
     });
   });
 

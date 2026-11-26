@@ -20,14 +20,15 @@ export function systemLedger(keepText = false, instanceId?: string) {
   };
   return {
     holds: (sessionId: string, system: string) => entry(sessionId)?.hash === digest(system),
-    prompt: (sessionId: string | null, system: string | undefined) => {
+    prompt: (sessionId: string | null, system: string | undefined, quiet?: ReadonlySet<string>) => {
       if (!system) return undefined;
       const previous = sessionId ? entry(sessionId) : undefined;
       if (!previous) return system;
       if (previous.hash === digest(system)) return undefined;
       if (!keepText) return system;
       if (systemLinesReordered(previous.text, system)) return system;
-      const update = withSystemChanges("", previous.text, system);
+      const update = withSystemChanges("", previous.text, system, undefined, quiet);
+      if (update === "") return undefined;
       return update && update.length < system.length ? update : system;
     },
     /** A turn is running: a crash before settle may follow a compaction. */

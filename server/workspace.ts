@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
-import { applyPicks, PICKS_FILE, picksBlock, pinnedGoals, timelineHolds, type PinnedGoal } from "./picks.ts";
+import { applyPicks, PICKS_FILE, picksBlock, pinnedGoals, retiredLines, timelineHolds, type PinnedGoal } from "./picks.ts";
 import { currentTurnTrace } from "./turn-timing.ts";
 
 export const WORKSPACES_DIR = join(DATA_DIR, "workspaces");
@@ -422,6 +422,10 @@ export function goalsOf(botId: string): PinnedGoal[] {
 /** The current picks block, the one copy chats and calls both read. */
 export function picksPrompt(botId: string): string {
   return picksBlock(readOptionalMemoryTopic(botId, PICKS_FILE));
+}
+
+export function retiredPickLines(botId: string): string[] {
+  return retiredLines(readOptionalMemoryTopic(botId, PICKS_FILE));
 }
 
 /** The memory block appended to a bot's system prompt. A short starter block

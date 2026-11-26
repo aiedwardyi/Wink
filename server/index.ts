@@ -337,6 +337,7 @@ import {
   workspaceDir,
   memoryHealth,
   memorySystemPrompt,
+  retiredPickLines,
   supportsWorkspaceFiles,
 } from "./workspace.ts";
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
@@ -3169,6 +3170,7 @@ const memoryPass = createMemoryPass({
   enabled: memoryJobEnabled,
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   host: deviceMachine,
+  merged: (botId, threadId, ref, start) => askPrs.merged(botId, threadId, { ref }, start),
 });
 const dreamLive = createDreamLive({
   dataDir: DATA_DIR,
@@ -6461,8 +6463,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           const delivered = resumeCursor === undefined ? undefined : store.sessionSystem(instanceId, resumeCursor);
           // A cursor with no record (saved before records existed) may hold any older text.
           const unknown = resumeCursor !== undefined && delivered === undefined;
-          const updated = (unknown ? null : withSystemChanges(text, delivered, system))
-            ?? (live.adapter.hasBackgroundWork?.(threadId) === true ? withSystemChanges(text, delivered ?? "", system, Infinity) : null);
+          const quiet = new Set(retiredPickLines(bot.id));
+          const updated = (unknown ? null : withSystemChanges(text, delivered, system, undefined, quiet))
+            ?? (live.adapter.hasBackgroundWork?.(threadId) === true ? withSystemChanges(text, delivered ?? "", system, Infinity, quiet) : null);
           if (updated !== null) ({ text, systemUpdate } = systemTurnInput(text, updated, instance.driverKind));
           else systemRecycle = true;
         }
@@ -6548,6 +6551,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
         system,
         systemUpdate,
+        systemQuiet: retiredPickLines(bot.id),
         approval,
         ...(readOnly ? { readOnly } : {}),
         attended: !isUnattended(bot.id),
