@@ -77,7 +77,10 @@ function namesPromise(line: string, promise: string, others: readonly string[]):
 // a final "I'll" that names its work, "the picker labels" or "PC A", is concrete; "I'll keep it simple" is where the turn stopped
 const concrete = (line: string) => {
   const marker = COMMIT.exec(line)!;
-  return DEFERRED.test(line) || /\b(?:the|my|your|our|their)\s+\p{L}|\p{Lu}|\p{N}/u.test(line.slice(marker.index + marker[0].length));
+  // Korean names its object before the ending, with 을/를 or a name
+  return DEFERRED.test(line) || (/^i/i.test(marker[0])
+    ? /\b(?:the|my|your|our|their)\s+\p{L}|\p{Lu}|\p{N}/u.test(line.slice(marker.index + marker[0].length))
+    : /\p{L}[을를]\s|\p{Lu}|\p{N}/u.test(line.slice(0, marker.index)));
 };
 // an answer says most of the question and more; "a good question", "I'll get back to you" and "I'm checking" never answer
 const TALK = new Set(["question", "good", "great", "fair", "interesting", "point"]);

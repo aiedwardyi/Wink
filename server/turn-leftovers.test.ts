@@ -53,6 +53,9 @@ describe("turn leftovers", () => {
     expect(turnLeftovers([user("Fix it"), tool(), bot("Fixed. I'll keep it simple.")])).toEqual([]);
     expect(turnLeftovers([user("Ship it"), tool(), bot("Shipped. I'll keep an eye on it.")])).toEqual([]);
     expect(turnLeftovers([user("Tests please"), bot("If you want, I'll add tests for the parser."), tool(), bot("Done.")])).toEqual([]);
+    expect(turnLeftovers([user("고쳐 주세요"), bot("API를 수정할게요.")])).toEqual([promise("API를 수정할게요.")]);
+    expect(turnLeftovers([user("고쳐 주세요"), bot("설정 파일을 수정할게요.")])).toEqual([promise("설정 파일을 수정할게요.")]);
+    expect(turnLeftovers([user("고쳐 주세요"), tool(), bot("확인할게요.")])).toEqual([]);
     const kept = ["I'll fix the API.", "I'll check if the backup exists.", "I'll implement the feature you want."];
     expect(turnLeftovers([user("Keep going."), ...kept.map((line) => bot(line, { summarized: true })), bot("Back soon.")])).toEqual(kept.map(promise));
   });
