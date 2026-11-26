@@ -86,9 +86,11 @@ const concrete = (line: string) => {
 };
 // an answer says most of the question and more; "a good question", "I'll get back to you" and "I'm checking" never answer
 const TALK = new Set(["question", "good", "great", "fair", "interesting", "point"]);
+// "I still need to check X" or "I haven't checked X yet" says the answer is to come
+const PENDING = /\b(?:still|yet|need(?:s)? to|have to|has to)\b|아직|해야/i;
 const answers = (asked: Set<string>, line: string) => {
   const found = words(line);
-  return !COMMIT.test(line) && !QUESTION.test(line) && !PROGRESS.test(line) && covered(asked, found) && [...found].some((term) => !asked.has(term) && !TALK.has(term));
+  return !COMMIT.test(line) && !QUESTION.test(line) && !PROGRESS.test(line) && !PENDING.test(line) && !(DENIED.test(line) && /\b(?:i|we)\b/i.test(line)) && covered(asked, found) && [...found].some((term) => !asked.has(term) && !TALK.has(term));
 };
 
 /** The messages a turn answered, oldest first: every user row back from its first row to the last reply, one folded in while it set up too. */

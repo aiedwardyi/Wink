@@ -44,7 +44,7 @@ describe("turn leftovers", () => {
     expect(turnLeftovers([user("go on"), bot("I'll update PC A."), bot("PC B is updated.")])).toEqual([promise("I'll update PC A.")]);
     expect(turnLeftovers([user("go on"), bot("I'll update folder 1."), bot("folder 2 is updated.")])).toEqual([promise("I'll update folder 1.")]);
     expect(turnLeftovers([user("Check the logs"), bot("I'll check the logs first."), tool(), bot("Logs are clean.")])).toEqual([promise("I'll check the logs first.")]);
-    expect(turnLeftovers([user("Release?"), bot("I'll read the release notes."), tool("RELEASE-NOTES.md", false), bot("I couldn't read the release notes.")])).toEqual([promise("I'll read the release notes.")]);
+    expect(turnLeftovers([user("Release?"), bot("I'll read the release notes."), tool("RELEASE-NOTES.md", false), bot("I couldn't read the release notes.")])).toEqual([promise("I'll read the release notes."), { ask: "Release?" }]);
   });
 
   it("files a final promise on a time or a named object, never an offer or a vague one", () => {
@@ -70,6 +70,12 @@ describe("turn leftovers", () => {
     expect(turnLeftovers([user(shortcuts.ask), bot("I'll get back to you.")])).toEqual([shortcuts]);
     expect(turnLeftovers([user(shortcuts.ask), bot("The keyboard shortcuts are a good question. I'll get back to you.")])).toEqual([shortcuts]);
     expect(turnLeftovers([user(shortcuts.ask), bot("I'm checking where the keyboard shortcuts are documented.")])).toEqual([shortcuts]);
+    expect(turnLeftovers([user(shortcuts.ask), bot("I still need to check where the keyboard shortcuts are documented.")])).toEqual([shortcuts]);
+    expect(turnLeftovers([user(shortcuts.ask), bot("I haven't checked where the keyboard shortcuts are documented yet.")])).toEqual([shortcuts]);
+    expect(turnLeftovers([user(shortcuts.ask), bot("I didn't find where the keyboard shortcuts are documented.")])).toEqual([shortcuts]);
+    // a plain negative still answers
+    expect(turnLeftovers([user(shortcuts.ask), bot("The keyboard shortcuts are not documented anywhere yet but GUIDE.md lists some.")])).toEqual([shortcuts]);
+    expect(turnLeftovers([user(shortcuts.ask), bot("The keyboard shortcuts are not documented outside GUIDE.md.")])).toEqual([]);
     const two = user(`What color should the ramp be? ${shortcuts.ask}`);
     expect(turnLeftovers([two, bot("The ramp should be blue.")])).toEqual([shortcuts]);
     expect(turnLeftovers([two, bot("The ramp should be blue."), user("What size?", { steered: true }), bot("The size is 14 px.")])).toEqual([shortcuts]);
