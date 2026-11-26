@@ -10,6 +10,7 @@ import { applySkin } from "@/lib/skins";
 import { FORUM_SELECTION } from "@/lib/board";
 import { closeShow, useMapThread, useTimelineThread, useToolsThread, useWorkersThread } from "@/lib/show-pane";
 import { WHATS_NEW } from "@/lib/whats-new";
+import { clipFacts } from "@/lib/testing/whats-new-clips";
 import { newerRelease } from "../../shared/release-order";
 import type { SceneModule } from "@/scenes/scene-host";
 
@@ -276,7 +277,7 @@ describe("whats new card", () => {
   });
 
   const clipsOf = (tile: (typeof WHATS_NEW)[string]["tiles"][number]) => [tile.clip, tile.lightClip].filter((clip): clip is string => Boolean(clip));
-  const moves = (clip: string) => readFileSync(join(".", clip)).includes("ANMF");
+  const moves = (clip: string) => (clipFacts(join(".", clip))?.durations.length ?? 0) > 1;
 
   it("ships every tile as a moving clip unless it says it is a still", () => {
     for (const [release, entry] of Object.entries(WHATS_NEW)) {
@@ -294,7 +295,7 @@ describe("whats new card", () => {
       render(release);
       seeAll();
       const frames = [...host.querySelectorAll(".whats-new-frame")].map((frame) => frame.firstElementChild?.tagName);
-      expect(frames, release).toEqual(entry.tiles.map(() => "IMG"));
+      expect(frames, release).toEqual(entry.tiles.map((tile) => (tile.clip.endsWith(".mp4") ? "VIDEO" : "IMG")));
       act(() => root.unmount());
       root = createRoot(host);
       observers = [];
@@ -577,17 +578,50 @@ describe("whats new card", () => {
     expect(frames()).toEqual(["CANVAS", "CANVAS"]);
   });
 
+  it("plays a video clip muted and inline on a loop, and holds a still when idle", async () => {
+    render("1.0.303");
+    seeAll();
+    const video = host.querySelector(".whats-new-frame")!.querySelector("video")!;
+    expect([video.autoplay, video.muted, video.loop, video.hasAttribute("playsinline")]).toEqual([true, true, true, true]);
+    expect(video.getAttribute("src")).toBe(WHATS_NEW["1.0.303"].tiles[0].clip);
+    await act(async () => document.documentElement.setAttribute("data-orbit-idle", "blur"));
+    expect(host.querySelector(".whats-new-frame")!.firstElementChild?.tagName).toBe("CANVAS");
+    await act(async () => document.documentElement.removeAttribute("data-orbit-idle"));
+  });
+
   it("keeps the previews small", () => {
     const dir = "src/assets/whats-new";
     const bytes = readdirSync(dir).reduce((sum, file) => sum + statSync(join(dir, file)).size, 0);
     expect(bytes).toBeLessThan(4 * 1024 * 1024);
   });
 
+  it("ships previews from 1.0.302 on sharp on a 2x screen", () => {
+    // the frame is the card's 560 px max width less its padding and borders
+    const minWidth = 2 * 524;
+    const dir = "src/assets/whats-new";
+    const soft = readdirSync(dir)
+      .filter((file) => !newerRelease("1.0.302", file.split("-")[0]))
+      .map((file) => `${file} ${clipFacts(join(dir, file))?.width ?? 0} px`)
+      .filter((line) => Number(line.split(" ")[1]) < minWidth);
+    expect(soft, `capture at deviceScaleFactor 2: a clip needs ${minWidth} source px or text blurs on a 2x screen`).toEqual([]);
+  });
+
+  it("plays previews from 1.0.302 on at 60 fps", () => {
+    const dir = "src/assets/whats-new";
+    const slow = readdirSync(dir)
+      .filter((file) => !newerRelease("1.0.302", file.split("-")[0]))
+      .filter((file) => {
+        const durations = clipFacts(join(dir, file))?.durations ?? [];
+        return durations.length === 0 || Math.max(...durations) > 1000 / 59;
+      });
+    expect(slow, "re-encode from the 60 fps capture: every frame 1/60 s, none held longer").toEqual([]);
+  });
+
   it("keeps animated previews moving smoothly", () => {
     const dir = "src/assets/whats-new";
     const failures: string[] = [];
-    for (const file of readdirSync(dir).filter((name) => name.endsWith(".webp"))) {
-      const durations = frameDurations(join(dir, file));
+    for (const file of readdirSync(dir)) {
+      const durations = clipFacts(join(dir, file))?.durations ?? [];
       if (durations.length === 0) continue;
       const motion = durations.slice(1, -1);
       const ms = motion.reduce((sum, duration) => sum + duration, 0);
@@ -599,20 +633,10 @@ describe("whats new card", () => {
   it("plays previews from 1.0.282 on at 20 fps or faster", () => {
     const dir = "src/assets/whats-new";
     const slow = readdirSync(dir).filter((file) => {
-      const durations = frameDurations(join(dir, file));
+      const durations = clipFacts(join(dir, file))?.durations ?? [];
       return durations.length > 0 && !newerRelease("1.0.282", file.split("-")[0]) && Math.min(...durations) > 50;
     });
     expect(slow, "a pan or zoom under 20 fps reads as lag: re-encode from the capture at 50 ms frames").toEqual([]);
   });
 });
 
-function frameDurations(path: string): number[] {
-  const data = readFileSync(path);
-  const durations: number[] = [];
-  for (let offset = 12; offset + 8 <= data.length; ) {
-    const size = data.readUInt32LE(offset + 4);
-    if (data.toString("ascii", offset, offset + 4) === "ANMF" && offset + 23 <= data.length) durations.push(data.readUIntLE(offset + 20, 3));
-    offset += 8 + size + (size % 2);
-  }
-  return durations;
-}
