@@ -29,6 +29,7 @@ const OPS = {
     wake_me: "chat",
     board_post: "chat",
     link_room_fix: "chat",
+    post_to_group: "chat",
     create_bot: "mutation",
     create_channel: "mutation",
     set_keep_going: "mutation",

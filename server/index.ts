@@ -56,7 +56,7 @@ import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.
 import { createUsageStats, type TurnFacts } from "./usage-stats.ts";
 import { watchLoopStalls } from "./loop-stalls.ts";
 import { openWhatsNew } from "./whats-new.ts";
-import { createRoomFixes, type RoomFixes } from "./room-fixes.ts";
+import { createRoomFixes, groupPostSchema, type RoomFixes } from "./room-fixes.ts";
 import { ghRun } from "./map-pr.ts";
 import { mapGit } from "./map-git.ts";
 import { openCallIntro } from "./call-intro.ts";
@@ -73,7 +73,7 @@ import { captureHostBotPicture, hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
-import { roomById } from "./rooms/db.ts";
+import { roomById, ROOM_TEXT_MAX } from "./rooms/db.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
 import { ownerRoomCode } from "./rooms/invites.ts";
 import { joinedRooms, leftByHand, myRoomBotThreads, roomTaskThreads, seatTaken } from "./rooms/joined.ts";
@@ -8710,6 +8710,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!body.success) return json(res, 400, { error: "bad request" });
         const linked = await roomFixes!.link({ botId: body.data.fromBotId, threadId: body.data.fromThreadId, sessionId: body.data.sessionId, title: body.data.title, room: body.data.room });
         return "error" in linked ? json(res, linked.error === "unknown sender" ? 403 : 400, linked) : json(res, 200, linked);
+      }
+      if (method === "POST" && path === "/api/internal/post-to-group") {
+        const source = commsCallers.resolve(req.headers.authorization);
+        if (!source) return json(res, 403, { error: "unknown sender" });
+        const body = groupPostSchema.safeParse(await readBody(req));
+        if (guestRoomTurn(source.botId, source.threadId)) return json(res, 403, { error: "Only the owner can ask you to post to a group." });
+        if (!body.success) return json(res, 400, { error: `post_to_group needs a group name and text up to ${ROOM_TEXT_MAX} characters.` });
+        const posted = roomFixes!.postToGroup(source.botId, body.data);
+        return "error" in posted ? json(res, posted.error === "unknown sender" ? 403 : 400, posted) : json(res, 200, posted);
       }
       // terminal_spawn, before the pane opens: the playbook hold, or the engine's usage left.
       if (method === "POST" && path === "/api/internal/spawn-usage") {
