@@ -68,6 +68,9 @@ describe("captured worker account projections", () => {
     owner = f.owner;
     t.after(() => f.host.dispose());
     const shell = await f.host.openForBot("bot-1", { label: "shell" });
+    // No prompt mark yet (a shell without them, as on Linux and macOS): nothing shows it idle.
+    assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 0, unknown: 1, generations: {} });
+    f.children[0].data(`\x1b]133;D;${shell.sessionId};0\x07`);
     assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 0, unknown: 0, generations: {} });
     await f.host.openForBot("bot-1", { label: "worker", command: "claude" });
     assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 0, unknown: 1, generations: {} });
