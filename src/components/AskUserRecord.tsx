@@ -1,5 +1,5 @@
-// A bot's ask_user question as it reads in the transcript. The pinned one is
-// answered above the composer; an older one still waiting keeps its choices here.
+// A bot's ask_user question as it reads in the transcript. While the composer's
+// dock holds the open questions, a waiting one shows there only; answered ones stay here.
 import { Check, CircleHelp, X } from "lucide-react";
 import type { Message } from "@/state/store";
 import { cn } from "@/lib/cn";

@@ -99,4 +99,35 @@ describe("GroupView ask records", () => {
     // nor the asker's name over an empty row
     expect(host.textContent).not.toContain("Atlas");
   });
+
+  it("an archive has no dock, so its waiting questions stay in the transcript", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const older: Message = { ...ask, card: { ...ask.card!, staysOpen: true } };
+    const newest: Message = { ...ask, id: "q2", at: 2, card: { ...ask.card!, subtitle: "Which branch?", staysOpen: true } };
+    const messages = [older, newest];
+    const group = { id: "room-1", name: "Room", threadId: "t1", messages } as unknown as Group;
+    await act(async () =>
+      root!.render(
+        createElement(
+          I18nProvider,
+          null,
+          createElement(Transcript, {
+            group,
+            members: [],
+            messages,
+            transcript: messages,
+            streamingMessage: null,
+            dock: null,
+            onReply: () => undefined,
+            onMessageMenu: () => undefined,
+            workers: [],
+            readOnly: true,
+          }),
+        ),
+      ),
+    );
+    expect(host.querySelectorAll('[data-ask-user-record="waiting"]')).toHaveLength(2);
+  });
 });

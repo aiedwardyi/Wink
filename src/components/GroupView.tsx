@@ -280,8 +280,10 @@ export const Transcript = memo(function Transcript({
   // Several bots working at once turn a room into a wall of chips; fold the
   // finished ones the same way a 1:1 chat does.
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
-  // the waiting cards the composer's dock holds take no row, so no asker label stands over an empty one
-  const dockedAsks = useMemo(() => new Set(pinnedQuestion(group.messages) ? openQuestions(group.messages).map((m) => m.id) : []), [group.messages]);
+  // the waiting cards the composer's dock holds take no row, so no asker label stands over an empty one;
+  // an archive has no dock, so its cards stay
+  const asksDocked = !readOnly && Boolean(pinnedQuestion(group.messages));
+  const dockedAsks = useMemo(() => new Set(asksDocked ? openQuestions(group.messages).map((m) => m.id) : []), [asksDocked, group.messages]);
   const items = useMemo(
     () => groupActivityRuns(
       streamingMessage ? [...messages, streamingMessage] : messages,
@@ -452,7 +454,7 @@ export const Transcript = memo(function Transcript({
                 message={m}
                 transcript={transcript}
                 askerName={memberOf(m.from?.botId)?.name ?? m.from?.name}
-                pinned={Boolean(pinnedQuestion(group.messages))}
+                pinned={asksDocked}
                 onPick={readOnly ? undefined : (answer) => dispatch({ type: "answerGroupCard", groupId: group.id, messageId: m.id, answer })}
               />
             </div>
