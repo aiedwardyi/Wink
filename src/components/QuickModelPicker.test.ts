@@ -209,16 +209,15 @@ describe("Quick picker style", () => {
     await act(async () => triggerBtn().click());
 
     expect(quickCard()?.getAttribute("data-flow")).toBeNull();
-    expect(quickCard()?.querySelector(".quick-card-neon")).toBeNull();
+    expect(quickCard()?.querySelector(".quick-thumb-neon")).toBeNull();
 
     await click('[data-quick-effort="xhigh"]');
-    expect(quickCard()?.querySelector('.quick-card-neon[data-flow="xhigh"]')).not.toBeNull();
-    expect(quickCard()?.querySelector(".quick-deck-aurora")).toBeNull();
+    expect(quickCard()?.getAttribute("data-flow")).toBe("xhigh");
+    expect(quickCard()?.querySelector(".quick-thumb-neon")).toBeNull();
     expect(quickCard()?.style.getPropertyValue("--quick-accent")).toBe(modelFamilyAccent("claudeAgent"));
 
     await click('[data-quick-effort="max"]');
-    expect(quickCard()?.querySelector('.quick-card-neon[data-flow="max"]')).not.toBeNull();
-    expect(quickCard()?.querySelector(".quick-deck-aurora")).not.toBeNull();
+    expect(quickCard()?.getAttribute("data-flow")).toBe("max");
     expect(quickCard()?.querySelector(".quick-thumb-neon")).not.toBeNull();
 
     await click('[data-quick-lab="codex"]');
@@ -349,12 +348,20 @@ describe("Quick picker style", () => {
     const heats: number[] = [];
     for (const level of levels) {
       await click(`[data-quick-effort="${level}"]`);
-      heats.push(Number(quickCard()!.querySelector<HTMLElement>("[data-quick-effort-deck]")!.style.getPropertyValue("--effort-heat")));
+      heats.push(Number(quickCard()!.style.getPropertyValue("--effort-heat")));
+      expect(quickCard()!.querySelector(".quick-card-neon")).not.toBeNull();
+      expect(quickCard()!.querySelector(".quick-deck-aurora")).not.toBeNull();
     }
     heats.forEach((heat, i) => expect(heat).toBeGreaterThan(i ? heats[i - 1]! : 0));
     expect(heats.at(-1)).toBe(1);
     const sheet = readFileSync(join(here, "QuickModelPicker.css"), "utf8");
-    expect(sheet).toMatch(/\.quick-thumb-body \{[^}]*var\(--effort-heat/);
+    for (const layer of ["quick-card", "quick-head-glow", "quick-card-neon", "quick-deck-aurora", "quick-effort-deck", "quick-effort-track", "quick-thumb-body"]) {
+      expect(sheet).toMatch(new RegExp(`\\.${layer} \\{[^}]*var\\(--effort-heat`));
+    }
+    for (const box of ["quick-card", "quick-effort-deck"]) {
+      expect(sheet, `.${box}: its glow layers overflow it; clip keeps a focus or click from scrolling it`).toMatch(new RegExp(`\\.${box} \\{[^}]*overflow: clip`));
+    }
+    expect(sheet, "Extra High must not jump: drive the layer from --effort-heat instead of a data-flow=\"xhigh\" rule").not.toMatch(/data-flow="xhigh"/);
   });
 
   it.each(["dial", "list", "chart"] as const)("leaves the %s header button as it is today at Max", async (view) => {

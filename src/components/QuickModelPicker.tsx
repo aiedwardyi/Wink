@@ -474,8 +474,8 @@ export function QuickModelPicker({
   const effortRatio = effortHeat(effortIndex, efforts.length);
   const shockLeftPct = efforts.length > 0 && effortIndex >= 0 ? `${(((effortIndex + 0.5) / efforts.length) * 100).toFixed(1)}%` : "85%";
   const glowX = efforts.length > 0 && effortIndex >= 0 ? `${Math.round(((effortIndex + 0.5) / efforts.length) * (spot.width - 24) - 90)}px` : "100px";
-  const glowOpacity = flowTier === "max" ? 0.84 : flowTier === "xhigh" ? 0.54 : Number((0.16 + effortRatio * 0.36).toFixed(2));
-  const glowScale = flowTier === "max" ? 1.24 : flowTier === "xhigh" ? 1.08 : Number((0.88 + effortRatio * 0.22).toFixed(2));
+  const glowOpacity = Number((effortRatio * 0.84).toFixed(2));
+  const glowScale = Number((0.88 + effortRatio * 0.36).toFixed(2));
   const deckBarTotal = barCountFor(efforts.length);
   const deckBarHeights = useMemo(() => barHeights(deckBarTotal, 4, 16), [deckBarTotal]);
   const litBars = filledBarCount(effortIndex, efforts.length, deckBarTotal);
@@ -502,12 +502,12 @@ export function QuickModelPicker({
       data-closing={closing || undefined}
       inert={closing || undefined}
       className="quick-card"
-      style={cssVars({ top: spot.top, right: spot.right, width: spot.width, maxHeight: spot.maxHeight, "--quick-accent": activeAccent, "--quick-view-accent": viewedAccent })}
+      style={cssVars({ top: spot.top, right: spot.right, width: spot.width, maxHeight: spot.maxHeight, "--quick-accent": activeAccent, "--quick-view-accent": viewedAccent, "--effort-heat": effortRatio })}
       onKeyDown={onKeyDown}
     >
       <div aria-hidden="true" className="quick-atmo" />
       <div aria-hidden="true" className="quick-head-glow" data-flow={flowTier !== "none" ? flowTier : undefined} />
-      {flowTier !== "none" && <div aria-hidden="true" className="quick-card-neon" data-flow={flowTier} />}
+      {effortIndex >= 0 && <div aria-hidden="true" className="quick-card-neon" />}
 
       <div className="quick-head">
         <div className="quick-head-left">
@@ -626,7 +626,7 @@ export function QuickModelPicker({
         style={cssVars({ "--quick-accent": activeAccent, "--shock-left": shockLeftPct, "--effort-heat": effortRatio })}
       >
         <div aria-hidden="true" className="quick-deck-glow" style={cssVars({ "--glow-x": glowX, "--glow-op": glowOpacity, "--glow-scale": glowScale })} />
-        {flowTier === "max" && <div aria-hidden="true" className="quick-deck-aurora" />}
+        {effortIndex >= 0 && <div aria-hidden="true" className="quick-deck-aurora" />}
         <div ref={sweepRef} aria-hidden="true" className="quick-deck-sweep" />
         <div ref={shockARef} aria-hidden="true" className="quick-shock" />
         <div ref={shockBRef} aria-hidden="true" className="quick-shock" />
