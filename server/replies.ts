@@ -21,8 +21,24 @@ export const typedByGuest = (author?: { kind: string; owner?: string }) => autho
 /** Words the host typed: never a teammate's, a bot's, a bot's mail or a summary. */
 export const typedByHost = (line: Line) => (line.author ? line.author.kind === "host" : line.role === "user" && !line.from && !line.comm);
 
-// the Claude CLI attaches whatever file an "@" starting a word names, with no ask; a zero-width space before it keeps the words
-export const inertMentions = (text: string) => text.replace(/(^|[\s\u3002\u3001\uFF1F\uFF01])@/g, "$1\u200B@");
+// Claude attaches the file an "@" starting a word names, and grok 1.0.92 the one after an "@" at the start, after a space,
+// a zero-width space or any of : , - / = \, with no ask; a zero-width space right after every "@" names no file in either
+export const inertMentions = (text: string) => text.replace(/@(?!\u200B)/g, "@\u200B");
+
+/** Prompt text whose every "@" may stand: Wink's own words, or words this PC's person typed. */
+export class PromptText {
+  readonly text: string;
+  constructor(text: string) {
+    this.text = text;
+  }
+}
+export const asIs = (text: string) => new PromptText(text);
+/** Prompt text from Wink's own template: every ${} value goes through inertMentions unless it is PromptText. */
+export const inert = (parts: TemplateStringsArray, ...values: readonly (string | PromptText)[]): PromptText =>
+  asIs(parts.reduce((out, part, index) => {
+    const value = values[index - 1]!;
+    return out + (value instanceof PromptText ? value.text : inertMentions(value)) + part;
+  }));
 
 /** A line's words as a prompt may carry them: a guest's @path names no file, and in a group nothing the host did not type does. */
 export const lineWords = (line: Line, text: string, group = false) => ((group ? !typedByHost(line) : typedByGuest(line.author)) ? inertMentions(text) : text);

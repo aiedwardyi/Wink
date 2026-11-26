@@ -62,7 +62,7 @@ import { mapGit } from "./map-git.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { createLaneHandoffs, createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
-import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
+import { accessRules, guestTurnInput, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed, sharedTurn } from "./rooms/guards.ts";
 import { ASK_DENY_NOTE, askById, askFromHost, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
@@ -79,6 +79,7 @@ import { ownerRoomCode } from "./rooms/invites.ts";
 import { joinedRooms, leftByHand, myRoomBotThreads, roomTaskThreads, seatTaken } from "./rooms/joined.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
 import { MyRoomBotTurns } from "./rooms/my-room-bots.ts";
+import { GuestSessions } from "./rooms/guest-sessions.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
 import { sweepRoomFiles } from "./rooms/files.ts";
 import { joinedFileRoute } from "./rooms/joined-files.ts";
@@ -2899,6 +2900,8 @@ const readOnlyTurnThreads = new Set<string>();
 const joinedRoomThreads = new Set<string>();
 /** Joined-room task threads whose current turn someone other than this PC's person asked for. */
 const joinedGuestThreads = new Set<string>();
+/** Threads whose native session only guests' read-only turns built. */
+const guestSessions = new GuestSessions();
 
 function settlePendingToolMessages(threadId: string, turnId?: string): void {
   const prefix = `${threadId}:`;
@@ -5890,10 +5893,14 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     // an unseeded session never got Wink's context, so it still recycles
     ...(nativeAt ? { native: !unseeded, reseedTokens: prepared.estimatedTokens } : {}),
   });
+  // Someone else's read-only turn never resumes a session an owner's turn built: that turn's file
+  // reads are in it. It starts over from the chat's words, even past background work.
+  const guestRecycle = (opts?.readOnly === true ? guestSessions.guestTurn(threadId) : (guestSessions.ownerTurn(threadId), false))
+    && !rewound && !fresh && task.resumeCursors[instanceId] !== undefined;
   // A recycle closes the live CLI and kills its background work. Resume it
   // instead; the first turn after that work settles recycles on the same checks.
-  let recycleDeferred = recycleWanted && !fresh && instance.adapter.hasBackgroundWork?.(threadId) === true;
-  const recycled = recycleWanted && !recycleDeferred;
+  let recycleDeferred = recycleWanted && !fresh && !guestRecycle && instance.adapter.hasBackgroundWork?.(threadId) === true;
+  const recycled = (recycleWanted && !recycleDeferred) || guestRecycle;
   // Transcript-replay engines never `--resume`; clearing an already-empty
   // map is a no-op. Resume-cursor engines drop the stale/fat session here.
   // Stop / crash Continuity on an uncompacted thread keeps the cursor.
@@ -5914,7 +5921,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   if (rewound || fresh || recycled || recycleDeferred) {
     console.info(`[session] ${JSON.stringify({
       threadId,
-      reason: rewound ? "rewound" : fresh ? "fresh" : recycleDeferred ? "recycle-deferred-background" : unseeded && !compactedThisTurn ? "unseeded" : recycleReason,
+      reason: rewound ? "rewound" : fresh ? "fresh" : recycleDeferred ? "recycle-deferred-background" : guestRecycle && !recycleWanted ? "guest" : unseeded && !compactedThisTurn ? "unseeded" : recycleReason,
       lastTurnToolRounds,
       sessionToolRounds,
       promptTokens: sessionPrompt?.last,
@@ -6576,7 +6583,26 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           limitWaits.track(bot.id, threadId, selection, opts?.limitWaitId, { unattended: opts?.unattended, keepGoingWake: opts?.keepGoingWake, paneNoteWake: opts?.paneNoteWake });
         }
         pendingInterruptThreads.started(threadId, bot.id, epoch);
-        const joined = await joinRunningTurn(live.adapter, { threadId, text, resumeCursor, systemUpdate }, runningTurnIdByThread.get(threadId));
+        const input = guestTurnInput({
+          ...(trace ? { trace } : {}),
+          threadId,
+          text,
+          model,
+          effort,
+          leanStartup,
+          resumeCursor,
+          resumeFallback: resumeCursor !== undefined ? { text: withLate(resumeFallback) } : undefined,
+          ...(nativeReplayPrefix ? { nativeReplayPrefix } : {}),
+          transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
+          system,
+          systemUpdate,
+          approval,
+          ...(readOnly ? { readOnly } : {}),
+          attended: !isUnattended(bot.id),
+          integrations,
+          cwd,
+        });
+        const joined = await joinRunningTurn(live.adapter, input, runningTurnIdByThread.get(threadId));
         if (joined) {
           disownedTurnIds.delete(joined.turnId);
           turnRegistry.started(joined.turnId, threadId);
@@ -6584,28 +6610,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           return joined;
         }
         trace?.input(currentPrompt, [...turnNotes, notesNotice, memoryNotice], durableTaskRecordText, systemUpdate);
-        trace?.assembled(system, text);
+        trace?.assembled(system, input.text);
         if (cwd) turnCwdByThread.set(threadId, cwd);
         else turnCwdByThread.delete(threadId);
-        return live.adapter.sendTurn({
-        ...(trace ? { trace } : {}),
-        threadId,
-        text,
-        model,
-        effort,
-        leanStartup,
-        resumeCursor,
-        resumeFallback: resumeCursor !== undefined ? { text: withLate(resumeFallback) } : undefined,
-        ...(nativeReplayPrefix ? { nativeReplayPrefix } : {}),
-        transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
-        system,
-        systemUpdate,
-        approval,
-        ...(readOnly ? { readOnly } : {}),
-        attended: !isUnattended(bot.id),
-        integrations,
-        cwd,
-      });
+        return live.adapter.sendTurn(input);
       });
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
       if (reservation) commit(reservation);
@@ -7687,7 +7695,7 @@ async function runClaimedGroupMemberTurn(
       pendingInterruptThreads.started(threadId, turnKey, epoch);
       if (cwd) turnCwdByThread.set(threadId, cwd);
       else turnCwdByThread.delete(threadId);
-      return live.adapter.sendTurn({
+      return live.adapter.sendTurn(guestTurnInput({
         threadId,
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
         system: roomSystem,
@@ -7697,7 +7705,7 @@ async function runClaimedGroupMemberTurn(
         cwd,
         integrations,
         ...memberTurnSelection(selection, bot.leanStartup),
-      });
+      }));
     })
       .then((started) => {
         bindInterruptedTurn(threadId, started.turnId, turnKey, epoch);
