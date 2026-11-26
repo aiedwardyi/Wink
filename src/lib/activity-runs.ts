@@ -363,23 +363,28 @@ export interface LiveTurnSteps {
 }
 
 /** Splits a running turn's bot texts so only the newest text renders in the quiet live line.
- * Steer replies and quick/sidekick/comm/voice lines stay out and remain visible bubbles. */
+ * Steer replies and quick/sidekick/comm/voice lines stay out and remain visible bubbles.
+ * `waitFloorId` is the tail row when the wait began: an unechoed send or a note there started the turn, later ones steer it. */
 export function liveTurnSteps(
   messages: readonly Message[],
   streaming: Message | null,
   waiting: boolean,
+  waitFloorId?: string,
 ): LiveTurnSteps {
   if (!waiting) return { hiddenIds: EMPTY_IDS, holdStream: false, fallbackText: null, stepIndex: -1 };
+  const floor = waitFloorId === undefined ? messages.length - 1 : messages.findIndex((row) => row.id === waitFloorId);
   let turnStart = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     const row = messages[i];
-    if (row.role === "user" && row.kind === "text" && !row.placeholder && !row.queued && !row.steered) {
+    if (row.queued || row.steered) continue;
+    const userLine = row.role === "user" && row.kind === "text" && (!row.placeholder || i <= floor);
+    if (userLine || (row.role === "bot" && row.kind === "note" && i <= floor)) {
       turnStart = i;
       break;
     }
   }
-  // a peer turn streams its labelled reply as before
-  if (turnStart < 0 || messages[turnStart].from) return { hiddenIds: EMPTY_IDS, holdStream: false, fallbackText: null, stepIndex: -1 };
+  // a peer turn streams its labelled reply as before; an unechoed send owns no rows yet, its turn's replies land after its echo
+  if (turnStart < 0 || messages[turnStart].from || messages[turnStart].placeholder) return { hiddenIds: EMPTY_IDS, holdStream: false, fallbackText: null, stepIndex: -1 };
   const turnTexts: Message[] = [];
   let afterSteer = false;
   for (let i = turnStart + 1; i < messages.length; i++) {

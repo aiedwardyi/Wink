@@ -1373,9 +1373,13 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   } : null, [waiting, turn.ended, turn.replying, bot.threadId, lastMessage?.id, lastMessage?.at]);
   const liveTail = laterCount === 0 && !jump.messages;
   const listedStreaming = liveTail ? streamingMessage : null;
+  const liveWaiting = waiting && !jump.messages;
+  const [waitFloor, setWaitFloor] = useState<{ on: boolean; id?: string }>({ on: false });
+  if (waitFloor.on !== liveWaiting) setWaitFloor({ on: liveWaiting, id: liveWaiting ? listed.at(-1)?.id : undefined });
+  const waitFloorId = waitFloor.on === liveWaiting ? waitFloor.id : liveWaiting ? listed.at(-1)?.id : undefined;
   const liveTurn = useMemo(
-    () => liveTurnSteps(listed, listedStreaming, waiting && !jump.messages),
-    [listed, listedStreaming, waiting, jump.messages],
+    () => liveTurnSteps(listed, listedStreaming, liveWaiting, waitFloorId),
+    [listed, listedStreaming, liveWaiting, waitFloorId],
   );
   const botFolder = activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd;
 
