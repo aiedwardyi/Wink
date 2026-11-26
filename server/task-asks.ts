@@ -56,10 +56,11 @@ const isQuestion = (ask: TaskAsk) => ask.kind === "question";
 const isPromise = (ask: TaskAsk) => ask.kind === "promise";
 const isRunning = (ask: TaskAsk) => isPromise(ask) && ask.status === "building";
 const RUNNING_NOTE = " One building is already running: check on it, never start it again.";
+const QUESTION_MARK = /[?？]$/;
 const isParked = (ask: TaskAsk, now: number) => isOpenAsk(ask) && ask.until !== undefined && ask.until > now;
 // a skipped question waits for a natural pause, so it never nags an ordinary turn
 const needsVerdict = (ask: TaskAsk, now: number) =>
-  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !isPromise(ask) && !ask.ref && now - Math.max(ask.changedAt, ask.until ?? 0) >= ASK_VERDICT_MS;
+  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !isPromise(ask) && !QUESTION_MARK.test(ask.ask) && !ask.ref && now - Math.max(ask.changedAt, ask.until ?? 0) >= ASK_VERDICT_MS;
 const words = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -147,27 +148,43 @@ const gist = (text: string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}]+/
 // #2073's: "PC A" and "PC B", or 4 pm and 5 pm: a number or one-letter name only one of them has keeps them apart
 const marks = (text: string) => [...new Set(text.replace(/\b(\d{1,2}):00\b/g, "$1").match(/\p{N}+|(?<![\p{L}\p{N}'’])\p{Lu}(?![\p{L}\p{N}'’])/gu)?.filter((mark) => mark !== "I"))].sort().join(" ");
 
-// a reworded repeat: most of the shorter one's words, or between a question and an ask three and half of them; "update the desktop toolbar icon" is never "... layout"
-function sameAsk(a: string, b: string, promises: boolean): boolean {
+// #2073's: a promise's words after "I'll" are all in the other's or theirs in its, so "update the main desktop toolbar icon" is never "... layout"
+const clause = (text: string) => gist(text.replace(/^.*?\bi(?:['’]ll| will)\b/i, ""));
+const within = (a: string, b: string) => {
+  const [p, q] = [clause(a), clause(b)];
+  return [...p].every((term) => q.has(term)) || [...q].every((term) => p.has(term));
+};
+
+// a reworded repeat: most of the shorter one's words, or between a question and an ask three and half of them
+function sameAsk(a: string, b: string, promises: boolean, promise: boolean): boolean {
   const [x, y] = [gist(a), gist(b)];
   const least = Math.min(x.size, y.size);
   const shared = [...x].filter((term) => y.has(term)).length;
-  return words(a) === words(b) || (least > 0 && marks(a) === marks(b) && (shared >= 0.8 * least || (!promises && shared >= 3 && shared * 2 >= least)));
+  return words(a) === words(b) || (least > 0 && marks(a) === marks(b) && (!promise || within(a, b)) && (shared >= 0.8 * least || (!promises && shared >= 3 && shared * 2 >= least)));
 }
 
-/** Closes the done ids, then files what a turn left open, a promise as kind promise, building with its line when it said the work is running, and the user's question as their ask; one an ask already has, open, done or declined, stays that ask. Null when nothing changes. */
-export function fileLeftovers(book: AskBook | undefined, left: readonly { ask: string; promise?: true; running?: string }[], now: number, done: readonly string[] = []): SavedAsks | null {
+/** Closes the settled ids or narrows them to what is left, then files what a turn left open, a promise as kind promise, building with its line when it said the work is running, and the user's question as their ask; one an ask already has, open, done or declined, stays that ask, and goes building when it is the running one. Null when nothing changes. */
+export function fileLeftovers(book: AskBook | undefined, left: readonly { ask: string; promise?: true; running?: string }[], now: number, settled: readonly { id: string; ask?: string }[] = []): SavedAsks | null {
   const asks = (book?.asks ?? []).map((item) => ({ ...item }));
   let lastAskId = lastAskIdOf(book);
   let changed = false;
   for (const item of asks) {
-    if (!isOpenAsk(item) || !done.includes(item.id)) continue;
-    Object.assign(item, { status: "done", changedAt: now });
+    const done = isOpenAsk(item) ? settled.find(({ id }) => id === item.id) : undefined;
+    if (!done) continue;
+    // shown 0: what changed rides to the next turn, so no engine redoes the finished part
+    Object.assign(item, done.ask ? { ask: clip(done.ask, ASK_LIMITS.ask), changedAt: now, shown: 0 } : { status: "done", changedAt: now });
     changed = true;
   }
   for (const item of left) {
-    const ask = clip(item.ask, ASK_LIMITS.ask);
-    if (!ask || asks.some((filed) => sameAsk(filed.ask, ask, isPromise(filed) && item.promise === true))) continue;
+    // a long question keeps its "?" so a later turn still reads it as one
+    const mark = item.promise ? undefined : QUESTION_MARK.exec(item.ask.trim())?.[0];
+    const ask = mark ? `${clip(item.ask.trim().slice(0, -1), ASK_LIMITS.ask - 1)}${mark}` : clip(item.ask, ASK_LIMITS.ask);
+    const repeat = ask ? asks.find((filed) => sameAsk(filed.ask, ask, isPromise(filed) && item.promise === true, item.promise === true)) : undefined;
+    if (repeat && item.running && isOpenAsk(repeat) && repeat.status !== "building") {
+      Object.assign(repeat, { status: "building", ref: clip(item.running, ASK_LIMITS.ref), changedAt: now, shown: 0 });
+      changed = true;
+    }
+    if (!ask || repeat) continue;
     lastAskId += 1;
     // shown 0: no turn showed it yet, so the next one does, resumed or not
     const filed: TaskAsk = { id: `A${lastAskId}`, ask, status: item.running ? "building" : "open", shown: 0, at: now, changedAt: now };

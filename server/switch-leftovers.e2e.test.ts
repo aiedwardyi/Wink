@@ -19,6 +19,7 @@ const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
 const ANSWER = "I'll answer the model-switch question from how Wink actually stores chats and tasks.";
 const PICKER = "I'll keep the picker changes moving.";
+const EXPORT = "I'll run the data export in the background.";
 let child: ChildProcess;
 let home: string;
 let prompts: string;
@@ -75,12 +76,16 @@ beforeAll(async () => {
   prompts = join(home, "claude-prompts.ndjson");
   const leave = join(home, "claude-leave.json");
   const result = (id: string) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: "notes" }] }] } });
-  writeFileSync(leave, JSON.stringify([
-    { type: "assistant", message: { id: "msg-1", stop_reason: "tool_use", content: [{ type: "text", text: "I'll update the picker labels." }, { type: "tool_use", id: "tu-1", name: "Read", input: { file_path: "notes.md" } }] } },
+  // a promise, a call, then a last line that finished nothing
+  const fixture = (path: string, promise: string, last: string) => writeFileSync(path, JSON.stringify([
+    { type: "assistant", message: { id: "msg-1", stop_reason: "tool_use", content: [{ type: "text", text: promise }, { type: "tool_use", id: "tu-1", name: "Read", input: { file_path: "notes.md" } }] } },
     result("tu-1"),
-    { type: "assistant", message: { id: "msg-2", stop_reason: "end_turn", content: [{ type: "text", text: "Back soon." }] } },
-    { type: "result", subtype: "success", is_error: false, result: "Back soon.", total_cost_usd: 0 },
+    { type: "assistant", message: { id: "msg-2", stop_reason: "end_turn", content: [{ type: "text", text: last }] } },
+    { type: "result", subtype: "success", is_error: false, result: last, total_cost_usd: 0 },
   ]));
+  fixture(leave, "I'll update the picker labels.", "Back soon.");
+  fixture(join(home, "claude-export.json"), EXPORT, "Back soon.");
+  fixture(join(home, "claude-running.json"), EXPORT, "Export running as PID 4128, leave it alone.");
   const claude = (environment: Record<string, string>) => ({ driver: "claudeAgent", environment: { FAKE_CLAUDE_PROMPT_LOG: prompts, ...environment }, config: { cli: `"${process.execPath}" "${FAKE_CLAUDE}"`, permissionMode: "bypassPermissions" } });
   const codex = (environment: Record<string, string>) => ({ driver: "codex", environment, config: { cli: `"${process.execPath}" "${FAKE_CODEX}"` } });
   writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({
@@ -93,6 +98,8 @@ beforeAll(async () => {
       codexDone: codex({ FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "The keyboard shortcuts are in GUIDE.md. I updated the picker labels.", phase: "final_answer" }]) }),
       claude: claude({}),
       claudeLeave: claude({ FAKE_CLAUDE_REPLY_FIXTURE: leave }),
+      claudeExport: claude({ FAKE_CLAUDE_REPLY_FIXTURE: join(home, "claude-export.json") }),
+      claudeRunning: claude({ FAKE_CLAUDE_REPLY_FIXTURE: join(home, "claude-running.json") }),
     },
   }));
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
@@ -115,7 +122,7 @@ beforeAll(async () => {
   await waitFor(async () => Boolean((await globalThis.fetch(`${BASE}/api/health`).catch(() => null))?.ok), "the server");
   await waitFor(async () => {
     const instances = (await api("GET", "/api/instances")).body.instances;
-    return ["codex", "codexLogs", "codexLeave", "codexDone", "claude", "claudeLeave"].every((id) => instances.find((row: any) => row.instanceId === id)?.snapshot.state === "available");
+    return ["codex", "codexLogs", "codexLeave", "codexDone", "claude", "claudeLeave", "claudeExport", "claudeRunning"].every((id) => instances.find((row: any) => row.instanceId === id)?.snapshot.state === "available");
   }, "the engines");
 }, 60_000);
 
@@ -187,4 +194,16 @@ it("gives a resumed session what its last turn left open, once", async () => {
   expect(next).toMatch(/^- A1 open promise \d\d-\d\d: I'll update the picker labels\.$/m);
   expect(await claudeTurn(id, "thanks")).not.toContain("I'll update the picker labels.");
   expect(asks(threadId)).toHaveLength(1);
+}, 90_000);
+
+it("tells the next engine a filed job a later turn started is running, never to start it", async () => {
+  const { id, threadId } = await bot("claudeExport", "claude-fake");
+  await turn(id, "Export the data");
+  expect(asks(threadId)).toMatchObject([{ id: "A1", ask: EXPORT, status: "open", kind: "promise" }]);
+  await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId: "claudeRunning", model: "claude-fake" } });
+  await turn(id, "go on");
+  expect(asks(threadId)).toMatchObject([{ id: "A1", status: "building", ref: "Export running as PID 4128" }]);
+  const input = await switched(id, "ok");
+  expect(input).toMatch(/^- A1 building promise \d\d-\d\d: I'll run the data export in the background\. \(Export running as PID 4128\)$/m);
+  expect(input).toContain("never start it again");
 }, 90_000);

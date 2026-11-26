@@ -8,8 +8,11 @@ const DEFERRED = /\b(?:later|tomorrow|tonight|today|overnight|noon|midnight|when
 const FILLER = /^(?:(?:ok(?:ay)?|sure|got it|alright)[,!.]?\s+)?(?:let me|lemme|one (?:moment|sec(?:ond)?)|give me a (?:sec(?:ond)?|moment|minute)|hold on|just a (?:sec(?:ond)?|moment))\b|^(?:잠시만|잠깐만)/i;
 // an offer waits on the user's yes; "check if it exists" and "the feature you want" are still promises
 const OFFER = /\b(?:if|unless) (?:you|needed|wanted|useful|helpful)\b|\b(?:want me to|would you like|shall i|maybe|perhaps)\b|원하시면|괜찮으시면/i;
-const REPORT = /\b(?:done|checked|fixed|finished|confirmed|verified|sent|merged|tested)\b|했어요|했습니다|완료/i;
+const REPORTED = new Set(["done", "checked", "fixed", "finished", "confirmed", "verified", "sent", "merged", "tested"]);
+const REPORT_KO = /했어요|했습니다|완료/;
 const DENIED = /\b(?:not|never|no|cannot)\b|n['’]t\b|(?:^|\s)(?:안|못)\s/i;
+// "still needs to be fixed" and "Please read the notes" say it is not done yet
+const UNDONE = /\b(?:still|yet|needs?|has to|have to|should|must|pending|remains?|please)\b|^(?:can|could|would) you\b/i;
 const HEDGED = /\b(?:if|unless|maybe|perhaps|in case)\b/i;
 // #2073's take-back: it opens its sentence, and one that names nothing is about the promise right before it
 const WITHDRAWN = /^(?:(?:actually|oh|oops|sorry|wait|no)[,!.]?\s+)*(?:scratch that|never ?mind|cancel that)\b|취소할게요/i;
@@ -23,7 +26,7 @@ const QUESTION = /[?？]$/;
 const sentences = (text: string) => text.replace(CODE, "$1").split(SENTENCE)
   .map((part) => part.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim()).filter(Boolean);
 // "Logs are clean, no errors" still reports the logs; "I couldn't rebuild the picker" reports nothing
-const clauses = (line: string) => line.split(/[,;:]\s*|\s+(?:but|though)\s+/i).map((part) => part.trim()).filter((part) => part && !DENIED.test(part));
+const clauses = (line: string) => line.split(/[,;:]\s*|\s+(?:but|though)\s+/i).map((part) => part.trim()).filter((part) => part && !DENIED.test(part) && !UNDONE.test(part));
 const said = (row: Message) => row.role === "bot" && row.kind === "text" && !row.roomEcho && Boolean(row.text?.trim());
 const PLAIN = new Set(["a", "an", "the", "i", "me", "my", "myself", "you", "your", "yourself", "we", "us", "our", "it", "its", "this", "that", "these", "those", "there", "here", "them", "they", "their", "to", "of", "for", "on", "in", "at", "with", "from", "into", "about", "up", "out", "off", "as", "and", "or", "but", "so", "if", "then", "than", "until", "also", "just", "now", "still", "really", "actually", "sorry", "okay", "ok", "anyway", "instead", "though", "again", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had", "will", "would", "can", "could", "going", "s", "t", "ll", "ve", "re", "d", "m", "그거", "그건", "이거"]);
 const COMMON = new Set("all and any are but can for get got had has how its let new not now off one our out see the too two was way who why you".split(" "));
@@ -85,24 +88,68 @@ function namesPromise(line: string, promise: string, others: readonly string[]):
     && others.map(shared).every((theirs) => theirs.length < hits.length && theirs.every((word) => hits.includes(word)));
 }
 
-// "The icon is updated" never finishes "update the icon and layout"; "Please update the labels" finishes nothing
-function finished(line: string, promise: string, others: readonly string[]): boolean {
-  const does = verb(promise);
-  const found = terms(line);
-  return (REPORT.test(line) || (does !== undefined && pastOf(does).some((form) => found.has(form)))) && namesPromise(line, promise, others);
+// "I set it", "It is fixed", "Updated the labels": said as done; "Please set it" never is
+const DONE_BY = new Set(["i", "we", "i've", "we've", "is", "are", "was", "were", "has", "have", "had", "been", "it's", "that's", "they're", "they've"]);
+const SOFT = new Set(["just", "already", "now", "also", "all", "both", "finally", "successfully", "fully"]);
+function statesDone(line: string, does: string | undefined): boolean {
+  if (REPORT_KO.test(line)) return true;
+  const past = new Set([...(does ? pastOf(does) : []), ...REPORTED]);
+  return clauses(line).some((part) => {
+    const said = part.toLowerCase().replace(/’/g, "'").match(/[\p{L}\p{N}']+/gu) ?? [];
+    return said.some((word, at) => {
+      if (!past.has(word)) return false;
+      let by = at - 1;
+      while (by >= 0 && SOFT.has(said[by]!)) by -= 1;
+      return by < 0 ? word !== does : DONE_BY.has(said[by]!);
+    });
+  });
 }
 
-/** The open promises and the user's open questions this turn settled: a promise its text reports done, whole, and a question its shown reply took up. */
-export function settledAsks(rows: readonly Message[], asks: readonly TaskAsk[] | undefined): string[] {
+// "The icon is updated" never finishes "update the icon and layout"; "Please update the labels" finishes nothing
+const finished = (line: string, promise: string, others: readonly string[]) => statesDone(line, verb(promise)) && namesPromise(line, promise, others);
+
+const LEAD = /^(?:the|a|an|my|your|our|its|their)\s+/i;
+// "I'll update the icon and layout": each thing after the action finishes on its own
+function parts(promise: string): { head: string; items: string[]; end: string } | null {
+  const marker = COMMIT.exec(promise);
+  if (!marker || !/^i/i.test(marker[0])) return null;
+  const from = marker.index + marker[0].length;
+  const split = /^(\s*\p{L}+\s+)(.+?)([.!]*)$/u.exec(promise.slice(from));
+  const items = split?.[2]!.split(/\s*,\s*(?:and\s+)?|\s+(?:and|&)\s+/i).filter(Boolean) ?? [];
+  if (items.length < 2) return null;
+  const lead = LEAD.exec(items[0]!)?.[0] ?? "";
+  return { head: promise.slice(0, from) + split![1], items: items.map((item) => LEAD.test(item) ? item : lead + item), end: split![3]! };
+}
+const rest = ({ head, end }: { head: string; end: string }, items: readonly string[]) =>
+  `${head}${items.length > 2 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items.join(" and ")}${end}`;
+
+// an answer adds what the question did not say; "The shortcuts are a good question" only names it
+const TALK = new Set(["question", "good", "great", "fair", "interesting", "point"]);
+
+/** id: closed; with ask, only that part is left and the ask narrows to it */
+export interface Settled { id: string; ask?: string }
+
+/** The open promises and the user's open questions this turn settled: a promise its text reports done, whole or in part, and a question a shown line answers. */
+export function settledAsks(rows: readonly Message[], asks: readonly TaskAsk[] | undefined): Settled[] {
   const open = (asks ?? []).filter((ask) => isOpenAsk(ask) && (ask.kind === "promise" || (!ask.kind && QUESTION.test(ask.ask))));
   if (!open.length) return [];
   const text = rows.filter((row) => said(row) && !row.quick);
   const reports = text.flatMap((row) => sentences(row.text!)).filter((line) => !COMMIT.test(line) && !QUESTION.test(line));
-  const seen = words(text.filter((row) => !row.summarized).flatMap((row) => sentences(row.text!).flatMap(clauses)).join("\n"));
+  const shown = text.filter((row) => !row.summarized).flatMap((row) => sentences(row.text!))
+    .filter((line) => !COMMIT.test(line) && !QUESTION.test(line)).map((line) => words(clauses(line).join(" ")));
   const promises = open.filter((ask) => ask.kind === "promise").map((ask) => ask.ask);
-  return open.filter((ask) => ask.kind === "promise"
-    ? reports.some((line) => finished(line, ask.ask, promises.filter((other) => other !== ask.ask)))
-    : covered(words(ask.ask), seen)).map((ask) => ask.id);
+  return open.flatMap((ask): Settled[] => {
+    if (ask.kind !== "promise") {
+      const asked = words(ask.ask);
+      return shown.some((said) => covered(asked, said) && [...said].some((term) => !asked.has(term) && !TALK.has(term))) ? [{ id: ask.id }] : [];
+    }
+    const others = promises.filter((other) => other !== ask.ask);
+    if (reports.some((line) => finished(line, ask.ask, others))) return [{ id: ask.id }];
+    const split = parts(ask.ask);
+    const left = split?.items.filter((item) => !reports.some((line) => finished(line, rest(split, [item]), others))) ?? [];
+    if (!split || left.length === split.items.length) return [];
+    return [left.length ? { id: ask.id, ask: rest(split, left) } : { id: ask.id }];
+  });
 }
 
 /** running: the line that said it is underway */
@@ -115,7 +162,8 @@ export function turnLeftovers(rows: readonly Message[]): Leftover[] {
   // a turn with no "I'll" reads no further
   const from = rows.findIndex((row) => own(row) && COMMIT.test(row.text!));
   const lines = from < 0 ? [] : rows.slice(from).flatMap((row) => row.tool
-    ? [{ line: [row.tool.name, row.tool.summary, ...(row.tool.writes ?? [])].join(" "), commit: false, tool: true }]
+    // a failed call did nothing
+    ? row.tool.ok === false ? [] : [{ line: [row.tool.name, row.tool.summary, ...(row.tool.writes ?? [])].join(" "), commit: false, tool: true }]
     : !own(row) ? []
     : sentences(row.text!).map((line) => ({ line, tool: false, commit: COMMIT.test(line) && !OFFER.test(line) && !FILLER.test(line) && !QUESTION.test(line) && (row !== last || DEFERRED.test(line)) })));
   for (const [at, { line }] of lines.entries()) {
@@ -145,7 +193,11 @@ export function turnLeftovers(rows: readonly Message[]): Leftover[] {
     if (!about.length) continue;
     const last = about.reduce((pick, said) => (said && (!pick || said.at < pick.at) ? said : pick), undefined);
     if (last && RUNNING.test(last.text)) left.unshift({ ask: line, promise: true, running: last.text });
-    else if (about.some((said) => !said)) left.unshift({ ask: line, promise: true });
+    else if (about.some((said) => !said)) {
+      const split = parts(line);
+      const open = split?.items.filter((item) => [...words(item.replace(TIMES, " "))].some((term) => !latest.has(term))) ?? [];
+      left.unshift({ ask: split && open.length && open.length < split.items.length ? rest(split, open) : line, promise: true });
+    }
   }
   const asked = rows.flatMap((row, at) => row.role === "user" && row.kind === "text" && row.text?.trim() && (!row.quick || row.quick.state === "handoff") && (at === 0 || row.steered) ? [at] : []);
   const shown = (row: Message) => said(row) && !row.summarized;

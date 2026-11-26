@@ -7,12 +7,14 @@ import { settledAsks, turnLeftovers } from "./turn-leftovers.ts";
 let n = 0;
 const user = (text: string, extra: Partial<Message> = {}): Message => ({ id: `m${++n}`, role: "user", kind: "text", text, at: n, ...extra });
 const bot = (text: string, extra: Partial<Message> = {}): Message => ({ id: `m${++n}`, role: "bot", kind: "text", text, at: n, ...extra });
-const tool = (summary = ""): Message => ({ id: `m${++n}`, role: "bot", kind: "activity", tool: { name: "Read", ok: true, summary }, at: n });
+const tool = (summary = "", ok = true): Message => ({ id: `m${++n}`, role: "bot", kind: "activity", tool: { name: "Read", ok, summary }, at: n });
 const ask = (id: string, text: string, status: TaskAsk["status"], kind?: TaskAsk["kind"]): TaskAsk => {
   const filed: TaskAsk = { id, ask: text, status, at: 1, changedAt: 1 };
   if (kind) filed.kind = kind;
   return filed;
 };
+// one settled turn: what it closed, narrowed and left open
+const settle = (rows: Message[], asks: TaskAsk[]) => fileLeftovers({ asks, lastAskId: asks.length }, turnLeftovers(rows), 9, settledAsks(rows, asks))?.asks ?? asks;
 
 describe("turn leftovers", () => {
   it("files the promises Codex's hidden notes made and its final never took up, and the question a steer talked over merges into one", () => {
@@ -84,7 +86,6 @@ describe("turn leftovers", () => {
   });
 
   it("keeps the part of a promise the turn did not finish, and a job it reported running files as running", () => {
-    expect(turnLeftovers([user("Polish the toolbar"), bot("I'll update the icon and layout."), tool(), bot("The icon is updated.")])).toEqual([{ ask: "I'll update the icon and layout.", promise: true }]);
     expect(turnLeftovers([user("Picker?"), bot("I'll rebuild the picker."), tool(), bot("I couldn't rebuild the picker.")])).toEqual([{ ask: "I'll rebuild the picker.", promise: true }]);
     const running = turnLeftovers([user("Export the data"), bot("I'll run the data export in the background."), tool("export.ps1"), bot("Export running as PID 4128, leave it alone.")]);
     expect(running).toEqual([{ ask: "I'll run the data export in the background.", promise: true, running: "Export running as PID 4128" }]);
@@ -117,10 +118,10 @@ describe("turn leftovers", () => {
 
   it("closes a carried promise the next turn reports done and a question it answered, and only those", () => {
     const open = [ask("A1", "I'll update the picker labels.", "open", "promise"), ask("A2", "Where are the keyboard shortcuts documented?", "open"), ask("A3", "I'll update the icon and layout.", "open", "promise"), ask("A4", "Pick the ramp color", "open")];
-    expect(settledAsks([user("go on"), bot("The keyboard shortcuts are in GUIDE.md. I updated the picker labels.")], open)).toEqual(["A1", "A2"]);
-    // half of a promise, a failure, a repeat, an instruction and the user's own ask close nothing
-    for (const reply of ["The icon is updated.", "I couldn't update the picker labels.", "I'll update the picker labels.", "Please update the picker labels.", "The ramp color is blue."]) expect(settledAsks([user("go on"), bot(reply)], open)).toEqual([]);
-    const saved = fileLeftovers({ asks: open, lastAskId: 4 }, [{ ask: "I'll update the picker labels.", promise: true }], 9, ["A1", "A2"])!;
+    expect(settledAsks([user("go on"), bot("The keyboard shortcuts are in GUIDE.md. I updated the picker labels.")], open)).toEqual([{ id: "A1" }, { id: "A2" }]);
+    // a failure, a repeat, an instruction and the user's own ask close nothing
+    for (const reply of ["I couldn't update the picker labels.", "I'll update the picker labels.", "Please update the picker labels.", "The ramp color is blue."]) expect(settledAsks([user("go on"), bot(reply)], open)).toEqual([]);
+    const saved = fileLeftovers({ asks: open, lastAskId: 4 }, [{ ask: "I'll update the picker labels.", promise: true }], 9, [{ id: "A1" }, { id: "A2" }])!;
     expect(saved.asks.map((item) => item.status)).toEqual(["done", "done", "open", "open"]);
   });
 
@@ -130,5 +131,54 @@ describe("turn leftovers", () => {
     const started = performance.now();
     for (let i = 0; i < 20; i++) turnLeftovers(rows);
     expect((performance.now() - started) / 20).toBeLessThan(2);
+  });
+
+  it("marks an existing promise the turn reports running as building with its line, so the next reply checks on it", () => {
+    const filed = [{ ...ask("A1", "I'll run the data export in the background.", "open", "promise"), shown: 5 }];
+    const after = settle([user("Export the data"), bot("I'll run the data export in the background."), tool("export.ps1"), bot("Export running as PID 4128, leave it alone.")], filed);
+    expect(after).toEqual([expect.objectContaining({ id: "A1", status: "building", ref: "Export running as PID 4128" })]);
+    const next = asksNudge(after, 10, "ok");
+    expect(next).toContain("- A1 building promise 01-01: I'll run the data export in the background. (Export running as PID 4128)");
+    expect(next).toContain("never start it again");
+  });
+
+  it("closes nothing on an acknowledgment, a request, a still-needs or a failure, and closes what a line says is done", () => {
+    const open = [ask("A1", "Where are the keyboard shortcuts documented?", "open"), ask("A2", "I'll read the release notes.", "open", "promise"), ask("A3", "I'll set the backup schedule.", "open", "promise"), ask("A4", "I'll fix the picker labels.", "open", "promise")];
+    for (const reply of ["The keyboard shortcuts are a good question. I'll get back to you.", "Please read the release notes.", "Please set the backup schedule.", "The picker labels still need to be fixed.", "I couldn't read the release notes."]) {
+      expect(settle([user("go on"), bot(reply)], open).map((item) => item.status)).toEqual(["open", "open", "open", "open"]);
+    }
+    expect(settle([user("go on"), bot("I read the release notes. I set the backup schedule. The picker labels are fixed.")], open).map((item) => item.status)).toEqual(["open", "done", "done", "done"]);
+    // in the turn that promised it
+    const read = { ask: "I'll read the release notes.", promise: true };
+    expect(turnLeftovers([user("Release?"), bot("I'll read the release notes."), tool("RELEASE-NOTES.md", false), bot("I couldn't read the release notes.")])).toEqual([read]);
+    expect(turnLeftovers([user("Release?"), bot("I'll read the release notes."), bot("Please read the release notes.")])).toEqual([read]);
+    expect(turnLeftovers([user("Picker?"), bot("I'll fix the picker labels."), tool(), bot("The picker labels still need to be fixed.")])).toEqual([{ ask: "I'll fix the picker labels.", promise: true }]);
+  });
+
+  it("keeps the main desktop toolbar layout apart from its icon, open or done, a promise or the user's ask", () => {
+    const layout = { ask: "I'll update the main desktop toolbar layout.", promise: true as const };
+    for (const status of ["open", "done"] as const) {
+      expect(fileLeftovers({ asks: [ask("A1", "I'll update the main desktop toolbar icon.", status, "promise")], lastAskId: 1 }, [layout], 9)?.asks).toHaveLength(2);
+      expect(fileLeftovers({ asks: [ask("A1", "Update the main desktop toolbar icon", status)], lastAskId: 1 }, [layout], 9)?.asks).toHaveLength(2);
+    }
+    expect(fileLeftovers(undefined, [{ ask: "I'll update the main desktop toolbar icon.", promise: true }, layout], 9)?.asks).toHaveLength(2);
+  });
+
+  it("narrows a half-done promise to what is left and closes it once that is done", () => {
+    expect(turnLeftovers([user("Polish the toolbar"), bot("I'll update the icon and layout."), tool(), bot("The icon is updated.")])).toEqual([{ ask: "I'll update the layout.", promise: true }]);
+    const half = settle([user("go on"), bot("The icon is updated.")], [ask("A1", "I'll update the icon and layout.", "open", "promise")]);
+    expect(half).toEqual([expect.objectContaining({ id: "A1", status: "open", ask: "I'll update the layout." })]);
+    expect(settle([user("go on"), bot("The layout is updated.")], half)[0]).toMatchObject({ id: "A1", status: "done" });
+  });
+
+  it("closes a long question its exact answer takes up, and never nags a question or promise to be built", () => {
+    const question = "Where are the keyboard shortcuts for the color picker documented, and can I change them from the settings page?";
+    const filed = settle([user(question), user("Color?", { steered: true }), bot("Blue.")], []);
+    expect(filed).toEqual([expect.objectContaining({ id: "A1", status: "open" })]);
+    expect(filed[0]!.ask).toHaveLength(80);
+    const late = 9 + ASK_VERDICT_MS;
+    for (const nudge of [asksNudge(filed, late, "Thanks"), asksNudge([ask("A1", "Where are the keyboard shortcuts documented?", "open"), ask("A2", "I'll update the picker labels.", "open", "promise")], late, "Thanks")]) expect(nudge).not.toMatch(/build, park or close|needs? (a )?verdict/);
+    const answered = settle([user("go on"), bot("The keyboard shortcuts for the color picker are documented in GUIDE.md, and you can change them from the settings page.")], filed);
+    expect(answered[0]).toMatchObject({ id: "A1", status: "done" });
   });
 });
