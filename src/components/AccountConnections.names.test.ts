@@ -405,26 +405,41 @@ it.each([
   while (line && line !== row() && !line.textContent?.includes("Claude 1")) line = line.parentElement;
   expect(line, "it sits on the name row, not on the account as a whole").not.toBe(row());
   expect(button(action, row()), `${action} shows`).toBeTruthy();
-  expect(line!.contains(button(action, row())!), `${action} sits on its own row, clear of the menu`).toBe(false);
+  // ${action} takes its own slot beside the menu, in the head's one control box, as Sign Out does on a signed-in row.
+  expect(button(action, row())!.closest(".usage-control"), `${action} sits in the menu's slot`).toBe(menus[0]!.parentElement);
 });
 
-it.each([[false, "en"], [true, "ko"]] as const)("offers Remove at the bottom of a signed-out row's menu, and the row leaves once the board folds it (phone=%s, %s)", async (phone, locale) => {
-  const remove = locale === "en" ? "Remove" : "제거";
+it.each([[false, "en"], [true, "ko"]] as const)("gives a signed-out row a signed-in row's head, with Remove beside Sign In on desktop and in the phone menu, and drops it once the board folds it (phone=%s, %s)", async (phone, locale) => {
+  const [remove, signIn, signOut] = locale === "en" ? ["Remove", "Sign In", "Sign Out"] : ["제거", "로그인", "로그아웃"];
   Object.assign(accounts[0]!, { accountMain: false, snapshot: { state: "available", authenticated: false } });
   accounts[1]!.accountMain = true;
   const fetchMock = vi.mocked(fetch);
   const answer = fetchMock.getMockImplementation()!;
   fetchMock.mockImplementation(async (url, init) => String(url).endsWith("/sign-out") ? (calls.push({ path: String(url), init }), Response.json({})) : answer(url, init));
   await mount({ phone, locale });
-  for (const other of host.querySelectorAll<HTMLElement>('[data-connection-account]:not([data-connection-account="claude"])')) {
-    if (phone) await click(other.querySelector<HTMLElement>("[data-connection-menu]"));
-    expect(button(remove, other), "a signed-in row has no Remove").toBeUndefined();
-    expect(button(locale === "en" ? "Sign Out" : "로그아웃", other)).toBeTruthy();
+  const other = host.querySelector<HTMLElement>('[data-connection-account]:not([data-connection-account="claude"])')!;
+  // Same head as the signed-in row: name line, the status where the address goes, the controls in its one slot.
+  expect(row()!.querySelectorAll("[data-account-head]")).toHaveLength(1);
+  expect(row()!.querySelector("[data-account-email]")?.textContent).toBe(locale === "en" ? "Signed out." : "로그아웃됨.");
+  const slot = (node: HTMLElement) => [...node.querySelectorAll<HTMLButtonElement>(".usage-control > button")].map((button) => button.dataset.connectionMenu === undefined ? button.textContent : "…");
+  if (phone) {
+    expect(slot(row()!)).toEqual([signIn, "…"]);
+    expect(slot(other)).toEqual(["…"]);
+    await click(other.querySelector<HTMLElement>("[data-connection-menu]"));
+    expect([...other.querySelectorAll("[data-fold] button")].map((button) => button.textContent)).not.toContain(remove);
+    await click(row()!.querySelector<HTMLElement>("[data-connection-menu]"));
+    const items = [...row()!.querySelectorAll<HTMLButtonElement>("[data-fold] button")];
+    expect(items.map((button) => button.textContent).at(-1)).toBe(remove);
+    // The menu row holds the same kind of buttons in the same container as a signed-in row's menu.
+    expect(items.at(-1)!.parentElement!.className).toBe(other.querySelector("[data-fold] button")!.parentElement!.className);
+    await click(items.at(-1));
+  } else {
+    expect(row()!.querySelector("[data-connection-menu]")).toBeNull();
+    expect(slot(row()!)).toEqual([remove, signIn]);
+    expect(slot(other)).toEqual([signOut]);
+    expect(button(remove, row())!.className).toBe(button(signOut, other)!.className);
+    await click(button(remove, row()));
   }
-  await click(row()!.querySelector<HTMLElement>("[data-connection-menu]"));
-  const items = [...row()!.querySelectorAll<HTMLButtonElement>("[data-fold] button")];
-  expect(items.at(-1)?.textContent).toBe(remove);
-  await click(items.at(-1));
   expect(calls.filter((call) => call.path.endsWith("/sign-out")).map((call) => [call.path, call.init?.body])).toEqual([["/api/accounts/claude/sign-out", "{}"]]);
   await unmount();
   const claude = board.engines[0]!;

@@ -57,32 +57,42 @@ export function AccountHead({ name, email, control }: { name: ReactNode; email?:
   );
 }
 
-export function SignInRow({ instance, mark, name, after, onUpdated }: { instance: InstanceInfo; mark?: ReactNode; name?: ReactNode; after?: ReactNode; onUpdated?: (instance: InstanceInfo) => void }) {
+export function SignInRow({ instance, mark, name, after, head, onUpdated }: {
+  instance: InstanceInfo; mark?: ReactNode; name?: ReactNode; after?: ReactNode;
+  /** Draws the line as an account row's head instead: it places the sign-in controls and the status text, and the steps fold under it. */
+  head?: (actions: ReactNode, status: ReactNode) => ReactNode;
+  onUpdated?: (instance: InstanceInfo) => void;
+}) {
   const { t } = useI18n();
   const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
   const status = waiting ? t(capture.code ? "engines.enterCode" : "engines.finishInBrowser")
     : failed ? t(failed) : "";
   const steps = waiting && (capture.code || capture.inputGeneration || failed);
+  const line = !loading && (connected ? t("connections.connected") : status || t("accounts.signedOut"));
+  const actions = <>{loading || connected ? null : computerOnly ? <span data-computer-only="">{t("engines.signInFromComputer")}</span> : waiting ? <>
+    {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className={STRONG_BUTTON}>{t(deviceFlow ? "engines.openLink" : "engines.openAgain")}</a>}
+    <button type="button" onClick={() => void cancel()} disabled={busy} className={ROW_BUTTON}>{t("engines.cancel")}</button>
+  </> : <button type="button" disabled={busy} onClick={() => void start()} className={STRONG_BUTTON}>{t("engines.signIn")}</button>}</>;
+  const detail = (name && status || steps) && <>
+    {name && status && <span>{status}</span>}
+    {waiting && capture.code && <code className="select-all break-all font-mono text-[14px] text-ink">{capture.code}</code>}
+    {waiting && capture.inputGeneration && <form className="flex flex-wrap items-center gap-x-3 gap-y-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
+      <input type="password" value={loginCode} onInput={(event) => setLoginCode(event.currentTarget.value)}
+        aria-label={t("accounts.loginCode")} placeholder={t("accounts.loginCode")} autoComplete="off" maxLength={4096}
+        className="h-8 min-w-0 flex-1 basis-56 rounded border border-hairline bg-control px-2 text-ink [@media(pointer:coarse)]:h-11" />
+      <button type="submit" disabled={busy || !loginCode} className={cn(STRONG_BUTTON, "ml-auto")}>{t("accounts.submitCode")}</button>
+    </form>}
+    {waiting && failed && <span>{t(failed)}</span>}
+  </>;
+  if (head) return (
+    <div aria-live="polite">
+      {head(actions, line)}
+      <Fold open={Boolean(detail)} keep><div className="flex min-w-0 flex-col items-stretch gap-2 pt-2">{detail}</div></Fold>
+    </div>
+  );
   return (
     <div aria-live="polite">
-      <ConnectionRow mark={mark}
-        label={name ?? (!loading && <><span className="min-w-0 break-words">{connected ? t("connections.connected") : status || t("accounts.signedOut")}</span>{after}</>)}
-        actions={<>{loading || connected ? null : computerOnly ? <span data-computer-only="">{t("engines.signInFromComputer")}</span> : waiting ? <>
-          {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className={STRONG_BUTTON}>{t(deviceFlow ? "engines.openLink" : "engines.openAgain")}</a>}
-          <button type="button" onClick={() => void cancel()} disabled={busy} className={ROW_BUTTON}>{t("engines.cancel")}</button>
-        </> : <button type="button" disabled={busy} onClick={() => void start()} className={STRONG_BUTTON}>{t("engines.signIn")}</button>}</>}>
-        {(name && status || steps) && <>
-          {name && status && <span>{status}</span>}
-          {waiting && capture.code && <code className="select-all break-all font-mono text-[14px] text-ink">{capture.code}</code>}
-          {waiting && capture.inputGeneration && <form className="flex flex-wrap items-center gap-x-3 gap-y-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
-            <input type="password" value={loginCode} onInput={(event) => setLoginCode(event.currentTarget.value)}
-              aria-label={t("accounts.loginCode")} placeholder={t("accounts.loginCode")} autoComplete="off" maxLength={4096}
-              className="h-8 min-w-0 flex-1 basis-56 rounded border border-hairline bg-control px-2 text-ink [@media(pointer:coarse)]:h-11" />
-            <button type="submit" disabled={busy || !loginCode} className={cn(STRONG_BUTTON, "ml-auto")}>{t("accounts.submitCode")}</button>
-          </form>}
-          {waiting && failed && <span>{t(failed)}</span>}
-        </>}
-      </ConnectionRow>
+      <ConnectionRow mark={mark} label={name ?? (line && <><span className="min-w-0 break-words">{line}</span>{after}</>)} actions={actions}>{detail}</ConnectionRow>
     </div>
   );
 }
@@ -134,29 +144,32 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   // Its first check has not answered: neither signed in nor signed out yet.
   const checking = !ready && !account.drain && engineChecking(account);
   const signInRow = !ready && !account.drain && !checking;
+  // A signed-out row is cleared through the same sign-out: the server marks it and Usage and Connections drop it.
+  const remove = <button type="button" data-remove-account="" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
+    className={ROW_BUTTON}>{t("accounts.remove")}</button>;
   const controls = <>
     {phone && canName && <button type="button" disabled={busy} className={ROW_BUTTON}
       onClick={() => { inlineEditor.current = false; setMenu(false); setEditing(true); }}>{t("accounts.name.edit")}</button>}
     {(ready || account.drain?.phase === "failed") && <button type="button" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
-    {/* A signed-out row is cleared through the same sign-out: the server marks it and Usage and Connections drop it. */}
-    {signInRow && <button type="button" data-remove-account="" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
-      className={ROW_BUTTON}>{t("accounts.remove")}</button>}
+    {signInRow && remove}
   </>;
   const toggleMenu = () => afterFold(`${id}-actions`, () => setMenu(!menu));
   const more = <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu} aria-controls={`${id}-actions`}
     onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button>;
-  // A signed-out row keeps its menu on the name line and Sign In on its own line below, so neither covers the other.
   const control = draining ? <span role="status">{t("accounts.removing")}</span> : checking ? <span aria-live="polite">{t("engines.checking")}</span>
-    : signInRow ? more : phone ? more : controls;
+    : phone ? more : controls;
+  const head = (slot: ReactNode, email: ReactNode) => <AccountHead control={slot} email={email} name={<>
+    {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
+      onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
+      : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
+        className="min-w-0 max-w-full truncate text-left">{name?.name}</button>}
+  </>} />;
   return (
     <div data-connection-account={account.instanceId} data-account-row={account.instanceId} tabIndex={-1} {...(reorder && reorderable(t("usage.desk.reorder", { name: name?.name ?? account.displayName })))} className={ACCOUNT_ROW}>
-      {(name || !signInRow) && <AccountHead control={control} email={!signInRow && !checking && label} name={<>
-        {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
-          onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
-          : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
-            className="min-w-0 max-w-full truncate text-left">{name?.name}</button>}
-      </>} />}
+      {/* A signed-out row keeps a signed-in row's shape: its status where the address goes, Sign In beside Remove (desktop) or the menu (phone). */}
+      {signInRow ? <SignInRow instance={account} onUpdated={() => void reload()} head={name ? (signIn, status) => head(<>{!phone && remove}{signIn}{phone && more}</>, status) : undefined} />
+        : head(control, !checking && label)}
       {named?.codexPromo && <p className="pb-2 text-[12px] text-ink-secondary">{t("usage.desk.codexPromo")}</p>}
       <Fold open={menu} id={`${id}-actions`} onOpened={() => revealOnOpen(actions.current)}>
         <div ref={actions} className="flex min-w-0 flex-wrap justify-end gap-2 pt-2"
@@ -164,7 +177,6 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
           {controls}
         </div>
       </Fold>
-      {signInRow && <SignInRow instance={account} onUpdated={() => void reload()} />}
     </div>
   );
 }
