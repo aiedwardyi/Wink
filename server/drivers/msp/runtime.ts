@@ -519,14 +519,13 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         // a resumed session keeps the root it started in, the host's project: someone else's words start over
         if (typeof shape.resumeCursor === "string" && !guestText(shape)) {
           try {
-            const resume = (relocate: object) => request(
+            // a guest's turn may have started this session in its empty folder: Muse 1.4.25+ moves it
+            // to this turn's root. A resume that can't move starts fresh below, never in the old root.
+            const resumed: any = await request(
               "session/resume",
-              { commandId: uuidv7(), sessionId: shape.resumeCursor, ...relocate, ...sessionConfig },
+              { commandId: uuidv7(), sessionId: shape.resumeCursor, workspaceRoot: sessionRoot, ...sessionConfig },
               SESSION_TIMEOUT,
             );
-            // a guest's turn may have started this session in its empty folder: bring it back to this
-            // turn's (Muse 1.4.25+ relocates; a build without the field resumes as before)
-            const resumed: any = await resume({ workspaceRoot: sessionRoot }).catch(() => resume({}));
             host.sessionId = typeof resumed?.session?.sessionId === "string" ? resumed.session.sessionId : shape.resumeCursor;
             host.model = typeof resumed?.session?.modelId === "string" ? resumed.session.modelId : null;
             host.resumedOk = true;
