@@ -125,6 +125,10 @@ describe("turn leftovers", () => {
     const book = { asks: filed, lastAskId: 4 };
     for (const repeat of [promise("I'll keep the picker changes moving."), promise("I'll fix the API."), { ask: "Why is CI red?" }]) expect(fileLeftovers(book, [repeat], 9)).toBeNull();
     for (const status of ["open", "done", "declined"] as const) expect(fileLeftovers({ asks: [ask("A1", "Why is CI red?", status)], lastAskId: 1 }, [{ ask: "Why is CI red?" }], 9)).toBeNull();
+    expect(fileLeftovers({ asks: [ask("A1", "I’ll fix the API", "done", "promise")], lastAskId: 1 }, [promise("I'll fix  the API.")], 9)).toBeNull();
+    // a path's punctuation tells two targets apart
+    for (const status of ["open", "done"] as const) expect(fileLeftovers({ asks: [ask("A1", "I'll update the src/foo.ts file.", status, "promise")], lastAskId: 1 }, [promise("I'll update the src-foo.ts file.")], 9)?.asks).toHaveLength(2);
+    expect(fileLeftovers(undefined, [promise("I'll update the src/foo.ts file."), promise("I'll update the src-foo.ts file.")], 9)?.asks).toHaveLength(2);
     // reworded, or the user's ask in the bot's words: one more line the next engine checks
     const saved = fileLeftovers(book, [{ ask: "What color should the ramp be?" }, promise("I'll fix the API")], 9)!;
     expect(saved.asks.slice(0, 4)).toEqual(filed);

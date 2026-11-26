@@ -143,7 +143,8 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
 }
 
 // a repeat is the same words of the same kind; "I'll update the icon and layout" is new work beside a done "update the icon"
-const same = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
+// an exact repeat: case, spacing, apostrophe style and closing punctuation aside; src/foo.ts is not src-foo.ts
+const same = (text: string) => text.toLowerCase().replace(/[‘’]/g, "'").replace(/[\s.!?]+$/, "").replace(/\s+/g, " ").trim();
 // a narrated turn files its first few; the rest wait in the transcript the next engine reads
 const MAX_TURN_PROMISES = 3;
 
