@@ -460,6 +460,65 @@ describe("decision timeline", () => {
       expect(timeline()).toMatch(/^- Retired: \d{4}-\d{2}-\d{2}$/m);
       expect(picksBlock(timeline())).toBe("");
     });
+
+    it("replaces a card's tap with a revised answer the note-taker files under its own key", async () => {
+      const card = swapCard();
+      answer(card, "Yes, swap");
+      reply();
+      await settle();
+      const revised = answer(card, "Re: “Swap the marketing bot or keep it?”\nKeep marketing bot");
+      reply({ kind: "decision", key: "marketing bot", fact: "Keep marketing bot", quote: "Keep marketing bot", message_id: revised.id, question_id: card.id });
+      await settle();
+      expect(picks()).toEqual([["Swap the marketing bot or keep it?", "Keep marketing bot", card.id]]);
+    });
+
+    it("keeps two long questions that open alike apart", async () => {
+      const lead = "For the next release, which of the two proposed signing settings should we use for ";
+      const desktop = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Signing", subtitle: `${lead}desktop builds?`, options: ["Local signing", "Cloud signing"], askUser: true } });
+      const mobile = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Signing", subtitle: `${lead}mobile builds?`, options: ["Local signing", "Cloud signing"], askUser: true } });
+      answer(desktop, "Local signing");
+      answer(mobile, "Cloud signing");
+      reply();
+      await settle();
+      expect(picks().map(([, picked, question]) => [picked, question])).toEqual([["Local signing", desktop.id], ["Cloud signing", mobile.id]]);
+      expect(picksBlock(timeline())).toMatch(/desktop builds\? \(\d\d-\d\d\): Local signing\n.*mobile builds\? \(\d\d-\d\d\): Cloud signing|mobile builds\? \(\d\d-\d\d\): Cloud signing\n.*desktop builds\? \(\d\d-\d\d\): Local signing/);
+    });
+
+    it("shows a fresh card's answer when an older card asked the same and retired", async () => {
+      const checks = () => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Checks", subtitle: "Run the checks tonight?", options: ["Yes", "No"], askUser: true } });
+      answer(checks(), "Yes");
+      reply();
+      await settle();
+      vi.setSystemTime(NOW + 2 * 24 * 60 * MINUTE);
+      const fresh = checks();
+      answer(fresh, "Yes");
+      reply();
+      await settle();
+      expect(currentPicks(timeline()).filter((pick) => !pick.retired).map(({ questionId }) => questionId)).toEqual([fresh.id]);
+      expect(picksBlock(timeline())).toContain("Run the checks tonight?");
+    });
+
+    it("saves a long tapped answer whole, with the words that hold it back", async () => {
+      const choice = "Send the finished release notes to everyone on the project mailing list and include the updated schedule, but wait for my approval before sending.";
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Share", subtitle: "How should we share the release notes?", options: [choice, "Save draft only"], askUser: true } });
+      answer(card, choice);
+      reply();
+      await settle();
+      expect(currentPicks(timeline()).map(({ picked, said }) => [picked, said])).toEqual([[choice, choice]]);
+      expect(memorySystemPrompt(BOT)).toContain("but wait for my approval before sending.");
+    });
+
+    it("keeps a card pick live while any PR it names is unread or open", async () => {
+      const merged = vi.fn((_bot: string, _thread: string, ref: string) => [41, 42, 43].filter((n) => ref.includes(String(n)) && n !== 42).map((number) => ({ number, mergedAt: Date.now() })));
+      pass.dispose();
+      pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged });
+      const ask = (subtitle: string) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Close", subtitle, options: ["Yes", "No"], askUser: true } });
+      answer(ask("Close packing after PR #41 and #42 merge?"), "Yes");
+      answer(ask("Close delivery after PR 41 and PR 43 merge?"), "Yes");
+      reply();
+      await settle();
+      expect(currentPicks(timeline()).map(({ key, retired }) => [key, Boolean(retired)])).toEqual([["Close packing after PR #41 and #42 merge?", false], ["Close delivery after PR 41 and PR 43 merge?", true]]);
+    });
   });
 
   describe("one pick per source", () => {

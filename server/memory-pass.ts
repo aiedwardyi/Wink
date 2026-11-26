@@ -9,7 +9,7 @@ import { AGY_TEXT_MODEL, exhaustedWindow, usageLimitFromError } from "./drivers/
 import { isSignOut } from "./drivers/signout.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
-import { applyPicks, currentPicks, entryTime, LABELED, parseTimeline, PICKS_FILE, pickKey, pickKeysList, retirePicks, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
+import { applyPicks, currentPicks, entryTime, KEY_MAX, LABELED, parseTimeline, PICKS_FILE, pickKey, pickKeysList, retirePicks, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { loadProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
 import { redactRoomMemory, redactSecretsInText } from "./redact.ts";
@@ -37,6 +37,8 @@ const MAX_PENDING = 200;
 const QUOTE_MAX = 120;
 const FACT_MAX = 200;
 const DECISION_MAX = 100;
+// every number in "PR #41 and #42", "PRs 41, 42" or "#41"
+const PR_LIST = /(?:\bPRs?\s*#?|#)\d+(?:\s*(?:,|&|\/|\band\b|\bor\b)\s*#?\d+)*/gi;
 const CONTEXT_MAX = 400;
 const OPTIONS_MAX = 6;
 const SHORT_ANSWER = 6;
@@ -647,6 +649,13 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
   return [...facts.flatMap((_, index) => kept.get(index) ?? []), ...cardAnswers(sources, answered, cardKeys, archived)];
 }
 
+// a long card question is keyed by what it asks, cut in the middle: two questions that open alike differ at the end
+function questionKey(question: string): string {
+  const asked = question.split(/(?<=[.?!])\s+/).filter((sentence) => sentence.endsWith("?")).join(" ") || question;
+  const chars = [...asked];
+  return chars.length > KEY_MAX ? `${chars.slice(0, 27).join("").trimEnd()}...${chars.slice(-30).join("").trimStart()}` : asked;
+}
+
 // what userTyping leaves of answerPrefix: the quote, or nothing once a long quote was cut
 const ANSWER_PREFIX = /^Re: (?:“[^\n]*”)?[ \t]*\n/;
 
@@ -659,7 +668,7 @@ function cardAnswers(sources: UserLine[], answered: Set<string>, keys: Map<strin
     if (!source.tap || !source.id || answered.has(source.id) || !question || !picked || secretValue(question) || secretValue(picked)) return [];
     const binding = validatePickBinding({ key: question, picked, over: [] }, source);
     if (!binding) return [];
-    const key = keys.get(binding.questionId) ?? entries.findLast((entry) => !entry.kind && entry.questionId === binding.questionId)?.key ?? question;
+    const key = keys.get(binding.questionId) ?? entries.findLast((entry) => !entry.kind && entry.questionId === binding.questionId)?.key ?? questionKey(question);
     keys.set(binding.questionId, key);
     return [{ line: `${key}: ${picked}`, kind: "decision", pick: { kind: "pick", at: binding.at, key, picked, said: picked, binding, tapped: true } }];
   });
@@ -772,9 +781,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   // every PR the pick names merged after it was picked
   const prsMerged = (botId: string, threadId: string, entry: PickEntry) => {
     const ref = [entry.key, entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n");
-    if (!refPrs(ref).length) return false;
-    const prs = deps.merged?.(botId, threadId, ref, true);
-    return Boolean(prs?.length && prs.every((pr) => (pr.mergedAt ?? 0) > entryTime(entry)));
+    const prs = refPrs(ref);
+    // "PR #41 and #42": a PR the reader missed keeps the pick
+    if (!prs.length || [...ref.matchAll(PR_LIST)].some(([list]) => list.match(/\d+/g)!.some((number) => !prs.some((pr) => pr.number === Number(number))))) return false;
+    const checked = deps.merged?.(botId, threadId, ref, true);
+    return Boolean(checked?.length && checked.every((pr) => (pr.mergedAt ?? 0) > entryTime(entry)));
   };
 
   let claim = false;

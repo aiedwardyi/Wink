@@ -55,6 +55,21 @@ describe("retiring finished one-off picks", () => {
     expect(picksBlock(tweaked)).toContain("Work PC second lane for checks");
   });
 
+  it("never retires a recurring instruction, whatever time it names", () => {
+    const text = ["# Decision timeline", "", ...entry("2026-11-20 10:00", "When should alerts go to the backup?", "Every day after 13:30", "- Tapped: yes")].join("\n");
+    expect(retirePicks(text, NOW)).toBeNull();
+  });
+
+  it("keeps a newer tweak over an older retirement through a sync merge", () => {
+    const old = retirePicks(["# Decision timeline", "", ...entry("2026-11-20 12:00", "Extra checks", "Run tonight")].join("\n"), NOW - 5 * 86_400_000)!;
+    const revived = applyPicks(old, [{ kind: "tweak", at: NOW - 4 * 86_400_000, key: "Extra checks", said: "Keep these checks every week" }])!.text;
+    const other = applyPicks(old, [{ kind: "pick", at: NOW - 4 * 86_400_000, key: "Theme", picked: "Dark", said: "Dark" }])!.text;
+    for (const merged of [mergeTimelines(revived, other)!, mergeTimelines(other, revived)!]) {
+      expect(picksBlock(merged)).toContain("Keep these checks every week");
+      expect(picksBlock(merged)).toContain("Dark");
+    }
+  });
+
   it("keeps the mark through a sync merge", () => {
     expect(currentPicks(mergeTimelines(retired, TIMELINE)!).filter((pick) => pick.retired)).toHaveLength(ONE_OFFS.length);
   });
@@ -63,10 +78,24 @@ describe("retiring finished one-off picks", () => {
     const delivered = `Rules.\n\n${picksBlock(TIMELINE)}`;
     const system = `Rules.\n\n${picksBlock(retired)}`;
     expect(withSystemChanges("hi", delivered, system)).toContain("[Removed:]");
-    expect(withSystemChanges("hi", delivered, system, undefined, new Set(retiredLines(retired)))).toBe("hi");
+    expect(withSystemChanges("hi", delivered, system, undefined, retiredLines(retired))).toBe("hi");
     const added = applyPicks(retired, [{ kind: "pick", at: NOW, key: "site accent", picked: "Neon pink", said: "Neon pink" }])!.text;
-    const update = withSystemChanges("hi", delivered, `Rules.\n\n${picksBlock(added)}`, undefined, new Set(retiredLines(added)))!;
+    const update = withSystemChanges("hi", delivered, `Rules.\n\n${picksBlock(added)}`, undefined, retiredLines(added))!;
     expect(update).toContain("[Added:]");
     expect(update).not.toContain("[Removed:]");
+  });
+
+  it("stays quiet for a session that got the pick before its last tweak", () => {
+    const at = (day: string) => new Date(`2026-11-${day}T09:00:00`).getTime();
+    const first = applyPicks("", [{ kind: "pick", key: "Branch cleanup", picked: "Clean old release branches", said: "Clean old release branches", at: at("22") }, { kind: "pick", key: "Default theme", picked: "Dark", said: "Dark", at: at("22") + 600_000 }])!.text;
+    const tweaked = applyPicks(first, [{ kind: "tweak", key: "Branch cleanup", said: "Run it tonight", at: at("23") }])!.text;
+    const retired = retirePicks(tweaked, at("24"))!;
+    expect(withSystemChanges("hi", `Rules.\n${picksBlock(first)}`, `Rules.\n${picksBlock(retired)}`, undefined, retiredLines(retired))).toBe("hi");
+  });
+
+  it("sends no removal for the block header when the last pick retires", () => {
+    const at = (day: string) => new Date(`2026-11-${day}T09:00:00`).getTime();
+    const lone = applyPicks("", [{ kind: "pick", key: "Demo lane", picked: "Use it tonight", said: "Use it tonight", at: at("20") }])!.text;
+    expect(withSystemChanges("hi", `Rules.\n${picksBlock(lone)}`, "Rules.", undefined, retiredLines(retirePicks(lone, at("24"))))).toBe("hi");
   });
 });

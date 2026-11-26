@@ -149,9 +149,9 @@ describe("applyPicks", () => {
   });
 
   it("never cuts an emoji in half", () => {
-    const said = `${"x".repeat(116)}\u{1F600} and more`;
+    const said = `${"x".repeat(196)}\u{1F600} and more`;
     const { text } = applyPicks("", [pick("forum look", "C - Reddit cards", said, at(17, 10))])!;
-    expect(text).toContain(`- Said: "${"x".repeat(116)}..."\n`);
+    expect(text).toContain(`- Said: "${"x".repeat(196)}..."\n`);
     expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
   });
 

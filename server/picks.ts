@@ -12,11 +12,12 @@ export const GOALS_PROMPT_TOKENS = 400;
 export const GOAL_MAX = 4_000;
 // Claude's tokenizer measured 2.6 chars per token on path-heavy English; other scripts run near one token per char
 const CHARS_PER_TOKEN = 2.6;
-const KEY_MAX = 60;
-const PICKED_MAX = 100;
+export const KEY_MAX = 60;
+// the card API's longest choice, so a tapped answer lands whole
+const PICKED_MAX = 200;
 // a goal shown in words gets at least this much; past that many goals, the oldest are listed by name
 const GOAL_TOKENS_MIN = 16;
-const SAID_MAX = 120;
+const SAID_MAX = 200;
 const LINE_MAX = 420;
 const TWEAKS_SHOWN = 3;
 const TWEAK_SHOWN_MAX = 80;
@@ -230,7 +231,10 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const asked = clip(change.key.replace(/\|/g, "/"), KEY_MAX);
     if (!pickKey(asked)) continue;
     const slot = slotOf({ kind: change.kind, key: asked });
-    const current = entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === slot);
+    const card = change.kind === "pick" && change.binding && change.binding !== "unbound" && change.binding.questionId !== change.binding.messageId ? change.binding : undefined;
+    // a later answer to the same card is that card's pick, whatever key the note-taker gave it
+    const answers = card ? entries.filter((entry) => !entry.replacedBy && !entry.kind && entry.questionId === card.questionId && entry.thread === card.thread && entry.messageId !== card.messageId) : [];
+    const current = (answers.length === 1 ? answers[0] : undefined) ?? entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === slot);
     const key = current?.key ?? asked;
     if (change.kind === "goal") {
       // a replayed batch from before the current entry never lands on it
@@ -270,7 +274,9 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const binding = change.binding === "unbound" ? "unbound" : change.binding && "verified";
     const evidence: Partial<PickBinding> = change.binding === "unbound" ? {} : change.binding ?? change;
     if (evidence.messageId && entries.some((entry) => entry.messageId === evidence.messageId && entry.thread === evidence.thread && pickKey(entry.key) === pickKey(key))) continue;
-    if (current && sameOption(current.picked, picked)) {
+    // a new card asking the same question again is a new answer, dated today
+    const reasked = tapped && current?.tapped && card && current.questionId !== card.questionId;
+    if (current && sameOption(current.picked, picked) && !reasked) {
       // a re-pick whose question never names the pick keeps the verified picture and time
       const proven = binding !== "verified" || current.binding !== "verified" || evidence.named;
       if (proven && (overTap || (binding === "verified" && (current.binding === "unbound" || (current.binding === "verified" && !tapped && !current.tapped))))) {
@@ -392,18 +398,21 @@ export function mergeTimelines(a: string, b: string): string | null {
         merged.set(key, { ...entry, source: key, replacedBy: undefined });
         continue;
       }
+      const tweaks = said(before.tweaks, entry.tweaks);
+      // a retirement judged the words it saw; a tweak it never saw brings the pick back
+      const retired = [before, entry].find((side) => side.retired && tweaks.every((tweak) => side.tweaks.some((seen) => seen.at === tweak.at && seen.said === tweak.said)))?.retired;
       const typed = Boolean(before.tapped) !== Boolean(entry.tapped) ? (before.tapped ? entry : before) : undefined;
       const bound = typed ?? (before.binding === "verified" ? before : entry.binding === "verified" ? entry : before.messageId ? before : entry);
       if (bound.messageId || bound.binding === "unbound") {
-        merged.set(key, { ...bound, source: key, replacedBy: undefined, retired: before.retired ?? entry.retired, tweaks: said(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra) });
+        merged.set(key, { ...bound, source: key, replacedBy: undefined, retired, tweaks, extra: union(before.extra, entry.extra) });
         continue;
       }
       const both: PickEntry = {
         ...before,
         picture: before.picture ?? entry.picture,
-        retired: before.retired ?? entry.retired,
+        retired,
         over: union(before.over, entry.over), overPictures: union(before.overPictures, entry.overPictures),
-        files: union(before.files, entry.files), tweaks: said(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra),
+        files: union(before.files, entry.files), tweaks, extra: union(before.extra, entry.extra),
       };
       // one PC saw the tap retyped
       if (before.tapped && !entry.tapped) {
@@ -577,6 +586,8 @@ export function currentOnly(text: string): string {
 const DATED = /(?<![\w.@])(?:tonight|today|right now|after \d{1,2}:\d{2})\b|(?<![\w.@]|\b(?:for|from) )now\b(?! on\b)/i;
 // a tweak is the user's raw words, so it dates the pick only by these
 const DATED_SAID = /(?<![\w.@])(?:tonight|expires? today|right now|after \d{1,2}:\d{2})\b/i;
+// "every day after 13:30" is a standing rule, whatever time it names
+const RECURRING = /\b(?:every|each|daily|nightly|weekly|monthly|always|whenever|from now on|(?:mon|tues|wednes|thurs|fri|satur|sun)days)\b/i;
 
 /** Marks current picks that are finished one-offs as retired today: their newest words date the action to a day now past, or done() says the PRs they name merged since. Null when none. */
 export function retirePicks(text: string, now: number, done: (entry: PickEntry) => boolean = () => false): string | null {
@@ -589,14 +600,16 @@ export function retirePicks(text: string, now: number, done: (entry: PickEntry) 
     // a card question can say what holds "right now" before or after what it asks
     const asked = entry.key.match(/[^.?!]*\?/g)?.join(" ") ?? entry.key;
     const day = tweak ? DATED_SAID.test(tweak.said) && tweak.at.slice(0, 10) : DATED.test(`${asked}\n${entry.picked}`) && entry.id.slice(0, 10);
-    if (!(day && day < today) && !done(entry)) continue;
+    const dated = day && day < today && !RECURRING.test([asked, entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n"));
+    if (!dated && !done(entry)) continue;
     entry.retired = today;
     retired += 1;
   }
   return retired ? renderTimeline(timeline) : null;
 }
 
-/** The prompt lines retired picks had, so a resumed session that still holds them is not told they no longer apply. */
+/** What starts each retired pick's prompt line in any version of it, and the block header they may have taken with them, so a resumed session that still holds them is not told they no longer apply. */
 export function retiredLines(text: string | null | undefined): string[] {
-  return currentPicks(text).filter((entry) => entry.retired).flatMap((entry) => [pickLine(entry), shortLine(entry)]);
+  const heads = currentPicks(text).filter((entry) => entry.retired).map((entry) => `- ${pickHead(entry)}`);
+  return heads.length ? [HEADER, ...heads] : [];
 }

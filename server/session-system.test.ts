@@ -438,8 +438,8 @@ describe("system text on a resumed session", () => {
 describe("startClaimedTurn's system step", () => {
   it("recycles a resumed session with no system record, or sends it the whole text", () => {
     expect(indexSource).toContain("const unknown = resumeCursor !== undefined && delivered === undefined;");
-    expect(indexSource).toContain("const updated = (unknown ? null : withSystemChanges(text, delivered, system, undefined, quiet))");
-    expect(indexSource).toContain('withSystemChanges(text, delivered ?? "", system, Infinity, quiet)');
+    expect(indexSource).toContain("const updated = (unknown ? null : withSystemChanges(text, delivered, system, undefined, quietLines))");
+    expect(indexSource).toContain('withSystemChanges(text, delivered ?? "", system, Infinity, quietLines)');
   });
 
   it("records a fresh session's system text when the session starts", () => {

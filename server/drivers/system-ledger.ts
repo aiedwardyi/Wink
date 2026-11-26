@@ -20,7 +20,7 @@ export function systemLedger(keepText = false, instanceId?: string) {
   };
   return {
     holds: (sessionId: string, system: string) => entry(sessionId)?.hash === digest(system),
-    prompt: (sessionId: string | null, system: string | undefined, quiet?: ReadonlySet<string>) => {
+    prompt: (sessionId: string | null, system: string | undefined, quiet?: readonly string[]) => {
       if (!system) return undefined;
       const previous = sessionId ? entry(sessionId) : undefined;
       if (!previous) return system;

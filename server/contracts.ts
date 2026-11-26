@@ -221,7 +221,7 @@ export interface SendTurnInput {
   system?: string;
   /** Codex only: trusted system diff prefix, separate from user text. */
   systemUpdate?: string;
-  /** Lines of `system` gone since a resumed session got it that it is not told about. */
+  /** What starts lines of `system` gone since a resumed session got it that it is not told about. */
   systemQuiet?: string[];
   /** The bot's Ask for approval / Auto chip. Omitted keeps the driver's own mode. */
   approval?: "ask" | "auto";
