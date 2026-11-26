@@ -368,7 +368,7 @@ export interface MemoryLookupDeps {
 
 /* oxlint-disable anti-slop/no-unknown-parameters -- provider resume cursors are opaque. */
 export interface MemoryLookup {
-  /** held: the next turns' recall waits for this build, so a line just moved out of MEMORY.md is found. */
+  /** held: the next turns' recall waits for this build, so a line just moved out of MEMORY.md, or synced before a restart, is found. */
   refresh(botId: string, held?: boolean): Promise<void>;
   /** The build a held refresh still owes, or nothing to wait for. */
   ready(botId: string): Promise<void> | undefined;

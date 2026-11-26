@@ -649,6 +649,10 @@ describe("send path wiring", () => {
     expect(source).toContain('void memoryLookup.refresh(botId, true);');
   });
 
+  it("holds the first turn after a restart for the startup build", () => {
+    expect(section("const memoryLookup = createMemoryLookup(", "\nconst memoryHealthCheck")).toContain("for (const bot of store.bots) void memoryLookup.refresh(bot.id, true);");
+  });
+
   it("reads parked asks from the owner's chats only", () => {
     expect(source).toContain("asks: (botId) => botAsks(store.bot(botId), (threadId) => store.taskPacket(threadId), notOwnerChats()),");
   });

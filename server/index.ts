@@ -3270,7 +3270,7 @@ const memoryLookup = createMemoryLookup({
   notesPath: (botId) => store.bot(botId)?.projectNotes,
   asks: (botId) => botAsks(store.bot(botId), (threadId) => store.taskPacket(threadId), notOwnerChats()),
 });
-for (const bot of store.bots) void memoryLookup.refresh(bot.id);
+for (const bot of store.bots) void memoryLookup.refresh(bot.id, true);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
 void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
 // Room thread → the instruction id its running turn was dispatched against.
