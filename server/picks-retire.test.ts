@@ -76,6 +76,11 @@ describe("retiring finished one-off picks", () => {
     for (const merged of [mergeTimelines(old, typed)!, mergeTimelines(typed, old)!]) expect(picksBlock(merged)).toContain("Work PC");
   });
 
+  it("keeps a choice that starts today rather than ends today", () => {
+    const text = ["# Decision timeline", "", ...entry("2026-11-25 10:00", "Theme", "Use dark mode from today onward"), ...entry("2026-11-25 11:00", "Server", "Use the home server starting today")].join("\n");
+    expect(retirePicks(text, NOW)).toBeNull();
+  });
+
   it("never retires a recurring instruction, whatever time it names", () => {
     const text = ["# Decision timeline", "", ...entry("2026-11-20 10:00", "When should alerts go to the backup?", "Every day after 13:30", "- Tapped: yes")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();

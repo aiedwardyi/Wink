@@ -13,12 +13,12 @@ export const GOAL_MAX = 4_000;
 // Claude's tokenizer measured 2.6 chars per token on path-heavy English; other scripts run near one token per char
 const CHARS_PER_TOKEN = 2.6;
 export const KEY_MAX = 60;
-// the card API's longest choice, so a tapped answer lands whole
-const PICKED_MAX = 200;
+// the longest paragraph the note-taker reads, so an accepted answer lands whole
+const PICKED_MAX = 400;
 // a goal shown in words gets at least this much; past that many goals, the oldest are listed by name
 const GOAL_TOKENS_MIN = 16;
-const SAID_MAX = 200;
-const LINE_MAX = 420;
+const SAID_MAX = PICKED_MAX;
+const LINE_MAX = KEY_MAX + PICKED_MAX + 20;
 const TWEAKS_SHOWN = 3;
 const TWEAK_SHOWN_MAX = 80;
 const KEYS_LISTED = 40;
@@ -588,7 +588,7 @@ const DATED = /(?<![\w.@])(?:tonight|today|right now|after \d{1,2}:\d{2})\b|(?<!
 // a tweak is the user's raw words, so it dates the pick only by these
 const DATED_SAID = /(?<![\w.@])(?:tonight|expires? today|right now|after \d{1,2}:\d{2})\b/i;
 // "every day after 13:30" is a standing rule, whatever time it names
-const RECURRING = /\b(?:every|each|daily|nightly|weekly|monthly|always|whenever|from now on|(?:mon|tues|wednes|thurs|fri|satur|sun)days)\b/i;
+const RECURRING = /\b(?:every|each|daily|nightly|weekly|monthly|always|whenever|from now on|(?:mon|tues|wednes|thurs|fri|satur|sun)days|onwards?|going forward|starting (?:today|tomorrow|now))\b/i;
 
 /** Marks current picks that are finished one-offs as retired today: their newest words date the action to a day now past, or done() says the PRs they name merged since. Null when none. */
 export function retirePicks(text: string, now: number, done: (entry: PickEntry) => boolean = () => false): string | null {

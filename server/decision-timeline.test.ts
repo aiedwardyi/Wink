@@ -500,6 +500,16 @@ describe("decision timeline", () => {
       expect(picksBlock(timeline())).toMatch(/desktop builds\? \(\d\d-\d\d\): Local signing\n.*mobile builds\? \(\d\d-\d\d\): Cloud signing|mobile builds\? \(\d\d-\d\d\): Cloud signing\n.*desktop builds\? \(\d\d-\d\d\): Local signing/);
     });
 
+    it("keeps two cards apart when their topic comes before the same question", async () => {
+      const billing = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Database", subtitle: "For the billing service. Which database should we use?", options: ["Postgres", "SQLite"], askUser: true } });
+      const analytics = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Database", subtitle: "For the analytics service. Which database should we use?", options: ["Postgres", "SQLite"], askUser: true } });
+      answer(billing, "Postgres");
+      answer(analytics, "SQLite");
+      reply();
+      await settle();
+      expect(picks().map(([, picked, question]) => [picked, question])).toEqual([["Postgres", billing.id], ["SQLite", analytics.id]]);
+    });
+
     it("shows a fresh card's answer when an older card asked the same and retired", async () => {
       const checks = () => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Checks", subtitle: "Run the checks tonight?", options: ["Yes", "No"], askUser: true } });
       answer(checks(), "Yes");

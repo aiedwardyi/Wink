@@ -649,11 +649,10 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
   return [...facts.flatMap((_, index) => kept.get(index) ?? []), ...cardAnswers(sources, answered, cardKeys, archived)];
 }
 
-// a long card question is keyed by what it asks, cut in the middle: two questions that open alike differ at the end
+// a long card question is cut in the middle: two questions that open alike differ at the end, a topic set first stays
 function questionKey(question: string): string {
-  const asked = question.split(/(?<=[.?!])\s+/).filter((sentence) => sentence.endsWith("?")).join(" ") || question;
-  const chars = [...asked];
-  return chars.length > KEY_MAX ? `${chars.slice(0, 27).join("").trimEnd()}...${chars.slice(-30).join("").trimStart()}` : asked;
+  const chars = [...question];
+  return chars.length > KEY_MAX ? `${chars.slice(0, 27).join("").trimEnd()}...${chars.slice(-30).join("").trimStart()}` : question;
 }
 
 // what userTyping leaves of answerPrefix: the quote, or nothing once a long quote was cut

@@ -148,10 +148,18 @@ describe("applyPicks", () => {
     expect(applyPicks("", [tweak("forum look", "make the header smaller", at(17, 10))])).toBeNull();
   });
 
+  it("keeps a long answer whole, up to the longest paragraph the note-taker reads", () => {
+    const said = `Ship the release to the beta channel first, collect crash reports for two full days, write up anything that regressed against the last build, fix the top three issues, then cut the release candidate for everyone. Do not deploy until I approve.`;
+    const { text } = applyPicks("", [pick("release plan", said, said, at(17, 10))])!;
+    expect(text).toContain(`- Picked: ${said}\n`);
+    expect(text).toContain(`- Said: "${said}"\n`);
+    expect(picksBlock(text)).toContain("Do not deploy until I approve.");
+  });
+
   it("never cuts an emoji in half", () => {
-    const said = `${"x".repeat(196)}\u{1F600} and more`;
+    const said = `${"x".repeat(396)}\u{1F600} and more`;
     const { text } = applyPicks("", [pick("forum look", "C - Reddit cards", said, at(17, 10))])!;
-    expect(text).toContain(`- Said: "${"x".repeat(196)}..."\n`);
+    expect(text).toContain(`- Said: "${"x".repeat(396)}..."\n`);
     expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
   });
 
