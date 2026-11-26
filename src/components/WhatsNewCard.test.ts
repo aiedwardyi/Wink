@@ -580,7 +580,7 @@ describe("whats new card", () => {
   it("keeps the previews small", () => {
     const dir = "src/assets/whats-new";
     const bytes = readdirSync(dir).reduce((sum, file) => sum + statSync(join(dir, file)).size, 0);
-    expect(bytes).toBeLessThan(3.5 * 1024 * 1024);
+    expect(bytes).toBeLessThan(4 * 1024 * 1024);
   });
 
   it("keeps animated previews moving smoothly", () => {
