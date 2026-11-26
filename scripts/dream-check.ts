@@ -349,6 +349,7 @@ async function main(): Promise<number> {
     mkdirSync(join(root, "data", "workspaces", TRAP_ID), { recursive: true });
     writeFileSync(join(root, "data", "workspaces", TRAP_ID, "MEMORY.md"), TRAP_MEMORY);
     const { createMemorySleep, parseTidy, SLEEP_IDLE_MS, SLEEP_TIMEOUT_MS } = await import("../server/memory-sleep.ts");
+    const { DREAMED_FILE } = await import("../server/dream-archive.ts");
     const { isMemoryTopicName, loadedMemory, workspaceDir, PARKED_COPY } = await import("../server/workspace.ts");
     const { applyMove, filingBytes, filingDue, filingPrompt, fileableNotes, misrouted, movePlan, planFiling, routePrompt, TOPICS_MAX } = await import("../server/memory-file.ts");
     const { BOT_ID, cleanerSkip, errorCode, historyBlock, historyFile, HISTORY_DIR, nightSummarySchema, quizBlocks, runIdOf, sha8, tidyResult } = await import("../server/memory-clean.ts");
@@ -370,7 +371,7 @@ async function main(): Promise<number> {
     const models = generator ? { ask: asking(claudeGenerator(configDir, helperDir, spend("check"))), file: asking(claudeGenerator(configDir, helperDir, spend("plan"), FILER_MODEL)) } : null;
     const notesOf = (ws: string): Notes => {
       const historyDirs = [join(ws, "memory-history"), join(ws, HISTORY_DIR)];
-      const side = filesUnder(ws).filter((path) => !historyDirs.some((dir) => path.startsWith(dir)) && relative(ws, path) !== "MEMORY.md");
+      const side = filesUnder(ws).filter((path) => !historyDirs.some((dir) => path.startsWith(dir)) && !["MEMORY.md", DREAMED_FILE].includes(relative(ws, path).replaceAll("\\", "/")));
       return { memory: readFileSync(join(ws, "MEMORY.md"), "utf8"), side: Object.fromEntries(side.map((path) => [relative(ws, path).replaceAll("\\", "/"), readFileSync(path, "utf8")])) };
     };
     const results: BotResult[] = [];
@@ -392,13 +393,17 @@ async function main(): Promise<number> {
         else realInfo(...args);
       };
       // the trap bot gets the worst reply a model could give, for free
-      const tidier: NoteGenerator | null = trap ? async () => TRAP_REPLY : generator;
-      const generate: NoteGenerator | null = tidier && Object.assign(async (...args: Parameters<NoteGenerator>) => (reply = await tidier(...args)), { engine: "claude" });
+      // --no-model: both seats flag nothing, so only the code's exact twins merge
+      const tidier: NoteGenerator = trap ? async () => TRAP_REPLY : generator ?? (async () => "{}");
+      const generate: NoteGenerator = Object.assign(async (...args: Parameters<NoteGenerator>) => (reply = await tidier(...args)), { engine: "claude" });
+      // a copy has one engine: both seats read its one reply, so the night spends one call and the pair agrees with itself
+      const asked = new Map<string, Promise<string>>();
+      const seat = (engine: string): NoteGenerator => Object.assign((prompt: string, signal: AbortSignal) => asked.get(prompt) ?? asked.set(prompt, generate(prompt, signal)).get(prompt)!, { engine });
       const started = Date.now();
       const sleep = createMemorySleep({
         dataDir: process.env.OMB_DATA_DIR,
         bots: () => [id],
-        generate: () => generate,
+        judges: () => ({ claude: seat("claude"), gemini: seat("gemini") }),
         enabled: () => true,
         busy: () => false,
         changed: () => {},

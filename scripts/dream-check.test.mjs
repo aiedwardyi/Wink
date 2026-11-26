@@ -210,8 +210,8 @@ describe("dream-check script", () => {
     const json = join(copy, "out.json");
     const result = capped(copy, "--detail", json);
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("FAILED Alpha night 1: tidy error");
-    expect(JSON.parse(readFileSync(json, "utf8")).results[0]).toMatchObject({ name: "Alpha", result: "error", moved: 0 });
+    expect(result.stdout).toContain("FAILED Alpha night 1: tidy unjudged");
+    expect(JSON.parse(readFileSync(json, "utf8")).results[0]).toMatchObject({ name: "Alpha", result: "unjudged", moved: 0 });
     expect(result.left).toEqual([]);
   });
 
@@ -222,9 +222,9 @@ describe("dream-check script", () => {
     const json = join(copy, "out.json");
     const result = capped(copy, "--detail", json);
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("FAILED Alpha night 1: tidy error, model token cap reached");
+    expect(result.stdout).toContain("FAILED Alpha night 1: tidy unjudged, model token cap reached");
     const [row] = JSON.parse(readFileSync(json, "utf8")).results;
-    expect(row).toMatchObject({ result: "error", error: "model token cap reached", filed: 0, lost: [], madeUp: [] });
+    expect(row).toMatchObject({ result: "unjudged", error: "model token cap reached", filed: 0, lost: [], madeUp: [] });
     expect(readFileSync(join(copy, "workspaces", "bot-a", "MEMORY.md"), "utf8")).toBe(raw);
     expect(result.left).toEqual([]);
   });
