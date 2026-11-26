@@ -177,6 +177,16 @@ describe("web_read steps 3-6", () => {
     expect((await createWebReader({ transport, readers: () => [bots[0]!, bots[3]!] }).read("https://www.reddit.com/r/a/comments/1/", { callerBotId: "me", ownToolFailed: true })).reader).toBeUndefined();
   });
 
+  it("never borrows an archived bot, while an active one on the same engine still is", async () => {
+    const { transport } = fake(blocked);
+    const archived = { botId: "c0", name: "Idle", engine: "codex", busy: false, hidden: true };
+    const first = await createWebReader({ transport, readers: () => [bots[0]!, archived, bots[1]!] }).read("https://www.reddit.com/r/a/comments/1/", { callerBotId: "me", ownToolFailed: true });
+    expect(first.reader).toEqual({ botId: "c1", name: "Coder", engine: "codex" });
+    const none = await createWebReader({ transport, readers: () => [bots[0]!, archived] }).read("https://www.reddit.com/r/a/comments/1/", { callerBotId: "me", ownToolFailed: true });
+    expect(none.reader).toBeUndefined();
+    expect(none.tried.join("\n")).toMatch(/step 4 cross-engine reader: no free Codex or Grok bot/);
+  });
+
   it("a caller whose engine is unknown (empty) borrows no reader, since any bot might be its own engine", async () => {
     const { transport } = fake(blocked);
     const unknown = [{ botId: "me", name: "Me", engine: "", busy: false }, bots[1]!, bots[3]!];
