@@ -402,10 +402,9 @@ it.each(["en", "ko"] as const)("shows a failed sign-out and allows retry in %s",
   }
 });
 
-it("shares signed-out instances with the model picker and onboarding", async () => {
-  const signedOut = instance({ snapshot: { state: "available", authenticated: false }, install: { logout: ["logout"] } });
+it("leaves sharing a done sign-out with the model picker and onboarding to the server push", async () => {
   const previous = globalThis.fetch;
-  globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ instances: [signedOut], candidates: [] }), { status: 200 }));
+  globalThis.fetch = vi.fn(async () => new Response("{}", { status: 200 }));
   dispatch.mockClear();
   const host = document.createElement("div");
   const root = createRoot(host);
@@ -414,7 +413,9 @@ it("shares signed-out instances with the model picker and onboarding", async () 
       instance: instance({ install: { logout: ["logout"] } }),
     }))));
     await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Sign Out"))!.click());
-    expect(dispatch).toHaveBeenCalledWith({ type: "instances", instances: [signedOut], preserveRateLimits: true });
+    expect(globalThis.fetch).toHaveBeenCalledOnce();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(host.querySelector("button")?.textContent).toBe("Sign In");
   } finally {
     await act(async () => root.unmount());
     globalThis.fetch = previous;

@@ -37,6 +37,8 @@ type Deps = {
 type Cursor = { boot: string; revision: number; counter: number; accounts: string; epoch: number };
 const engines = new Map<string, UsageBoardEngineId>([["claudeAgent", "claude"], ["codex", "codex"], ["grokAgent", "grok"], ["gemini", "gemini"], ["muse", "muse"]]);
 const titles = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini", muse: "Muse" } satisfies Record<UsageBoardEngineId, string>;
+// Signed in with no known address: still a sign-in, so its sign-out clears the row's usage.
+const SIGNED_IN = "\0signed-in";
 
 function kind(window: { id: string; windowMinutes?: number }): UsageBoardWindow["kind"] {
   if (window.windowMinutes === 300 || window.id === "five_hour") return "session";
@@ -95,11 +97,15 @@ export function createUsageBoard(deps: Deps) {
     const rows = deps.accounts.list().filter((row) => engines.has(row.driverKind) && isInstanceId(row.id) && isInstanceId(row.of))
       .map((row) => ({ ...row, codexPromo: row.driverKind === "codex" && Boolean(deps.codexPromo?.(row.id, row.generation)) }));
     for (const row of rows) {
-      const identity = usageIdentity(row.status ?? {});
+      const known = usageIdentity(row.status ?? {});
+      const identity = known === undefined && row.status?.authenticated === true ? SIGNED_IN : known;
       if (identity === undefined) continue;
-      const changed = identities.has(row.id) && identities.get(row.id) !== identity;
+      const before = identities.get(row.id);
+      // An address showing up for a sign-in, or going missing from a later check, is the same sign-in.
+      const same = before !== undefined && before !== null && identity !== null && (before === SIGNED_IN || identity === SIGNED_IN);
+      const changed = identities.has(row.id) && before !== identity && !same;
       // Stored before accountChanged runs: its callbacks read the board again.
-      identities.set(row.id, identity);
+      if (!(same && identity === SIGNED_IN)) identities.set(row.id, identity);
       if (changed) {
         deps.rateLimits.delete(row.id);
         unpaid.delete(row.id);

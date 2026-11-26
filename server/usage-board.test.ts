@@ -127,6 +127,34 @@ describe("usage board", () => {
     expect(after.revision).toBeGreaterThan(before.revision);
   });
 
+  it.each(["muse", "gemini", "claudeAgent"])("drops %s usage on a sign-out that never knew an address", async (driverKind) => {
+    const s = setup();
+    s.setRows([{ ...s.rows()[0], driverKind, status: { state: "available", authenticated: true } }]);
+    s.accept("claude", report(100));
+    await settle();
+    const before = await s.board.read();
+    expect(account(before).windows[0].usedPercent).toBe(100);
+    s.setRows([{ ...s.rows()[0], status: { state: "available", authenticated: false } }]);
+    const after = await s.board.read(before.cursor);
+    expect(account(after).windows).toEqual([]);
+    expect(s.rateLimits.has("claude")).toBe(false);
+  });
+
+  it("keeps usage when a sign-in's address first shows or goes missing from one check", async () => {
+    const s = setup();
+    s.setRows([{ ...s.rows()[0], driverKind: "gemini", status: { state: "available", authenticated: true } }]);
+    s.accept("claude", report(100));
+    await settle();
+    let cursor = (await s.board.read()).cursor;
+    for (const status of [{ account: "ed@example.test" }, {}, { account: "ed@example.test" }]) {
+      s.setRows([{ ...s.rows()[0], status: { state: "available", authenticated: true, ...status } }]);
+      const read = await s.board.read(cursor);
+      expect(account(read).windows[0].usedPercent).toBe(100);
+      cursor = read.cursor;
+    }
+    expect(s.rateLimits.has("claude")).toBe(true);
+  });
+
   it.each([undefined, 1440])("records Codex aliases with primary duration %s", async (windowDurationMins) => {
     const s = setup();
     s.setRows([{ id: "codex", of: "codex", driverKind: "codex", generation: 0, existing: false, state: "ready" }]);

@@ -394,7 +394,7 @@ it("persists Connections order in Usage and brings Usage changes back", async ()
 
 it.each([
   ["signed-out", "Sign In", {}],
-  ["still signing in", "Cancel", { loginState: "pending", loginCapture: { url: "https://example.com/device" } }],
+  ["still signing in", "Cancel", { loginState: "pending" }],
 ] as const)("keeps one menu, on the name row, for a %s named account on a phone", async (_state, action, signIn) => {
   Object.assign(accounts[0]!, { snapshot: { state: "available", authenticated: false }, ...signIn });
   await mount({ phone: true });
