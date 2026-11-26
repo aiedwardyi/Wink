@@ -3,22 +3,29 @@ import { askTerms } from "./task-asks.ts";
 
 // #2073's first-person commitment, in English or Korean
 const COMMIT = /\b(?:i['’]ll|i will(?! not\b)|i['’]m going to|i am going to)\b|(?:할|볼|드릴|둘|놓을)\s?[게께]요?(?=[\s.!~]|$)/i;
-// an offer waits on the user's yes
-const OFFER = /\b(?:if|unless|want|would|shall|maybe|perhaps)\b|원하시면|괜찮으시면/i;
+// an offer waits on the user's yes; "check if it exists" and "the feature you want" are still promises
+const OFFER = /\b(?:if|unless) (?:you|needed|wanted|useful|helpful)\b|\b(?:want me to|would you like|shall i|maybe|perhaps)\b|원하시면|괜찮으시면/i;
 const SENTENCE = /(?<=[.!?。！？])\s+|\n+/;
 const CODE = /(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g;
 
 const sentences = (text: string) => text.replace(CODE, "$1").split(SENTENCE)
   .map((part) => part.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim()).filter(Boolean);
 const said = (row: Message) => row.role === "bot" && row.kind === "text" && !row.roomEcho && Boolean(row.text?.trim());
+const COMMON = new Set("all and any are but can for get got had has how its let new not now off one our out see the too two was way who why you".split(" "));
+// with the short ones a subject can be: "the API", "the bug"
+function words(text: string): Set<string> {
+  const found = askTerms(text);
+  for (const word of text.toLowerCase().match(/\b[a-z0-9]{2,3}\b/g) ?? []) if (!COMMON.has(word)) found.add(word);
+  return found;
+}
 // half its words come back in what followed
 const covered = (item: Set<string>, later: Set<string>) => [...item].filter((term) => later.has(term)).length * 2 >= item.size;
 
 /** What a promise is about: its words after "I'll" and the verb, or before a Korean ending. */
 function object(promise: string): Set<string> {
   const marker = COMMIT.exec(promise)!;
-  if (!/^i/i.test(marker[0])) return askTerms(promise.slice(0, marker.index));
-  return askTerms(promise.slice(marker.index + marker[0].length).replace(/^\s*\S+/, ""));
+  if (!/^i/i.test(marker[0])) return words(promise.slice(0, marker.index));
+  return words(promise.slice(marker.index + marker[0].length).replace(/^\s*\S+/, ""));
 }
 
 export interface Leftover { ask: string; promise?: true }
@@ -42,7 +49,7 @@ export function turnLeftovers(rows: readonly Message[]): Leftover[] {
       after.push(line);
       continue;
     }
-    for (const term of askTerms(after.join("\n"))) later.add(term);
+    for (const term of words(after.join("\n"))) later.add(term);
     after = [];
     const about = object(line);
     if (about.size && !covered(about, later)) left.unshift({ ask: line, promise: true });

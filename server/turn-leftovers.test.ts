@@ -60,6 +60,12 @@ describe("turn leftovers", () => {
     expect(saved.asks.at(-1)).toMatchObject({ id: "A5", status: "open", kind: "promise" });
   });
 
+  it("keeps a short subject and a promise that only mentions if or want", () => {
+    const promises = ["I'll fix the API.", "I'll check if the backup exists.", "I'll implement the feature you want."];
+    expect(turnLeftovers([user("Keep going."), ...promises.map((line) => bot(line, { summarized: true })), user("Color?", { steered: true }), bot("Blue.")])).toEqual(promises.map((ask) => ({ ask, promise: true })));
+    expect(turnLeftovers([user("Status?"), bot("I'll fix the API."), tool(), bot("The API is fixed.")])).toEqual([]);
+  });
+
   it("keeps a question the quick helper handed into the turn as a steer", () => {
     expect(turnLeftovers([user("What font is it?"), user("And the ramp color?", { steered: true, quick: { state: "handoff" } }), bot("Blue.")])).toEqual([{ ask: "What font is it?" }]);
   });
