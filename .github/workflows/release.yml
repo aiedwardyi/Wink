@@ -106,6 +106,8 @@ jobs:
           [ -f "$res/server/packaged-boot.js" ] || { echo "::error::missing server/packaged-boot.js"; exit 1; }
           [ -f "$res/server/index.js" ] || { echo "::error::missing server/index.js"; exit 1; }
           [ -f "$res/ui/index.html" ] || { echo "::error::missing ui/index.html"; exit 1; }
+          # a file the UI asks for but did not ship → a blank What's New clip, not a build error
+          node scripts/check-packaged-assets.mjs "$res" || exit 1
           [ -f "$res/cloudflared/cloudflared.exe" ] || { echo "::error::missing cloudflared.exe"; exit 1; }
           [ -f "$res/licenses/cloudflared-LICENSE.txt" ] || { echo "::error::missing cloudflared license"; exit 1; }
           [ -f "$res/licenses/cloudflared-README.md" ] || { echo "::error::missing cloudflared provenance"; exit 1; }
