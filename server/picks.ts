@@ -401,7 +401,7 @@ export function mergeTimelines(a: string, b: string): string | null {
       }
       const tweaks = said(before.tweaks, entry.tweaks);
       // a retirement judged the words it saw; a tweak it never saw brings the pick back
-      const retired = [before, entry].find((side) => side.retired && tweaks.every((tweak) => side.tweaks.some((seen) => seen.at === tweak.at && seen.said === tweak.said)))?.retired;
+      const retired = [before, entry].find((side) => side.retired && entryTime(side) >= Math.max(entryTime(before), entryTime(entry)) && tweaks.every((tweak) => side.tweaks.some((seen) => seen.at === tweak.at && seen.said === tweak.said)))?.retired;
       const typed = Boolean(before.tapped) !== Boolean(entry.tapped) ? (before.tapped ? entry : before) : undefined;
       const bound = typed ?? (before.binding === "verified" ? before : entry.binding === "verified" ? entry : before.messageId ? before : entry);
       if (bound.messageId || bound.binding === "unbound") {
