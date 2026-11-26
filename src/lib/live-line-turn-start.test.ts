@@ -25,6 +25,16 @@ describe("live line must not take the last turn's answer", () => {
     const live = liveTurnSteps(list, null, true);
     expect({ hidden: [...live.hiddenIds], line: live.fallbackText }).toEqual({ hidden: [], line: null });
   });
+  it("a sidekick question mid-turn keeps the running turn's progress in the live line", () => {
+    const list = [
+      row("u1", 1, { role: "user", kind: "text" }),
+      row("t1", 2, { role: "bot", kind: "text" }),
+      row("q1", 3, { role: "user", kind: "text", quick: { state: "asked" } }),
+      row("qa1", 4, { role: "bot", kind: "text", quick: { state: "answer", askId: "q1" } }),
+    ];
+    const live = liveTurnSteps(list, null, true);
+    expect({ hidden: [...live.hiddenIds], line: live.fallbackText }).toEqual({ hidden: ["t1"], line: "t1" });
+  });
   it("a note or send that lands after the wait began steers the running turn", () => {
     const list = [
       row("u1", 1, { role: "user", kind: "text" }),
