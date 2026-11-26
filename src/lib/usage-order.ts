@@ -16,6 +16,8 @@ let writes = 0;
 /** The newest copy Wink sent, by rev; replies and config frames can arrive in any order. */
 let newest: UsageOrderStatus | undefined;
 let legacyDone = false;
+/** Saves go one at a time, so Wink applies them in the order they were made. */
+let queue: Promise<unknown> = Promise.resolve();
 const watchers = new Set<() => void>();
 
 function show(next: UsageOrders) {
@@ -53,8 +55,9 @@ function dropLegacy() {
 /** A write in flight holds the shown order, so a config frame from an earlier write cannot flick it back. */
 function put(body: object): Promise<{ ok: boolean; status?: UsageOrderStatus }> {
   writes += 1;
-  return Promise.resolve()
-    .then(() => api(PATH, { method: "PUT", body: JSON.stringify(body) }))
+  const sent = queue.then(() => api(PATH, { method: "PUT", body: JSON.stringify(body) }));
+  queue = sent.catch(() => {});
+  return sent
     .then((reply: { usageOrder?: unknown } | undefined) => ({ ok: true, status: isStatus(reply?.usageOrder) ? reply.usageOrder : undefined }), () => ({ ok: false }))
     .finally(() => { writes -= 1; });
 }
@@ -105,6 +108,7 @@ export function resetUsageOrder() {
   writes = 0;
   newest = undefined;
   legacyDone = false;
+  queue = Promise.resolve();
 }
 
 function subscribe(notify: () => void) {

@@ -154,21 +154,21 @@ function holdReplies() {
   return { held, frames };
 }
 
-it("keeps a newer drag when the older drag's reply or config frame arrives last", async () => {
+it("keeps a newer drag when an older drag's config frame arrives last", async () => {
   const desktop = await open({ desktop: true });
   const { held, frames } = holdReplies();
   await desktop.move(ids[0]!, "ArrowDown");
   await desktop.move(ids[0]!, "ArrowDown");
   const newer = [ids[1], ids[2], ids[0]];
   expect(desktop.rows()).toEqual(newer);
+  while (held.length) {
+    held.pop()!();
+    await desktop.settle();
+  }
   for (const frame of frames) {
     h.config = frame;
     await desktop.receive();
   }
-  held[1]!();
-  await desktop.settle();
-  held[0]!();
-  await desktop.settle();
   expect(desktop.rows()).toEqual(newer);
   h.config = frames[0];
   await desktop.receive();
@@ -186,5 +186,20 @@ it("shows another client's newer order once this client's own save settles", asy
   await desktop.receive();
   held[0]!();
   await desktop.settle();
+  expect(desktop.rows()).toEqual(newer);
+});
+
+it("keeps the newer of two quick drags whatever order Wink takes their requests in", async () => {
+  const desktop = await open({ desktop: true });
+  const waiting: (() => void)[] = [];
+  h.api.mockImplementation((path: string, init?: RequestInit) => new Promise((resolve) => waiting.push(() => resolve(answer(path, init)))));
+  await desktop.move(ids[0]!, "ArrowDown");
+  await desktop.move(ids[0]!, "ArrowDown");
+  const newer = [ids[1], ids[2], ids[0]];
+  while (waiting.length) {
+    waiting.pop()!();
+    await desktop.settle();
+  }
+  expect(saved?.orders.claude).toEqual(newer);
   expect(desktop.rows()).toEqual(newer);
 });
