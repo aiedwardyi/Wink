@@ -3228,13 +3228,17 @@ require(${JSON.stringify(fake)});
 
       it("starts one agy per chat however often it is opened, and two chats at most", async () => {
         const instance = await make("open-cap");
-        await open(instance);
-        await open(instance);
-        await open(instance, { threadId: "t-standby-2" });
-        await open(instance, { threadId: "t-standby-3" });
-        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(2);
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        expect(spawns()).toHaveLength(2);
+        const spawn = vi.spyOn(procs, "spawnCli");
+        try {
+          // a prepare has spawned its agy, or never will, by the time it resolves
+          await open(instance);
+          await open(instance);
+          await open(instance, { threadId: "t-standby-2" });
+          await open(instance, { threadId: "t-standby-3" });
+          expect(spawn.mock.calls.filter(([, args]) => args.includes("--input-format"))).toHaveLength(2);
+        } finally {
+          spawn.mockRestore();
+        }
       });
 
       it("starts none beside a running turn or for a chat that resumes", async () => {
@@ -3242,11 +3246,15 @@ require(${JSON.stringify(fake)});
         rmSync(join(dir, "go"));
         await instance.adapter.sendTurn({ ...chat, text: "one" });
         await expect.poll(() => existsSync(dump) && JSON.parse(readFileSync(dump, "utf8")).prompt, { timeout: 5_000 }).toBe("one");
-        await open(instance);
-        await open(instance, { threadId: "t-standby-resume", fresh: undefined });
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        expect(spawns()).toHaveLength(1);
-        writeFileSync(join(dir, "go"), "");
+        const spawn = vi.spyOn(procs, "spawnCli");
+        try {
+          await open(instance);
+          await open(instance, { threadId: "t-standby-resume", fresh: undefined });
+          expect(spawn).not.toHaveBeenCalled();
+        } finally {
+          spawn.mockRestore();
+          writeFileSync(join(dir, "go"), "");
+        }
       });
 
       it("retires the prepared agy on Stop (a bot delete stops its chat) and on dispose", async () => {
