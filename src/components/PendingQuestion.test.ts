@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import type { Message } from "@/state/store";
@@ -60,6 +60,7 @@ const size = (cls: string, name: string, variant = "") => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   window.getSelection()?.removeAllRanges();
   if (root) await act(async () => root!.unmount());
   host?.remove();
@@ -219,54 +220,65 @@ describe("question folding", () => {
     expect(pill()).toBeNull();
   });
 
-  it("counts every choice the row has no room for in one +N pill that opens the card", async () => {
-    // happy-dom has no layout: each shown pill is 100px wide in a 250px space
-    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
-      return this.matches("[data-row-choices]") ? this.querySelectorAll("button:not([hidden])").length * 100 : 0;
-    });
-    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
-      return this.matches("[data-row-choices]") ? 250 : 0;
-    });
+  describe("the row's choices, all or none", () => {
+    let room = 0;
+    const watchers: { fit: () => void; target: Element }[] = [];
+    const shown = () => {
+      const list = host.querySelector<HTMLElement>("[data-row-choices]");
+      return list && !list.hidden ? [...list.querySelectorAll<HTMLButtonElement>("button:not([hidden])")].map((chip) => chip.textContent) : [];
+    };
     const options = ["Yes, both", "Only the open speed", "Change it"];
-    await render("fold-more", options);
-    await fold();
-    const pills = [...host.querySelectorAll<HTMLButtonElement>("[data-row-choices] button")].filter((pill) => !pill.hidden);
-    const more = pills.find((pill) => /^\+\d+$/.test(pill.textContent ?? ""));
-    const shown = pills.filter((pill) => pill !== more).map((pill) => pill.textContent);
-    expect(shown).toEqual(["Yes, both"]);
-    expect(more?.textContent).toBe("+2");
-    expect(more?.getAttribute("aria-label")).toBe("2 more choices");
-    expect(more?.className).toBe(pills[0].className);
-    await press(more!, 1);
-    await settle();
-    expect(pill()).toBeNull();
-    expect([...host.querySelectorAll("[data-term-choices] button")].map((choice) => choice.textContent)).toEqual(options);
-    expect(onPick).not.toHaveBeenCalled();
+
+    beforeEach(() => {
+      vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
+        if (!this.matches("[data-row-choices]")) return 0;
+        return [...this.querySelectorAll("button:not([hidden])")].reduce((width, chip) => width + 8 * (chip.textContent?.length ?? 0), 0);
+      });
+      vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+        return this.matches("[data-row-choices]") ? room : 0;
+      });
+      watchers.length = 0;
+      vi.stubGlobal("ResizeObserver", class {
+        constructor(private fit: () => void) {}
+        observe(target: Element) { watchers.push({ fit: this.fit, target }); }
+        disconnect() {}
+      });
+    });
+
+    it("shows every choice when all fit, and no +N pill", async () => {
+      room = 400;
+      await render("row-all-fit", options);
+      await fold();
+      expect(shown()).toEqual(options);
+      expect([...host.querySelectorAll("[data-row-choices] button")].map((chip) => chip.textContent)).toEqual(options);
+    });
+
+    it.each([["one", 280], ["several", 100]] as const)("shows no choice when %s would not fit", async (_, width) => {
+      room = width;
+      await render(`row-cut-${width}`, options);
+      await fold();
+      expect(shown()).toEqual([]);
+      expect(pill()?.textContent).toContain("Which design");
+    });
+
+    it("brings every choice back when the row widens", async () => {
+      room = 280;
+      await render("row-widen", options);
+      await fold();
+      expect(shown()).toEqual([]);
+      room = 400;
+      await act(async () => { for (const { fit, target } of watchers) if (target.querySelector(":scope > [data-row-choices]")) fit(); });
+      expect(shown()).toEqual(options);
+    });
   });
 
-  it.each([["en", "1 more choice"], ["ko", "선택지 1개 더 보기"]] as const)("names one cut choice in the singular in %s", async (locale, label) => {
-    applyLocale(locale);
-    // the +N pill is narrower than a choice, so cutting one choice makes room
-    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
-      if (!this.matches("[data-row-choices]")) return 0;
-      return [...this.querySelectorAll("button:not([hidden])")].reduce((width, chip) => width + (chip.textContent?.startsWith("+") ? 40 : 100), 0);
-    });
-    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
-      return this.matches("[data-row-choices]") ? 250 : 0;
-    });
-    await render(`fold-one-more-${locale}`, ["Yes, both", "Only the open speed", "Change it"]);
-    await act(async () => button(locale === "ko" ? "질문 접기" : "Fold question").click());
-    await settle();
-    const more = [...host.querySelectorAll<HTMLButtonElement>("[data-row-choices] button")].find((chip) => !chip.hidden && chip.textContent === "+1");
-    expect(more?.getAttribute("aria-label")).toBe(label);
-    expect(more?.title).toBe(label);
-  });
-
-  it("shows no +N pill when every choice fits", async () => {
-    await render("fold-all-fit", ["Yes, both", "Only the open speed", "Change it"]);
-    await fold();
-    const pills = [...host.querySelectorAll<HTMLButtonElement>("[data-row-choices] button")].filter((pill) => !pill.hidden);
-    expect(pills.map((pill) => pill.textContent)).toEqual(["Yes, both", "Only the open speed", "Change it"]);
+  it("renders long choices as a left-aligned list instead of centered full-radius pills", async () => {
+    await render("long-choice-list", ["Build it (my pick)", "Also add Sol's chat-only mode (~0.9x, fewer tools)", "Hold"]);
+    const group = host.querySelector<HTMLElement>("[data-ask-choices]")!;
+    expect(group.getAttribute("data-choice-layout")).toBe("list");
+    const buttons = [...group.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttons).toHaveLength(3);
+    expect(buttons.every((b) => b.classList.contains("text-left") && !b.classList.contains("rounded-full"))).toBe(true);
   });
 
   it("moves focus between the row and the card only for the keyboard, so a click never inherits a focus ring", async () => {

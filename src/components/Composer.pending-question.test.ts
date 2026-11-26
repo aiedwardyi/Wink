@@ -568,13 +568,13 @@ describe("pinned ask_user question", () => {
     expect(pin()!.textContent).toContain("3/3");
   });
 
-  it("outlines the choices in secondary ink with a 44px touch target", async () => {
+  it("outlines the choices in a subtle hairline chip with a 44px touch target", async () => {
     await mount({ bot: bot([question]) });
     const choice = pinButton("Prod").className;
-    expect(choice).toContain("rounded-full");
-    expect(choice).toContain("bg-control");
-    expect(choice).toContain("border-ink-secondary ");
-    expect(choice).toContain("pointer-coarse:after:-inset-y-[5px]");
+    expect(choice).toContain("rounded-xl");
+    expect(choice).toContain("bg-inset/60");
+    expect(choice).toContain("border-hairline/80 ");
+    expect(choice).toContain("pointer-coarse:after:-inset-y-[6px]");
   });
 
   it("gives the open card's x a 44px touch target without growing the card", async () => {
@@ -784,8 +784,8 @@ describe("jumping from the question card", () => {
     expect(focused).toBeNull();
   });
 
-  it("jumps to an older open question's own record, reached with the arrows", async () => {
-    const older = ask({ staysOpen: true, subtitle: "Older question?" });
+  it("jumps from an older docked open question to its turn's text, reached with the arrows", async () => {
+    const older = ask({ staysOpen: true, subtitle: "Older question?", replyId: "reply-1" });
     const newest = ask({ staysOpen: true, subtitle: "Newest question?" });
     await mount({ bot: bot([reply("reply-1"), older, newest]) });
     await shrink();
@@ -793,7 +793,7 @@ describe("jumping from the question card", () => {
     await expand();
     await tap();
     expect(card()?.textContent).toContain("Older question?");
-    expect(focused).toMatchObject({ messageId: older.id });
+    expect(focused).toMatchObject({ messageId: "reply-1" });
   });
 
   it("leaves the arrows and the choices to flip and answer, not jump", async () => {

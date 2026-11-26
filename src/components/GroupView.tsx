@@ -450,7 +450,7 @@ export const Transcript = memo(function Transcript({
                 message={m}
                 transcript={transcript}
                 askerName={memberOf(m.from?.botId)?.name ?? m.from?.name}
-                pinned={pinnedQuestion(group.messages)?.id === m.id}
+                pinned={Boolean(pinnedQuestion(group.messages))}
                 onPick={readOnly ? undefined : (answer) => dispatch({ type: "answerGroupCard", groupId: group.id, messageId: m.id, answer })}
               />
             </div>
@@ -1595,12 +1595,13 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
         <SelectionMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} text={shownMenu.text} closing={menuClosing} onClose={() => setMenu(null)} />
       ) : null}
 
-      {(jump.messages || laterCount > 0 || (!follow && newestBelow)) && (
-        <JumpToLatest bottom={composerDock.height} onJump={jumpToLatest} />
-      )}
-
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
       <ChatPeekPart part="composer">
+      {(jump.messages || laterCount > 0 || (!follow && newestBelow)) && (
+        <div data-dock-rail="" className="flex min-h-[28px] justify-end bg-app px-5 py-1.5 max-md:border-t max-md:border-hairline/25 max-md:px-3">
+          <JumpToLatest inline onJump={jumpToLatest} />
+        </div>
+      )}
       {archive ? (
         <GroupArchiveBar />
       ) : (

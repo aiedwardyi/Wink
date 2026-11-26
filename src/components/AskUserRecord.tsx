@@ -33,14 +33,14 @@ export function AskUserRecord({
     <div
       data-ask-user-record={status.state}
       className={cn(
-        "w-full max-w-[840px] rounded-2xl border bg-card p-4",
+        "w-full max-w-[840px] rounded-xl border bg-card px-3.5 py-2.5",
         waiting ? "border-accent/40" : "border-hairline/30 opacity-70",
       )}
     >
-      {askerName && <div className="text-[13px] font-semibold text-ink">{t("ask.asks", { name: askerName })}</div>}
-      <div className="mt-1 whitespace-pre-wrap break-words text-[14px] leading-relaxed text-ink">{card.subtitle}</div>
+      {askerName && <div className="text-[12.5px] font-semibold text-ink">{t("ask.asks", { name: askerName })}</div>}
+      <div className="mt-1 whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink">{card.subtitle}</div>
       {waiting && onPick && <AskChoices options={card.options} onPick={onPick} />}
-      <div className="mt-3 flex min-w-0 items-center gap-1.5 text-[13px] text-ink-secondary">
+      <div className="mt-2 flex min-w-0 items-center gap-1.5 text-[12.5px] text-ink-secondary">
         {status.state === "answered" ? (
           <>
             <Check size={14} className="shrink-0 text-success" />
