@@ -12,7 +12,8 @@
 //                      | wink-tool (FAKE_CLAUDE_TOOL, gated the same way; running
 //                        it writes ran-tool.txt)
 //                      | read (a Read of notes.txt in the cwd, gated the same way;
-//                        what it read goes to FAKE_CLAUDE_READ_OUT)
+//                        what it read goes to FAKE_CLAUDE_READ_OUT;
+//                        FAKE_CLAUDE_READ_TOOL names another read tool, e.g. LSP)
 //                      | bench-quiet (text only, no tool_use — latency floor)
 //                      | late-wake (wakes after `result` and asks for a Bash)
 //                      | subagent-wake (a subagent's final lands after `result`,
@@ -883,7 +884,7 @@ const playTurn = (prompt: JsonValue, held = false) => {
 
   if (mode === "read") {
     const path = join(process.cwd(), "notes.txt");
-    void playTools([["tu-read", "Read", { file_path: path }, () => writeFileSync(process.env.FAKE_CLAUDE_READ_OUT ?? "read.txt", readFileSync(path))]]);
+    void playTools([["tu-read", process.env.FAKE_CLAUDE_READ_TOOL ?? "Read", { file_path: path }, () => writeFileSync(process.env.FAKE_CLAUDE_READ_OUT ?? "read.txt", readFileSync(path))]]);
     return;
   }
 

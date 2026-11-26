@@ -14,7 +14,7 @@ import { writeFileAtomic } from "../../atomic.ts";
 import { grokAgentsAllowState, saveGrokAgentsAllowState } from "../../grok-agents-allow-state.ts";
 import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
-import { FREE_ACCESS, routedAccess } from "../turn-access.ts";
+import { FREE_ACCESS, guestText, routedAccess } from "../turn-access.ts";
 import { accountLabel, storedAccount, storedSignIn } from "../auth-status.ts";
 import { createCliText, type CliTextRun } from "../cli-text.ts";
 
@@ -553,6 +553,9 @@ function removeGrokTextSession({ cwd, stdout, env }: CliTextRun): void {
 }
 
 const GROK_COMPACTION_UPDATES = new Set(["auto_compact_started", "compaction_checkpoint", "auto_compact_completed"]);
+// Grok's file readers by tool id (read_file and grep also name their hashline twins), plus the
+// subagent and workflow tools, whose agents read on their own. An id a build lacks only warns.
+const GROK_GUEST_OFF = ["read_file", "grep", "list_dir", "glob", "lsp", "task", "workflow"];
 
 export const grokSupport: AcpSupport = {
   driverKind: "grokAgent",
@@ -608,6 +611,8 @@ export const grokSupport: AcpSupport = {
   spawnArgs: (config, turn) => [
     // Only a Wink setting overrides; otherwise the user's own grok config decides.
     ...(turn.readOnly ? ["--permission-mode", "plan"] : config.fullAuto ? ["--permission-mode", "bypassPermissions"] : turn.approval === "ask" ? ["--permission-mode", "default"] : []),
+    // plan mode still reads the session's folder, the host's project, unasked: someone else's words get no tool that reads
+    ...(guestText(turn) ? ["--disallowed-tools", GROK_GUEST_OFF.join(",")] : []),
     "agent",
     ...(turn.model ? ["-m", turn.model] : []),
     // long form on purpose: `--effort` is documented as an alias, and an

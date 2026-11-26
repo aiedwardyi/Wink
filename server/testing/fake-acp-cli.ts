@@ -33,6 +33,9 @@
 //                     file exists — a deterministic busy window for the
 //                     steer-queue e2e, with the echo pinning exactly what a
 //                     drained turn was sent)
+//                   | read (Grok's plan mode: a read_file of notes.txt in the
+//                     session's cwd runs unasked, unless --disallowed-tools
+//                     removes read_file; what it read goes to FAKE_ACP_READ_OUT)
 //   FAKE_ACP_DUMP   path to write {argv, env} as JSON, so a test can assert
 //                   argv shape (agent/stdio flags) and env hygiene. Per-session
 //                   settings land next to it in `<path>.config.json`, so a test
@@ -58,6 +61,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 
 const mode = process.env.FAKE_ACP_MODE ?? "happy";
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -97,6 +101,9 @@ const sessionModels = () =>
   acpModels.length ? { currentModelId: acpModels[0].modelId, availableModels: acpModels } : null;
 
 const argv = process.argv.slice(2);
+// the session's folder, where the read mode looks
+let sessionCwd: string | null = null;
+const readToolsOff = () => argv.includes("--disallowed-tools") && argv[argv.indexOf("--disallowed-tools") + 1]!.split(",").includes("read_file");
 const dumpEnv = Object.fromEntries(
   [
     "PATH",
@@ -389,6 +396,7 @@ function handle(msg: any) {
         writeFileSync(`${process.env.FAKE_ACP_DUMP}.cwd.json`, JSON.stringify(msg.params?.cwd ?? null));
       }
       agentsMcp = servers.find((s: any) => s?.name === "agents") ?? null;
+      sessionCwd = typeof msg.params?.cwd === "string" ? msg.params.cwd : null;
       if (process.env.FAKE_ACP_DUMP) {
         writeFileSync(`${process.env.FAKE_ACP_DUMP}.mcp.json`, JSON.stringify(servers, null, 2));
       }
@@ -406,6 +414,7 @@ function handle(msg: any) {
         out({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: "session not found" } });
         break;
       }
+      sessionCwd = typeof msg.params?.cwd === "string" ? msg.params.cwd : null;
       const opts = configOptions();
       const mdls = sessionModels();
       result(msg.id, { ...(opts ? { configOptions: opts } : {}), ...(mdls ? { models: mdls } : {}) });
@@ -496,6 +505,12 @@ function handle(msg: any) {
       if (process.env.FAKE_ACP_DUMP) {
         dumpState.prompt = msg.params?.prompt;
         writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify(dumpState, null, 2));
+      }
+      if (mode === "read" && sessionCwd && !readToolsOff()) {
+        const path = join(sessionCwd, "notes.txt");
+        out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "read-1", title: "read_file", kind: "read" } } });
+        if (existsSync(path)) writeFileSync(process.env.FAKE_ACP_READ_OUT ?? "read.txt", readFileSync(path));
+        out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "read-1", status: "completed" } } });
       }
       if (mode === "hang") {
         // never resolve the prompt — lets tests exercise interrupt

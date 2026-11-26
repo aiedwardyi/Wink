@@ -271,6 +271,52 @@ describe("a room guest's read-only turn reads no host file", () => {
     expect(await claudeRead("t-owner", OWNER_TURN)).toBe(CANARY);
   });
 
+  it("Claude: LSP reads like Read: an owner turn keeps it, a guest's ask can't", async () => {
+    setEnv("FAKE_CLAUDE_READ_TOOL", "LSP");
+    expect(await claudeRead("t-owner-lsp", OWNER_TURN)).toBe(CANARY);
+    expect(await claudeRead("t-guest-lsp", GUEST_ASK)).toBeNull();
+  });
+
+  const hostProject = () => {
+    const project = join(scratch, "proj");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, "notes.txt"), CANARY);
+    return project;
+  };
+  const reader = (instance: ProviderInstance, cwd: string, out: string) => async (threadId: string, access: Partial<SendTurnInput>) => {
+    rmSync(out, { force: true });
+    await run(instance, threadId, { cwd, integrations: { agents }, ...access });
+    return existsSync(out) ? readFileSync(out, "utf8") : null;
+  };
+
+  it("Grok: plan mode reads unasked, so a guest's ask gets no read tool; the owner's lane and turns keep them", async () => {
+    const out = join(scratch, "grok-read.txt");
+    setEnv("FAKE_ACP_MODE", "read");
+    setEnv("FAKE_ACP_READ_OUT", out);
+    const instance = await GrokAgentDriver.create({ instanceId: "read-grok", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-acp-cli.ts"), fullAuto: true } });
+    live.push(instance);
+    const read = reader(instance, hostProject(), out);
+    expect(await read("t-grok-guest", GUEST_ASK)).toBeNull();
+    expect(await read("t-grok-guest-resumed", { ...GUEST_ASK, resumeCursor: "s-host" })).toBeNull();
+    expect(await read("t-grok-lane", OWNER_LANE)).toBe(CANARY);
+    expect(await read("t-grok-owner", OWNER_TURN)).toBe(CANARY);
+  });
+
+  it("Muse: a guest's ask works in an empty folder and never resumes a session rooted in the host's project", async () => {
+    const out = join(scratch, "muse-read.txt");
+    setEnv("META_API_KEY", "meta-key");
+    setEnv("FAKE_MSP_MODE", "read");
+    setEnv("FAKE_MSP_READ_OUT", out);
+    const instance = await MspMuseAgentDriver.create({ instanceId: "read-muse", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-msp-cli.ts"), fullAuto: true } });
+    live.push(instance);
+    const read = reader(instance, hostProject(), out);
+    expect(await read("t-muse-lane", OWNER_LANE)).toBe(CANARY);
+    expect(await read("t-muse-guest", GUEST_ASK)).toBeNull();
+    // the owner's session, rooted in the project, is the one a guest's ask would resume
+    expect(await read("t-muse-owner", OWNER_TURN)).toBe(CANARY);
+    expect(await read("t-muse-guest-resumed", { ...GUEST_ASK, resumeCursor: "fake-msp-session" })).toBeNull();
+  });
+
   it("agy: a guest's ask denies every file read; the owner's lane keeps its workspace", async () => {
     setEnv("FAKE_AGY_DUMP", join(scratch, "agy.json"));
     const instance = await AntigravityDriver.create({ instanceId: "read-agy", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-agy-cli.ts"), fullAuto: true } });
