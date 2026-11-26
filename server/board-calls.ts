@@ -1,5 +1,5 @@
-// Bot calls feed the Board: an engine call leaves a stuck post, the bot clearing that blocker with a note solves it, and a later
-// bot with the same blocker, or about to ask the user a plain fact, gets the fix instead. No model calls.
+// Bot calls and the Board: a call reaches the user, never the Forum. The bot clearing a blocker an older build posted solves that post,
+// and a later bot with the same blocker, or about to ask the user a plain fact, gets the fix instead. No model calls.
 import { createHash } from "node:crypto";
 
 import { BOARD_REF_MAX, boardLine, boardPostId, errorSig, type Board, type BoardPost } from "./board.ts";
@@ -124,18 +124,12 @@ export function createBoardCalls(deps: BoardCallDeps) {
       deps.held?.({ kind: "ask", botId, threadId, postIds: posts.map((post) => post.id) });
       return `Not asked yet: the Forum may answer this:\n${posts.map((post) => boardLine(post, HIT_CHARS)).join("\n")}\nIf it answers you, close this question with ask_user close:true. If not, it posts when your turn ends.`;
     },
-    /** A call went out: an engine blocker becomes an open stuck post, a fresh one once the last call was solved. */
-    called(botId: string, threadId: string, blocker: Blocker): BoardPost | undefined {
-      if (deps.room(threadId) || !forumKind(blocker)) return undefined;
-      return deps.board.post({
-        author_bot_id: botId,
-        kind: "stuck",
-        title: blocker.note,
-        body: blocker.note,
-        error_sig: errorSig(blocker.note),
-        project_id: deps.projectOf(threadId),
-        source_ref: currentRef(threadId, blocker),
-      });
+    /** The bot's newest open Stuck post on this thread, named on each task write until a fix reply under it solves it. */
+    ownStuck(botId: string, threadId: string): string {
+      if (deps.room(threadId)) return "";
+      const refs = [`tool:${threadId}:`, callRef(threadId)];
+      const own = deps.board.list().find((post) => post.author_bot_id === botId && post.kind === "stuck" && post.status === "open" && post.parent_id === null && refs.some((ref) => post.source_ref.startsWith(ref)));
+      return own ? `Your Forum post ${own.id} is still open. Once it is solved, reply with board_post kind fix and parent_id ${own.id}.` : "";
     },
     /** The bot cleared the one blocker it called on, with a note: that note is the fix. The user's chat is never the fix. */
     cleared(threadId: string, before: readonly Blocker[], after: readonly Blocker[], note = ""): BoardPost[] {

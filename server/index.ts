@@ -3470,7 +3470,6 @@ const botCalls = createBotCalls({
   chat: (threadId) => store.groupByThread(threadId)?.id,
   skip: (threadId) => isHostedThread(store, threadId),
   calls: () => teamReports.member(),
-  called: (botId, threadId, blocker) => void boardCalls.called(botId, threadId, blocker),
 });
 
 function phonePing(botId: string, ping: PhonePing | null, open: PushTarget) {
