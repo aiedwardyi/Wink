@@ -1752,7 +1752,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const generations = {};
       for (const session of sessions.values()) {
         if (!session.botPane || session.retired || session.exitCode !== null || active.get(session.key) !== session.id) continue;
-        if (!session.workerAccount) { if (!session.workerAccountKnown) unknown++; continue; }
+        // An idle empty shell runs no worker; a command Wink sent or the user started may run one on a login the host can't name.
+        if (!session.workerAccount) { if (!session.workerAccountKnown && (session.command || session.worker || session.shellExecuting)) unknown++; continue; }
         if (session.workerFinished || session.workerAccount.id !== accountId) continue;
         count++;
         const generation = session.workerAccount.generation;

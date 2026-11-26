@@ -62,6 +62,20 @@ describe("captured worker account projections", () => {
     assert.deepEqual(f.host.liveAccountRuns().map((run) => run.accountId), ["claude.fixture", "claude.other"]);
   });
 
+  test("an empty shell is no worker on any login; a pane that runs one on a login it can't name is unknown", async (t) => {
+    let owner;
+    const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "unrouted" }) });
+    owner = f.owner;
+    t.after(() => f.host.dispose());
+    const shell = await f.host.openForBot("bot-1", { label: "shell" });
+    assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 0, unknown: 0, generations: {} });
+    await f.host.openForBot("bot-1", { label: "worker", command: "claude" });
+    assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 0, unknown: 1, generations: {} });
+    // The shell's own mark: the user started a command in it.
+    f.children[0].data(`\x1b]133;C;${shell.sessionId};${"A".repeat(43)}=\x07`);
+    assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 0, unknown: 2, generations: {} });
+  });
+
   test("projects busy, idle and limit states without changing the captured account", async (t) => {
     let owner;
     const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "managed", executable: "claude", args: [], account: { id: "claude.fixture", generation: 1 }, environment: {} }) });

@@ -46,6 +46,7 @@ export class AccountLifecycle {
     this.hooks = hooks;
     this.bots = bots;
     registry.onAccountIdentity((id, snapshot) => this.observe(id, snapshot));
+    registry.recheckSignedOut((id) => !accounts.drains[id] && !this.pending.has(id) && accounts.list().some((row) => row.id === id && row.userSignedOut));
     // Any confirmed login on a base ends its user Sign Out, also one made outside Wink: when it expires later its Sign In row stays.
     this.stopProbed = registry.onProbed((id) => {
       if (accounts.isBase(id) && registry.accountAvailable(id, true)) void accounts.markSignedOut(id, false).catch(() => { console.error("Signed-in base could not be saved"); });

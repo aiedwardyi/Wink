@@ -462,7 +462,7 @@ describe("account lifecycle", () => {
     expect(f.start).not.toHaveBeenCalled();
     expect(f.registry.accountBlocked("claude")).toBe(false);
     expect(f.accounts.get(account.id)?.state).toBe("ready");
-    await expect(runtime!.accountPanesBusy(null, account.id)).rejects.toMatchObject({ code: "host-unknown" });
+    await expect(runtime!.accountPanesBusy({ url: "http://127.0.0.1:1", token: "fixture" }, account.id)).rejects.toMatchObject({ code: "host-unknown" });
     const { LoginBusyError } = await import("./engine-login.ts");
     (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async () => false;
     vi.spyOn(f.registry, "startSignIn").mockRejectedValue(new LoginBusyError());
@@ -1238,6 +1238,18 @@ describe("account HTTP routes", () => {
     expect(f.registry.accountBlocked("claude")).toBe(false);
   });
 
+  it.each([
+    ["no terminal host, as the browser-only launch runs", null, 200],
+    ["an unreachable terminal host", { url: "http://127.0.0.1:1", token: "fixture" }, 409],
+  ])("signs out a lone base with %s only when its workers are known", async (_name, access, status) => {
+    const f = await fixture();
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("unreachable"); }));
+    (f.controller as unknown as { hooks: { panesBusy(id: string, activeOnly?: boolean): Promise<boolean> } }).hooks.panesBusy = (id, activeOnly) => runtime!.accountPanesBusy(access, id, activeOnly);
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/accounts/claude/sign-out")).toMatchObject({ status });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(status === 200);
+  });
+
   it("uses the same removal guard for legacy managed-instance sign-out", async () => {
     const f = await fixture();
     const added = await f.add();
@@ -1385,6 +1397,27 @@ describe("a user Sign Out removes the account from Usage and Connections", () =>
     f.statuses.set(base, { state: "available", authenticated: false });
     await controller.signedOut(base);
     expect(await listed({ ...f, accounts, registry, controller }, base, accounts)).toMatchObject({ usage: [base, added.id], signIn: { [base]: "signed-out" } });
+  });
+
+  it.each([
+    ["codex", "signs out", "refresh"], ["claude", "signs out", "rescan"], ["codex", "hands Main on", "rescan"],
+  ] as const)("lists a later %s login without a restart after the base %s, on a %s, and keeps its Sign In row when it expires", async (base, how, probe) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    if (how === "hands Main on") await f.controller.remove(base, added.id);
+    else {
+      await f.controller.useForBots(added.id);
+      await f.controller.remove(base);
+    }
+    expect((await listed(f, base)).usage).toEqual([added.id]);
+    // Another login lands on the base outside Wink while Wink stays open.
+    f.statuses.delete(base);
+    await f.registry.describe({ [probe]: true });
+    expect(await listed(f, base)).toMatchObject({ usage: [base, added.id], connections: [base, added.id] });
+    expect(f.accounts.list().find((row) => row.id === base)?.userSignedOut).toBeUndefined();
+    f.statuses.set(base, { state: "available", authenticated: false });
+    await f.controller.signedOut(base);
+    expect(await listed(f, base)).toMatchObject({ usage: [base, added.id], signIn: { [base]: "signed-out" } });
   });
 
   it("lists the base again once it signs back in", async () => {
