@@ -9,7 +9,7 @@ import type { createUsageHistory } from "./usage-history.ts";
 
 type AccountRow = {
   id: string; of: string; driverKind: string; generation: number; existing: boolean; state: "pending" | "ready" | "stopped";
-  blocked?: boolean; checking?: boolean; identity?: string; credit?: true;
+  blocked?: boolean; checking?: boolean; identity?: string; credit?: true; userSignedOut?: true;
   status?: { state: "available" | "unavailable" | "checking"; cliMissing?: boolean; authenticated?: boolean; account?: string; accountIdentity?: string };
 };
 type Bot = { id: string; name: string; base: string };
@@ -233,8 +233,9 @@ export function createUsageBoard(deps: Deps) {
       const [x, y] = [login(a), login(b)];
       return Boolean(x && y && (x.identity && y.identity ? x.identity === y.identity : x.email && x.email === y.email));
     };
+    // A base the user signed out, not signed in again, folds the same way while another account of its engine is listed.
     const duplicates = new Set(rows.filter((row) => row.id === row.of && rows.some((other) => other.of === row.of && other.id !== row.id
-      && !Object.hasOwn(deps.accounts.drains, other.id) && sameLogin(row, other))).map((row) => row.id));
+      && !Object.hasOwn(deps.accounts.drains, other.id) && (sameLogin(row, other) || (row.userSignedOut && !login(row) && !other.credit)))).map((row) => row.id));
     for (const row of rows) {
       const engine = engines.get(row.driverKind)!;
       let group = board.engines.find((group) => group.base === row.of);

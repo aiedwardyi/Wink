@@ -22,6 +22,8 @@ const stateSchema = z.object({
   version: z.literal(1), accounts: z.array(recordSchema), retired: z.array(z.string().regex(ACCOUNT_ID)),
   defaults: z.record(z.string().refine(isInstanceId), z.string().refine(isInstanceId)).optional(),
   drains: z.record(z.string().refine(isInstanceId), drainSchema).optional(),
+  // Bases the user signed out; while another account of the engine is listed, Usage and Connections leave them out.
+  signedOut: z.array(z.string().refine(isInstanceId)).optional(),
 }).strict();
 export type AccountDrain = z.infer<typeof drainSchema>;
 type SavedAccount = z.infer<typeof recordSchema>;
@@ -153,20 +155,21 @@ export class AccountService {
       }
       const drains = { ...this.state.drains };
       delete drains[id];
-      this.commit({ ...this.state, defaults, drains,
+      this.commit({ ...this.marked(id, true), defaults, drains,
         accounts: this.state.accounts.filter((row) => row.id !== id),
         retired: this.get(id) ? [...this.state.retired, id] : this.state.retired,
       });
     });
   }
 
-  list(): Array<{ id: string; of: string; driverKind: string; generation: number; existing: boolean; state: SavedAccount["state"]; error?: string }> {
+  list(): Array<{ id: string; of: string; driverKind: string; generation: number; existing: boolean; state: SavedAccount["state"]; error?: string; userSignedOut?: true }> {
     if (this.error) return [{ id: "accounts", of: "accounts", driverKind: "accounts", generation: 0, existing: false, state: "stopped", error: this.error }];
     return Object.entries(this.bases()).filter(([, entry]) => entry.enabled !== false && ACCOUNT_DRIVERS.includes(entry.driver))
-      .flatMap(([of, entry]) => [
-        { id: of, of, driverKind: entry.driver, generation: 0, existing: true, state: "ready" as const },
-        ...this.records.filter((row) => row.of === of).map((row) => ({ id: row.id, of, driverKind: entry.driver, generation: row.generation, existing: false, state: row.state })),
-      ]);
+      .flatMap(([of, entry]) => {
+        const base: ReturnType<AccountService["list"]>[number] = { id: of, of, driverKind: entry.driver, generation: 0, existing: true, state: "ready" };
+        if (this.state.signedOut?.includes(of)) base.userSignedOut = true;
+        return [base, ...this.records.filter((row) => row.of === of).map((row) => ({ id: row.id, of, driverKind: entry.driver, generation: row.generation, existing: false, state: row.state }))];
+      });
   }
 
   /** Any enabled engine signs in from its base; only ACCOUNT_DRIVERS also add accounts. */
@@ -218,6 +221,15 @@ export class AccountService {
     });
   }
 
+  /** A base the user signed out, or signed back in; any other id is left alone. */
+  markSignedOut(id: string, signedOut: boolean): Promise<void> {
+    if (this.error) return Promise.resolve();
+    return this.change(() => {
+      const next = this.marked(id, signedOut);
+      if (next !== this.state) this.commit(next);
+    });
+  }
+
   // The only path that brings a missing saved home back: Sign In on an account still in the store.
   openHome(id: string) {
     const row = this.require(id);
@@ -227,6 +239,16 @@ export class AccountService {
   }
 
   validateBases(bases = this.bases()) { if (!this.error) this.validate(this.state, bases); }
+
+  private marked(id: string, signedOut: boolean): State {
+    const bases = this.bases();
+    const marks = this.state.signedOut ?? [];
+    if (this.get(id) || !Object.hasOwn(bases, id) || !ACCOUNT_DRIVERS.includes(bases[id].driver) || marks.includes(id) === signedOut) return this.state;
+    const next = signedOut ? [...marks, id] : marks.filter((mark) => mark !== id);
+    const state: State = { ...this.state, signedOut: next };
+    if (!next.length) delete state.signedOut;
+    return state;
+  }
 
   private require(id: string): AccountRecord {
     const row = this.get(id);

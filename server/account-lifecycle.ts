@@ -173,6 +173,7 @@ export class AccountLifecycle {
           const snapshot = state === "cancelled" ? undefined : await this.registry.settleSignIn(id, generation);
           if (snapshot?.authenticated === true && home && state === "complete") clearCodexPromo(home);
           if (guarded) this.registry.blockAccount(id, snapshot?.authenticated === true ? false : blocked);
+          if (snapshot?.authenticated === true) await this.accounts.markSignedOut(id, false).catch(() => { console.error("Signed-in base could not be saved"); });
         }).catch(() => {
           if (guarded) this.registry.blockAccount(id, blocked);
           console.error("Account sign-in snapshot could not be refreshed");
@@ -266,6 +267,8 @@ export class AccountLifecycle {
           }
         }
         this.signedOutBase(await this.registry.signOut(id));
+        // A base can't be retired: it stays in the store, marked, and leaves Usage and Connections while another account is listed.
+        await this.accounts.markSignedOut(id, true);
         if (guarded) {
           this.hooks.invalidate(id);
           // Invalidating drops the signed-out check and a stopped base never checks on its own: without a new one it reads as not installed.

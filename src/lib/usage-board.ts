@@ -54,7 +54,7 @@ export type UsageBoardEngine = {
   // Absent until automatic picks ship; true keeps new work on Main.
   stayOn?: boolean;
   accounts: UsageBoardAccount[];
-  // Account ids left out because another row of this engine is the same sign-in; Connections hides them too.
+  // Account ids left out because another row of this engine is the same sign-in, or a base the user signed out; Connections hides them too.
   duplicates?: string[];
   events: UsageBoardEvent[];
 };
