@@ -287,9 +287,9 @@ export function Composer({
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
   const pinned = useMemo(() => pinnedQuestion(chatMessages, threadMessages), [chatMessages, threadMessages]);
   const questions = pinned ? openQuestions(chatMessages) : [];
-  // the row's arrows show an older open question until a newer one arrives
-  const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
-  const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
+  // the row's arrows show another open question until it is answered or dismissed
+  const [questionPick, setQuestionPick] = useState<string | null>(null);
+  const question = (pinned && questions.find((open) => open.id === questionPick)) || pinned;
   const questionIndex = question ? questions.indexOf(question) : -1;
   const jumpId = question ? questionJumpId(threadMessages, question, pinned, Boolean(group ? group.hasMore : bot?.hasMore)) : null;
   const questionMovedOn = useMemo(() => question ? chatMovedOn(chatMessages, question) : false, [chatMessages, question]);
@@ -1267,9 +1267,9 @@ export function Composer({
             onJump={jumpId ? () => dispatch({ type: "focusMessage", threadId, messageId: jumpId }) : undefined}
             onStep={(step, folded) => {
               const next = questions[questionIndex + step];
-              if (!next || !pinned) return;
+              if (!next) return;
               foldQuestion(next.id, folded);
-              setQuestionPick({ id: next.id, newest: pinned.id });
+              setQuestionPick(next.id);
             }}
             typed={text}
             attached={attachments.length}
