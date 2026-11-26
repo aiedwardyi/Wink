@@ -148,11 +148,13 @@ export function covers(drop: string, by: readonly string[]): boolean {
   return need.length > 0 && need.every((word) => have.includes(word)) && !have.filter((word) => !need.includes(word)).some(negates);
 }
 
-/** Exact twins as Sleep finds them, then up to DREAM_MOVES_MAX of the agreed flags that pass the code gates. */
+/** Exact twins as Sleep finds them that both judges flagged as repeats of a twin, then up to DREAM_MOVES_MAX of the agreed flags that pass the code gates. */
 export function planDream(raw: string, flags: readonly Flag[], today: string, movedBefore: ReadonlySet<string> = new Set()): Move[] {
-  const moves = planTidy(raw, "", movedBefore);
   const all = raw.split("\n").map((line) => line.replace(/\r$/, ""));
   const lines = new Map(noteLines(raw).map((line) => [line.at, line] as const));
+  const twinFlagged = (line: NoteLine) =>
+    flags.some((flag) => flag.kind === "repeat" && flag.at === line.at && flag.by.length > 0 && flag.by.every((at) => lines.has(at) && twinKey(lines.get(at)!.text) === twinKey(line.text)));
+  const moves = planTidy(raw, "", movedBefore).filter((move) => twinFlagged(lines.get(move.at)!) && !neverMoves(lines.get(move.at)!, all));
   const { head, loaded } = loadWindow(raw);
   const gone = new Set(moves.map(({ at }) => at));
   const kept = new Set(moves.flatMap(({ by }) => [...lines.values()].filter((line) => line.text === by).map(({ at }) => at)));

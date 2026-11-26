@@ -95,3 +95,47 @@ describe("gates", () => {
     expect(planDream(raw, [{ kind: "repeat", at: 3, by: [4] }], "2026-11-26")).toEqual([]);
   });
 });
+
+describe("exact twins", () => {
+  const today = "2026-11-26";
+  const both = (raw: string, reply: unknown) => agreed(flags(raw, reply), flags(raw, reply));
+  // a pinned rule, the user's quoted pick with a date, and an undated fact that still holds
+  const guarded = [
+    memory("## Pinned", "- Deploy only from main", "- Deploy only from main"),
+    memory('- Picked (11-02) "plain list" for the forum', '- Picked (11-02) "plain list" for the forum'),
+    memory("- Lives in Seoul", "- Lives in Seoul"),
+  ];
+
+  const twin = (raw: string) => {
+    const [drop, keep] = noteLines(raw).slice(-2).map((line) => `L${line.at + 1}`);
+    return { repeat: [{ drop, by: [keep], lost: "" }] };
+  };
+  it.each([
+    ["both judges flag nothing", (_raw: string) => ({ repeat: [], disagree: [], stale: [] }), (_raw: string) => ({ repeat: [], disagree: [], stale: [] })],
+    ["a judge abstains", twin, (_raw: string) => ({})],
+    ["a judge answers an unrelated error object", twin, (_raw: string) => ({ error: "rate limited", code: 429 })],
+  ])("stay when %s", (_, claude, gemini) => {
+    for (const raw of guarded) {
+      const pair = agreed(parseDream(JSON.stringify(claude(raw)), noteLines(raw), today)!, parseDream(JSON.stringify(gemini(raw)), noteLines(raw), today)!);
+      expect(planDream(raw, pair, today)).toEqual([]);
+    }
+  });
+
+  it("keep a pinned rule and a dated quoted pick even when both judges flag the twin", () => {
+    for (const raw of guarded.slice(0, 2)) expect(planDream(raw, both(raw, twin(raw)), today)).toEqual([]);
+  });
+
+  it("keep each guarded line standing alone when both judges call it expired", () => {
+    for (const alone of [memory("## Pinned", "- Deploy only from main"), memory('- Picked (11-02) "plain list" for the forum'), memory("- Lives in Seoul")]) {
+      const pair = both(alone, { stale: [`L${noteLines(alone).at(-1)!.at + 1}`] });
+      expect(pair).toHaveLength(1);
+      expect(planDream(alone, pair, today)).toEqual([]);
+    }
+  });
+
+  it("move only the copy both judges flag", () => {
+    const raw = memory("- Uses pnpm", "- Uses pnpm", "- Uses pnpm");
+    expect(planDream(raw, both(raw, { repeat: [{ drop: "L3", by: ["L5"], lost: "" }] }), today).map(({ at }) => at)).toEqual([2]);
+    expect(planDream(raw, both(raw, {}), today)).toEqual([]);
+  });
+});

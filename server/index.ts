@@ -3193,10 +3193,14 @@ const dreamLive = createDreamLive({
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
   bots: () => store.bots.map((bot) => bot.id),
+  live: (botId) => dreamLive.live(botId),
   judges: () => botAccounts.dreamJudges({ limits: rateLimitsByInstance, save: () => scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR), signedOut: signedOutHelpers }),
   enabled: (botId) => memoryJobEnabled(botId) && memoryJobsHere(botId),
   busy: (botId) => botHasActiveTurn(botId),
-  changed: (botId) => broadcast({ kind: "memory.changed", botId }),
+  changed: (botId) => {
+    broadcast({ kind: "memory.changed", botId });
+    void memoryLookup.refresh(botId);
+  },
   // saved now, so a restart before the next sync pass still knows the tidy alone made this change
   tidied: (botId, before, after) => {
     const botSyncId = chatSyncBotId(profileSyncSettings, botId);
@@ -9415,7 +9419,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "GET") {
       if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
-      const run = dreamLive.dry(m[1]) ? dreamLive.latest(m[1]) : memorySleep.latest(m[1]);
+      const run = dreamLive.live(m[1]) ? memorySleep.latest(m[1]) : dreamLive.latest(m[1]);
       return run ? json(res, 200, { run }) : json(res, 404, { error: "no-run" });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/clean\/undo$/);

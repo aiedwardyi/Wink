@@ -393,7 +393,7 @@ async function main(): Promise<number> {
         else realInfo(...args);
       };
       // the trap bot gets the worst reply a model could give, for free
-      // --no-model: both seats flag nothing, so only the code's exact twins merge
+      // --no-model: both seats flag nothing, so nothing moves
       const tidier: NoteGenerator = trap ? async () => TRAP_REPLY : generator ?? (async () => "{}");
       const generate: NoteGenerator = Object.assign(async (...args: Parameters<NoteGenerator>) => (reply = await tidier(...args)), { engine: "claude" });
       // a copy has one engine: both seats read its one reply, so the night spends one call and the pair agrees with itself
@@ -403,6 +403,8 @@ async function main(): Promise<number> {
       const sleep = createMemorySleep({
         dataDir: process.env.OMB_DATA_DIR,
         bots: () => [id],
+        // a disposable copy: its pass moves lines, as a live bot's would
+        live: () => true,
         judges: () => ({ claude: seat("claude"), gemini: seat("gemini") }),
         enabled: () => true,
         busy: () => false,

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,7 @@ import {
   SLEEP_IDLE_MS,
   SLEEP_TIMEOUT_MS,
   tidyPrompt,
+  twinKey,
   withoutLines,
   noteLines,
   type MemorySleep,
@@ -49,9 +50,15 @@ const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 
 const memory = (...lines: string[]) => `# Memory\n\n${lines.join("\n")}\n`;
-// written as the old tidy reply; each judge reads it as its own dream reply
-const reply = ({ duplicates, ...rest }: { duplicates?: Array<{ keep: string; drop: string[] }>; disagree?: Array<[string, string]>; stale?: string[] }): NoteGenerator => async () =>
-  JSON.stringify({ ...rest, repeat: (duplicates ?? []).flatMap(({ keep, drop }) => drop.map((each) => ({ drop: each, by: [keep], lost: "" }))) });
+// written as the old tidy reply; each judge reads it as its own dream reply, and like both judges flags each exact twin as a repeat
+const reply = ({ duplicates, ...rest }: { duplicates?: Array<{ keep: string; drop: string[] }>; disagree?: Array<[string, string]>; stale?: string[] }): NoteGenerator => async (prompt) => {
+  const notes = [...prompt.matchAll(/^(L\d+): (.*)$/gm)].map(([, ref, text]) => ({ ref: ref!, key: twinKey(text!) }));
+  const twins = notes.flatMap((note) => {
+    const other = notes.find((each) => each !== note && each.key === note.key);
+    return other ? [{ drop: note.ref, by: [other.ref], lost: "" }] : [];
+  });
+  return JSON.stringify({ ...rest, repeat: [...twins, ...(duplicates ?? []).flatMap(({ keep, drop }) => drop.map((each) => ({ drop: each, by: [keep], lost: "" })))] });
+};
 const loaded = (botId: string) => {
   const memory = loadMemory(botId);
   return memory ? shownMemory(memory) : "";
@@ -208,6 +215,7 @@ describe("memory sleep", () => {
     const created = createMemorySleep({
       dataDir,
       bots: () => bots,
+      live: () => true,
       judges: (botId) => {
         const own = perBot.get(botId);
         return own ? { claude: own, gemini: own } : { claude: generator && generate, gemini: second === null ? null : generator && gemini };
@@ -387,7 +395,7 @@ describe("memory sleep", () => {
     const bot = bots[0]!;
     const archived: string[] = [];
     sleep.dispose();
-    sleep = createMemorySleep({ dataDir, bots: () => bots, judges: () => ({ claude: generate, gemini }), enabled: () => true, busy: () => false, changed: () => {}, archived: (_, run) => void archived.push(run.runId) });
+    sleep = createMemorySleep({ dataDir, bots: () => bots, live: () => true, judges: () => ({ claude: generate, gemini }), enabled: () => true, busy: () => false, changed: () => {}, archived: (_, run) => void archived.push(run.runId) });
     const raw = memory("- Uses  pnpm.", "- Uses pnpm", "## Home", "- Prefers light mode (noted 2026-10-01)", "- Prefers dark mode, not light mode (noted 2026-11-12)", "- Dentist on 11-02 at 3pm");
     writeMemoryFile(bot, raw);
     generator = reply({ disagree: [["L6", "L7"]], stale: ["L8"] });
@@ -436,7 +444,8 @@ describe("memory sleep", () => {
     await quiet(SLEEP_IDLE_MS + SLEEP_GAP_MS);
     const ms = vi.getRealSystemTime() - started;
     expect(generate).toHaveBeenCalledTimes(30);
-    for (const bot of bots) expect(noteLines(memoryFileRaw(bot))).toHaveLength(150);
+    // a twin past the lines the judges read is never flagged, so it stays
+    for (const bot of bots) expect(noteLines(memoryFileRaw(bot))).toHaveLength(190);
     expect(Math.max(...generate.mock.calls.map(([prompt]) => Buffer.byteLength(prompt, "utf8")))).toBeLessThan(40_000);
     expect(ms).toBeLessThan(30 * 1000);
   });
@@ -984,6 +993,41 @@ describe("memory sleep", () => {
     });
   });
 
+  describe("undo after a restart puts back", () => {
+    const moveThenUndo = async (raw: string, judged: NoteGenerator) => {
+      const bot = bots[0]!;
+      mkdirSync(workspaceDir(bot), { recursive: true });
+      writeFileSync(join(workspaceDir(bot), "MEMORY.md"), raw);
+      generator = judged;
+      await quiet();
+      expect(memoryFileRaw(bot)).not.toBe(raw);
+      const runId = sleep.latest(bot)!.runId;
+      sleep.dispose();
+      sleep = start();
+      return sleep.undo(bot, runId);
+    };
+
+    it("the moved copy of an exact twin", async () => {
+      const raw = memory("- Uses pnpm", "- Uses pnpm", "- Lives in Seoul");
+      expect(await moveThenUndo(raw, reply({ duplicates: [{ keep: "L4", drop: ["L3"] }] }))).toMatchObject({ ok: true, restored: 1, skipped: 0 });
+      expect(memoryFileRaw(bots[0]!)).toBe(raw);
+    });
+
+    it("a line between two blank lines where it was", async () => {
+      const raw = memory("- Keeps tea in the blue tin", "", "- Dentist on 11-02 at 3pm", "", "- Lives in Seoul");
+      expect(await moveThenUndo(raw, reply({ stale: ["L5"] }))).toMatchObject({ ok: true, restored: 1 });
+      expect(memoryFileRaw(bots[0]!)).toBe(raw);
+    });
+
+    it.each([
+      ["a CRLF file", "# Memory\r\n\r\n- Keeps tea in the blue tin\r\n- Dentist on 11-02 at 3pm\n- Lives in Seoul\r\n"],
+      ["an LF file", "# Memory\n\n- Keeps tea in the blue tin\n- Dentist on 11-02 at 3pm\r\n- Lives in Seoul\n"],
+    ])("a line with its own line ending in %s", async (_, raw) => {
+      expect(await moveThenUndo(raw, reply({ stale: ["L4"] }))).toMatchObject({ ok: true, restored: 1 });
+      expect(memoryFileRaw(bots[0]!)).toBe(raw);
+    });
+  });
+
   describe("shows", () => {
     it("the archive among the bot's memory topics, where sync and recall reach it", async () => {
       const bot = bots[0]!;
@@ -1024,5 +1068,29 @@ describe("memory sleep", () => {
         rmSync(join(DATA_DIR, "lookup-bots.json"), { force: true });
       }
     });
+
+    it("archived lines in recall once the archive passes 2 MiB, the oldest and the newest", async () => {
+      const bot = bots[0]!;
+      const lines = filler(120);
+      writeMemoryFile(bot, memory("- Cobalt walrus invoices go to the north office (noted 2026-10-01)", ...lines, "- Cobalt walrus invoices go to the south office, no longer the north office (noted 2026-11-12)"));
+      const old = Array.from({ length: 15_000 }, (_, n) => `- Filler pebble${n} meadow${n} quartz${n} lagoon${n} saffron${n} tundra${n} orchid${n}\n  - from MEMORY.md:9 on 2026-10-02: a newer note says all of it`);
+      mkdirSync(dirname(dreamedPath(bot)), { recursive: true });
+      writeFileSync(dreamedPath(bot), `# Dreamed notes\n\n## 2026-10-02 (run old)\n- Vermilion heron tickets live in the attic drawer\n${old.join("\n")}\n`);
+      generator = reply({ disagree: [["L3", `L${lines.length + 4}`]] });
+      await quiet();
+      expect(statSync(dreamedPath(bot)).size).toBeGreaterThan(2 * 1024 * 1024);
+      expect(memoryFileRaw(bot)).not.toContain("2026-10-01");
+      vi.useRealTimers();
+      mkdirSync(DATA_DIR, { recursive: true });
+      writeFileSync(join(DATA_DIR, "lookup-bots.json"), JSON.stringify([bot]));
+      try {
+        const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+        await lookup.refresh(bot);
+        expect(lookup.take(bot, "t1", undefined, "where do vermilion heron tickets live?").join("\n")).toContain("Vermilion heron tickets live in the attic drawer");
+        expect(lookup.take(bot, "t2", undefined, "where do cobalt walrus invoices go?").join("\n")).toContain("Cobalt walrus invoices go to the north office");
+      } finally {
+        rmSync(join(DATA_DIR, "lookup-bots.json"), { force: true });
+      }
+    }, 60_000);
   });
 });

@@ -27,7 +27,7 @@ const tidySchema = z.object({
   duplicates: z.array(z.object({ keep: z.string(), drop: refsSchema })).max(MOVES_MAX).nullish(),
   disagree: z.array(z.tuple([z.string(), z.string()])).max(MOVES_MAX).nullish(),
 });
-const movedSchema = z.object({ at: z.number(), text: z.string(), by: z.string(), why: z.enum(["duplicate", "replaced", "expired"]), after: z.string().nullable() });
+const movedSchema = z.object({ at: z.number(), text: z.string(), by: z.string(), why: z.enum(["duplicate", "replaced", "expired"]), after: z.string().nullable(), cr: z.boolean(), left: z.number() });
 const runSchema = z.object({ runId: z.string(), at: z.number(), beforeBytes: z.number(), afterBytes: z.number(), moves: z.array(movedSchema), undoneAt: z.number().optional() });
 const botStateSchema = z.object({ digest: z.string().optional(), at: z.number().optional(), run: runSchema.optional() });
 const stateSchema = z.object({ bots: z.record(z.string(), botStateSchema) });
@@ -69,6 +69,8 @@ export interface MemorySleepDeps {
   dataDir: string;
   /** Every bot at boot, so a tidy owed before a restart still runs. */
   bots(): string[];
+  /** Dreaming's mode, read again just before a move: only a bot set to live moves lines, every other bot dreams dry. */
+  live(botId: string): boolean;
   /** Both must answer for anything to move; never one alone. */
   judges(botId: string): DreamJudges;
   /** The bot's Auto notes switch, read live; false on a PC that does not tidy this bot. */
@@ -83,7 +85,6 @@ export interface MemorySleepDeps {
   archived?(botId: string, run: { runId: string; count: number }): void;
   /** Dreaming (dream-live.ts): a dry bot's pass plans its asks and notes and writes nothing else. */
   dream?: {
-    dry(botId: string): boolean;
     asks(botId: string, signal: AbortSignal): Promise<DreamAsks | null>;
     plan(botId: string, at: number, notes: DryNotes, asks: DreamAsks): void;
   };
@@ -481,7 +482,7 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
   };
 
   const run = async (botId: string, signal: AbortSignal) => {
-    if (deps.dream?.dry(botId)) return dryRun(botId, signal, deps.dream);
+    if (!deps.live(botId)) return deps.dream ? dryRun(botId, signal, deps.dream) : undefined;
     if (!deps.enabled(botId)) return;
     if (deps.busy(botId)) return arm(botId);
     const record = bots.get(botId) ?? {};
@@ -513,6 +514,7 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
       log({ ...base, ms: now() - started, result: "conflict" });
       return arm(botId);
     }
+    if (!deps.live(botId)) return log({ ...base, ms: now() - started, result: "dry" });
     let moves: Move[];
     let runId = "";
     try {

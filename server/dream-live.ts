@@ -1,5 +1,5 @@
-// Dreaming: the idle pass for the bots D/dream-live.json names. Dry is the only mode built: the pass writes what it would move or
-// close to plan.json and changes nothing else. A bot with no entry, or any other value, gets today's tidy.
+// Dreaming: the idle pass for every bot. Dry is the default: the pass writes what it would move or close to plan.json and changes
+// nothing else. Only a bot D/dream-live.json sets to "live" moves lines; no file, a file that does not parse or no entry is dry.
 import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -123,10 +123,7 @@ export function createDreamLive(deps: DreamLiveDeps) {
     return plan?.botId === botId ? [plan] : [];
   }).sort((left, right) => right.at - left.at);
 
-  const dry = (botId: string) => {
-    // live is not built: any value but dry is off
-    return readJson(join(deps.dataDir, DREAM_FILE), modeFileSchema)?.bots[botId] === "dry";
-  };
+  const live = (botId: string) => readJson(join(deps.dataDir, DREAM_FILE), modeFileSchema)?.bots[botId] === "live";
 
   async function asks(botId: string, signal: AbortSignal): Promise<DreamAsks | null> {
     await deps.cite(botId);
@@ -197,12 +194,12 @@ export function createDreamLive(deps: DreamLiveDeps) {
   }
 
   return {
-    dry,
+    live,
     asks,
     plan,
-    /** The newest plan on this PC as the Memory row reads it; null unless the bot dreams dry. */
+    /** The newest plan on this PC as the Memory row reads it; null for a bot set to live. */
     latest(botId: string) {
-      const newest = dry(botId) ? plans(botId)[0] : undefined;
+      const newest = live(botId) ? undefined : plans(botId)[0];
       if (!newest) return null;
       return { runId: newest.runId, at: newest.at, files: [], beforeBytes: 0, afterBytes: 0, merged: 0, replaced: 0, moved: 0, undoneAt: null, undoable: false, dream: { mode: newest.mode, notes: newest.notes, asks: newest.asks, runUntil: newest.runUntil, dropUntil: newest.dropUntil } };
     },

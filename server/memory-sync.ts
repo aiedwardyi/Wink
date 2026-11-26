@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { readOsMachineId } from "./device-sync.ts";
+import { DREAMED_FILE } from "./dream-archive.ts";
 import { mergeTimelines, PICKS_FILE } from "./picks.ts";
 import { syncRoots, syncWriteRoot } from "./sync-roots.ts";
 import { isMemoryTopicName, MEMORY_SEED } from "./workspace.ts";
@@ -733,7 +734,8 @@ export function syncBotMemory(
       }
       // changed on two PCs at once, or the same versions with different text from a copied ledger
       const timeline = file === `memory/${PICKS_FILE}`;
-      const cuts: [string[], string[]] | undefined = text === null || entry.text === null || timeline ? undefined : joinCuts(mineCopy, theirCopy);
+      // the archive only ever gains lines, so its two copies join even when no lineage settles them
+      const cuts: [string[], string[]] | undefined = text === null || entry.text === null || timeline ? undefined : joinCuts(mineCopy, theirCopy) ?? (file === DREAMED_FILE ? [[], []] : undefined);
       const merged: string | null = text === null || entry.text === null
         ? null
         : timeline ? mergeTimelines(text, entry.text) : cuts ? joinCopies(text, entry.text, cuts[0], cuts[1]) : null;

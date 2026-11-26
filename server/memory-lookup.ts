@@ -11,6 +11,7 @@ import { z } from "zod";
 
 import { latestTaskAsks } from "../shared/task-ask-list.ts";
 import { aboutYouFile, aboutYouPastTheCut, botImportFile, botImportPastTheCut } from "./about-you.ts";
+import { DREAMED_FILE } from "./dream-archive.ts";
 import { secretLike, userTyping, withoutBlocks } from "./memory-pass.ts";
 import { isSyncedFile } from "./memory-sync.ts";
 import { currentOnly, PICKS_FILE } from "./picks.ts";
@@ -500,7 +501,8 @@ async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile
   for (const { source, tier, path, mtime, size } of sources) {
     // an import file only counts for the lines past the cut: a big one fills what is left, it is not skipped whole
     const shared = source === ABOUT_YOU_SOURCE || source === IMPORT_SOURCE;
-    if (!shared) {
+    // the archive holds lines that left MEMORY.md, so it is read whole and takes no room from the other files
+    if (!shared && source !== DREAMED_FILE) {
       if (bytes + size > MAX_CORPUS_BYTES) continue;
       bytes += size;
     }
