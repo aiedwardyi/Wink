@@ -11,6 +11,7 @@ import { safeProviderText } from "@/lib/safe-provider-text";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import type { UsageBoardAccount } from "@/lib/usage-board";
 import { useUsageBoard } from "@/lib/use-usage-board";
+import { shownLogin } from "../../shared/usage-identity";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { ordered, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
@@ -245,11 +246,13 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
     setError(null);
     setExistingId(null);
     try {
-      if (sourceId) body = await api(`/api/accounts/${encodeURIComponent(sourceId)}/destination`);
+      if (sourceId) body = { ...await api(`/api/accounts/${encodeURIComponent(sourceId)}/destination`), ...body };
       const result = await api(path, { method: "POST", body: JSON.stringify(body) });
       if (path === "/api/accounts" && typeof result.id === "string") setAdding(result.id);
       await reload();
     } catch (error) {
+      // Another client changed this sign-in since the row was drawn: the row redraws, nothing was signed out.
+      if ((error as { code?: string }).code === "login-changed") { await reload(); return; }
       const message = error instanceof Error ? error.message : "";
       setError({ message: message === "No ready account can take over this profile"
         ? t("accounts.noDestination") : safeProviderText(message, accounts.map((account) => account.snapshot.account)) || t("engines.didntFinish"),
@@ -277,7 +280,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
             <ConnectionAccount key={account.instanceId} reorder={shown.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
               removable={account.instanceId !== base || shown.some((other) => other !== account && !other.drain)}
               named={board?.engines.flatMap((engine) => engine.accounts).find((row) => row.id === account.instanceId)} revision={board?.revision ?? -1}
-              reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)} />
+              reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : { login: shownLogin(account.snapshot) }, main && !drain ? account.instanceId : undefined)} />
           );
         })}
       </AccountGroup>

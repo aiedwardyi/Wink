@@ -332,6 +332,11 @@ export class ProviderRegistry {
     const entry = this.byId.get(id);
     if (entry?.live) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }, true));
   }
+  /** Reads the account's CLI home again, a signed-out base's too, so an account action sees the login there now. */
+  async recheck(id: string) {
+    const entry = this.byId.get(id);
+    if (entry?.live) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }));
+  }
   accountAvailable(id: string, confirmed = false) {
     const snapshot = this.probed.get(id)?.snapshot;
     return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" &&

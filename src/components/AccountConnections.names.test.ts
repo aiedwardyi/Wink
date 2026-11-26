@@ -446,7 +446,7 @@ it.each([[false, "en"], [true, "ko"]] as const)("gives a signed-out row a signed
     expect(button(remove, row())!.className).toBe(button(signOut, other)!.className);
     await click(button(remove, row()));
   }
-  expect(calls.filter((call) => call.path.endsWith("/sign-out")).map((call) => [call.path, call.init?.body])).toEqual([["/api/accounts/claude/sign-out", "{}"]]);
+  expect(calls.filter((call) => call.path.endsWith("/sign-out")).map((call) => [call.path, call.init?.body])).toEqual([["/api/accounts/claude/sign-out", '{"login":null}']]);
   await unmount();
   const claude = board.engines[0]!;
   Object.assign(claude, { accounts: claude.accounts.filter((account) => account.id !== "claude"), duplicates: ["claude"] });
@@ -462,6 +462,39 @@ it.each([false, true])("offers no Remove on a lone signed-out base, which nothin
   expect(button("Sign In", row())).toBeTruthy();
   if (phone) await click(row()!.querySelector<HTMLElement>("[data-connection-menu]"));
   expect(row()!.querySelector("[data-remove-account]")).toBeNull();
+});
+
+it("names the login each row shows on Remove and Sign Out, and redraws without an error when another client changed it", async () => {
+  Object.assign(accounts[0]!, { accountMain: false, snapshot: { state: "available", authenticated: false } });
+  accounts[1]!.accountMain = true;
+  const fetchMock = vi.mocked(fetch);
+  const answer = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url, init) => {
+    if (String(url).endsWith("/sign-out")) return calls.push({ path: String(url), init }), Response.json({ error: "changed", code: "login-changed" }, { status: 409 });
+    if (String(url) === "/api/instances") return calls.push({ path: String(url), init }), Response.json({ instances: accounts });
+    return answer(url, init);
+  });
+  await mount();
+  const other = host.querySelector<HTMLElement>(`[data-connection-account="${accounts[2]!.instanceId}"]`);
+  await click(button("Remove", row()));
+  await click(button("Sign Out", other));
+  expect(calls.filter((call) => call.path.endsWith("/sign-out")).map((call) => JSON.parse(String(call.init?.body)))).toEqual([{ login: null }, { login: canary.address }]);
+  expect(calls.filter((call) => call.path === "/api/instances")).toHaveLength(2);
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("reloads the engine rows once when the board shows a sign-in another client changed", async () => {
+  await mount();
+  const reloads = () => calls.filter((call) => call.path === "/api/instances").length;
+  const before = reloads();
+  await act(async () => m.client.usageBoardFrame(board.revision));
+  await settle();
+  expect(reloads(), "an unchanged board reloads nothing").toBe(before);
+  board.engines[0]!.accounts[0]!.signIn = "signed-out";
+  board.revision += 1;
+  await act(async () => m.client.usageBoardFrame(board.revision));
+  await settle();
+  expect(reloads()).toBe(before + 1);
 });
 
 it("shows a base signed in as an added account once, as Usage does", async () => {

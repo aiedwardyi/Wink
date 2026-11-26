@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import test, { describe } from "node:test";
 import os from "node:os";
@@ -68,7 +68,7 @@ describe("captured worker account projections", () => {
     owner = f.owner;
     t.after(() => f.host.dispose());
     const shell = await f.host.openForBot("bot-1", { label: "shell" });
-    // No prompt mark yet (a shell without them, as on Linux and macOS): nothing shows it idle.
+    // No prompt mark yet (a shell without them, such as sh): nothing shows it idle.
     assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 0, unknown: 1, generations: {} });
     f.children[0].data(`\x1b]133;D;${shell.sessionId};0\x07`);
     assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 0, unknown: 0, generations: {} });
@@ -5275,3 +5275,41 @@ test("a user typing at a blip leaves the pane to the STALLED note", async (t) =>
   assert.equal(f.notes.length, 1);
   assert.match(f.notes[0].text, /^STALLED: /);
 });
+
+const UNIX_SHELLS = [["bash", process.platform === "win32" ? path.join(process.env.ProgramFiles || "C:\\Program Files", "Git", "bin", "bash.exe") : "/bin/bash"], ["zsh", "/bin/zsh"]];
+for (const [name, shell] of UNIX_SHELLS) for (const platform of ["linux", "darwin"]) {
+  test(`a ${platform} ${name} pane reads idle at its own prompt and unknown while a command runs`, { skip: !fs.existsSync(shell) }, async (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-unix-home-"));
+    const rc = name === "zsh" ? ".zshrc" : platform === "darwin" ? ".bash_profile" : ".bashrc";
+    fs.writeFileSync(path.join(home, rc), "PS1='user-rc$ '\n");
+    let owner;
+    const f = fixture({ platform, env: { SHELL: shell, HOME: home, PATH: process.env.PATH, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) }, owner: () => owner, workerLaunch: async () => ({ kind: "unrouted" }) });
+    owner = f.owner;
+    t.after(async () => { await f.host.dispose(); fs.rmSync(home, { recursive: true, force: true }); });
+    await f.host.openForBot("bot-1", { label: "shell" });
+    const child = f.children[0];
+    // The pane's own shell, args and env, read over pipes: it loads the user's file, then marks each prompt and command.
+    const output = await new Promise((resolve, reject) => {
+      const run = spawn(child.shell, [...child.args, "-i"], { cwd: home, env: child.options.env, windowsHide: true });
+      let text = "";
+      run.stdout.on("data", (chunk) => { text += chunk; });
+      run.stderr.on("data", (chunk) => { text += chunk; });
+      run.on("error", reject);
+      run.on("close", () => resolve(text));
+      run.stdin.end("true\nexit\n");
+    });
+    assert.match(output, /user-rc\$ /);
+    // Bash writes the prompt mark to stdout and PS0 to stderr, so only each kind's own order is fixed.
+    const marks = output.match(/\x1b\]133;[CD];[^\x07]*\x07/g) ?? [];
+    const [prompts, starts] = ["D", "C"].map((kind) => marks.filter((mark) => mark[6] === kind));
+    assert.ok(prompts.length >= 2 && starts.length >= 1, JSON.stringify(output.slice(-300)));
+    const unknown = () => f.host.livePanesForAccount("claude").unknown;
+    assert.equal(unknown(), 1);
+    child.data(prompts[0]);
+    assert.equal(unknown(), 0);
+    child.data(starts[0]);
+    assert.equal(unknown(), 1);
+    child.data(prompts[1]);
+    assert.equal(unknown(), 0);
+  });
+}

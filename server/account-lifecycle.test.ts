@@ -1250,6 +1250,33 @@ describe("account HTTP routes", () => {
     expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(status === 200);
   });
 
+  it("refuses a stale Remove of a signed-out base whose home now holds another login, and keeps that login", async () => {
+    const f = await fixture(vi.fn());
+    const added = await f.add("codex");
+    await f.controller.useForBots(added.id);
+    await f.controller.remove("codex");
+    // Another login lands on the base; a client that drew the row signed out still offers Remove.
+    f.statuses.set("codex", { state: "available", authenticated: true, account: "replacement@example.test" });
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/accounts/codex/sign-out", { login: null })).toMatchObject({ status: 409, body: { code: "login-changed" } });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(false);
+    expect(f.registry.accountAvailable("codex", true)).toBe(true);
+    expect(f.accounts.list().find((row) => row.id === "codex")?.userSignedOut).toBeUndefined();
+  });
+
+  it("refuses a stale Sign Out of a login another one replaced, then signs out the one it names", async () => {
+    const f = await fixture(vi.fn());
+    const added = await f.add("codex");
+    f.statuses.set("codex", { state: "available", authenticated: true, account: "first@example.test" });
+    await f.registry.describe({ refresh: true });
+    f.statuses.set("codex", { state: "available", authenticated: true, account: "replacement@example.test" });
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/accounts/codex/sign-out", { destinationId: added.id, login: "first@example.test" })).toMatchObject({ status: 409, body: { code: "login-changed" } });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(false);
+    expect(await request(f, "POST", "/api/accounts/codex/sign-out", { destinationId: added.id, login: "replacement@example.test" })).toMatchObject({ status: 200 });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(true);
+  });
+
   it("uses the same removal guard for legacy managed-instance sign-out", async () => {
     const f = await fixture();
     const added = await f.add();
