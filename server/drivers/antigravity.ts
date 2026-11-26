@@ -56,7 +56,7 @@ import { systemLedger } from "./system-ledger.ts";
 import { ANTIGRAVITY_KEYRING, antigravityCredentialStore, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
 import { antigravityHelperHome, dropAntigravityHelperToken } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
-import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
+import { FREE_ACCESS, guestText, type TurnAccess } from "./turn-access.ts";
 import { warmPool, type Lease } from "./warm-pool.ts";
 
 const DRIVER_KIND = "antigravityAgent";
@@ -556,6 +556,8 @@ export interface AntigravityTurnArgvInput {
   model?: string | null;
   resumeCursor?: string | null;
   readOnly?: boolean;
+  /** A read-only turn on someone else's words */
+  guestText?: boolean;
 }
 
 /** Print-mode argv with the prompt on stdin — never on --print. */
@@ -572,7 +574,8 @@ export function buildAntigravityTurnArgv(input: AntigravityTurnArgvInput): strin
   ];
   // plan, never agy's default mode: the user's own agy settings can make the default edit and run commands
   // plan reads outside the workspace only with Non-Workspace Access, which the owner may have turned on for themselves
-  if (input.readOnly) args.push("--mode", "plan", "--settings", JSON.stringify({ allowNonWorkspaceAccess: false }));
+  // and reads the workspace, the host's project, unasked: someone else's words read no file at all
+  if (input.readOnly) args.push("--mode", "plan", "--settings", JSON.stringify({ allowNonWorkspaceAccess: false, ...(input.guestText && { permissions: { deny: ["read_file(*)"] } }) }));
   else if (input.fullAuto) args.push("--dangerously-skip-permissions");
   else {
     args.push("--mode", "accept-edits");
@@ -802,7 +805,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       };
       // a standby started beside a running turn would load the conversation before that turn's messages
       if (disposed || active.has(threadId) || keyringSignOut.pending || mcpExclusiveWanted()) return finalizeMcp();
-      const args = buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd, model: turn.model, resumeCursor: conversation, readOnly: turn.readOnly });
+      const args = buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd, model: turn.model, resumeCursor: conversation, readOnly: turn.readOnly, guestText: guestText(turn) });
       const lease = warmPool.reserve(warmKey(threadId), launchFingerprint(config.cli, args, cwd, childEnv, turn), captured(threadId), "speculative", { evict: true });
       if (lease === "denied" && conversation) refusedStandby.set(threadId, { conversation, turn, cwd, childEnv, epoch: warmPool.generation(warmKey(threadId)) });
       if (typeof lease !== "object" || standbys.has(lease)) return finalizeMcp();
@@ -1016,6 +1019,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         model: turn.model,
         resumeCursor,
         readOnly: turn.readOnly,
+        guestText: guestText(turn),
       });
       // a computer turn's mount carries its box token, so it never runs on or leaves a standby
       const ordinary = computer === null;

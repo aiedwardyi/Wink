@@ -11,6 +11,8 @@
 //                      | edit (a Write then a Bash, gated like the real CLI)
 //                      | wink-tool (FAKE_CLAUDE_TOOL, gated the same way; running
 //                        it writes ran-tool.txt)
+//                      | read (a Read of notes.txt in the cwd, gated the same way;
+//                        what it read goes to FAKE_CLAUDE_READ_OUT)
 //                      | bench-quiet (text only, no tool_use — latency floor)
 //                      | late-wake (wakes after `result` and asks for a Bash)
 //                      | subagent-wake (a subagent's final lands after `result`,
@@ -122,7 +124,7 @@ import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, writeFile
 import { execSync, spawn } from "node:child_process";
 import { connect, createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 const forked = process.argv.includes("--fork-session");
 const mode = (forked ? process.env.FAKE_CLAUDE_FORK_MODE : process.env.FAKE_CLAUDE_MODE) ?? "happy";
@@ -424,12 +426,19 @@ const playNarrationScript = async () => {
 // The real CLI's order, checked against 2.1.x: a --settings ask rule beats
 // the user's allow list, which beats the permission mode; anything left
 // goes to the --permission-prompt-tool, which forwards to Orbit's broker.
+// Under the ask rules, a read tool on a path inside the cwd runs in any mode.
 const allowedBy = (rules: string | null | undefined, tool: string): boolean =>
   (rules ?? "").split(",").some((rule) => rule === tool || (rule.startsWith("mcp__") && tool.startsWith(`${rule}__`)));
-const needsPrompt = (tool: string): boolean => {
+const READ_TOOLS = ["Read", "Glob", "Grep", "LSP"];
+const insideCwd = (path: string): boolean => {
+  const rel = relative(process.cwd(), resolve(path));
+  return !rel.startsWith("..") && !isAbsolute(rel);
+};
+const needsPrompt = (tool: string, input: { [key: string]: JsonValue } = {}): boolean => {
   const settings = argAfter("--settings");
   const askRules: unknown = settings ? JSON.parse(settings)?.permissions?.ask : undefined;
   if (Array.isArray(askRules) && askRules.includes(tool)) return true;
+  if (READ_TOOLS.includes(tool) && insideCwd(String(input.file_path ?? input.path ?? "."))) return false;
   if (allowedBy(process.env.FAKE_CLAUDE_USER_ALLOW, tool) || allowedBy(argAfter("--allowedTools"), tool)) return false;
   const permissionMode = argAfter("--permission-mode");
   if (permissionMode === "bypassPermissions") return false;
@@ -512,7 +521,7 @@ const playTools = async (tools: Array<[id: string, name: string, input: { [key: 
   const denials: string[] = [];
   const useTool = async (id: string, name: string, input: { [key: string]: JsonValue }, run: () => void) => {
     out({ type: "assistant", message: { content: [{ type: "tool_use", id, name, input }] } });
-    const behavior = (argAfter("--disallowedTools") ?? "").split(",").includes(name) ? "deny" : hookDecision(name, input) ?? (needsPrompt(name) ? await askBroker(socketPath, name, input) : "allow");
+    const behavior = (argAfter("--disallowedTools") ?? "").split(",").includes(name) ? "deny" : hookDecision(name, input) ?? (needsPrompt(name, input) ? await askBroker(socketPath, name, input) : "allow");
     if (behavior !== "allow") denials.push(name);
     if (behavior === "allow") run();
     out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: behavior !== "allow" }] } });
@@ -869,6 +878,12 @@ const playTurn = (prompt: JsonValue, held = false) => {
       ["tu-write", "Write", { file_path: "made.txt", content: "hi" }, () => writeFileSync("made.txt", "hi")],
       ["tu-bash", "Bash", { command: "node -e \"require('fs').writeFileSync('ran.txt','ok')\"" }, () => writeFileSync("ran.txt", "ok")],
     ]);
+    return;
+  }
+
+  if (mode === "read") {
+    const path = join(process.cwd(), "notes.txt");
+    void playTools([["tu-read", "Read", { file_path: path }, () => writeFileSync(process.env.FAKE_CLAUDE_READ_OUT ?? "read.txt", readFileSync(path))]]);
     return;
   }
 
