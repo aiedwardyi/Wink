@@ -109,6 +109,7 @@ beforeAll(async () => {
       // two promises in commentary, then a steered color question the final answers alone
       codex: codex({ FAKE_CODEX_MODE: "steer", FAKE_CODEX_COMMENTARY: JSON.stringify([{ text: ANSWER, phase: "commentary" }, { text: PICKER, phase: "commentary" }]), FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "Blue.", phase: "final_answer" }]) }),
       codexPlain: codex({ FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "You're welcome.", phase: "final_answer" }]) }),
+      codexCap: codex({ FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "I'll update the guide. I'll check the invoice. I'll review the font. I'll email the release calendar.", phase: "final_answer" }]) }),
       codexLogs: codex({ FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "I'll check the logs first.", phase: "commentary" }, { text: "Logs are clean.", phase: "final_answer" }]) }),
       // a promise in hidden notes and a question a steer talked over, then another engine that answers and finishes both
       codexLeave: codex({ FAKE_CODEX_MODE: "steer", FAKE_CODEX_COMMENTARY: JSON.stringify([{ text: "I'll update the picker labels.", phase: "commentary" }]), FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "Blue.", phase: "final_answer" }]) }),
@@ -139,7 +140,7 @@ beforeAll(async () => {
   await waitFor(async () => Boolean((await globalThis.fetch(`${BASE}/api/health`).catch(() => null))?.ok), "the server");
   await waitFor(async () => {
     const instances = (await api("GET", "/api/instances")).body.instances;
-    return ["codex", "codexPlain", "codexLogs", "codexLeave", "claude", "claudeDone", "claudeLeave", "claudeExport", "claudeRunning"].every((id) => instances.find((row: any) => row.instanceId === id)?.snapshot.state === "available");
+    return ["codex", "codexPlain", "codexCap", "codexLogs", "codexLeave", "claude", "claudeDone", "claudeLeave", "claudeExport", "claudeRunning"].every((id) => instances.find((row: any) => row.instanceId === id)?.snapshot.state === "available");
   }, "the engines");
 }, 60_000);
 
@@ -249,4 +250,35 @@ it("never marks a filed job building from a running line; the next engine checks
   await updateAsks(id, threadId, [{ id: "A1", status: "building", ref: "PID 4128" }]);
   expect(asks(threadId)).toMatchObject([{ id: "A1", status: "building", ref: "PID 4128" }]);
   expect(await claudeTurn(id, "status?")).toMatch(/^- A1 building promise \d\d-\d\d: I'll run the data export in the background\. \(PID 4128\)$/m);
+}, 90_000);
+
+it("gives each of four promises its own ID, and after three close by ID a status question still lists the fourth", async () => {
+  const { id, threadId } = await bot("codexCap", "gpt-fake-default");
+  await turn(id, "Please handle the release follow-ups");
+  expect(asks(threadId).map((ask) => [ask.id, ask.ask, ask.status])).toEqual([
+    ["A1", "I'll update the guide.", "open"],
+    ["A2", "I'll check the invoice.", "open"],
+    ["A3", "I'll review the font.", "open"],
+    ["A4", "I'll email the release calendar.", "open"],
+  ]);
+  const input = await switched(id, "go on");
+  expect(input).toMatch(/^- A3 open promise unchecked \d\d-\d\d: I'll review the font\.$/m);
+  expect(input).toMatch(/^- \+1 more unchecked promises, each open by ID; a status question lists them: A4$/m);
+  await updateAsks(id, threadId, ["A1", "A2", "A3"].map((ask) => ({ id: ask, status: "done" })));
+  expect(await claudeTurn(id, "status?")).toMatch(/^- A4 open promise unchecked \d\d-\d\d: I'll email the release calendar\.$/m);
+}, 90_000);
+
+it("keeps the check on a carried question on every switch until an engine settles it by ID", async () => {
+  const { id, threadId } = await bot("codexPlain", "gpt-fake-default");
+  await turn(id, "Could you write ready.txt?");
+  expect(asks(threadId)).toMatchObject([{ id: "A1", ask: "Could you write ready.txt?", status: "open" }]);
+  for (const text of ["go on", "ok", "next"]) {
+    const input = await switched(id, text);
+    expect(input).toContain("check the transcript, files and running processes first");
+    expect(input).toMatch(/^- A1 open unchecked \d\d-\d\d: Could you write ready\.txt\?$/m);
+    await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId: "codexPlain", model: "gpt-fake-default" } });
+    await turn(id, `back ${text}`);
+  }
+  await updateAsks(id, threadId, [{ id: "A1", status: "done" }]);
+  expect(await switched(id, "thanks")).not.toContain(ASKS_LIST);
 }, 90_000);

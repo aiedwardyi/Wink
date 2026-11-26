@@ -183,6 +183,20 @@ describe("task resume packets", () => {
     expect(settleTaskResumePacket("thread-1", { dir })?.asks?.at(-1)).toEqual(promise);
   });
 
+  it("keeps a filed ask's key beside the record, so an older build still reads it and a repeat still matches", () => {
+    const filed: TaskAsk[] = [
+      { id: "A4", ask: "Could you write ready.txt?", status: "open", shown: 0, key: "a".repeat(64), at: 130, changedAt: 130 },
+      { id: "A5", ask: "I'll update the file src/Header.ts.", status: "open", kind: "promise", key: "b".repeat(64), at: 130, changedAt: 130 },
+    ];
+    expect(writeTaskResumePacket(packet({ asks: [...asks, ...filed] }), { dir }).asks).toEqual([...asks, ...filed]);
+    const raw = JSON.parse(readFileSync(join(dir, "thread-1.json"), "utf8"));
+    const older = z.array(taskAskSchema.omit({ key: true }).extend({ kind: z.literal("question").optional() }).strict());
+    expect(() => older.parse(raw.asks)).not.toThrow();
+    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual([...asks, ...filed]);
+    stageTaskResumePacket(packet({ asks: [...asks, ...filed], nextAction: "Staged" }), { dir });
+    expect(settleTaskResumePacket("thread-1", { dir })?.asks?.slice(-2)).toEqual(filed);
+  });
+
   it("loads a record saved with an ask due time and wake id, asks and plan intact", () => {
     const old = [{ id: "A1", ask: "Send the brief", status: "open" as const, due: 1_800_000_000_000, wake: "wake-1", at: 100, changedAt: 100 }];
     writeFileSync(join(dir, "thread-1.json"), JSON.stringify(packet({ asks: old })));

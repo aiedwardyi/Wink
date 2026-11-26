@@ -280,7 +280,7 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { ASKS_LIST, asksNudge, fileLeftovers, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, fileLeftovers, isStatusTurn, MORE_PROMISES, rotatedAsks, TASK_ASKS_PROMPT, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { sweepDroppedAsks } from "./task-dropped.ts";
@@ -3061,7 +3061,8 @@ function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }
 function stampShownAsks(threadId: string, sent: string): void {
   const record = taskPacketForWrite(threadId);
   const now = Date.now();
-  const left = record?.asks?.filter((ask) => ask.shown === 0 && sent.includes(`- ${ask.id} `)).map((ask) => ask.id) ?? [];
+  const more = sent.split("\n").filter((line) => line.includes(MORE_PROMISES)).join(" ");
+  const left = record?.asks?.filter((ask) => ask.shown === 0 && (sent.includes(`- ${ask.id} `) || new RegExp(`\\b${ask.id}\\b`).test(more))).map((ask) => ask.id) ?? [];
   const ids = [...(record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) ?? [] : []), ...left];
   if (record && ids.length) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
 }

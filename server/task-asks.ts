@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 export const ASK_STATUSES = ["open", "building", "waiting-for-user", "done", "declined"] as const;
@@ -10,6 +12,9 @@ export const ASKS_LIST = "[Wink asks list";
 
 export const TASK_ASKS_PROMPT =
   "Add each ask the user makes to update_task_state asks in the same turn, counting a yes to something you proposed; open means not started yet. Close it as done or declined as soon as it settles; never drop one. Keep three lists for asks and work only: the plan is the to-do for now, asks marked building are the sprint, and the asks list holds every open ask; never start a separate list file, and keep your other records. Build any summary, status or release from the asks list, not from memory. Never leave work waiting for the user's review without showing it to them. Wink lists every open ask in a fresh session and on a status question, otherwise the asks the user's words name, and merges a repeat into the ask it matches. Park an ask with until when it waits on a date. An ask with no ref and no change in 3 days needs your verdict: build it (helper or time), park it or close it yourself, and ask the user about at most 3 at a time.";
+
+/** a sha-256 of an ask's full words */
+export const askKeySchema = z.string().regex(/^[0-9a-f]{64}$/);
 
 export const taskAskSchema = z.object({
   id: z.string().regex(/^A\d{1,6}$/),
@@ -26,6 +31,8 @@ export const taskAskSchema = z.object({
   until: z.number().int().nonnegative().optional(),
   /** when a list past MAX_STATUS_ASKS_BYTES last showed it */
   shown: z.number().int().nonnegative().optional(),
+  /** Wink filed it from a turn's words: the full words' identity, so a repeat matches past the clip; unchecked while open */
+  key: askKeySchema.optional(),
   at: z.number().int().nonnegative(),
   changedAt: z.number().int().nonnegative(),
 }).strict();
@@ -145,41 +152,32 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
 // an exact repeat of the same kind: case, spacing, apostrophe style and closing punctuation aside, so "the icon and layout"
 // is new work beside a done "the icon", src/foo.ts is not src-foo.ts, and a clipped ask proves no repeat
 const same = (text: string) => /…\??$/.test(text) ? Symbol() : text.toLowerCase().replace(/[‘’]/g, "'").replace(/[\s.!?]+$/, "").replace(/\s+/g, " ").trim();
-// a narrated turn files its first few; the rest wait in the transcript the next engine reads
-const MAX_TURN_PROMISES = 3;
+// the same over the full words before the clip, and a path keeps its case: src/Header.ts is not src/header.ts
+const keyOf = (text: string) => createHash("sha256").update(text.replace(/[‘’]/g, "'").replace(/[\s.!?]+$/, "").trim().split(/\s+/)
+  .map((word) => /[\\/]|[\p{L}\p{N}_-]\.[\p{L}\p{N}]/u.test(word) ? word : word.toLowerCase()).join(" ")).digest("hex");
 
-/** Files what a turn may have left open, unchecked: a promise as kind promise with any running line as its ref, never its status, and the user's question as their ask. It only adds: a filed ask, open, done or declined, takes nothing but an exact repeat. Null when nothing changes. */
+/** Files what a turn may have left open, unchecked, each with its own id: a promise as kind promise with any running line as its ref, never its status, and the user's question as their ask. It only adds: a filed ask, open, done or declined, takes nothing but an exact repeat of its full words. Null when nothing changes. */
 export function fileLeftovers(book: AskBook | undefined, left: readonly { ask: string; promise?: true; note?: string }[], now: number): SavedAsks | null {
   const asks = (book?.asks ?? []).map((item) => ({ ...item }));
   const first = lastAskIdOf(book);
   let lastAskId = first;
-  const promises: TaskAsk[] = [];
-  let more = 0;
   for (const item of left) {
     // a long question keeps its "?" so a later turn still reads it as one
     const mark = item.promise ? undefined : QUESTION_MARK.exec(item.ask.trim())?.[0];
     const ask = mark ? `${clip(item.ask.trim().slice(0, -1), ASK_LIMITS.ask - 1)}${mark}` : clip(item.ask, ASK_LIMITS.ask);
-    if (!ask || asks.some((filed) => isPromise(filed) === Boolean(item.promise) && !isQuestion(filed) && same(filed.ask) === same(ask))) continue;
-    if (item.promise && promises.length === MAX_TURN_PROMISES) {
-      more += 1;
-      continue;
-    }
+    const key = keyOf(item.ask);
+    if (!ask || asks.some((filed) => isPromise(filed) === Boolean(item.promise) && !isQuestion(filed) && (filed.key ? filed.key === key : same(filed.ask) === same(ask)))) continue;
     lastAskId += 1;
     // shown 0: no turn showed it yet, so the next one does, resumed or not
-    const filed: TaskAsk = { id: `A${lastAskId}`, ask, status: "open", shown: 0, at: now, changedAt: now };
+    const filed: TaskAsk = { id: `A${lastAskId}`, ask, status: "open", shown: 0, key, at: now, changedAt: now };
     if (item.promise) filed.kind = "promise";
     if (item.note) filed.ref = clip(item.note, ASK_LIMITS.ref);
     asks.push(filed);
-    if (item.promise) promises.push(filed);
   }
-  const lastPromise = promises.at(-1);
-  if (lastPromise && more) lastPromise.ref = clip(`${lastPromise.ref ? `${lastPromise.ref}; ` : ""}${more} more "I'll" in that turn's transcript`, ASK_LIMITS.ref);
   if (lastAskId === first) return null;
   trimClosed(asks);
   return { asks, lastAskId };
 }
-
-export const askTerms = (text: string): Set<string> => terms(text);
 
 /** A card answered after its question was filed: one filed for this card goes, an older one closes done. Null when none matches. */
 export function answerQuestionAsk(existing: readonly TaskAsk[] | undefined, question: string, cardAt: number, now: number): TaskAsk[] | null {
@@ -197,8 +195,16 @@ function day(at: number): string {
   return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-// a promise, or anything Wink filed from a turn that no turn showed yet, is unchecked until an engine closes it
-const unchecked = (ask: TaskAsk) => ask.status === "open" && (isPromise(ask) || (ask.shown === 0 && !isQuestion(ask)));
+// a promise, or anything Wink filed from a turn, is unchecked on every list until an engine settles it by ID
+const unchecked = (ask: TaskAsk) => ask.status === "open" && (isPromise(ask) || ask.key !== undefined || (ask.shown === 0 && !isQuestion(ask)));
+// past the first few, unchecked promises ride as their IDs on one line; each keeps its row, and a status question lists them all
+const MAX_LISTED_PROMISES = 3;
+export const MORE_PROMISES = "more unchecked promises, each open by ID; a status question lists them:";
+const rows = (asks: readonly TaskAsk[], line: (ask: TaskAsk) => string, all: boolean) => {
+  const batched = all ? [] : asks.filter((ask) => isPromise(ask) && unchecked(ask)).slice(MAX_LISTED_PROMISES);
+  const lines = asks.filter((ask) => !batched.includes(ask)).map(line);
+  return batched.length ? [...lines, `- +${batched.length} ${MORE_PROMISES} ${batched.map((ask) => ask.id).join(", ")}`] : lines;
+};
 const askLine = (ask: TaskAsk, now: number, carried = false) => isParked(ask, now)
   ? `- ${ask.id} parked back ${day(ask.until!)}: ${ask.ask}`
   : `- ${ask.id} ${ask.status}${ask.kind ? ` ${ask.kind}` : ""}${carried || unchecked(ask) ? " unchecked" : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
@@ -244,7 +250,7 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, sta
   const check = shown.some(unchecked) ? ` An unchecked row may be done or running already: ${CHECK}` : "";
   return [
     `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}${promises}${check}]`,
-    ...shown.map(line),
+    ...rows(shown, line, statusTurn),
   ].join("\n");
 }
 
@@ -275,7 +281,7 @@ function leftBlock(asks: readonly TaskAsk[], now: number): string {
   if (!asks.length) return "";
   return [
     `[Wink asks the last turn may have left open, unchecked - ${asks.length}: ${CHECK}]`,
-    ...asks.map((ask) => askLine(ask, now, true)),
+    ...rows(asks, (ask) => askLine(ask, now, true), false),
   ].join("\n");
 }
 
@@ -301,7 +307,7 @@ export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, tex
   const render = (picked: readonly TaskAsk[]) => {
     const hits = picked.filter((ask) => mine.has(ask));
     return [
-      hits.length ? [`[Wink asks the user's message names - ${hits.length} of ${own.filter(isOpenAsk).length} open; a status question lists them all.]`, ...hits.map((ask) => askLine(ask, now))].join("\n") : "",
+      hits.length ? [`[Wink asks the user's message names - ${hits.length} of ${own.filter(isOpenAsk).length} open; a status question lists them all.${hits.some(unchecked) ? " An unchecked row may be done already: check first, close it by ID, never start one twice." : ""}]`, ...hits.map((ask) => askLine(ask, now))].join("\n") : "",
       elsewhereBlock(picked.filter((ask) => !mine.has(ask)), now),
     ].filter(Boolean).join("\n");
   };

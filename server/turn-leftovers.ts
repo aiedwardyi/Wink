@@ -1,9 +1,8 @@
 import type { Message } from "./store.ts";
-import { askTerms } from "./task-asks.ts";
 
 // #2073's first-person commitment, in English or Korean
 const COMMIT = /\b(?:i['’]ll|i will(?! not\b)|i['’]m going to|i am going to)\b|(?:할|볼|드릴|둘|놓을)\s?[게께]요?(?=[\s.!~]|$)/i;
-// #2073's time or trigger: a final reply's "I'll" on one is work for later
+// #2073's time or trigger: a take-back's "tomorrow" names no promise
 const DEFERRED = /\b(?:later|tomorrow|tonight|today|overnight|noon|midnight|when|once|after|before|next|by|(?:mon|tues|wednes|thurs|fri|satur|sun)day|this (?:morning|afternoon|evening|week|weekend)|in (?:an?|\d+) (?:minutes?|hours?|days?|weeks?))\b|\b\d{1,2}(?::\d{2})?\s?[ap]\.?m\b|\bat \d{1,2}(?::\d{2})?\b|나중에|내일|오늘|이따|다음에|되면|끝나면|켜시면|하시면|후에|\d{1,2}시/i;
 const FILLER = /^(?:(?:ok(?:ay)?|sure|got it|alright)[,!.]?\s+)?(?:let me|lemme|one (?:moment|sec(?:ond)?)|give me a (?:sec(?:ond)?|moment|minute)|hold on|just a (?:sec(?:ond)?|moment))\b|^(?:잠시만|잠깐만)/i;
 // an offer waits on the user's yes; "check if it exists" and "the feature you want" are still promises
@@ -18,23 +17,11 @@ const TIMES = new RegExp(DEFERRED.source, "gi");
 const SENTENCE = /(?<=[.!?。！？])\s+|\n+/;
 const CODE = /(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g;
 const QUESTION = /[?？]$/;
-// "I'm checking where the shortcuts are": the bot on its way, never an answer
-const PROGRESS = /\b(?:i['’]m|i am|we['’]re|we are)\s+(?:\p{L}+\s+)?\p{L}+ing\b/iu;
 
 const sentences = (text: string) => text.replace(CODE, "$1").split(SENTENCE)
   .map((part) => part.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim()).filter(Boolean);
 const said = (row: Message) => row.role === "bot" && row.kind === "text" && !row.roomEcho && Boolean(row.text?.trim());
 const PLAIN = new Set(["a", "an", "the", "i", "me", "my", "myself", "you", "your", "yourself", "we", "us", "our", "it", "its", "this", "that", "these", "those", "there", "here", "them", "they", "their", "to", "of", "for", "on", "in", "at", "with", "from", "into", "about", "up", "out", "off", "as", "and", "or", "but", "so", "if", "then", "than", "until", "also", "just", "now", "still", "really", "actually", "sorry", "okay", "ok", "anyway", "instead", "though", "again", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had", "will", "would", "can", "could", "going", "s", "t", "ll", "ve", "re", "d", "m", "그거", "그건", "이거"]);
-const COMMON = new Set("all and any are but can for get got had has how its let new not now off one our out see the too two was way who why you".split(" "));
-// with the short ones a subject can be: "the API", "the bug"
-function words(text: string): Set<string> {
-  const found = askTerms(text);
-  for (const word of text.toLowerCase().match(/\b[a-z0-9]{2,3}\b/g) ?? []) if (!COMMON.has(word) && !PLAIN.has(word)) found.add(word);
-  return found;
-}
-// half its words come back in what followed
-const covered = (item: Set<string>, later: Set<string>) => [...item].filter((term) => later.has(term)).length * 2 >= item.size;
-
 // #2073's whole-word match of a take-back to the promise it names
 const terms = (text: string) => new Set((text.match(/[\p{L}\p{N}]+/gu) ?? [])
   .map((word) => (/^\p{Lu}$/u.test(word) && word !== "I" ? word : word.toLowerCase())).filter((word) => !PLAIN.has(word)));
@@ -74,24 +61,8 @@ function namesPromise(line: string, promise: string, others: readonly string[]):
     && others.map(shared).every((theirs) => theirs.length < hits.length && theirs.every((word) => hits.includes(word)));
 }
 
-// a final "I'll" that names its work, "the picker labels" or "PC A", is concrete; "I'll keep it simple" is where the turn stopped
-// an "I'll" in quotes is an example, not the bot's word; quotes keep their place, so a quoted name still makes one concrete
+// an "I'll" in quotes is an example, not the bot's word
 const spoken = (line: string) => line.replace(/"[^"]*"|“[^”]*”/g, (quoted) => " ".repeat(quoted.length));
-const concrete = (line: string) => {
-  const marker = COMMIT.exec(spoken(line))!;
-  // Korean names its object before the ending, with 을/를 or a name
-  return DEFERRED.test(line) || (/^i/i.test(marker[0])
-    ? /\b(?:the|my|your|our|their)\s+\p{L}|\p{Lu}|\p{N}/u.test(line.slice(marker.index + marker[0].length))
-    : /\p{L}[을를]\s|\p{Lu}|\p{N}/u.test(line.slice(0, marker.index)));
-};
-// an answer says most of the question and more; "a good question", "I'll get back to you" and "I'm checking" never answer
-const TALK = new Set(["question", "good", "great", "fair", "interesting", "point"]);
-// "I still need to check X" or "I haven't checked X yet" says the answer is to come
-const PENDING = /\b(?:still|yet|need(?:s)? to|have to|has to)\b|아직|해야/i;
-const answers = (asked: Set<string>, line: string) => {
-  const found = words(line);
-  return !COMMIT.test(line) && !QUESTION.test(line) && !PROGRESS.test(line) && !PENDING.test(line) && !(DENIED.test(line) && /\b(?:i|we)\b/i.test(line)) && covered(asked, found) && [...found].some((term) => !asked.has(term) && !TALK.has(term));
-};
 
 /** The messages a turn answered, oldest first: every user row back from its first row to the last reply, one folded in while it set up too. */
 export function answeredRows(first: Message | undefined, row: (id: string) => Message | undefined): Message[] {
@@ -103,12 +74,11 @@ export function answeredRows(first: Message | undefined, row: (id: string) => Me
 /** note: a later line of the turn saying that work is running */
 export interface Leftover { ask: string; promise?: true; note?: string }
 
-/** What a settled turn may have left open, to carry to the next reply unchecked: every "I'll" it kept, one in its last text only on a time or a named object, then each question of the user's no shown reply line answered. It only adds: no line closes, narrows or drops a filed ask. rows: the turn in order, from the messages it answered. */
+/** What a settled turn may have left open, to carry to the next reply unchecked: every "I'll" it kept, its last text's too, then each question of the user's the quick helper did not answer. A false one costs one checked line, so no wording decides an ask was answered or done: no line closes, narrows or drops a filed ask. rows: the turn in order, from the messages it answered. */
 export function turnLeftovers(rows: readonly Message[]): Leftover[] {
   const own = (row: Message) => said(row) && !row.quick;
-  const last = rows.findLast(own);
   const lines = rows.flatMap((row) => !own(row) ? [] : sentences(row.text!)
-    .map((line) => ({ line, commit: COMMIT.test(spoken(line)) && !OFFER.test(line) && !FILLER.test(line) && !QUESTION.test(line) && (row !== last || concrete(line)) })));
+    .map((line) => ({ line, commit: COMMIT.test(spoken(line)) && !OFFER.test(line) && !FILLER.test(line) && !QUESTION.test(line) })));
   for (const [at, { line }] of lines.entries()) {
     if (!WITHDRAWN.test(line)) continue;
     const taken = line.replace(WITHDRAWN, " ");
@@ -125,16 +95,11 @@ export function turnLeftovers(rows: readonly Message[]): Leftover[] {
   });
   // the messages the turn answered, folded ones too, and the steers it took
   const lead = rows.findIndex((row) => row.role !== "user");
-  const shown = rows.flatMap((row, at) => said(row) && !row.summarized ? sentences(row.text!).map((line) => ({ at, line })) : []);
   for (const [at, row] of rows.entries()) {
     if (row.role !== "user" || row.kind !== "text" || !row.text?.trim() || (row.quick && row.quick.state !== "handoff") || !(lead < 0 || at < lead || row.steered)) continue;
     // the quick helper answered it
     if (rows.some((other) => other.quick?.askId === row.id)) continue;
-    const replies = shown.filter((reply) => reply.at > at);
-    for (const ask of sentences(row.text).filter((line) => QUESTION.test(line))) {
-      const asked = words(ask);
-      if (asked.size && !replies.some(({ line }) => answers(asked, line))) left.push({ ask });
-    }
+    for (const ask of sentences(row.text).filter((line) => QUESTION.test(line))) left.push({ ask });
   }
   return left;
 }

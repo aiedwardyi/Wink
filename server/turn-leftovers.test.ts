@@ -30,9 +30,10 @@ describe("turn leftovers", () => {
       promise("I'll answer the model-switch question from how Wink actually stores chats and tasks."),
       promise("I'll keep the picker changes moving."),
       { ask: "How does Wink keep my work when I switch models?" },
+      { ask: "What color should the ramp be?" },
     ]);
     const saved = fileLeftovers(undefined, left, 5)!;
-    expect(saved.asks.map((item) => [item.id, item.status, item.kind])).toEqual([["A1", "open", "promise"], ["A2", "open", "promise"], ["A3", "open", undefined]]);
+    expect(saved.asks.map((item) => [item.id, item.status, item.kind])).toEqual([["A1", "open", "promise"], ["A2", "open", "promise"], ["A3", "open", undefined], ["A4", "open", undefined]]);
     expect(saved.asks[0]!.ask).toHaveLength(80);
     expect(asksBlock(saved.asks, 5)).toContain("- A2 open promise unchecked 01-01: I'll keep the picker changes moving.");
   });
@@ -47,15 +48,17 @@ describe("turn leftovers", () => {
     expect(turnLeftovers([user("Release?"), bot("I'll read the release notes."), tool("RELEASE-NOTES.md", false), bot("I couldn't read the release notes.")])).toEqual([promise("I'll read the release notes."), { ask: "Release?" }]);
   });
 
-  it("files a final promise on a time or a named object, never an offer or a vague one", () => {
+  it("files a final promise whatever its wording, never an offer or a quoted example", () => {
     expect(turnLeftovers([user("Please fix the picker"), bot("I'll update the picker labels.")])).toEqual([promise("I'll update the picker labels.")]);
     expect(turnLeftovers([user("Please review it"), tool(), bot("I'll review the invoice tomorrow.")])).toEqual([promise("I'll review the invoice tomorrow.")]);
-    expect(turnLeftovers([user("Fix it"), tool(), bot("Fixed. I'll keep it simple.")])).toEqual([]);
-    expect(turnLeftovers([user("Ship it"), tool(), bot("Shipped. I'll keep an eye on it.")])).toEqual([]);
+    // a false one costs one checked line; a dropped one is lost work
+    expect(turnLeftovers([user("Please proofread the draft"), tool(), bot("I'll fix typos.")])).toEqual([promise("I'll fix typos.")]);
+    expect(turnLeftovers([user("Fix it"), tool(), bot("Fixed. I'll keep it simple.")])).toEqual([promise("I'll keep it simple.")]);
+    expect(turnLeftovers([user("Ship it"), tool(), bot("Shipped. I'll keep an eye on it.")])).toEqual([promise("I'll keep an eye on it.")]);
     expect(turnLeftovers([user("Tests please"), bot("If you want, I'll add tests for the parser."), tool(), bot("Done.")])).toEqual([]);
     expect(turnLeftovers([user("고쳐 주세요"), bot("API를 수정할게요.")])).toEqual([promise("API를 수정할게요.")]);
     expect(turnLeftovers([user("고쳐 주세요"), bot("설정 파일을 수정할게요.")])).toEqual([promise("설정 파일을 수정할게요.")]);
-    expect(turnLeftovers([user("고쳐 주세요"), tool(), bot("확인할게요.")])).toEqual([]);
+    expect(turnLeftovers([user("고쳐 주세요"), tool(), bot("확인할게요.")])).toEqual([promise("확인할게요.")]);
     // a quoted example is no promise; a quoted name inside one is
     expect(turnLeftovers([user("Go on"), bot(`The sentence "I'll delete the backup tomorrow." is in the future tense.`), bot("Back soon.")])).toEqual([]);
     expect(turnLeftovers([user("Go on"), bot(`I'll rename the "Save" button.`)])).toEqual([promise(`I'll rename the "Save" button.`)]);
@@ -64,24 +67,19 @@ describe("turn leftovers", () => {
     expect(turnLeftovers([user("Keep going."), ...kept.map((line) => bot(line, { summarized: true })), bot("Back soon.")])).toEqual(kept.map(promise));
   });
 
-  it("keeps a question no shown reply line answers: an unrelated reply, a deferral, or an answer to another question only", () => {
+  it("files every question the user asked, since no reply wording decides it was answered", () => {
     const shortcuts = { ask: "Where are the keyboard shortcuts documented?" };
-    expect(turnLeftovers([user(shortcuts.ask), bot("Blue.")])).toEqual([shortcuts]);
-    expect(turnLeftovers([user(shortcuts.ask), bot("I'll get back to you.")])).toEqual([shortcuts]);
-    expect(turnLeftovers([user(shortcuts.ask), bot("The keyboard shortcuts are a good question. I'll get back to you.")])).toEqual([shortcuts]);
-    expect(turnLeftovers([user(shortcuts.ask), bot("I'm checking where the keyboard shortcuts are documented.")])).toEqual([shortcuts]);
-    expect(turnLeftovers([user(shortcuts.ask), bot("I still need to check where the keyboard shortcuts are documented.")])).toEqual([shortcuts]);
-    expect(turnLeftovers([user(shortcuts.ask), bot("I haven't checked where the keyboard shortcuts are documented yet.")])).toEqual([shortcuts]);
-    expect(turnLeftovers([user(shortcuts.ask), bot("I didn't find where the keyboard shortcuts are documented.")])).toEqual([shortcuts]);
-    // a plain negative still answers
-    expect(turnLeftovers([user(shortcuts.ask), bot("The keyboard shortcuts are not documented anywhere yet but GUIDE.md lists some.")])).toEqual([shortcuts]);
-    expect(turnLeftovers([user(shortcuts.ask), bot("The keyboard shortcuts are not documented outside GUIDE.md.")])).toEqual([]);
+    for (const reply of [
+      "The keyboard shortcuts changed yesterday.",
+      "Blue.",
+      "I still need to check where the keyboard shortcuts are documented.",
+      "The keyboard shortcuts are documented in GUIDE.md.",
+    ]) expect(turnLeftovers([user(shortcuts.ask), bot(reply)])).toEqual([shortcuts]);
+    // a question no search term is left of still files
+    expect(turnLeftovers([user("Why?"), tool(), bot("Back soon.")])).toEqual([{ ask: "Why?" }]);
     const two = user(`What color should the ramp be? ${shortcuts.ask}`);
-    expect(turnLeftovers([two, bot("The ramp should be blue.")])).toEqual([shortcuts]);
-    expect(turnLeftovers([two, bot("The ramp should be blue."), user("What size?", { steered: true }), bot("The size is 14 px.")])).toEqual([shortcuts]);
-    // a line that says it and more answers it
-    expect(turnLeftovers([user("Why is CI red?"), user("Color?", { steered: true }), bot("Blue. CI is red from a flaky test.")])).toEqual([{ ask: "Color?" }]);
-    expect(turnLeftovers([user(shortcuts.ask), bot("The keyboard shortcuts are documented in GUIDE.md.")])).toEqual([]);
+    expect(turnLeftovers([two, bot("The ramp should be blue."), user("What size?", { steered: true }), bot("The size is 14 px.")])).toEqual([{ ask: "What color should the ramp be?" }, shortcuts, { ask: "What size?" }]);
+    expect(turnLeftovers([user("Why is CI red?"), user("Color?", { steered: true }), bot("Blue. CI is red from a flaky test.")])).toEqual([{ ask: "Why is CI red?" }, { ask: "Color?" }]);
   });
 
   it("reads every message the turn answered, one folded in while it set up too", () => {
@@ -96,8 +94,8 @@ describe("turn leftovers", () => {
     expect(answeredRows(undefined, (id) => rows.get(id))).toEqual([]);
   });
 
-  it("keeps a question the quick helper handed into the turn as a steer, and none it answered", () => {
-    expect(turnLeftovers([user("What font is it?"), user("And the ramp color?", { steered: true, quick: { state: "handoff" } }), bot("The ramp color is blue, like the toolbar.")])).toEqual([{ ask: "What font is it?" }]);
+  it("keeps a question the quick helper handed into the turn as a steer", () => {
+    expect(turnLeftovers([user("What font is it?"), user("And the ramp color?", { steered: true, quick: { state: "handoff" } }), bot("The ramp color is blue, like the toolbar.")])).toEqual([{ ask: "What font is it?" }, { ask: "And the ramp color?" }]);
   });
 
   it("drops a promise a take-back names, or a bare one the promise right before it; a hedged one drops nothing", () => {
@@ -119,15 +117,57 @@ describe("turn leftovers", () => {
     expect(turnLeftovers([user("go on"), bot("I'll update the picker labels."), bot("The backup is running.")])).toEqual([promise("I'll update the picker labels.")]);
   });
 
-  it("files a narrated turn's first three promises and points at the transcript for the rest, in under 2 ms", () => {
+  it("gives every promise of a narrated turn its own ID; a list shows the first three and the rest by ID, in under 2 ms", () => {
     const rows = [user("Do the release"), ...Array.from({ length: 60 }, (_, i) => [bot(`I'll check step ${i} of the release notes.`), tool("RELEASE-NOTES.md"), bot(`Step ${i} is fine.`)]).flat(), bot(`All done. ${"More detail on the release. ".repeat(150)}`)];
     expect(turnLeftovers(rows)).toHaveLength(60);
     const saved = fileLeftovers(undefined, turnLeftovers(rows), 9)!;
-    expect(saved.asks.map((item) => item.ask)).toEqual([0, 1, 2].map((i) => `I'll check step ${i} of the release notes.`));
-    expect(saved.asks[2]!.ref).toBe(`57 more "I'll" in that turn's transcript`);
+    expect(saved.asks.map((item) => [item.id, item.ask, item.ref])).toEqual(Array.from({ length: 60 }, (_, i) => [`A${i + 1}`, `I'll check step ${i} of the release notes.`, undefined]));
+    const more = `- +57 more unchecked promises, each open by ID; a status question lists them: ${Array.from({ length: 57 }, (_, i) => `A${i + 4}`).join(", ")}`;
+    for (const list of [asksBlock(saved.asks, 10), asksNudge(saved.asks, 10, "ok")]) {
+      expect(list.split("\n").slice(1)).toEqual([0, 1, 2].map((i) => `- A${i + 1} open promise unchecked 01-01: I'll check step ${i} of the release notes.`).concat(more));
+    }
+    expect(asksBlock(saved.asks, 10, true)).toContain("- A60 open promise unchecked 01-01: I'll check step 59 of the release notes.");
     const started = performance.now();
     for (let i = 0; i < 20; i++) fileLeftovers(undefined, turnLeftovers(rows), 9);
     expect((performance.now() - started) / 20).toBeLessThan(2);
+  });
+
+  it("keeps each of four promises addressable: past three closed by ID, the fourth still lists (2226G cap)", () => {
+    const four = turnLeftovers([user("Please handle the release follow-ups"), tool(), bot("I'll update the guide. I'll check the invoice. I'll review the font. I'll email the release calendar.")]);
+    const saved = fileLeftovers(undefined, four, 5)!;
+    expect(saved.asks.map((item) => [item.id, item.ask, item.ref])).toEqual([
+      ["A1", "I'll update the guide.", undefined],
+      ["A2", "I'll check the invoice.", undefined],
+      ["A3", "I'll review the font.", undefined],
+      ["A4", "I'll email the release calendar.", undefined],
+    ]);
+    expect(asksBlock(saved.asks, 6)).toContain("- +1 more unchecked promises, each open by ID; a status question lists them: A4");
+    const closed = saved.asks.map((item) => item.id === "A4" ? item : { ...item, status: "done" as const });
+    for (const list of [asksBlock(closed, 7), asksBlock(closed, 7, true), asksNudge(closed, 7, "status?")]) expect(list).toContain("- A4 open promise unchecked 01-01: I'll email the release calendar.");
+  });
+
+  it("knows a repeat by its full words, past the clip, and a path by its case (2226G identity)", () => {
+    const long = promise("I'll update the keyboard shortcuts documentation for the desktop color picker and the settings page.");
+    const first = fileLeftovers(undefined, [long], 5)!;
+    expect(first.asks[0]!.ask).toMatch(/…$/);
+    expect(fileLeftovers(first, [long], 9)).toBeNull();
+    expect(fileLeftovers({ asks: first.asks.map((item) => ({ ...item, status: "done" as const })), lastAskId: 1 }, [long], 9)).toBeNull();
+    const headers = fileLeftovers(undefined, turnLeftovers([user("Please address the two headers"), tool(), bot("I'll update the file src/Header.ts. I'll update the file src/header.ts.")]), 5)!;
+    expect(headers.asks.map((item) => [item.id, item.ask])).toEqual([["A1", "I'll update the file src/Header.ts."], ["A2", "I'll update the file src/header.ts."]]);
+    // ordinary words still match whatever their case
+    expect(fileLeftovers(headers, [promise("I'll Update the File src/Header.ts")], 9)).toBeNull();
+  });
+
+  it("keeps the check on a carried question on every list until an engine settles it by ID (2226G three switches)", () => {
+    let filed = fileLeftovers(undefined, turnLeftovers([user("Could you write ready.txt?"), bot("Back soon.")]), 5)!.asks;
+    for (const at of [6, 7, 8]) {
+      const list = asksBlock(filed, at);
+      expect(list).toContain("check the transcript, files and running processes first");
+      expect(list).toContain("- A1 open unchecked 01-01: Could you write ready.txt?");
+      filed = filed.map((item) => ({ ...item, shown: at }));
+    }
+    expect(asksNudge(filed, 9, "did you write ready.txt")).toContain("never start one twice");
+    expect(asksBlock(filed.map((item) => ({ ...item, status: "building" as const })), 9)).not.toMatch(/unchecked/);
   });
 
   it("takes only an exact repeat of the same kind as the ask it repeats; anything else files beside it", () => {
