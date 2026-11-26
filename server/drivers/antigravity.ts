@@ -749,6 +749,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     const captured = (threadId: string) => ({ generation: warmPool.generation(warmKey(threadId)), incarnation, identity: "" });
     const standbys = new WeakMap<Lease, Standby>();
     const standbyOf = new Map<string, Standby>();
+    const refusedStandby = new Map<string, { conversation: string; turn: SendTurnInput; cwd: string; childEnv: NodeJS.ProcessEnv; epoch: number }>();
 
     /** The folder and env a turn's agy runs with; a standby launched otherwise never serves it. */
     const launchOf = (turn: SendTurnInput) => {
@@ -796,6 +797,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       if (disposed || active.has(threadId) || keyringSignOut.pending || mcpExclusiveWanted()) return finalizeMcp();
       const args = buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd, model: turn.model, resumeCursor: conversation, readOnly: turn.readOnly });
       const lease = warmPool.reserve(warmKey(threadId), launchFingerprint(config.cli, args, cwd, childEnv, turn), captured(threadId), "speculative", { evict: true });
+      if (lease === "denied" && conversation) refusedStandby.set(threadId, { conversation, turn, cwd, childEnv, epoch: warmPool.generation(warmKey(threadId)) });
       if (typeof lease !== "object" || standbys.has(lease)) return finalizeMcp();
       let child: ReturnType<typeof spawnCli>;
       try {
@@ -900,6 +902,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = relaunchOf ?? newId();
       const epoch = warmPool.generation(warmKey(threadId));
+      refusedStandby.delete(threadId);
       if (signedOut) {
         emit({ ...base(threadId, turnId), type: "turn.started" });
         emit({ ...base(threadId, turnId), type: "runtime.error", message: "Gemini is not signed in.", setup: true, signIn: true, signedOut: true });
@@ -1502,14 +1505,19 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         void retireStandbys("signed out");
         keyringSignOut.signedOutByAgy();
       },
-      // a chat with a conversation gets its standby when its last turn exits
+      // a chat with a conversation gets its standby when its last turn exits, or when next opened if the pool was full then
       prepare: async (_shape?: PrepareTurn, focus?: PrepareFocus) => {
-        if (focus) warmPool.open(warmKey(focus.threadId));
-        if (!focus?.fresh || disposed || active.has(focus.threadId) || keyringSignOut.pending || mcpExclusiveWanted()) return;
+        if (!focus) return;
+        warmPool.open(warmKey(focus.threadId));
+        const refused = refusedStandby.get(focus.threadId);
+        refusedStandby.delete(focus.threadId);
+        if (disposed || active.has(focus.threadId) || keyringSignOut.pending || mcpExclusiveWanted()) return;
         const { fresh, ...settings } = focus;
         const turn: SendTurnInput = { ...settings, ...fresh, text: "" };
-        if (antigravityComputerMcpServer(turn.integrations) !== null) return;
-        const { cwd, childEnv } = launchOf(turn);
+        const launch = fresh
+          ? antigravityComputerMcpServer(turn.integrations) === null && { conversation: null, turn, ...launchOf(turn) }
+          : refused?.epoch === warmPool.generation(warmKey(focus.threadId)) && refused;
+        if (!launch) return;
         const releaseMcpLock = await acquireAntigravityMcpLock(false).granted;
         let restoreMcp: () => void;
         try {
@@ -1518,7 +1526,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           releaseMcpLock();
           return;
         }
-        startStandby(focus.threadId, null, turn, cwd, childEnv, { restoreMcp, releaseMcpLock });
+        startStandby(focus.threadId, launch.conversation, launch.turn, launch.cwd, launch.childEnv, { restoreMcp, releaseMcpLock });
       },
       adapter: {
         provider: DRIVER_KIND,
@@ -1550,6 +1558,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         interruptTurn: async (threadId) => {
           // a Stop or a bot delete ends the chat's idle standby too
           warmPool.invalidate({ instanceId, threadId }, "stopped");
+          refusedStandby.delete(threadId);
           active.get(threadId)?.interrupt();
         },
         respondToRequest: async () => "unavailable" as const, // this engine has no asks to answer

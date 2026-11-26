@@ -3280,6 +3280,39 @@ require(${JSON.stringify(fake)});
         }
       });
 
+      it("starts the standby of a chat returned to mid-reply when it is opened after the reply", async () => {
+        const instance = await make("open-return");
+        const spawn = vi.spyOn(procs, "spawnCli");
+        const agys = () => spawn.mock.calls.filter(([, args]) => args.includes("--input-format"));
+        const recorder = recordEvents(instance.adapter);
+        rmSync(join(dir, "go"));
+        try {
+          const { turnId } = await instance.adapter.sendTurn({ ...chat, threadId: "t-return-b", text: "b" });
+          const child = spawn.mock.results[spawn.mock.calls.lastIndexOf(agys().at(-1)!)]!.value as ReturnType<typeof procs.spawnCli>;
+          const closed = new Promise((done) => child.once("close", done));
+          await expect.poll(() => existsSync(dump) && JSON.parse(readFileSync(dump, "utf8")).prompt, { timeout: 5_000 }).toBe("b");
+          await open(instance, { threadId: "t-return-c" });
+          await open(instance, { threadId: "t-return-d" });
+          await standbyAfter(3);
+          // a composer returned to mid-reply asks only once the reply ends
+          writeFileSync(join(dir, "go"), "");
+          await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+          await closed;
+          expect(agys()).toHaveLength(3);
+          const cursor = (recorder.events.find((event) => event.type === "session.started" && event.turnId === turnId) as { sessionId: string }).sessionId;
+          await open(instance, { threadId: "t-return-b", fresh: undefined });
+          const standby = await standbyAfter(4);
+          expect(standby.argv[standby.argv.indexOf("--conversation") + 1]).toBe(cursor);
+          await expect.poll(() => spawns().slice(1, 3).map(({ pid }) => alive(pid)), { timeout: 5_000 }).toEqual([false, true]);
+          const b = await turn(instance, { ...chat, threadId: "t-return-b", text: "again", resumeCursor: cursor });
+          expect(b.pid).toBe(standby.pid);
+        } finally {
+          recorder.stop();
+          spawn.mockRestore();
+          writeFileSync(join(dir, "go"), "");
+        }
+      });
+
       it("leaves no standby after room turns, which never resume, so the next chat still gets one", async () => {
         const gemini = await make("room-turns");
         const spawn = vi.spyOn(procs, "spawnCli");
