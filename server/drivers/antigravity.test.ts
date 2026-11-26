@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 import * as auth from "./antigravity-auth.ts";
 
@@ -2967,7 +2967,7 @@ describe("Antigravity computer MCP config", () => {
         return false;
       }
     };
-    /** Turn processes in start order: a standby is logged when it starts, before any prompt. */
+    /** Turn processes in the order each logged its start, before any prompt: two quick starts can log in either order. */
     const spawns = (): Array<{ pid: number; argv: string[] }> =>
       existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
     const make = async (name: string, environment: Record<string, string> = {}) => {
@@ -2994,6 +2994,9 @@ describe("Antigravity computer MCP config", () => {
         recorder.stop();
       }
     };
+    /** Turn processes in spawn order. */
+    const started = (spawn: MockInstance<typeof procs.spawnCli>): number[] =>
+      spawn.mock.calls.flatMap(([, args], i) => (args.includes("--input-format") ? [spawn.mock.results[i]!.value.pid] : []));
     const standbyAfter = async (count: number) => {
       await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(count);
       return spawns()[count - 1]!;
@@ -3241,11 +3244,11 @@ require(${JSON.stringify(fake)});
           await open(instance);
           await open(instance, { threadId: "t-standby-2" });
           await open(instance, { threadId: "t-standby-3" });
-          expect(spawn.mock.calls.filter(([, args]) => args.includes("--input-format"))).toHaveLength(3);
-          await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(3);
-          await expect.poll(() => spawns().map(({ pid }) => alive(pid)), { timeout: 5_000 }).toEqual([false, true, true]);
+          const pids = started(spawn);
+          expect(pids).toHaveLength(3);
+          await expect.poll(() => pids.map(alive), { timeout: 5_000 }).toEqual([false, true, true]);
           const third = await turn(instance, { ...chat, threadId: "t-standby-3", text: "one" });
-          expect(third.pid).toBe(spawns()[2]!.pid);
+          expect(third.pid).toBe(pids[2]);
         } finally {
           spawn.mockRestore();
         }
@@ -3270,9 +3273,9 @@ require(${JSON.stringify(fake)});
           await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
           await closed;
           expect(agys()).toHaveLength(3);
-          expect(spawns().slice(1).map(({ pid }) => alive(pid))).toEqual([true, true]);
+          expect(started(spawn).slice(1).map(alive)).toEqual([true, true]);
           const b = await turn(instance, { ...chat, threadId: "t-focus-b", text: "b" });
-          expect(b.pid).toBe(spawns()[1]!.pid);
+          expect(b.pid).toBe(started(spawn)[1]);
         } finally {
           recorder.stop();
           spawn.mockRestore();
@@ -3303,7 +3306,7 @@ require(${JSON.stringify(fake)});
           await open(instance, { threadId: "t-return-b", fresh: undefined });
           const standby = await standbyAfter(4);
           expect(standby.argv[standby.argv.indexOf("--conversation") + 1]).toBe(cursor);
-          await expect.poll(() => spawns().slice(1, 3).map(({ pid }) => alive(pid)), { timeout: 5_000 }).toEqual([false, true]);
+          await expect.poll(() => started(spawn).slice(1, 3).map(alive), { timeout: 5_000 }).toEqual([false, true]);
           const b = await turn(instance, { ...chat, threadId: "t-return-b", text: "again", resumeCursor: cursor });
           expect(b.pid).toBe(standby.pid);
         } finally {
