@@ -2,6 +2,7 @@ import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type
 import { ArrowDown, ArrowUp, Lock, Square } from "lucide-react";
 import type { ModelSelection } from "@/state/store";
 import { pickerEfforts, pickerModels, selectPickerEffort, selectPickerModel, type PickerRow } from "@/lib/cross-model-picker";
+import { effortHeat } from "@/lib/effort-heat";
 import { DIAL_DIGITS, dialFind, dialPrice, dialRunCost, dialScore, dialShift, dialSource, dialStep, dialTier, type DialStat } from "@/lib/model-dial";
 import { formatUsd, pickerPrice } from "@/lib/model-index";
 import { MODEL_INDEX_AS_OF } from "../../shared/model-index-data.ts";
@@ -552,7 +553,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
             const notches = Array.from({ length: n }, (_, j) => sector(112, 124, 150 + j * 240 / n + 2.5, 150 + (j + 1) * 240 / n - 2.5));
             const on = n === efforts.length;
             return (
-              <svg key={n} className="dial-layer dial-gauge" viewBox="0 0 480 480" data-on={on || undefined} aria-hidden>
+              <svg key={n} className="dial-layer dial-gauge" viewBox="0 0 480 480" data-on={on || undefined} style={on ? { "--effort-heat": effortHeat(level, n) } as CSSProperties : undefined} aria-hidden>
                 {notches.map((d, j) => (
                   <g key={j} className="dial-notch" data-lit={(on && j <= level) || undefined} style={{ "--p": j / Math.max(n - 1, 1) } as CSSProperties} onClick={() => on && efforts[j] && onDraft(selectPickerEffort(draft, efforts[j]!))}>
                     <path d={d} fill="var(--dial-line, #fff)" fillOpacity=".07" />

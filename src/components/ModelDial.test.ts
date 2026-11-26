@@ -188,6 +188,21 @@ describe("ModelDial", () => {
     expect(effort()).toBe("low");
   });
 
+  it("steps effort heat up at every level to full at Max", async () => {
+    media();
+    await mount();
+    for (let i = 0; i < 4; i++) await key("ArrowLeft");
+    const heats: number[] = [];
+    for (let i = 0; i < L5.length; i++) {
+      if (i) await key("ArrowRight");
+      heats.push(Number(document.querySelector<HTMLElement>(".dial-gauge[data-on]")!.style.getPropertyValue("--effort-heat")));
+    }
+    heats.forEach((heat, i) => expect(heat).toBeGreaterThan(i ? heats[i - 1]! : 0));
+    expect(heats.at(-1)).toBe(1);
+    const sheet = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "ModelDial.css"), "utf8");
+    expect(sheet).toMatch(/\.dial-notch\[data-lit\] \.lit \{[^}]*var\(--effort-heat/);
+  });
+
   it("squashes the logo on each effort step, not at the clamp", async () => {
     media();
     await mount();

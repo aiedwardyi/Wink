@@ -121,7 +121,7 @@
 .dial-gauge[data-on] { opacity: 1; }
 .dial-notch { cursor: pointer; }
 .dial-notch .lit { opacity: 0; transition: opacity 90ms linear; }
-.dial-notch[data-lit] .lit { opacity: 1; }
+.dial-notch[data-lit] .lit { opacity: calc(.72 + .28 * var(--effort-heat, 1)); filter: drop-shadow(0 0 calc(5px * var(--effort-heat, 0) * var(--glow)) color-mix(in srgb, var(--accent) calc(var(--effort-heat, 0) * 80%), transparent)); }
 /* Max: the gauge burns hot in rainbow, one hue per notch; Overdrive's outer arc stays lit at rest. */
 .dial-stage[data-max] :is(.dial-notch, .dial-overdrive path) { --hue: calc(20deg + var(--p) * 290deg); --hot: oklch(.84 .12 var(--hue)); --halo: oklch(.7 .19 var(--hue)); }
 .dial-stage[data-max] .dial-notch .lit { fill: var(--hot); filter: drop-shadow(0 0 calc(3px + 6px * var(--glow)) var(--halo)); }

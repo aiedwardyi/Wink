@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { Check, Lock } from "lucide-react";
 import type { ModelSelection } from "@/state/store";
 import { defaultModelEffort } from "../../shared/model-effort.ts";
+import { MODEL_INDEX_SOURCES } from "../../shared/model-index-data.ts";
 import { pickerColumn, pickerEfforts, pickerModels, selectPickerEffort, selectPickerModel, type PickerCell, type PickerEffort, type PickerRow } from "@/lib/cross-model-picker";
 import { chipEffortLabel, chipEffortShortLabel, modelFamilyAccent } from "@/lib/model-chip";
 import { dialPrice, dialScore, dialTier } from "@/lib/model-dial";
+import { effortHeat } from "@/lib/effort-heat";
 import { pickerPrice } from "@/lib/model-index";
 import { pickerLookSkin, type PickerLook } from "@/lib/picker-look";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -48,6 +50,10 @@ const APEX_SPARKS = [
   { dx: -18, dy: -34, bright: true },
   { dx: 6, dy: -32, bright: false },
 ] as const;
+
+const INTEL_SOURCE = MODEL_INDEX_SOURCES["aa-intelligence-index"].label;
+const SCORE_TIP_HOLD_MS = 450;
+const SCORE_TIP_SHOW_MS = 2400;
 
 const labShortName = (row: PickerRow) => LAB_SHORT_NAMES.get(row.instance.driverKind) ?? row.label;
 
@@ -255,6 +261,18 @@ export function QuickModelPicker({
   const viewedRowIndex = Math.max(0, rows.findIndex((row) => row.instance.instanceId === viewedLabId));
   const viewedRow = rows[viewedRowIndex] ?? selectedRow;
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [scoreTip, setScoreTip] = useState(false);
+  const scoreTipTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(scoreTipTimer.current), []);
+  const holdScoreTip = (event: ReactPointerEvent) => {
+    if (event.pointerType === "mouse") return;
+    window.clearTimeout(scoreTipTimer.current);
+    scoreTipTimer.current = window.setTimeout(() => {
+      setScoreTip(true);
+      scoreTipTimer.current = window.setTimeout(() => setScoreTip(false), SCORE_TIP_SHOW_MS);
+    }, SCORE_TIP_HOLD_MS);
+  };
+  const dropScoreHold = () => { if (!scoreTip) window.clearTimeout(scoreTipTimer.current); };
 
   const prevSelectedInstance = useRef(selection.instanceId);
   useEffect(() => {
@@ -453,7 +471,7 @@ export function QuickModelPicker({
     }
   };
 
-  const effortRatio = efforts.length > 0 && effortIndex >= 0 ? (effortIndex + 1) / efforts.length : 0;
+  const effortRatio = effortHeat(effortIndex, efforts.length);
   const shockLeftPct = efforts.length > 0 && effortIndex >= 0 ? `${(((effortIndex + 0.5) / efforts.length) * 100).toFixed(1)}%` : "85%";
   const glowX = efforts.length > 0 && effortIndex >= 0 ? `${Math.round(((effortIndex + 0.5) / efforts.length) * (spot.width - 24) - 90)}px` : "100px";
   const glowOpacity = flowTier === "max" ? 0.84 : flowTier === "xhigh" ? 0.54 : Number((0.16 + effortRatio * 0.36).toFixed(2));
@@ -541,6 +559,24 @@ export function QuickModelPicker({
 
       <div className="quick-models-scroll">
         {viewedRow && (
+          <div className="quick-models-head">
+            <span
+              className="quick-score-head"
+              data-quick-score-head=""
+              title={INTEL_SOURCE}
+              onPointerDown={holdScoreTip}
+              onPointerUp={dropScoreHold}
+              onPointerCancel={dropScoreHold}
+              onPointerLeave={dropScoreHold}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              {t("modelIndex.index.intelligence")}
+            </span>
+            <span aria-hidden="true" className="quick-model-tier" />
+            {scoreTip && <span role="tooltip" data-quick-score-tip="" className="quick-score-tip">{INTEL_SOURCE}</span>}
+          </div>
+        )}
+        {viewedRow && (
           <div className="quick-models" role="radiogroup" aria-label={viewedRow.label} onMouseLeave={() => setHoverIdx(null)}>
             <div aria-hidden="true" className="quick-hover-pill" data-on={hoverIdx !== null || undefined} style={cssVars({ "--hover-idx": hoverIdx ?? 0 })} />
             {viewedRow.cells.map((cell, idx) => {
@@ -587,7 +623,7 @@ export function QuickModelPicker({
         data-flow={flowTier !== "none" ? flowTier : undefined}
         data-apex={isApex || undefined}
         data-max={isMax || undefined}
-        style={cssVars({ "--quick-accent": activeAccent, "--shock-left": shockLeftPct })}
+        style={cssVars({ "--quick-accent": activeAccent, "--shock-left": shockLeftPct, "--effort-heat": effortRatio })}
       >
         <div aria-hidden="true" className="quick-deck-glow" style={cssVars({ "--glow-x": glowX, "--glow-op": glowOpacity, "--glow-scale": glowScale })} />
         {flowTier === "max" && <div aria-hidden="true" className="quick-deck-aurora" />}

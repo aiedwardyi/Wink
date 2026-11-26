@@ -319,6 +319,43 @@ describe("Quick picker style", () => {
     expect(effort()).toBe("medium");
   });
 
+  it("names the score column and its source on hover and on a long press", async () => {
+    await mountPicker(atHigh, [claude, codex]);
+    await act(async () => triggerBtn().click());
+    const head = quickCard()!.querySelector<HTMLElement>("[data-quick-score-head]")!;
+    expect(head.textContent).toBe("Intelligence");
+    expect(head.title).toBe("Artificial Analysis Intelligence Index v5.0.1");
+
+    const wait = (ms: number) => act(() => new Promise((resolve) => setTimeout(resolve, ms)));
+    await act(async () => { head.dispatchEvent(new window.PointerEvent("pointerdown", { pointerType: "touch", bubbles: true })); });
+    await wait(300);
+    expect(quickCard()!.querySelector("[data-quick-score-tip]")).toBeNull();
+    await wait(250);
+    expect(quickCard()!.querySelector("[data-quick-score-tip]")?.textContent).toBe("Artificial Analysis Intelligence Index v5.0.1");
+    await wait(2450);
+    expect(quickCard()!.querySelector("[data-quick-score-tip]")).toBeNull();
+  });
+
+  it.each([
+    ["claude", ["low", "medium", "high", "xhigh", "max"]],
+    ["muse", ["minimal", "low", "medium", "high", "xhigh", "max"]],
+    ["grok", ["low", "medium", "high"]],
+  ] as const)("steps effort heat up at every %s level to full at the top", async (id, levels) => {
+    const engine = makeInstance(id, `${id}Agent`, [{ id: `${id}-1`, label: id }], [...levels]);
+    await mountPicker({ instanceId: id, model: `${id}-1`, effort: levels[0], mode: "pinned" }, [engine]);
+    await act(async () => triggerBtn().click());
+    expect([...quickCard()!.querySelectorAll("[data-quick-effort]")].map((el) => el.getAttribute("data-quick-effort"))).toEqual(levels);
+    const heats: number[] = [];
+    for (const level of levels) {
+      await click(`[data-quick-effort="${level}"]`);
+      heats.push(Number(quickCard()!.querySelector<HTMLElement>("[data-quick-effort-deck]")!.style.getPropertyValue("--effort-heat")));
+    }
+    heats.forEach((heat, i) => expect(heat).toBeGreaterThan(i ? heats[i - 1]! : 0));
+    expect(heats.at(-1)).toBe(1);
+    const sheet = readFileSync(join(here, "QuickModelPicker.css"), "utf8");
+    expect(sheet).toMatch(/\.quick-thumb-body \{[^}]*var\(--effort-heat/);
+  });
+
   it.each(["dial", "list", "chart"] as const)("leaves the %s header button as it is today at Max", async (view) => {
     await mountPicker({ ...atHigh, effort: "max" }, [claude], view);
     expect(triggerBtn().classList.contains("quick-header-max")).toBe(false);

@@ -212,6 +212,13 @@
 .quick-lab-live { position: absolute; top: 4px; right: 5px; width: 4px; height: 4px; border-radius: 999px; background: var(--quick-dot); }
 
 .quick-models-scroll { position: relative; z-index: 1; min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 2px 12px 9px; }
+.quick-models-head { position: relative; display: flex; justify-content: flex-end; gap: 8px; height: 16px; padding: 0 38px 0 12px; }
+.quick-score-head { align-self: center; font-size: 10.5px; font-weight: 500; line-height: 1; color: var(--color-ink-secondary); cursor: help; -webkit-touch-callout: none; }
+.quick-score-tip {
+  position: absolute; top: calc(100% + 2px); right: 12px; z-index: 5; max-width: calc(100% - 24px); padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--color-hairline) 60%, transparent); border-radius: 8px;
+  background: var(--color-panel); color: var(--color-ink); font-size: 12px; line-height: 1.35; box-shadow: 0 6px 18px rgb(0 0 0 / 0.32);
+}
 .quick-models { position: relative; display: flex; flex-direction: column; gap: 2px; }
 .quick-hover-pill {
   position: absolute; top: 0; left: 0; right: 0; height: 34px; border-radius: 8px; pointer-events: none; opacity: 0;
@@ -244,7 +251,7 @@
 
 .quick-effort-deck {
   position: relative; z-index: 1; flex-shrink: 0; overflow: hidden; padding: 11px 12px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--color-hairline) 52%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--quick-accent) calc(var(--effort-heat, 0) * 30%), color-mix(in srgb, var(--color-hairline) 52%, transparent));
   background: color-mix(in srgb, var(--color-inset) 48%, var(--color-panel));
 }
 .quick-effort-deck[data-flow="xhigh"] {
@@ -299,7 +306,7 @@
 
 .quick-effort-head { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .quick-effort-meta { display: flex; min-width: 0; align-items: baseline; gap: 7px; }
-.quick-effort-label { font: 600 10.5px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-ink-secondary); }
+.quick-effort-label { flex-shrink: 0; white-space: nowrap; font-size: 12.5px; font-weight: 600; letter-spacing: 0.01em; color: var(--color-ink); }
 .quick-effort-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--color-ink-secondary); }
 .quick-effort-deck[data-flow="xhigh"] .quick-effort-note { color: color-mix(in srgb, var(--quick-accent-ink) 74%, var(--color-ink-secondary)); }
 .quick-effort-deck[data-flow="max"] .quick-effort-note { color: var(--quick-accent-ink); font-weight: 500; }
@@ -331,7 +338,7 @@
 }
 @keyframes quick-bar-breathe { 0%, 100% { transform: scaleY(0.94); opacity: 0.9; } 50% { transform: scaleY(1.04); opacity: 1; } }
 
-.quick-effort-readout { display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; color: var(--color-ink); transform-origin: right center; }
+.quick-effort-readout { display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; color: color-mix(in srgb, var(--quick-accent-ink) calc(var(--effort-heat, 0) * 60%), var(--color-ink)); transform-origin: right center; }
 .quick-effort-deck[data-flow="xhigh"] .quick-effort-readout { color: color-mix(in srgb, var(--quick-accent-ink) 78%, var(--color-ink)); }
 .quick-effort-deck[data-flow="max"] .quick-effort-readout {
   color: var(--quick-accent-ink);
@@ -340,7 +347,7 @@
 
 .quick-effort-track {
   position: relative; z-index: 2; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); padding: 3px 3px 9px;
-  border: 1px solid color-mix(in srgb, var(--color-hairline) 62%, transparent); border-radius: 10px; background: var(--color-inset); overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--quick-accent) calc(var(--effort-heat, 0) * 20%), color-mix(in srgb, var(--color-hairline) 62%, transparent)); border-radius: 10px; background: var(--color-inset); overflow: hidden;
 }
 .quick-effort-deck[data-flow="xhigh"] .quick-effort-track {
   border-color: color-mix(in srgb, var(--quick-accent) 28%, var(--color-hairline));
@@ -376,8 +383,9 @@
 }
 .quick-thumb-body {
   position: relative; width: 100%; height: 100%; border-radius: inherit; overflow: hidden;
-  background: var(--color-raised); border: 1px solid color-mix(in srgb, var(--quick-accent) 32%, var(--color-hairline));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1), 0 2px 8px rgb(0 0 0 / 0.32);
+  background: color-mix(in srgb, var(--quick-accent) calc(var(--effort-heat, 0) * 9%), var(--color-raised));
+  border: 1px solid color-mix(in srgb, var(--quick-accent) calc(24% + var(--effort-heat, 0) * 24%), var(--color-hairline));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1), 0 2px 8px rgb(0 0 0 / 0.32), 0 0 calc(var(--effort-heat, 0) * 10px) color-mix(in srgb, var(--quick-accent) calc(var(--effort-heat, 0) * 22%), transparent);
 }
 .quick-effort-deck[data-flow="xhigh"] .quick-thumb-body {
   border-color: color-mix(in srgb, var(--quick-accent) 54%, var(--color-hairline));
