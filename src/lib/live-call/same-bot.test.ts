@@ -4,6 +4,7 @@ import type { Message } from "@/state/store-types";
 import { READY_MS, VOICE_OUT, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
 import { SameBotCall } from "./same-bot";
+import { sameBotSetup } from "../../../server/same-bot-call.ts";
 
 class FakeEngine implements LiveEngine {
   events!: LiveEvents;
@@ -147,17 +148,337 @@ describe("same-bot call", () => {
     expect(s.engine().texts).toEqual([]);
   });
 
-  it("keeps the mic shut while it reads, so the voice never hears itself", async () => {
+  it("his words close to the read's still stop it and are sent", async () => {
+    for (const [reply, his] of [["The build passed on step three.", "No, the build failed on step two."], ["배포가 3단계에서 실패했습니다.", "잠깐만, 그거 말고 테스트 결과 알려줘"]]) {
+      const s = await started();
+      answered(s, reply);
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(reply);
+      s.engine().events.turnDone();
+      s.audio.mic!(loudFrame());
+      s.engine().events.heard(his);
+      expect(s.audio.flushed).toBe(1);
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(["tell me", his]);
+    }
+  });
+
+  it("stops reading when he talks over it, and sends what he said", async () => {
     const s = await started();
-    answered(s, "Here is a reply long enough to read.");
-    expect(s.engine().frames).toBe(1);
+    answered(s, "A reply long enough to be read aloud for a while.");
+    s.engine().events.answering();
+    s.engine().events.audio(new Int16Array(4));
+    s.engine().events.said("A reply long enough to be read aloud for a while.");
+    s.engine().events.turnDone();
+    expect(s.call.state().status).toBe("speaking");
+    const frames = s.engine().frames;
     s.audio.mic!(loudFrame());
-    expect(s.engine().frames).toBe(1);
-    expect(s.engine().paused).toBe(1);
-    s.engine().events.heard("echo of the reply");
+    expect(s.engine().frames).toBe(frames + 1);
+    s.engine().events.heard("wait, stop that");
+    expect(s.audio.flushed).toBe(1);
+    expect(s.call.state().status).toBe("listening");
+    s.engine().events.heard(" and check the logs");
+    s.engine().events.answering();
+    s.engine().events.turnDone();
+    expect(s.sent).toEqual(["tell me", "wait, stop that and check the logs"]);
+  });
+
+  it("its own voice coming back through the mic neither stops the read nor is sent", async () => {
+    const s = await started();
+    answered(s, "A reply long enough to be read aloud for a while.");
+    s.engine().events.answering();
+    s.engine().events.audio(new Int16Array(4));
+    s.engine().events.said("A reply long enough to be read aloud for a while.");
+    s.engine().events.turnDone();
+    s.audio.mic!(loudFrame());
+    s.engine().events.heard("a reply long enough");
+    s.engine().events.heard(" to be read");
+    s.engine().events.heard("yeah");
+    expect(s.audio.flushed).toBe(0);
+    expect(s.call.state().status).toBe("speaking");
+    s.engine().events.answering();
+    s.engine().events.turnDone();
+    s.audio.flush();
+    s.audio.onIdle();
+    expect(s.sent).toEqual(["tell me"]);
+  });
+
+  it("Google never cuts a read itself: its own voice, a nod or a noise heard mid-read is not sent and the rest is still read", async () => {
+    const googleCuts = sameBotSetup("Atlas").realtimeInputConfig.activityHandling !== "NO_INTERRUPTION";
+    for (const heard of ["first i checked the build", "Yeah.", ""]) {
+      const s = await started();
+      answered(s, "First I checked the build. Then I ran the tests.");
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said("First I checked the build.");
+      s.audio.mic!(loudFrame());
+      if (googleCuts) {
+        s.engine().events.interrupted();
+        s.engine().events.turnDone();
+      }
+      if (heard) s.engine().events.heard(heard);
+      if (!googleCuts) s.engine().events.turnDone();
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(["tell me"]);
+      expect(s.engine().texts).toEqual(["[READ]\nFirst I checked the build.", "[READ]\nThen I ran the tests."]);
+    }
+  });
+
+  it("its own voice heard back a little wrong is still its own: a misheard word, a number in words, a contraction spelled out", async () => {
+    for (const [reply, echo] of [
+      ["A reply long enough to be read aloud for a while.", "a reply along enough to be red aloud"],
+      ["PR 2148 merged at 5 PM.", "pr twenty one forty eight merged at five pm"],
+      ["It's done and I'm deploying it now.", "it is done and i am deploying it now"],
+      ["A reply long enough to be read aloud for a while.", "a reply long enough to read aloud for a while"],
+      ["First I checked the build and then the tests.", "first i checked the bill and then the tests"],
+      ["A reply long enough to be read aloud for a while.", "a reply long enough to be read out aloud for a while"],
+      ["That plan costs $20 a month and the build is 50% done.", "that plan costs twenty dollars a month and the build is fifty percent done"],
+      ["배포가 3단계에서 실패했습니다. 로그를 확인해 주세요.", "배포가 3 단계에서 실패했습니다"],
+      ["배포가 3단계에서 실패했습니다. 로그를 확인해 주세요.", "배포가 3단계에서 실패했읍니다"],
+      ["배포가 3단계에서 실패했습니다. 로그를 확인해 주세요.", "배포가 삼단계에서 실패했습니다"],
+    ] as const) {
+      const s = await started();
+      answered(s, reply);
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(reply);
+      s.engine().events.turnDone();
+      s.audio.mic!(loudFrame());
+      s.engine().events.heard(echo);
+      expect(s.audio.flushed).toBe(0);
+      expect(s.call.state().status).toBe("speaking");
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(["tell me"]);
+    }
+  });
+
+it("its own voice transcribed after the read ended is still its own, and what he says once Google's turn for it ends is his", async () => {
+    for (const [during, late] of [["a reply long enough to be", " read aloud for a while"], ["", "a reply long enough to be read aloud for a while"], ["a reply long enough to be read aloud for a", " while."]]) {
+      const s = await started();
+      answered(s, "A reply long enough to be read aloud for a while.");
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said("A reply long enough to be read aloud for a while.");
+      s.engine().events.turnDone();
+      s.audio.mic!(loudFrame());
+      if (during) s.engine().events.heard(during);
+      s.audio.flush();
+      s.audio.onIdle();
+      expect(s.call.state().status).toBe("listening");
+      s.engine().events.heard(late);
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(["tell me"]);
+      expect(s.call.state().status).toBe("listening");
+      say(s, "yes");
+      expect(s.sent).toEqual(["tell me", "yes"]);
+    }
+  });
+
+  it("a sound during the read that Google gives no turn does not hold back his answer after it", async () => {
+    const question = "Should I go ahead and deploy it, or keep the old build?";
+    for (const during of ["", "should i go ahead and deploy it"]) {
+      for (const his of ["Yes.", "Okay.", "네.", "Go ahead.", "Deploy it.", "Keep the old build."]) {
+        const s = await started();
+        answered(s, question);
+        s.engine().events.answering();
+        s.engine().events.audio(new Int16Array(4));
+        s.engine().events.said(question);
+        s.engine().events.turnDone();
+        s.audio.mic!(loudFrame());
+        if (during) s.engine().events.heard(during);
+        s.audio.flush();
+        s.audio.onIdle();
+        say(s, his);
+        expect(s.sent).toEqual(["tell me", his]);
+      }
+    }
+    const s = await started();
+    answered(s, "First I checked the build. Then I ran the tests. Finally I looked at the deploy log.");
+    for (const part of ["First I checked the build.", "Then I ran the tests.", "Finally I looked at the deploy log."]) {
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(part);
+      if (part.startsWith("First")) s.audio.mic!(loudFrame());
+      s.engine().events.turnDone();
+    }
+    s.audio.flush();
+    s.audio.onIdle();
+    say(s, "Yes.");
+    expect(s.sent).toEqual(["tell me", "Yes."]);
+  });
+
+  it("words held as maybe its own voice after the read are his once Google's turn for them ends, unless they go on its own words", async () => {
+    const question = "Should I go ahead and deploy it?";
+    for (const his of ["Yes, go ahead.", "Go ahead.", "Deploy it."]) {
+      const s = await started();
+      answered(s, question);
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(question);
+      s.engine().events.turnDone();
+      s.audio.mic!(loudFrame());
+      s.audio.flush();
+      s.audio.onIdle();
+      s.engine().events.heard(his);
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(["tell me", his]);
+    }
+    const s = await started();
+    answered(s, question);
+    s.engine().events.answering();
+    s.engine().events.audio(new Int16Array(4));
+    s.engine().events.said(question);
+    s.engine().events.turnDone();
+    s.audio.mic!(loudFrame());
+    s.engine().events.heard("should i go ahead and");
+    s.audio.flush();
+    s.audio.onIdle();
+    s.engine().events.heard(" deploy it");
     s.engine().events.answering();
     s.engine().events.turnDone();
     expect(s.sent).toEqual(["tell me"]);
+  });
+
+  it("its own voice leaking into the mic through the read is still its own after the read, even after a sound", async () => {
+    const leak = () => new Int16Array(640).fill(4_000).buffer;
+    const question = "Should I go ahead and deploy it, or keep the old build?";
+    for (const [his, sent] of [["", []], [" Yes.", ["Yes."]], [" What time is it?", ["What time is it?"]]] as const) {
+      const s = await started();
+      answered(s, question);
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(question);
+      s.engine().events.turnDone();
+      for (let i = 0; i < 25; i++) s.audio.mic!(leak());
+      s.engine().events.heard("should i go ahead and deploy it");
+      s.audio.flush();
+      s.audio.onIdle();
+      s.audio.mic!(loudFrame());
+      s.engine().events.heard(" or keep the old build");
+      if (his) s.engine().events.heard(his);
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(["tell me", ...sent]);
+    }
+  });
+
+  it("his short answer after a read the mic heard all through is his: a nod, the read's own words, a no", async () => {
+    const leak = () => new Int16Array(640).fill(4_000).buffer;
+    const question = "Should I go ahead and deploy it, or keep the old build?";
+    for (const his of ["Yes.", "Okay.", "네.", "Keep the old build.", "No, keep the old build."]) {
+      const s = await started();
+      answered(s, question);
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(question);
+      s.engine().events.turnDone();
+      for (let i = 0; i < 25; i++) s.audio.mic!(leak());
+      s.engine().events.heard("should i go ahead and deploy it");
+      s.audio.flush();
+      s.audio.onIdle();
+      say(s, his);
+      expect(s.sent).toEqual(["tell me", his]);
+    }
+  });
+
+  it("a correction he talks over the read with is his: a not or another number, while the same number in words is its own", async () => {
+    for (const [reply, heard, his] of [
+      ["I think we should merge it now.", "I think we should not merge it now", true],
+      ["Do delete the production database.", "do not delete the production database", true],
+      ["The meeting is at 5 PM.", "the meeting is at six pm", true],
+      ["Set the timeout to 30 seconds.", "set the timeout to 60 seconds", true],
+      ["Deploy version 123 tonight.", "deploy version 999 tonight", true],
+      ["The meeting is at 5 PM.", "the meeting is at five pm", false],
+      ["Set the timeout to 30 seconds.", "set the timeout to thirty seconds", false],
+    ] as const) {
+      const s = await started();
+      answered(s, reply);
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said(reply);
+      s.engine().events.turnDone();
+      s.audio.mic!(loudFrame());
+      s.engine().events.heard(heard);
+      expect(s.audio.flushed).toBe(his ? 1 : 0);
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(his ? ["tell me", heard] : ["tell me"]);
+    }
+  });
+
+  it("a short read written back after it ended is its own, and his answer after it is his", async () => {
+    const s = await started();
+    answered(s, "All done.");
+    s.engine().events.answering();
+    s.engine().events.audio(new Int16Array(4));
+    s.engine().events.said("All done.");
+    s.engine().events.turnDone();
+    s.audio.mic!(loudFrame());
+    s.audio.flush();
+    s.audio.onIdle();
+    s.engine().events.heard("all done");
+    s.engine().events.heard(" Thanks.");
+    s.engine().events.answering();
+    s.engine().events.turnDone();
+    expect(s.sent).toEqual(["tell me", "Thanks."]);
+  });
+
+  it("his own words heard after the read ended still go to the bot once", async () => {
+    const s = await started();
+    answered(s, "A reply long enough to be read aloud for a while.");
+    s.engine().events.answering();
+    s.engine().events.audio(new Int16Array(4));
+    s.engine().events.said("A reply long enough to be read aloud for a while.");
+    s.engine().events.turnDone();
+    s.audio.mic!(loudFrame());
+    s.audio.flush();
+    s.audio.onIdle();
+    s.engine().events.heard("wait, what about");
+    s.engine().events.heard(" the deploy logs");
+    s.engine().events.answering();
+    s.engine().events.turnDone();
+    expect(s.sent).toEqual(["tell me", "wait, what about the deploy logs"]);
+  });
+
+  it("a nod followed by its own voice neither stops the read nor is sent; a nod followed by his words stops it", async () => {
+    for (const [nod, echo] of [["Yeah.", " long enough to be read aloud"], ["Mm.", " long enough to be read aloud"], ["Okay.", " a reply long enough to be read aloud for a while"]]) {
+      const s = await started();
+      answered(s, "A reply long enough to be read aloud for a while.");
+      s.engine().events.answering();
+      s.engine().events.audio(new Int16Array(4));
+      s.engine().events.said("A reply long enough to be read aloud for a while.");
+      s.engine().events.turnDone();
+      s.audio.mic!(loudFrame());
+      s.engine().events.heard(nod);
+      s.engine().events.heard(echo);
+      expect(s.audio.flushed).toBe(0);
+      expect(s.call.state().status).toBe("speaking");
+      s.audio.flush();
+      s.audio.onIdle();
+      s.engine().events.answering();
+      s.engine().events.turnDone();
+      expect(s.sent).toEqual(["tell me"]);
+    }
+    const s = await started();
+    answered(s, "A reply long enough to be read aloud for a while.");
+    s.engine().events.answering();
+    s.engine().events.audio(new Int16Array(4));
+    s.engine().events.said("A reply long enough to be read aloud for a while.");
+    s.engine().events.turnDone();
+    s.audio.mic!(loudFrame());
+    s.engine().events.heard("Yeah.");
+    expect(s.audio.flushed).toBe(0);
+    s.engine().events.heard(" Wait, stop.");
+    expect(s.audio.flushed).toBe(1);
+    s.engine().events.answering();
+    s.engine().events.turnDone();
+    expect(s.sent).toEqual(["tell me", "Yeah. Wait, stop."]);
   });
 
   it("stops reading at a tap and listens again", async () => {

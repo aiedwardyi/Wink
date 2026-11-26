@@ -599,6 +599,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     <div
       ref={frame}
       className="timeline-canvas"
+      data-no-swipe
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

@@ -7,7 +7,7 @@ import type { VerifyCardData } from "../../shared/live-verify";
 import { applyLocale } from "@/lib/i18n";
 import { noteMemoryFrame } from "@/lib/memory-clean-events";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
-import { closeShow, closeTab, paneTabs, showCheck, showItem, showMap, showMedia, showTimeline, tabKey, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
+import { closeShow, closeTab, paneTabs, showCheck, showItem, showMap, showMedia, showTimeline, tabKey, useCheckThread, useShowItem, useTimelineThread, type ShowItem } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { applyPicks, parseTimeline } from "../../server/picks";
 import { ShowPane } from "./ShowPane";
@@ -271,6 +271,69 @@ it.each([false, true])("closes from the far right of the header, phone %s", asyn
   function Probe() { shown = useShowItem(); return null; }
   await act(async () => root.render(createElement(Probe)));
   expect(shown).toBeNull();
+});
+
+const phoneMotion = (reduced = false) => vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width") || reduced && query.includes("reduced-motion"), addEventListener() {}, removeEventListener() {} })));
+
+it("a right swipe on a phone slides the pane off to the right and closes it with the Bot Details tick; a short drag springs back", async () => {
+  phoneMotion();
+  const vibrate = vi.fn();
+  Object.defineProperty(navigator, "vibrate", { configurable: true, value: vibrate });
+  await act(async () => showItem(item("C:\\w\\a.png", "image")));
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  const aside = document.querySelector<HTMLElement>("aside.show-pane")!;
+  const stage = aside.querySelector(".show-stage")!;
+  await touch("touchstart", [[100, 300]], stage, 400);
+  await touch("touchmove", [[140, 302]], stage, 200);
+  expect(aside.style.transform).toMatch(/^translate3d\(40px/);
+  await touch("touchend", [], stage, 200);
+  await until(() => !aside.style.transform);
+  expect(aside.style.transform).toBe("");
+  expect(vibrate).not.toHaveBeenCalled();
+  await touch("touchstart", [[100, 300]], stage, 400);
+  await touch("touchmove", [[200, 300]], stage);
+  await touch("touchmove", [[300, 300]], stage);
+  await touch("touchend", [], stage);
+  expect(aside.style.transform).toMatch(new RegExp(`^translate3d\\(${window.innerWidth}px`));
+  await until(() => vibrate.mock.calls.length > 0);
+  expect(vibrate).toHaveBeenCalledWith(10);
+  let shown: ShowItem | null = item("x", "image");
+  function Probe() { shown = useShowItem(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(shown).toBeNull();
+  Reflect.deleteProperty(navigator, "vibrate");
+});
+
+it("a right swipe under reduced motion closes the phone pane without the slide", async () => {
+  phoneMotion(true);
+  await act(async () => showItem(item("C:\\w\\a.png", "image")));
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  const aside = document.querySelector<HTMLElement>("aside.show-pane")!;
+  const stage = aside.querySelector(".show-stage")!;
+  await touch("touchstart", [[100, 300]], stage, 400);
+  await touch("touchmove", [[300, 300]], stage);
+  expect(aside.style.transform).toBe("");
+  await touch("touchend", [], stage);
+  let shown: ShowItem | null = item("x", "image");
+  function Probe() { shown = useShowItem(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(shown).toBeNull();
+});
+
+it("a right swipe on the desktop pane does nothing", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+  await act(async () => showItem(item("C:\\w\\a.png", "image")));
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  const aside = host.querySelector<HTMLElement>("aside.show-pane")!;
+  const stage = aside.querySelector(".show-stage")!;
+  await touch("touchstart", [[100, 300]], stage, 400);
+  await touch("touchmove", [[300, 300]], stage);
+  expect(aside.style.transform).toBe("");
+  await touch("touchend", [], stage);
+  let shown: ShowItem | null = null;
+  function Probe() { shown = useShowItem(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(shown).not.toBeNull();
 });
 
 it("speaks Korean", async () => {
@@ -823,6 +886,28 @@ it("sorts a text-only pick by its day, below an older day's timed pick", async (
   expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Header", "Forum"]);
   expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-14", "2026-11-17"]);
   expect(named("Forum").querySelector("time")).toBeNull();
+});
+
+it("a right drag on a phone that starts on the tab strip or the Timeline canvas stays theirs: the pane neither moves nor closes", async () => {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
+  pickList();
+  await act(async () => showTimeline("t1"));
+  await openTimeline("b-phone-swipe");
+  await until(() => Boolean(document.querySelector(".timeline-canvas")));
+  const aside = document.querySelector<HTMLElement>("aside.show-pane")!;
+  for (const from of [document.querySelector(".show-pane-tabs [role='tab']")!, document.querySelector(".timeline-canvas")!]) {
+    await touch("touchstart", [[100, 300]], from, 400);
+    await touch("touchmove", [[200, 300]], from);
+    expect(aside.style.transform).toBe("");
+    await touch("touchmove", [[300, 300]], from);
+    await touch("touchend", [], from);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
+    expect(aside.style.transform).toBe("");
+  }
+  let thread: string | null = null;
+  function Probe() { thread = useTimelineThread(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(thread).toBe("t1");
 });
 
 it("moves with scroll and a drag, zooms with Ctrl+scroll and a pinch, and shows the zoom in the corner", async () => {

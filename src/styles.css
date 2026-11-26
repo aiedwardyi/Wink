@@ -2260,7 +2260,14 @@ html:lang(ko) {
     flex-direction: column;
     align-items: flex-start;
     gap: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
     counter-reset: term-choice;
+  }
+
+  [data-term-choices] > button > svg {
+    display: none;
   }
 
   [data-pending-approval] [data-term-choices] {
@@ -4843,7 +4850,7 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-caret, .animate-msg-in, .animate-pop-in, .animate-panel-in, .animate-fade-in { animation: none; }
+  .animate-caret, .animate-msg-in, .animate-pop-in, .animate-panel-in, .animate-fade-in, .animate-step-in { animation: none; }
   .thinking-sheen { display: none; }
   .orbit-ring { display: none; }
   .turn-mascot-in, .turn-mascot-out { animation: none; }
@@ -5474,6 +5481,20 @@ button:disabled.bg-danger {
 }
 
 /* A new question over the composer takes one quicker pulse. */
+[data-orbit-composer-frame][data-dock-attached] {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+[data-orbit-composer-frame][data-dock-attached]:not(:focus-within) {
+  border-color: color-mix(in oklab, var(--color-hairline) 70%, transparent) !important;
+  border-top-color: color-mix(in oklab, var(--color-hairline) 40%, transparent) !important;
+}
+
+[data-orbit-composer-frame][data-dock-attached]:not(:focus-within) > [data-orbit-rainbow] {
+  opacity: 0;
+}
+
 [data-pending-question].arrival-glow::before { animation-duration: 1.2s; }
 
 /* The phone menu sits flush with the chat title; pull its rings in so they never touch it. */

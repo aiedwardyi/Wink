@@ -22,7 +22,7 @@ let fakeClaudeDump: string;
 let cookie = "";
 const origin = () => `http://127.0.0.1:${port}`;
 
-const bot = z.object({ bot: z.object({ id: z.string(), threadId: z.string() }).passthrough() });
+const bot = z.object({ bot: z.object({ id: z.string(), threadId: z.string(), name: z.string(), color: z.string() }).passthrough() });
 
 const api = async (method: "GET" | "POST" | "PATCH", path: string, body?: object) => {
   const init: RequestInit = { method };
@@ -91,6 +91,7 @@ describe("internal routes", () => {
       ["POST", "/api/internal/call-api"], ["POST", "/api/internal/generate-image"], ["POST", "/api/internal/show-image"],
       ["POST", "/api/internal/create-bot"], ["POST", "/api/internal/task-state"], ["POST", "/api/internal/react"],
       ["POST", "/api/internal/keep-going"], ["POST", "/api/internal/wake"], ["POST", "/api/internal/request-credential"],
+      ["POST", "/api/internal/post-to-group"],
       ["GET", "/api/internal/agents"], ["GET", `/api/internal/usage?self=${owner.id}`], ["PUT", "/api/internal/terminal-bridge"],
     ];
     for (const [method, path] of routes) {
@@ -125,5 +126,52 @@ describe("internal routes", () => {
     expect(own.status).toBe(409);
     expect(z.object({ error: z.string() }).parse(await own.json()).error).toContain("No xAI API Key saved");
     expect((await call(other.id, other.threadId)).status).toBe(403);
+  });
+
+  it("posts one text message to a named group as the authenticated member", async () => {
+    const { bot: owner } = bot.parse((await api("POST", "/api/bots", {})).body);
+    const { bot: other } = bot.parse((await api("POST", "/api/bots", {})).body);
+    const groupId = z.object({ group: z.object({ id: z.string() }) });
+    const group = async (name: string, memberIds: string[]) => {
+      const created = await api("POST", "/api/groups", { name, memberIds });
+      expect(created.status).toBe(201);
+      return groupId.parse(created.body).group.id;
+    };
+    const target = await group("Launch Planning", [owner.id, other.id]);
+    const privateGroup = await group("Private Planning", [other.id]);
+    const firstDuplicate = await group("Weekly Notes", [owner.id]);
+    const secondDuplicate = await group("weekly notes", [owner.id]);
+    const headers = await agentsHeaders(api, fakeClaudeDump, owner.id, owner.threadId);
+    const path = "/api/internal/post-to-group";
+    const post = (body: string) => fetch(`${origin()}${path}`, { method: "POST", headers, body });
+    const message = "Research links\n- One\n- Two";
+
+    const valid = await post(JSON.stringify({ group: " launch planning ", text: message }));
+    expect(valid.status, await valid.text()).toBe(200);
+    const bootToken = await harnessToken(origin());
+    const bootPost = await fetch(`${origin()}${path}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${bootToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ group: "Launch Planning", text: message }),
+    });
+    expect(bootPost.status).toBe(403);
+    for (const body of [
+      { group: "Private Planning", text: message }, { group: "Missing", text: message }, { group: "Weekly Notes", text: message },
+      { group: "Launch Planning", text: 42 }, { group: "Launch Planning", text: " \t\n " },
+      { group: "Launch Planning", text: "\u0000" }, { group: "Launch Planning", text: "a".repeat(20_001) },
+      { group: "", text: message }, { text: message },
+      { group: "Launch Planning", text: message, fromBotId: other.id },
+    ]) {
+      expect((await post(JSON.stringify(body))).status, JSON.stringify({ ...body, text: String(body.text).slice(0, 80) })).toBe(400);
+    }
+    const result = await api("GET", "/api/bots?messages=50");
+    const snapshot = z.object({ groups: z.array(z.object({ id: z.string(), unread: z.boolean(), messages: z.array(z.unknown()) })) }).parse(result.body);
+    expect(snapshot.groups.find((room) => room.id === target)).toMatchObject({
+      unread: true,
+      messages: [expect.objectContaining({ role: "bot", kind: "text", text: message, from: { botId: owner.id, name: owner.name, color: owner.color } })],
+    });
+    for (const id of [privateGroup, firstDuplicate, secondDuplicate]) {
+      expect(snapshot.groups.find((room) => room.id === id)?.messages).toEqual([]);
+    }
   });
 });

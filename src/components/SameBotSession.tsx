@@ -1,4 +1,4 @@
-// The same-bot call's host: loaded only when a call is placed with "Same bot", so a Gemini voice call never runs this code.
+// The same-bot call's host: loaded only when a call is answered by "Same bot", so a Gemini voice call never runs this code.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { api, useStore, visibleMessages, type Bot, type Message } from "@/state/store";
@@ -11,7 +11,7 @@ import { GeminiLive } from "@/lib/live-call/gemini";
 import { SameBotCall } from "@/lib/live-call/same-bot";
 import { useCallVolume } from "@/lib/live-call/volume";
 import { sendInput } from "@/lib/usage-stats";
-import { post, publish, WORDS } from "./LiveCallBar";
+import { post, publish, useAnswerSwitch, WORDS } from "./LiveCallBar";
 
 export function SameBotSession({ active, bot }: { active: ActiveCall; bot: Bot }) {
   const { state, dispatch } = useStore();
@@ -23,7 +23,7 @@ export function SameBotSession({ active, bot }: { active: ActiveCall; bot: Bot }
   /** The task each of this call's sends went to. */
   const sentOn = useRef(new Map<string, string>());
   const [live] = useState(() => {
-    const audio = new CallAudio(active.sound);
+    const audio = active.handoff?.audio ?? new CallAudio(active.sound);
     const call = new SameBotCall({
       botId: bot.id,
       engine: () => new GeminiLive(),
@@ -36,10 +36,12 @@ export function SameBotSession({ active, bot }: { active: ActiveCall; bot: Bot }
         dispatch({ type: "send", botId: target.current.id, text, threadId: target.current.threadId, sendId, onError: unsent, onRejected: unsent });
       },
     });
-    return { call, level: (mic: boolean) => audio.level(mic) };
+    if (active.handoff?.muted) call.mute(true);
+    return { call, audio, level: (mic: boolean) => audio.level(mic) };
   });
   const { call } = live;
   const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
+  const moved = useAnswerSwitch(active, call, live.audio, snap);
   const owner = useOnCall();
   const mounted = useRef(false);
   const configured = Boolean(state.config?.gemini?.configured);
@@ -77,11 +79,12 @@ export function SameBotSession({ active, bot }: { active: ActiveCall; bot: Bot }
       queueMicrotask(() => {
         if (mounted.current) return;
         call.end();
+        if (moved.current) return;
         endCall(bot.id);
         onEnd();
       });
     };
-  }, [bot.id, call, onEnd]);
+  }, [bot.id, call, moved, onEnd]);
 
   const owned = useRef(false);
   useEffect(() => {

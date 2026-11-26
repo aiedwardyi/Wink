@@ -53,6 +53,11 @@ class FakeEventSource {
 const PRESENCE_ROW_PX = 48;
 const VIEWPORT_PX = 400;
 const TRANSCRIPT_PX = 1000;
+// Tailwind spacing in px: n * 4, or an arbitrary [npx]
+const px = (cls: string, name: string, variant = "") => {
+  const found = cls.match(new RegExp(`(?:^| )${variant}(-?)${name}-(?:\\[(\\d+)px\\]|([\\d.]+))(?= |$)`));
+  return found ? (found[1] ? -1 : 1) * (found[2] ? Number(found[2]) : Number(found[3]) * 4) : 0;
+};
 
 const baseBot = {
   title: "",
@@ -102,7 +107,7 @@ afterEach(() => {
 });
 
 describe("ChatView reply settle", () => {
-  it.each(["user", "tools", "legacy"])("keeps the reply row and code card after a %s tail", async (tail) => {
+  it.each(["user", "tools", "legacy"])("streams a code reply in the live step line, then settles it as one reply row after a %s tail", async (tail) => {
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
     vi.stubGlobal("ResizeObserver", class {
@@ -132,42 +137,26 @@ describe("ChatView reply settle", () => {
       await render(current);
       await act(async () => { await sleep(300); });
       const user = host.querySelector('[data-orbit-message="user"]');
-      const row = host.querySelector('[data-orbit-message="bot"]');
-      const body = row?.querySelector("[data-orbit-message-body]");
-      const content = row?.querySelector("[data-orbit-message-content]");
-      const markdown = row?.querySelector(".chat-md");
-      const card = markdown?.firstElementChild;
-      const copy = card?.querySelector("button");
-      const code = card?.querySelector("pre");
-      expect.soft(body).not.toBeNull();
-      expect(copy).toBeTruthy();
-      const widths = [row?.className, body?.className, content?.className];
+      expect(host.querySelector('[data-orbit-message="bot"]')).toBeNull();
+      expect(host.querySelector("[data-live-step] pre")?.textContent).toContain("stable");
       await render(completed);
-      expect.soft(host.querySelectorAll('[data-orbit-message="bot"]')).toHaveLength(1);
-      expect.soft(host.querySelector('[data-orbit-message="bot"]')).toBe(row);
-      expect.soft(host.querySelector(".chat-md")).toBe(markdown);
-      expect.soft(host.querySelector('.chat-md button')).toBe(copy);
       live.current = { streaming: {}, reasoning: {}, signal: {}, turn: {} };
       await render({ ...completed, busy: false, activity: "idle" });
       await act(async () => { await sleep(600); });
-      const settled = host.querySelector('[data-orbit-message="bot"]');
-      expect.soft(settled).toBe(row);
-      expect.soft(settled?.querySelector("[data-orbit-message-body]")).toBe(body);
-      expect.soft(settled?.querySelector("[data-orbit-message-content]")).toBe(content);
-      expect.soft(settled?.querySelector(".chat-md")?.firstElementChild).toBe(card);
-      expect.soft(settled?.querySelector("pre")).toBe(code);
+      expect(host.querySelectorAll('[data-orbit-message="bot"]')).toHaveLength(1);
+      const row = host.querySelector('[data-orbit-message="bot"]');
+      const code = row?.querySelector("pre");
+      expect(row?.querySelector(".chat-md button")).toBeTruthy();
+      expect(code?.textContent).toContain("stable");
+      expect(host.querySelector("[data-live-step]")).toBeNull();
       expect.soft(host.querySelector('[data-orbit-message="user"]')).toBe(user);
-      expect.soft([
-        settled?.className,
-        settled?.querySelector("[data-orbit-message-body]")?.className,
-        settled?.querySelector("[data-orbit-message-content]")?.className,
-      ]).toEqual(widths);
       const followup = { ...userMsg("followup", "Next question"), parentId: reply.id, at: 3 };
       live.current = { streaming: { "thread-a": "Second reply" }, reasoning: {}, signal: {}, turn: { "thread-a": "0:followup" } };
       await render({ ...completed, messages: [...completed.messages, followup], activeLeafId: tail === "legacy" ? undefined : followup.id });
-      expect(host.querySelectorAll('[data-orbit-message="bot"]')).toHaveLength(2);
+      expect(host.querySelectorAll('[data-orbit-message="bot"]')).toHaveLength(1);
       expect(host.querySelector('[data-orbit-message="bot"]')).toBe(row);
       expect(row?.querySelector("pre")).toBe(code);
+      expect(host.querySelector("[data-live-step]")?.textContent).toContain("Second reply");
     } finally {
       await act(async () => root.unmount());
       host.remove();
@@ -926,6 +915,70 @@ describe("ChatView transcript window", () => {
       await unmount();
     }
   });
+
+  it("seats Jump to latest in the dock above the composer, never over a row", async () => {
+    const { host, render, unmount } = await mount();
+    const messages = Array.from({ length: 370 }, (_, i) => userMsg(`m${i}`, `row ${i};`));
+    try {
+      await render({ ...botA, messages });
+      await act(async () => button(host, "Show earlier messages")!.click());
+      const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => VIEWPORT_PX });
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => TRANSCRIPT_PX });
+      scroller.scrollTop = 0;
+      await act(async () => scroller.dispatchEvent(new Event("scroll")));
+      const jump = button(host, "Jump to latest")!;
+      expect(jump.closest("[data-dock-rail]")).not.toBeNull();
+      // the rail shares the dock with the composer, below the transcript, so the pill takes its own line
+      expect(jump.closest("[data-dock-rail]")!.parentElement!.querySelector("[data-orbit-composer-frame]")).not.toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it.each(["chat", "room"] as const)("keeps the %s's Latest touch target inside the dock rail, off the transcript and the composer", async (kind) => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const messages = Array.from({ length: 370 }, (_, i) => userMsg(`m${i}`, `row ${i};`));
+    const group: Group = { id: "g", threadId: "thread-g", name: "Room", memberIds: ["a", "b"], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 1, setupCompletedAt: 1, hasMore: false, messages };
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, kind === "chat" ? createElement(ChatView, { bot: { ...botA, messages } }) : createElement(GroupView, { group }))));
+      await act(async () => button(host, "Show earlier messages")!.click());
+      const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => VIEWPORT_PX });
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => TRANSCRIPT_PX });
+      scroller.scrollTop = 0;
+      await act(async () => scroller.dispatchEvent(new Event("scroll")));
+      const jump = host.querySelector<HTMLElement>("[data-jump-latest]")!;
+      const rail = jump.closest<HTMLElement>("[data-dock-rail]")!.className;
+      // happy-dom has no layout: the rail's padding is all the room between the pill and the transcript or composer
+      const reach = -px(jump.className, "inset-y", "pointer-coarse:after:");
+      const pill = 2 + 2 * px(jump.className, "py") + px(jump.className, "leading");
+      expect(reach).toBeGreaterThan(0);
+      expect(reach).toBeLessThanOrEqual(px(rail, "py"));
+      expect(pill + 2 * reach).toBeGreaterThanOrEqual(36);
+      expect(px(jump.className, "inset-x", "pointer-coarse:after:")).toBeLessThan(0);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("keeps every waiting question out of the transcript while the dock holds them", async () => {
+    const { host, render, unmount } = await mount();
+    const ask = (id: string, subtitle: string): Message => ({ id, at: 1, role: "bot", kind: "options", card: { title: "A asks", subtitle, options: ["Yes", "No"], askUser: true, staysOpen: true } });
+    try {
+      await render({ ...botA, busy: false, messages: [userMsg("u1", "two things"), ask("q1", "Older question?"), ask("q2", "Newest question?")] });
+      expect(host.querySelectorAll('[data-ask-user-record="waiting"]')).toHaveLength(0);
+      expect(host.querySelector("[data-pending-question]")).not.toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
 });
 
 describe("a box opening in a row", () => {
@@ -1490,7 +1543,7 @@ describe("ChatView queued sends", () => {
     return { host, root, order, row };
   };
 
-  it("keeps a waiting send below the thinking row and the reply above it", async () => {
+  it("keeps a waiting send below the thinking row and the live reply in the step line", async () => {
     const { host, root, order, row } = await mount(false);
     try {
       expect(order()).toEqual(["ua", "thinking", "q1"]);
@@ -1499,12 +1552,14 @@ describe("ChatView queued sends", () => {
 
       live.current = { streaming: { "thread-a": "answer for A" }, reasoning: {}, signal: { "thread-a": "started" }, turn: { "thread-a": "0:ua" } };
       await act(async () => show({ ...botA }));
-      expect(order()).toEqual(["ua", "stream:thread-a:ua", "thinking", "q1"]);
+      expect(order()).toEqual(["ua", "thinking", "q1"]);
+      expect(host.querySelector("[data-live-step]")?.textContent).toContain("answer for A");
       expect(row("q1")).toBe(waiting);
 
       live.current = { streaming: {}, reasoning: {}, signal: { "thread-a": "started" }, turn: {} };
       await act(async () => show({ ...botA, messages: [...botA.messages, replyA], activeLeafId: "reply-a" }));
-      expect(order()).toEqual(["ua", "reply-a", "thinking", "q1"]);
+      expect(order()).toEqual(["ua", "thinking", "q1"]);
+      expect(host.querySelector("[data-live-step]")?.textContent).toContain(replyA.text);
       expect(row("q1")).toBe(waiting);
       expect(row("q1")?.textContent).toContain("Sends next");
     } finally {
@@ -1517,7 +1572,7 @@ describe("ChatView queued sends", () => {
     const { host, root, order, row } = await mount(false);
     try {
       await act(async () => show({ ...botA, messages: [...botA.messages, replyA], activeLeafId: "reply-a" }));
-      expect(order()).toEqual(["ua", "reply-a", "thinking", "q1"]);
+      expect(order()).toEqual(["ua", "thinking", "q1"]);
       await act(async () => {
         send({ type: "consumePendingQueued", threadId: "thread-a", queueId: "q1" });
         show({ ...botA, messages: [...botA.messages, replyA, drained], activeLeafId: "ub" });
@@ -1627,7 +1682,9 @@ describe("docked reply mascot", () => {
         await render("First chunk");
         oldReads = 0;
         await render("First chunk, second chunk");
-        expect(host.querySelector(`[data-mid="stream:${view.threadId}:${tail.id}"]`)?.textContent).toContain("second chunk");
+        // a chat streams into its live step line, which this mock store does not re-notify; a room still streams a transcript row
+        if (kind === "direct") expect(host.querySelector("[data-live-step]")?.textContent).toContain("First chunk");
+        else expect(host.querySelector(`[data-mid="stream:${view.threadId}:${tail.id}"]`)?.textContent).toContain("second chunk");
         counts.push(oldReads);
       } finally {
         await act(async () => root.unmount());
@@ -1638,7 +1695,7 @@ describe("docked reply mascot", () => {
     expect(counts[1]).toBe(counts[0]);
   });
 
-  it("renders the mascot standalone before any text, then docks it in the live reply's action strip", async () => {
+  it("keeps the mascot standalone and shows live text in the step line above it", async () => {
     localStorage.setItem("omb-reply-style", "live");
     const { host, render, mascots, unmount } = await mount();
     try {
@@ -1646,65 +1703,59 @@ describe("docked reply mascot", () => {
       await render(botA);
       expect(host.querySelector('[data-orbit-message="bot"]')).toBeNull();
       expect(host.querySelector(".turn-presence [data-turn-mascot]")).not.toBeNull();
+      expect(host.querySelector("[data-live-step]")).toBeNull();
 
       live.current = working("thread-a", "Shoelaces were patented in 1790");
       await render({ ...botA });
-      const body = host.querySelector('[data-orbit-message="bot"] [data-orbit-message-body]');
-      expect(body?.textContent).toContain("Shoelaces were patented in 1790");
-      expect(body?.querySelector("[data-turn-mascot]")?.className).toContain("turn-mascot-in");
-      expect(host.querySelector(".turn-presence")).toBeNull();
+      expect(host.querySelector('[data-orbit-message="bot"]')).toBeNull();
+      expect(host.querySelector(".turn-presence [data-live-step]")?.textContent).toContain("Shoelaces were patented in 1790");
+      expect(host.querySelector(".turn-presence [data-turn-mascot]")?.className).toContain("turn-mascot-in");
       expect(mascots()).toHaveLength(1);
     } finally {
       await unmount();
     }
   });
 
-  it("leaves the strip in place with the reply actions at turn end", async () => {
+  it("shows the answer as a reply row with its actions at turn end", async () => {
     const { host, render, mascots, unmount } = await mount();
     const reply: Message = { id: "reply-a", parentId: "ua", at: 2, role: "bot", kind: "text", text: "Shoelaces were patented in 1790." };
     try {
       live.current = working("thread-a", "Shoelaces were patented in 1790.");
       await render(botA);
-      const body = host.querySelector('[data-orbit-message="bot"] [data-orbit-message-body]');
-      const strip = body?.className;
-      expect(strip).toContain("pb-8");
-      expect(body?.querySelector("[data-turn-mascot]")).not.toBeNull();
-      expect(body?.querySelector("[data-message-hover-actions]")).toBeNull();
+      expect(host.querySelector('[data-orbit-message="bot"]')).toBeNull();
+      expect(host.querySelector("[data-live-step]")?.textContent).toContain("Shoelaces were patented in 1790.");
 
       live.current = { streaming: {}, reasoning: {}, signal: {}, turn: {} };
       await render({ ...botA, busy: false, activity: "idle", messages: [...botA.messages, reply], activeLeafId: "reply-a" });
       const settled = host.querySelector('[data-orbit-message="bot"] [data-orbit-message-body]');
-      expect(settled).toBe(body);
-      expect(settled?.className).toBe(strip);
+      expect(settled?.textContent).toContain("Shoelaces were patented in 1790.");
       expect(settled?.querySelector("[data-message-hover-actions]")).not.toBeNull();
-      expect(settled?.querySelector("[data-turn-mascot]")?.className).toContain("turn-mascot-out");
-      expect(host.querySelector(".turn-presence")).toBeNull();
-      expect(mascots()).toHaveLength(1);
+      expect(host.querySelector("[data-live-step]")).toBeNull();
 
       await act(async () => { await sleep(320); });
       expect(mascots()).toHaveLength(0);
-      expect(host.querySelector('[data-orbit-message="bot"] [data-orbit-message-body]')).toBe(body);
-      expect(body?.className).toBe(strip);
+      expect(host.querySelector('[data-orbit-message="bot"] [data-orbit-message-body]')).toBe(settled);
     } finally {
       await unmount();
     }
   });
 
-  it("stands alone once reply text settles and docks again when the next reply streams", async () => {
+  it("replaces the live step line with each new text of the turn and never docks", async () => {
     const { host, render, mascots, unmount } = await mount();
     const first: Message = { id: "reply-1", parentId: "ua", at: 2, role: "bot", kind: "text", text: "Checking the logs." };
     const tool: Message = { id: "tool-1", parentId: "reply-1", at: 3, role: "bot", kind: "activity", tool: { name: "Read" } };
     const dockedIn = () => host.querySelector("[data-turn-mascot]")?.closest("[data-mid]")?.getAttribute("data-mid");
+    const step = () => host.querySelector(".turn-presence [data-live-step]")?.textContent;
     try {
       live.current = working("thread-a", "Checking the logs.");
       await render(botA);
-      expect(dockedIn()).toBe("stream:thread-a:ua");
+      expect(step()).toContain("Checking the logs.");
+      expect(dockedIn()).toBeUndefined();
 
       live.current = working("thread-a");
       await render({ ...botA, messages: [...botA.messages, first], activeLeafId: "reply-1" });
-      expect(host.querySelector(".turn-presence [data-turn-mascot]")).not.toBeNull();
-      expect(host.querySelector('[data-mid="reply-1"] [data-message-hover-actions]')).not.toBeNull();
-      expect(dockedIn()).toBeUndefined();
+      expect(step()).toContain("Checking the logs.");
+      expect(host.querySelector('[data-mid="reply-1"]')).toBeNull();
 
       await render({ ...botA, messages: [...botA.messages, first, tool], activeLeafId: "tool-1" });
       expect(host.querySelector(".turn-presence [data-turn-mascot]")).not.toBeNull();
@@ -1712,8 +1763,9 @@ describe("docked reply mascot", () => {
 
       live.current = working("thread-a", "All clear.", "tool-1");
       await render({ ...botA, messages: [...botA.messages, first, tool], activeLeafId: "tool-1" });
-      expect(dockedIn()).toBe("stream:thread-a:tool-1");
-      expect(host.querySelector(".turn-presence")).toBeNull();
+      expect(step()).toContain("All clear.");
+      expect(step()).not.toContain("Checking the logs.");
+      expect(dockedIn()).toBeUndefined();
       expect(mascots()).toHaveLength(1);
     } finally {
       await unmount();

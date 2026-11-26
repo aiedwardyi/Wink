@@ -56,7 +56,7 @@ import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.
 import { createUsageStats, type TurnFacts } from "./usage-stats.ts";
 import { watchLoopStalls } from "./loop-stalls.ts";
 import { openWhatsNew } from "./whats-new.ts";
-import { createRoomFixes, type RoomFixes } from "./room-fixes.ts";
+import { createRoomFixes, groupPostSchema, type RoomFixes } from "./room-fixes.ts";
 import { ghRun } from "./map-pr.ts";
 import { mapGit } from "./map-git.ts";
 import { openCallIntro } from "./call-intro.ts";
@@ -73,7 +73,7 @@ import { captureHostBotPicture, hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
-import { roomById } from "./rooms/db.ts";
+import { roomById, ROOM_TEXT_MAX } from "./rooms/db.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
 import { ownerRoomCode } from "./rooms/invites.ts";
 import { joinedRooms, leftByHand, myRoomBotThreads, roomTaskThreads, seatTaken } from "./rooms/joined.ts";
@@ -145,6 +145,7 @@ import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
+import { nextUsageOrder, parseUsageOrderBody, usageOrderStatus } from "./usage-order.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse, usageReportWithAge } from "./usage-refresh.ts";
 import { createUsageSwapRefresh } from "./usage-swap-refresh.ts";
 import { usageStatusText } from "./usage-status.ts";
@@ -1150,6 +1151,8 @@ roomFixes = createRoomFixes({
 const botAccounts = new BotAccounts(accounts, registry, store, {
   captured: (threadId) => providerReload.current(threadId),
 });
+// every way a Gemini chat or room ends (delete, engine pick, a room's roster) frees its standby's slot
+warmPool.setOwner("antigravityAgent", (key) => store.threadBots(key.threadId).some((bot) => !bot.hidden && botAccounts.instance(bot, key.threadId)?.instanceId === key.instanceId));
 const snagUserData = process.env.OMB_USER_DATA;
 const teamSnags = snagUserData ? new TeamSnags({
   userData: snagUserData,
@@ -1973,6 +1976,8 @@ async function stopBotWork(bot: BotRecord): Promise<void> {
   const instance = botAccounts.instance(bot);
   for (const group of store.groups.filter((g) => g.busyBotId === bot.id)) await botAccounts.instance(bot, group.threadId)?.adapter.interruptTurn(group.threadId).catch(() => {});
   await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
+  // a warm child from an engine the bot has left is not the current engine's to stop
+  warmPool.retire({ threadId: bot.threadId }, "bot deleted");
   stopScreenPoller(bot.id);
   activeVpsThreads.delete(bot.id);
   routines!.disableForBot(bot.id);
@@ -3008,7 +3013,17 @@ function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
 // can carry what the bot actually said
 const lastReply = new Map<string, { text: string; messageId: string }>();
 const askTexts = askTurnTexts();
-const turnSummary = turnSummaries((threadId, ids, restated) => { for (const id of ids) store.patchRow(threadId, id, { summarized: true, restated }); });
+const turnSummary = turnSummaries(
+  (threadId, ids, restated) => { for (const id of ids) store.patchRow(threadId, id, { summarized: true, restated }); },
+  // 1:1 only: a room keeps every line as its own entry
+  (threadId, ids) => {
+    if (!store.botByThread(threadId)) return;
+    for (const id of ids) {
+      const row = store.row(threadId, id);
+      if (row && !row.quick && !row.comm && !isVoiceLine(row)) store.patchRow(threadId, id, { step: true });
+    }
+  },
+);
 const unreadTurns = turnUnread();
 
 const TASK_PACKET_FLUSH_MS = 30_000;
@@ -4004,6 +4019,7 @@ bus.subscribe((event: RuntimeEvent) => {
   quickAnswersTaken(store, event);
   roomEchoesTaken(store, event);
   const visibleEvent = peerUserRuntime(event);
+  if (event.type === "turn.completed") turnSummary.fold(event.threadId, event.turnId);
   if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
   // the settle below writes to disk; the reply's last frame must not wait behind it
   if (event.type === "turn.completed") for (const client of sseClients) sendNow(client.res);
@@ -4085,6 +4101,8 @@ bus.subscribe((event: RuntimeEvent) => {
         // the line answering a direct steer stays shown and is never hidden as restated: the final does not repeat it
         const anchor = event.summarized ? undefined : store.findLast(event.threadId, (m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text")));
         const steerReply = anchor?.role === "user" && anchor.steered && !anchor.queueId;
+        // a peer turn keeps every line as its own row, as before
+        const peerTurn = !event.summarized && Boolean(store.findLast(event.threadId, (m) => m.role === "user" && m.kind === "text" && !m.steered && !isVoiceLine(m))?.from);
         const message = pushMessage(
           event.summarized
             ? { role: "bot", kind: "text", text: event.text, summarized: true, engine: event.provider }
@@ -4098,7 +4116,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // just that something ended; an engine summary is not the bot's words
         if (!event.summarized) lastReply.set(event.threadId, { text: event.text, messageId: message.id });
         if (!event.summarized && turnOwnerId) askTexts.text(turnOwnerId, event.threadId, event.turnId, message.id, event.phase);
-        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply && event.phase === "commentary" ? undefined : event.phase, steerReply || stamp ? undefined : event.text);
+        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply && event.phase === "commentary" ? undefined : event.phase, steerReply || stamp ? undefined : event.text, !steerReply && !stamp && !peerTurn);
       } else if (event.itemType === "tool" && event.itemId) {
         const itemKey = `${event.threadId}:${event.itemId}`;
         const pending = toolMessageByItem.get(itemKey);
@@ -5394,8 +5412,8 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
 // turn mounts something only a send may set up (a remote or VM computer, connected apps).
 function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullable<PrepareFocus["fresh"]> | null {
   const task = store.taskByThread(bot.id, bot.threadId);
-  // only Claude starts a session ahead of Send; other engines' prepare ignores this shape
-  if (instance.driverKind !== "claudeAgent" || !task || task.resumeCursors[instance.instanceId]) return null;
+  // Claude starts a session and Gemini an agy ahead of Send; other engines' prepare ignores this shape
+  if (!["claudeAgent", "antigravityAgent"].includes(instance.driverKind) || !task || task.resumeCursors[instance.instanceId]) return null;
   if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) return null;
   if (bot.computer !== undefined && bot.computer !== "off") return null;
   if (bot.cloudBackend === "vps" || box.boxConfigured(cfg)) return null;
@@ -7648,6 +7666,7 @@ async function runClaimedGroupMemberTurn(
         threadId,
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
         system: roomSystem,
+        hosted: true,
         ...access,
         attended: !isUnattended(bot.id),
         cwd,
@@ -8223,6 +8242,7 @@ function configStatus() {
       googlePhoto: googlePhotoOffered(googleAccount.idToken(), googleAccount.owner()?.sub, cfg.profile),
     },
     rooms: { turnTimeoutMinutes: roomTurnTimeoutMinutes(cfg) },
+    usageOrder: usageOrderStatus(cfg.usageOrder),
     localVm: {
       mode: localVmMode(cfg),
       maxInstances: localVmMaxInstances(cfg),
@@ -8377,7 +8397,7 @@ const webRead = webReadRoute(createWebReader({
     const instance = registry.get(bot.modelSelection.instanceId);
     const snapshot = providerSnapshots.get(bot.modelSelection.instanceId);
     const ready = snapshot?.state === "available" && snapshot.authenticated !== false;
-    return { botId: bot.id, name: bot.name, engine: ready ? instance?.driverKind ?? "" : "", busy: Boolean(bot.busy) };
+    return { botId: bot.id, name: bot.name, engine: ready ? instance?.driverKind ?? "" : "", busy: Boolean(bot.busy), hidden: Boolean(bot.hidden) };
   }),
 }), (header) => commsCallers.resolve(header), guestRoomTurn);
 const verifySite = createVerifySite({
@@ -8710,6 +8730,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!body.success) return json(res, 400, { error: "bad request" });
         const linked = await roomFixes!.link({ botId: body.data.fromBotId, threadId: body.data.fromThreadId, sessionId: body.data.sessionId, title: body.data.title, room: body.data.room });
         return "error" in linked ? json(res, linked.error === "unknown sender" ? 403 : 400, linked) : json(res, 200, linked);
+      }
+      if (method === "POST" && path === "/api/internal/post-to-group") {
+        const source = commsCallers.resolve(req.headers.authorization);
+        if (!source) return json(res, 403, { error: "unknown sender" });
+        const body = groupPostSchema.safeParse(await readBody(req));
+        if (guestRoomTurn(source.botId, source.threadId)) return json(res, 403, { error: "Only the owner can ask you to post to a group." });
+        if (!body.success) return json(res, 400, { error: `post_to_group needs a group name and text up to ${ROOM_TEXT_MAX} characters.` });
+        const posted = roomFixes!.postToGroup(source.botId, body.data);
+        return "error" in posted ? json(res, posted.error === "unknown sender" ? 403 : 400, posted) : json(res, 200, posted);
       }
       // terminal_spawn, before the pane opens: the playbook hold, or the engine's usage left.
       if (method === "POST" && path === "/api/internal/spawn-usage") {
@@ -9840,6 +9869,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (changingLocalVmMode) localVmModeChangeBusy = false;
         providerConfigBusy = false;
       }
+    }
+
+    // The order the user drags on Usage and Connections. It is a config.json setting so the
+    // config frame carries it to every client; a write needs none of the provider reload above.
+    if (method === "PUT" && path === "/api/usage-order") {
+      const body = parseUsageOrderBody(await readBody(req));
+      // Read the saved order only after the body arrives: another save may have landed meanwhile.
+      const next = nextUsageOrder(cfg.usageOrder, body);
+      if (next) {
+        saveConfig({ usageOrder: next });
+        Object.assign(cfg, loadConfig());
+        broadcast({ kind: "config", ...configStatus() });
+      }
+      return json(res, 200, { usageOrder: usageOrderStatus(cfg.usageOrder) });
     }
 
     // ── voice ─────────────────────────────────────────────────────────

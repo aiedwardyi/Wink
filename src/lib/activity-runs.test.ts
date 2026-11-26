@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { activityRunVisible, activityVisibleInChat, classifyServerNotice, describeRun, describeSearch, groupActivityRuns, isServerLine, itemMatchesFind, localizeServerLine, SERVER_LINES, shownRunStep } from "./activity-runs";
+import { activityRunVisible, activityVisibleInChat, classifyServerNotice, describeRun, describeSearch, describeSteps, groupActivityRuns, isServerLine, isStepText, itemMatchesFind, liveTurnSteps, localizeServerLine, SERVER_LINES, shownRunStep } from "./activity-runs";
 import { translate, type Translate } from "@/lib/i18n";
 import type { Message } from "@/state/store";
 
@@ -603,5 +603,66 @@ describe("memory cleanup boundary", () => {
     const tidy = { ...save("tidy"), tool: { name: "memory.save", ok: true, tidy: { runId: "r", count: 1 } } };
     const items = groupActivityRuns([save("a"), save("b"), tidy, save("c"), save("d")], false);
     expect(items.map((item) => item.kind)).toEqual(["memory", "message", "memory"]);
+  });
+});
+
+describe("Steps fold and live turn steps", () => {
+  const stepText = (id: string, body: string): Message => ({ id, at: 1, role: "bot", kind: "text", text: body, step: true });
+
+  it("folds settled step texts with interleaved tools into one visible run even when tool calls are off", () => {
+    const items = groupActivityRuns([
+      stepText("s1", "Pulling worker logs."),
+      tool("Read"),
+      stepText("s2", "Patched cursor retry."),
+      tool("Bash"),
+      text("All 14 tests pass."),
+    ]);
+    expect(items.map((item) => item.kind)).toEqual(["run", "message"]);
+    const run = items[0];
+    expect(run.kind).toBe("run");
+    if (run.kind === "run") {
+      expect(activityRunVisible(run.messages, false)).toBe(true);
+      expect(describeSteps(run.messages)).toBe("Steps (2)");
+      expect(run.messages.filter((m) => shownRunStep(m, { terminal: false, showActivities: false, findId: null })).map((m) => m.id)).toEqual(["s1", "s2"]);
+      expect(run.messages.filter((m) => shownRunStep(m, { terminal: false, showActivities: true, findId: null }))).toHaveLength(4);
+    }
+  });
+
+  it("never folds sidekick quick answers into Steps", () => {
+    const quick: Message = { id: "q1", at: 1, role: "bot", kind: "text", text: "Quick answer", step: true, quick: { state: "answer", askId: "a1" } };
+    expect(isStepText(quick)).toBe(false);
+    expect(groupActivityRuns([quick]).map((item) => item.kind)).toEqual(["message"]);
+  });
+
+  it("tracks only the newest live step text while keeping steer and sidekick replies visible", () => {
+    const user: Message = { id: "u1", at: 1, role: "user", kind: "text", text: "check sync" };
+    const s1: Message = { id: "m1", at: 2, role: "bot", kind: "text", text: "Reading logs." };
+    const quick: Message = { id: "q1", at: 3, role: "bot", kind: "text", text: "Sidekick answer.", quick: { state: "answer", askId: "a1" } };
+    const s2: Message = { id: "m2", at: 4, role: "bot", kind: "text", text: "Patching retry loop." };
+    const stream: Message = { id: "stream:t:m2", at: 5, role: "bot", kind: "text", text: "Running tests.", placeholder: true };
+
+    const committed = liveTurnSteps([user, s1, quick, s2], null, true);
+    expect([...committed.hiddenIds]).toEqual(["m1", "m2"]);
+    expect(committed.fallbackText).toBe("Patching retry loop.");
+    expect(committed.stepIndex).toBe(1);
+    expect(committed.holdStream).toBe(false);
+
+    const streaming = liveTurnSteps([user, s1, quick, s2], stream, true);
+    expect([...streaming.hiddenIds]).toEqual(["m1", "m2"]);
+    expect(streaming.stepIndex).toBe(2);
+    expect(streaming.holdStream).toBe(true);
+
+    const steer: Message = { id: "u2", at: 6, role: "user", kind: "text", text: "also check staging", steered: true };
+    const steerReply: Message = { id: "r2", at: 7, role: "bot", kind: "text", text: "Checking staging too." };
+    const afterSteer = liveTurnSteps([user, s1, steer, steerReply], null, true);
+    expect([...afterSteer.hiddenIds]).toEqual(["m1"]);
+    expect(afterSteer.fallbackText).toBe("Reading logs.");
+  });
+
+  it("leaves the last turn's answer out of a turn whose line was sent before it finished", () => {
+    const sent: Message = { id: "u2", at: 900, actedAt: 0, role: "user", kind: "text", text: "next ask" };
+    const answer: Message = { id: "r1", at: 300, role: "bot", kind: "text", text: "Last answer." };
+    const step: Message = { id: "m1", at: 1200, role: "bot", kind: "text", text: "Reading logs." };
+    expect([...liveTurnSteps([sent, answer, step], null, true).hiddenIds]).toEqual(["m1"]);
   });
 });

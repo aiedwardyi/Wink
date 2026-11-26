@@ -139,6 +139,6 @@ describe("overlay motion styles", () => {
   });
 
   it("drops the enter animations under reduced motion", () => {
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\r?\n {2}\.animate-caret, \.animate-msg-in, \.animate-pop-in, \.animate-panel-in, \.animate-fade-in \{ animation: none; \}/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\r?\n {2}\.animate-caret, \.animate-msg-in, \.animate-pop-in, \.animate-panel-in, \.animate-fade-in, \.animate-step-in \{ animation: none; \}/);
   });
 });
