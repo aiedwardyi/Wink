@@ -1973,6 +1973,8 @@ async function stopBotWork(bot: BotRecord): Promise<void> {
   const instance = botAccounts.instance(bot);
   for (const group of store.groups.filter((g) => g.busyBotId === bot.id)) await botAccounts.instance(bot, group.threadId)?.adapter.interruptTurn(group.threadId).catch(() => {});
   await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
+  // a warm child from an engine the bot has left is not the current engine's to stop
+  warmPool.invalidate({ threadId: bot.threadId }, "bot deleted");
   stopScreenPoller(bot.id);
   activeVpsThreads.delete(bot.id);
   routines!.disableForBot(bot.id);

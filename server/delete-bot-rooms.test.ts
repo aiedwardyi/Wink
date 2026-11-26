@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { removeTestData, testHome } from "./testing/test-home.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
+import { createWarmPool } from "./drivers/warm-pool.ts";
 
 // deleteBotFully and removeSyncedBots are private to index.ts, which these
 // tests must not boot; their wiring is pinned on source, same idiom as chief-of-staff.test.ts.
@@ -81,6 +82,22 @@ describe("deleting a bot that leads a room", () => {
 });
 
 describe("deleteBotFully", () => {
+  const noop = () => {};
+  const deleteWith = (overrides: Record<string, unknown>) => {
+    const deps = {
+      botAccounts: { instance: () => undefined },
+      registry: { get: () => undefined }, store: { groups: [], deleteBot: noop },
+      stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop }, webhooks: { disableForBot: noop },
+      lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,
+      computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes: { forgetBot: noop }, accountNotices: { forget: noop }, limitWaits: { cancel: noop },
+      perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(), warmPool: { invalidate: noop },
+      EVENTS_DIR: "", NATIVE_DIR: "", join, removeRotatingLog: noop,
+      ...overrides,
+    };
+    const javascript = ts.transpileModule(`${fn("stopBotWork")}\n}\n${fn("deleteBotFully")}\n}`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+    return new Function(...Object.keys(deps), `${javascript}\nreturn deleteBotFully;`)(...Object.values(deps));
+  };
+
   it("is the path a delete synced from another PC takes", async () => {
     expect(fn("removeSyncedBots")).toContain("await deleteBotFully(bot);");
     expect(fn("deleteBotFully")).toContain("store.deleteBot(bot.id);");
@@ -104,6 +121,20 @@ describe("deleteBotFully", () => {
     expect(body.indexOf("store.deleteBot(bot.id);")).toBeGreaterThan(stopped);
   });
 
+  it("retires a warm child its bot started on an engine it has since left", async () => {
+    const warmPool = createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+    const lease = warmPool.reserve({ engine: "antigravityAgent", instanceId: "gemini", threadId: "t1" }, "fp", { generation: 0, incarnation: "i", identity: "" }, "speculative");
+    if (typeof lease === "string") throw new Error(lease);
+    const close = vi.fn(async () => {});
+    lease.attach({ session: { kind: "fresh" }, alive: () => true, close });
+    lease.ready();
+    const deleteBotFully = deleteWith({ warmPool });
+
+    await deleteBotFully({ id: "bot-1", threadId: "t1", modelSelection: { instanceId: "codex" }, tasks: [] });
+
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("removes the event logs of every task, not just the open one", async () => {
     home = mkdtempSync(join(testHome(), "omb-delete-bot-logs-"));
     const dirs = ["events", "native"].map((name) => join(home, name));
@@ -111,18 +142,7 @@ describe("deleteBotFully", () => {
       mkdirSync(dir);
       for (const threadId of ["t1", "t2"]) writeFileSync(join(dir, `${threadId}.ndjson`), "{}");
     }
-    const noop = () => {};
-    const deps = {
-      botAccounts: { instance: () => undefined },
-      registry: { get: () => undefined }, store: { groups: [], deleteBot: noop },
-      stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop }, webhooks: { disableForBot: noop },
-      lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,
-      computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes: { forgetBot: noop }, accountNotices: { forget: noop }, limitWaits: { cancel: noop },
-      perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(),
-      EVENTS_DIR: dirs[0], NATIVE_DIR: dirs[1], join, removeRotatingLog,
-    };
-    const javascript = ts.transpileModule(`${fn("stopBotWork")}\n}\n${fn("deleteBotFully")}\n}`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
-    const deleteBotFully = new Function(...Object.keys(deps), `${javascript}\nreturn deleteBotFully;`)(...Object.values(deps));
+    const deleteBotFully = deleteWith({ EVENTS_DIR: dirs[0], NATIVE_DIR: dirs[1], removeRotatingLog });
 
     await deleteBotFully({ id: "bot-1", threadId: "t1", modelSelection: { instanceId: "claude" }, tasks: [{ threadId: "t1" }, { threadId: "t2" }] });
 

@@ -7,14 +7,18 @@
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as auth from "./antigravity-auth.ts";
 
+import { createBotRoutes } from "../bot-routes.ts";
 import { DATA_DIR, ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
 import type { PrepareFocus, ProviderInstance } from "../contracts.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+import { Store } from "../store.ts";
 import { summaryInstance } from "../summary-instance.ts";
 import { AGENTS_IDENTITY, expectAgentsBudget, listAgentsTools } from "../testing/agents-tools.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
@@ -3255,6 +3259,31 @@ require(${JSON.stringify(fake)});
           spawn.mockRestore();
           writeFileSync(join(dir, "go"), "");
         }
+      });
+
+      it("retires the prepared agy when its bot switches engine, freeing the slot for the next chat", async () => {
+        const gemini = await make("open-switch");
+        const codex = { instanceId: "codex", adapter: {} };
+        const store = new Store(() => ({ instanceId: gemini.instanceId, model: "gemini-4-neon" }));
+        const routes = createBotRoutes({
+          store, registry: { get: (id: string) => [gemini, codex].find((instance) => instance.instanceId === id) },
+          checkedModelSelection: (selection: unknown) => ({ ok: true, selection }), wireBot: (bot: unknown) => bot,
+        } as unknown as Parameters<typeof createBotRoutes>[0]);
+        const [first, second, third] = [store.createBot(), store.createBot(), store.createBot()];
+        await open(gemini, { threadId: first.threadId });
+        await open(gemini, { threadId: second.threadId });
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(2);
+        for (const bot of [first, second]) {
+          const req = Readable.from([JSON.stringify({ modelSelection: { instanceId: "codex", model: "gpt-5" } })]) as IncomingMessage;
+          await routes.patch(req, { writeHead: () => {}, end: () => {} } as unknown as ServerResponse, ["", bot.id] as RegExpMatchArray);
+        }
+        // a Stop or Delete now reaches only Codex
+        for (const { pid } of spawns()) await expect.poll(() => alive(pid), { timeout: 5_000 }).toBe(false);
+        await open(gemini, { threadId: third.threadId });
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(3);
+        expect(alive(spawns()[2]!.pid)).toBe(true);
+        await gemini.dispose();
+        await expect.poll(() => alive(spawns()[2]!.pid), { timeout: 5_000 }).toBe(false);
       });
 
       it("retires the prepared agy on Stop (a bot delete stops its chat) and on dispose", async () => {
