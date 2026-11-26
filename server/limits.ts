@@ -99,6 +99,7 @@ export const KEPT_LIMITS: Limits = {
   "server/summary-repair.ts": { MAX_REPAIR_RUNS: AUTO, MAX_REPAIR_BATCHES: AUTO },
   "server/task-asks.ts": {
     MAX_STATUS_ASKS_BYTES: "Crash: bots see every open ask, so the turn must still fit the model's input; past this size the least recently shown go first and the header counts the rest for the next turn. Nothing is refused or dropped.",
+    MAX_TURN_PROMISES: "Runaway loop: every open row rides each later turn and asks the engine to check it, so a narrated turn's 60 \"I'll\" lines would add 60 checks to every turn. The rest are counted on the last row with a pointer to that turn's transcript; nothing the user asked is dropped.",
   },
   "server/team-library.ts": { MAX_CATALOG_BYTES: OUTSIDER, MAX_MANIFEST_BYTES: OUTSIDER },
   "server/thread-events.ts": { MAX_LIMIT: FILE, MAX_TAIL_BYTES: FILE },
