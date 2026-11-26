@@ -173,6 +173,21 @@ it("waits for the renewed snapshot before requesting an unchanged selected file"
   expect(host.textContent).toContain("renewed diff");
 });
 
+it("asks a kept Map's Git rows again only once its stream is back, since the server answers them only for an open stream", async () => {
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : String(url).includes("/flow?") ? Response.json({ commits: [] }) : Response.json({ lines: [] }));
+  const flows = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/flow?")).length;
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  await act(async () => {});
+  const asked = flows();
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", active: false })));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", active: true })));
+  expect(flows()).toBe(asked);
+  expect(host.querySelector(".map-flow-rows")).not.toBeNull();
+  await emit([workers[0]]);
+  expect(flows()).toBe(asked + 2);
+});
+
 it("draws the repo as a tree in place of the squares and the changed-files list, every file of a small repo shown", async () => {
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit([workers[0]]);

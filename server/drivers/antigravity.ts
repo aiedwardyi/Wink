@@ -51,8 +51,8 @@ import { appendNative, finishNative } from "./native.ts";
 import { AGY_TEXT_MODEL, textUsageError } from "./rate-limits.ts";
 import { BUSY_RESUME_DELAYS_MS, busyResumeReason, interruptibleDelay, isResumeCursorRejected } from "./retry.ts";
 import { systemLedger } from "./system-ledger.ts";
-import { ANTIGRAVITY_KEYRING, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, hasAntigravityTokenFile, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
-import { antigravityHelperHome } from "./antigravity-home.ts";
+import { ANTIGRAVITY_KEYRING, antigravityCredentialStore, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
+import { antigravityHelperHome, dropAntigravityHelperToken } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
 import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
 import { warmPool, type Lease } from "./warm-pool.ts";
@@ -648,12 +648,17 @@ function launchFingerprint(cli: string, args: string[], cwd: string, env: NodeJS
     .digest("hex");
 }
 
+const credentialStore = (env = antigravityEnvironment()) => antigravityCredentialStore(env, {
+  probe: () => probeAntigravitySignIn(),
+  forget: () => forgetAntigravitySignIn(ANTIGRAVITY_KEYRING),
+});
+
 // agy's saved sign-in is one per machine, so every instance shares one keyring sign-out and its running turns.
 const keyringSignOut = antigravityKeyringSignOut(async () => {
   await retireStandbys("sign-out");
-  return forgetAntigravitySignIn(ANTIGRAVITY_KEYRING);
+  return credentialStore().clear();
 }, {
-  present: () => probeAntigravitySignIn(),
+  present: () => credentialStore().has(),
   mark: signedOutMarkFile(join(DATA_DIR, "gemini-signed-out")),
 });
 
@@ -682,8 +687,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     // Per call, so agy installed after Wink started is on PATH without a restart.
     const env = () => antigravityEnvironment(input.environment);
     sweepAntigravityMcpLeftover(env());
-    const signIn = antigravitySignIn(async () => hasAntigravityTokenFile(env()) || probeAntigravitySignIn(), () => readAntigravityLogSignIn(env()));
+    const credentials = () => credentialStore(env());
+    const signIn = antigravitySignIn(() => credentials().has(), () => readAntigravityLogSignIn(env()));
     const forgetSignedOut = keyringSignOut.onSignedOut(() => {
+      dropAntigravityHelperToken(env());
       signIn.record(false);
       void retireStandbys("signed out");
     });
@@ -1454,7 +1461,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // Only a failed lookup is Not Installed; a slow or failing agy is installed but not answering.
       if (!version) return missing ? cliNotFound(config.cli) : { state: "unavailable", reason: `\`${config.cli}\` did not answer --version` };
       const authenticated = await signIn.check(opts?.rescan || opts?.refresh);
-      const account = authenticated ? readAntigravityAccount(env()) : undefined;
+      const account = authenticated ? credentials().account() : undefined;
       // a sign-in made outside Wink changes agy's account under the idle standbys
       if ([...standbyOf.values()].some((standby) => standby.account !== account)) void retireStandbys("account changed");
       return { state: "available", version, authenticated, account };
@@ -1491,6 +1498,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         return keyringSignOut.signingIn();
       },
       signedOutByCli: () => {
+        dropAntigravityHelperToken(env());
         void retireStandbys("signed out");
         keyringSignOut.signedOutByAgy();
       },

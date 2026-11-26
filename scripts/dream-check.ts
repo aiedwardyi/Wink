@@ -252,7 +252,7 @@ function claudeGenerator(configDir: string, cwd: string, { spent, cap, ledger, k
           spent.output += used.output;
           spent.fresh += used.input + used.cacheCreation + used.output;
           ledger?.add(kind, { fresh: used.input + used.cacheCreation + used.output, processed: used.input + used.cachedInput + used.cacheCreation + used.output });
-          onUsage?.(used);
+          onUsage?.({ ...used, input: used.input + used.cachedInput + used.cacheCreation });
           resolve(result);
         } catch (error) {
           reject(error);

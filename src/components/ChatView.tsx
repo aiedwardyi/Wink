@@ -47,7 +47,7 @@ import { showChatHeaderFind } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
 import { composerIsBusy, inSendOrder, queuedSendIds, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
-import { paneOpensOnMedia, picturedReplies } from "@/lib/show-pane";
+import { paneLeadsToMedia, picturedReplies } from "@/lib/show-pane";
 import { liveActivityLabel } from "@/lib/live-activity";
 import { warmMedia } from "@/lib/media-index";
 import { useNoReply } from "@/lib/no-reply";
@@ -1101,7 +1101,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
       if (idle !== undefined || box?.value) return;
       idle = window.requestIdleCallback(() => {
         idle = undefined;
-        if (!box?.value && paneOpensOnMedia(bot.threadId, paneMap, paneWorkerTab)) warmMedia(bot.threadId);
+        if (!box?.value && paneLeadsToMedia(bot.threadId, paneMap, paneWorkerTab)) warmMedia(bot.threadId);
       });
     };
     ask();

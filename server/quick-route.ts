@@ -1,5 +1,5 @@
 // Gate 1 of the quick router: a busy-time question goes to the quick helper first; any other message goes to the bot
-// at once with one short helper reply beside it, except approvals, refusals and pauses, which go to the bot alone.
+// at once and the helper answers only the question in it, except approvals, refusals and pauses, which go to the bot alone.
 const MAX_CHARS = 240;
 const SENTENCE = /(?<=[.!?])\s+|\n+/;
 const ATTACH_OR_LINK = /<attached-(image|file)|https?:\/\//i;
@@ -56,26 +56,39 @@ const REPORTED = /^(switched|done)\b/i;
 const ENDS_Q = /\?[\s!?.)]*((lol|lmao|haha)\s*)?\W*$/i;
 const TAG_Q = /\b(right|correct|or not|or no)[\s.!]*$/i;
 
-/** An order or a decision for the bot, whose meaning only the bot may read. */
-export function isOrder(raw: string): boolean {
-  return raw
+// each sentence as typed, and without the filler it opens with
+const parts = (raw: string) =>
+  raw
     .split(SENTENCE)
     .map((part) => part.trim())
     .filter(Boolean)
-    .some((part) => {
-      const sentence = part.replace(LEAD, "").replace(KO_LEAD, "").trim();
-      return (
-        (REQUEST.test(part) && !INFO_Q.test(sentence) && !DO_Q.test(sentence)) ||
-        KO_REQUEST.test(part.replace(KO_ASKS, "")) ||
-        PICK.test(sentence) ||
-        KO_PICK.test(sentence) ||
-        (COMMAND.test(sentence) && !REPORTED.test(sentence) && !QUESTION_START.test(sentence))
-      );
-    });
-}
+    .map((part) => ({ part, sentence: part.replace(LEAD, "").replace(KO_LEAD, "").trim() }));
 
-/** "quick": the helper tries it first, then confirms or hands off. "ack": the bot takes it now and the helper adds one short reply. "main": the bot alone. */
-export function nominate(raw: string): "quick" | "ack" | "main" {
+const orders = ({ part, sentence }: { part: string; sentence: string }) =>
+  (REQUEST.test(part) && !INFO_Q.test(sentence) && !DO_Q.test(sentence)) ||
+  KO_REQUEST.test(part.replace(KO_ASKS, "")) ||
+  PICK.test(sentence) ||
+  KO_PICK.test(sentence) ||
+  (COMMAND.test(sentence) && !REPORTED.test(sentence) && !QUESTION_START.test(sentence));
+
+// "can you help me out?" asks for work, so only the bot answers it; "can you tell me why?" asks for a fact.
+const ASKS_WORK = /^(can|could|would|will)\s+(u|you|ya)\b/i;
+const asksSomething = (sentence: string) =>
+  !(ASKS_WORK.test(sentence) && !INFO_Q.test(sentence)) &&
+  (ENDS_Q.test(sentence) || QUESTION_START.test(sentence) || INFO_Q.test(sentence) || DO_Q.test(sentence) || KO_QUESTION.test(sentence) || TAG_Q.test(sentence));
+
+/** An order or a decision for the bot, whose meaning only the bot may read. */
+export const isOrder = (raw: string) => parts(raw).some(orders);
+
+/** The sentences that ask and order nothing, as typed; "" when none asks. */
+export const questionPart = (raw: string) =>
+  parts(raw)
+    .filter((part) => !orders(part) && asksSomething(part.sentence))
+    .map(({ part }) => part)
+    .join(" ");
+
+/** "quick": the helper tries it first, then confirms or hands off. "aside": the bot takes it now and the helper answers only its question part. "main": the bot alone. */
+export function nominate(raw: string): "quick" | "aside" | "main" {
   const whole = raw.trim();
   if (!whole) return "main";
   // the rest decides; nothing left means it only greets or pings
@@ -86,9 +99,9 @@ export function nominate(raw: string): "quick" | "ack" | "main" {
     .map((sentence) => sentence.trim().replace(LEAD, "").replace(KO_LEAD, "").trim())
     .filter(Boolean);
   if (!sentences.length || KO_STOP.test(text) || sentences.some((sentence) => (STEER.test(sentence) && !DO_Q.test(sentence)) || KO_STEER.test(sentence))) return "main";
-  if (whole.length > MAX_CHARS || ATTACH_OR_LINK.test(whole) || REQUEST.test(text) || REPORT.test(text) || KO_REQUEST.test(text) || KO_REPORT.test(text)) return "ack";
-  if (sentences.some((sentence) => COMMAND.test(sentence) && !QUESTION_START.test(sentence))) return "ack";
+  if (whole.length > MAX_CHARS || ATTACH_OR_LINK.test(whole) || REQUEST.test(text) || REPORT.test(text) || KO_REQUEST.test(text) || KO_REPORT.test(text)) return "aside";
+  if (sentences.some((sentence) => COMMAND.test(sentence) && !QUESTION_START.test(sentence))) return "aside";
   const last = sentences.at(-1)!;
   const asks = sentences.some((sentence) => ENDS_Q.test(sentence)) || QUESTION_START.test(last) || KO_QUESTION.test(last) || TAG_Q.test(last);
-  return asks ? "quick" : "ack";
+  return asks ? "quick" : "aside";
 }

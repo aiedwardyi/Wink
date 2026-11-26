@@ -70,7 +70,7 @@ import { warmPool, type Lease } from "./warm-pool.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { accountLabel, cachedSignIn } from "./auth-status.ts";
-import { isSignOut } from "./signout.ts";
+import { isPaymentDue, isSignOut } from "./signout.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
 import { FREE_ACCESS, type AccessTurn, type TurnAccess } from "./turn-access.ts";
@@ -2102,7 +2102,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                   break;
                 }
                 // the CLI already retried; a limit gets its own row from settle
-                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: text.trim() });
+                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: text.trim(), ...(!injected.injected && isPaymentDue(text) ? { paymentDue: true } : {}) });
               }
             }
             session.turn?.trace?.reconcile(claudeUsage(o.usage));
@@ -2336,7 +2336,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         const child = spawnCli(
           config.cli,
           [
-            "-p", "--model", "claude-haiku-5-5", "--output-format", "text",
+            "-p", "--model", "claude-haiku-5-5", "--output-format", "json",
             ...(lean ? ["--safe-mode", "--tools", "", "--strict-mcp-config"] : []),
             ...(effort ? ["--effort", effort] : []),
             ...(ephemeral ? ["--no-session-persistence"] : []),
@@ -2353,15 +2353,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         let stdout = "";
         let stderr = "";
         let settled = false;
-        const finish = (error?: Error) => {
+        const finish = (error?: Error, text = "", usage?: Parameters<UsageObserver>[0]) => {
           if (settled) return;
           settled = true;
           helpers -= 1;
-          try { onUsage?.(undefined); } catch {}
+          try { onUsage?.(usage); } catch {}
           clearTimeout(timer);
           signal?.removeEventListener("abort", onAbort);
           if (error) reject(error);
-          else resolve(stdout.trim());
+          else resolve(text.trim());
         };
         const onAbort = () => {
           killCliTree(child);
@@ -2386,8 +2386,17 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         });
         child.on("error", (error) => finish(error));
         child.on("close", (code) => {
-          if (code === 0) finish();
-          else finish(new Error(stderr.trim() || `Claude review exited ${code}`));
+          if (code !== 0) return finish(new Error(stderr.trim() || `Claude review exited ${code}`));
+          let reply: { result?: unknown; usage?: any } | undefined;
+          try {
+            reply = JSON.parse(stdout);
+          } catch {
+            return finish(new Error("Claude review returned no JSON"));
+          }
+          // with "verbose" on in the CLI's config, json mode prints every message as an array
+          if (Array.isArray(reply)) reply = reply.findLast((item) => item?.type === "result");
+          if (typeof reply?.result !== "string") return finish(new Error("Claude review returned no result"));
+          finish(undefined, reply.result, reply.usage ? { ...claudeUsage(reply.usage)!, cacheCreation: reply.usage.cache_creation_input_tokens } : undefined);
         });
         if (signal?.aborted) onAbort();
         else {

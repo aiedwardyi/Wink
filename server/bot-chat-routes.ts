@@ -20,8 +20,8 @@ import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
 import { switchHeld } from "./pending-model.ts";
-import { ackQuick, answerQuick, askStopped, cancelQuickAsks, pending, queueAsk, quickAskRecovery, repliedUnder, requeueDroppedAsk, requeueDroppedCall, routesAck, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
-import { isOrder } from "./quick-route.ts";
+import { answerAside, answerQuick, askStopped, cancelQuickAsks, pending, queueAsk, quickAskRecovery, repliedUnder, requeueDroppedAsk, requeueDroppedCall, routesAside, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
+import { isOrder, questionPart } from "./quick-route.ts";
 import { composeUserTurnPrompt, promptWithReply, replyExcerpt, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -38,13 +38,13 @@ import { TASK_RESUME_PROMPT } from "./turn-context.ts";
 
 // A stopped thread stays held through the driver's cancel grace (ACP and MSP: 5 s), and an edit inside it is refused.
 const STOP_RELEASE_MS = 6_000;
-// The bot acks a send mid-turn unless the helper's reply beside it does.
-const ACK_COVERED =
-  "[Wink note, automated, not from the person. A fast reply in your voice answers the message below beside your work, so write no line of your own for it; continue, and put anything new in your final reply.]";
+// The bot answers a question sent mid-turn unless the helper's answer beside it does.
+const ANSWERED_ASIDE =
+  "[Wink note, automated, not from the person. A fast reply in your voice answers the question in the message below beside your work, so write no line of your own for it; act on the rest, and put anything new in your final reply.]";
 // Only the bot can tell whether its own reply under the send already answered it; built at each use, since that reply can land between steer and queue.
 // A steered note joins the user's own turn, where no_reply_needed neither ends nor hides anything and its "stop" could cost the work's reply.
-const ackMissed = (path: Message[], sent: Message, steered: boolean) =>
-  `[Wink note, automated, not from the person. No fast reply reached the person for "${replyExcerpt(sent.text ?? "")}"; ${repliedUnder(path, sent) ? `if your reply after it already answers it, ${steered ? "write nothing for it" : "call no_reply_needed and write nothing"}; otherwise ` : ""}reply to it now in one short visible line, then continue.]`;
+const unanswered = (path: Message[], sent: Message, question: string, steered: boolean) =>
+  `[Wink note, automated, not from the person. No fast reply reached the person for "${replyExcerpt(question)}"; ${repliedUnder(path, sent) ? `if your reply after it already answers it, ${steered ? "write nothing for it" : "call no_reply_needed and write nothing"}; otherwise ` : ""}reply to it now in one short visible line, then continue.]`;
 
 type BotChatRouteDeps = {
   cancelUsageWait?: (botId: string, waitId?: string, preserveTurn?: boolean) => void;
@@ -165,14 +165,14 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     bot: BotRecord,
     threadId: string,
     text: string,
-    { adapter, replyTo, sendId, queueId, after, ask, call, answersCard, actedAt, sendSeq, sentAfterId, waited, covered }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message; call?: CallTag; answersCard?: string; actedAt?: number; sendSeq?: number; sentAfterId?: string | null; waited?: boolean; covered?: boolean },
+    { adapter, replyTo, sendId, queueId, after, ask, call, answersCard, actedAt, sendSeq, sentAfterId, waited, aside, question }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message; call?: CallTag; answersCard?: string; actedAt?: number; sendSeq?: number; sentAfterId?: string | null; waited?: boolean; aside?: boolean; question?: string },
   ) => {
     let steered = false;
     let dropped = false;
     let recorded = false;
     let callRow: Message | undefined;
-    // the reply beside a covered order promises it, so a late drop requeues it like a call
-    const requeues = Boolean(call) || Boolean(covered && isOrder(text));
+    // its mid-turn label is an order's only receipt, so a late drop requeues it like a call
+    const requeues = Boolean(call) || Boolean(aside && isOrder(text));
     let peerInput: ReturnType<typeof beginPeerUserReply>;
     // a held switch: the adapter is still the old turn's engine, so this send queues for the chip's model
     if (!switchHeld(bot) && steersSend(adapter, bot.busy, after)) {
@@ -188,7 +188,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       const prompt = [
         ...closedAskNotes(turnOpts.messages, text, ask?.id),
         ...(call ? callLinesSinceLastUserTurn(turnOpts.messages, new Set()) : []),
-        ...(covered ? [ACK_COVERED] : []),
+        ...(question ? [ANSWERED_ASIDE] : []),
         consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName),
       ].join("\n\n");
       peerInput = beginPeerUserReply(bot.id, threadId, prompt);
@@ -301,29 +301,29 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       drain: drainQueuedSends,
     }, botId, threadId, ask).catch((error) => console.warn(`[quick] ask failed: ${error instanceof Error ? error.message : String(error)}`)).finally(settle);
   };
-  const startAck = (quick: QuickRouting, botId: string, threadId: string, sent: Message) => {
+  const startAside = (quick: QuickRouting, botId: string, threadId: string, sent: Message, question: string) => {
     const owed = () => {
       const current = store.bot(botId);
       const path = store.activePath(threadId);
       if (!current || !store.taskByThread(botId, threadId) || askStopped(sent) || !path.some((row) => row.id === sent.id) || path.some((row) => row.quick?.askId === sent.id)) return undefined;
       return current;
     };
-    void ackQuick({ store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage }, botId, threadId, sent)
-      .catch((error) => console.warn(`[quick] ack failed: ${error instanceof Error ? error.message : String(error)}`))
+    void answerAside({ store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage }, botId, threadId, sent, question)
+      .catch((error) => console.warn(`[quick] aside answer failed: ${error instanceof Error ? error.message : String(error)}`))
       .then(async () => {
         const current = owed();
         if (!current) return;
         const adapter = instanceForBot(current, threadId)?.adapter;
         if (current.busy && (current.activeThreadId ?? current.threadId) === threadId && adapter?.steer) {
-          const note = ackMissed(store.activePath(threadId), sent, true);
+          const note = unanswered(store.activePath(threadId), sent, question, true);
           if (await (steerUntilTaken(adapter, threadId, note) ?? adapter.steer(threadId, note)).catch(() => false)) return;
           if (!owed()) return;
         }
         // a turn that ended or refused the note, or a switch to another task, leaves it for the bot's next turn in this task, drained into the send's own row
-        queueAsk(store, botId, threadId, sent, ackMissed(store.activePath(threadId), sent, false));
+        queueAsk(store, botId, threadId, sent, unanswered(store.activePath(threadId), sent, question, false));
         drainQueuedSends();
       })
-      .catch((error) => console.warn(`[quick] owed ack failed: ${error instanceof Error ? error.message : String(error)}`));
+      .catch((error) => console.warn(`[quick] owed answer failed: ${error instanceof Error ? error.message : String(error)}`));
   };
   return {
     taskFrame,
@@ -472,10 +472,11 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
               startQuick(quick, bot.id, threadId, message);
               return { ok: true as const, quick: true as const, threadId, message };
             }
-            // a call line is spoken back and a peer-watched turn owes the person its own tagged line, so only other typed sends get the reply beside them
-            const ack = Boolean(quick && gate && !call && !hasPeerWatch(threadId) && routesAck(gate));
-            const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt, sendSeq, sentAfterId, waited: queuedSend?.waited, covered: ack });
-            if (quick && ack && "steered" in sent && sent.steered) startAck(quick, bot.id, threadId, sent.message);
+            // a call line is spoken back and a peer-watched turn owes the person its own tagged line, so only other typed sends get an answer beside them
+            const aside = Boolean(quick && gate && !call && !hasPeerWatch(threadId) && routesAside(gate));
+            const question = aside ? questionPart(text) : "";
+            const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt, sendSeq, sentAfterId, waited: queuedSend?.waited, aside, question });
+            if (quick && question && "steered" in sent && sent.steered) startAside(quick, bot.id, threadId, sent.message, question);
             return sent;
           }
           // Stop cleared `busy`, but the driver holds the thread for up to

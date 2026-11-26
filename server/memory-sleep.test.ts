@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
-import type { NoteGenerator } from "./memory-pass.ts";
+import { ClaudeDriver } from "./drivers/claude.ts";
+import { noteGenerator, type NoteGenerator } from "./memory-pass.ts";
 import {
   createMemorySleep,
   planTidy,
@@ -688,6 +690,27 @@ describe("memory sleep", () => {
       await quiet(SLEEP_IDLE_MS + 100);
       expect(checks.mock.calls.length).toBeLessThan(5);
       expect(generate).toHaveBeenCalledTimes(1);
+    });
+
+    it("logs the tokens a Claude tidy spent", async () => {
+      const bot = bots[0]!;
+      writeMemoryFile(bot, memory("- Uses pnpm", "- Lives in Seoul"));
+      const cli = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-claude-cli.ts");
+      chmodSync(cli, 0o755);
+      vi.useRealTimers();
+      const claude = await ClaudeDriver.create({ instanceId: "claude-sleep", displayName: "Claude", environment: {}, enabled: true, config: { cli, permissionMode: "acceptEdits" } });
+      try {
+        vi.useFakeTimers();
+        vi.setSystemTime(NOW);
+        generator = noteGenerator([claude]);
+        sleep.dispose();
+        sleep = start();
+        await vi.advanceTimersByTimeAsync(SLEEP_IDLE_MS);
+        await vi.waitFor(() => expect(vi.mocked(console.info)).toHaveBeenCalledOnce(), { timeout: 15_000 });
+        expect(JSON.parse(String(vi.mocked(console.info).mock.calls[0]![0]).replace("[memory-sleep] ", ""))).toMatchObject({ botId: bot, input: 6188, output: 1436, result: "none" });
+      } finally {
+        await claude.dispose?.();
+      }
     });
   });
 

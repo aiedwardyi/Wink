@@ -43,6 +43,7 @@ interface FrameProps {
   inline?: boolean;
   /** inside the Show pane, whose header holds Maximize and Close */
   hosted?: { maximized: boolean };
+  kept?: boolean;
   onClose(): void;
 }
 
@@ -50,7 +51,7 @@ const TAG_FONT = `10px "Cascadia Mono", ui-monospace, monospace`;
 // measureText resolves the font on first use (several ms); the tag font is monospace.
 const TAG_CHAR = 6.1;
 
-export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false, inline = false, hosted, onClose }: FrameProps) {
+export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false, inline = false, hosted, kept, onClose }: FrameProps) {
   const { locale } = useI18n();
   const c = copy[locale];
   const phone = useIsPhone();
@@ -296,7 +297,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   };
 
   return (
-    <div ref={frameRef} className="verify-watch-frame" data-inline={inline || undefined} data-maximized={expanded || undefined}>
+    <div ref={frameRef} className="verify-watch-frame" data-inline={inline || undefined} data-maximized={expanded || undefined} data-kept={kept}>
       <div className="verify-watch-bar">
         <span className="verify-watch-dots" aria-hidden="true"><i /><i /><i /></span>
         <div role="tablist" className="verify-watch-tabs">

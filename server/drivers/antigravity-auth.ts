@@ -208,8 +208,8 @@ export function antigravityKeyringSignOut(forget: () => Promise<boolean>, opts: 
 }
 
 const LOG_EVENT = /applyAuthResult: email=([^,\s]+),|Logging out current user/g;
-// `agy -p` writes cli-<stamp>.log and `agy acp` (Wink's sign-in and sign-out) acp-server-<stamp>-<n>.log.
-const LOG_NAME = /^(?:cli|acp-server)-(\d{8}_\d{6})\S*\.log$/;
+// Every agy mode names its log <mode>-<stamp>[-<n>].log (cli, acp-server, acp-login, ...), so any mode's sign-in counts.
+const LOG_NAME = /^[a-z]+(?:-[a-z]+)*-(\d{8}_\d{6})\S*\.log$/;
 const LOG_FILES = 20;
 const LOG_MAX_BYTES = 8 * 1024 * 1024;
 const logResults = new Map<string, { identity: string; last: string | null | undefined }>();
@@ -231,13 +231,32 @@ function logAccount(path: string): string | null | undefined {
 const appDir = (env: Record<string, string | undefined>) => join(env.HOME || env.USERPROFILE || homedir(), ".gemini", "antigravity-cli");
 const logDir = (env: Record<string, string | undefined>) => join(appDir(env), "log");
 
-/** agy saves its sign-in to this file instead of the keyring over SSH (the phone sign-in sets SSH_CONNECTION), and reads both. */
-export function hasAntigravityTokenFile(env: Record<string, string | undefined> = process.env): boolean {
-  try {
-    return statSync(join(appDir(env), "antigravity-oauth-token")).size > 0;
-  } catch {
-    return false;
-  }
+/** agy's saved sign-in: the OS keyring, or the token file it writes instead over SSH (the phone sign-in sets SSH_CONNECTION); agy reads both. */
+export function antigravityCredentialStore(env: Record<string, string | undefined> = process.env, keyring = {
+  probe: () => probeAntigravitySignIn(),
+  forget: () => forgetAntigravitySignIn(ANTIGRAVITY_KEYRING),
+}) {
+  const path = join(appDir(env), "antigravity-oauth-token");
+  const hasFile = () => {
+    try {
+      return statSync(path).size > 0;
+    } catch {
+      return false;
+    }
+  };
+  return {
+    path,
+    hasFile,
+    async has(): Promise<boolean | undefined> { return hasFile() || keyring.probe(); },
+    /** True once neither place holds a sign-in. */
+    async clear(): Promise<boolean> {
+      const hadFile = hasFile();
+      rmSync(path, { force: true });
+      const keyed = await keyring.probe();
+      return keyed === false || await keyring.forget() || (hadFile && keyed === undefined);
+    },
+    account: () => readAntigravityAccount(env),
+  };
 }
 
 function latestLogEvent(env: Record<string, string | undefined>): string | null | undefined {

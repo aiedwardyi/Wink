@@ -31,8 +31,8 @@ describe("server stalls in the cold-open record", () => {
     const blockedAt = Date.now();
     block(2_500);
     await settle();
-    await receiveColdOpen(post({ ...open, mount: 1, sseOpen: 1, chatPaint: 1 }), dir);
-    await receiveColdOpen(post(open), dir);
+    await receiveColdOpen(post({ ...open, mount: 1, sseOpen: 1, chatPaint: 1 }), dir, "local");
+    await receiveColdOpen(post(open), dir, "local");
     const [after, behind] = lines(dir);
     expect(after.server.stalls).toBeUndefined();
     expect(behind.server.stalls).toHaveLength(1);

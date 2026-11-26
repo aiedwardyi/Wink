@@ -122,11 +122,17 @@ export const syncHold = {
       .all(scope.threadId).map((row) => [String(row.writer), Number(row.seq)])));
     let ahead = false;
     for (const head of heads) {
+      // A listed head this pull refused waits again, unless an earlier pull applied these bytes.
+      if (head.refused) {
+        if (hashes.get(head.path) !== head.hash && peers.get(scope.threadId)?.get(`${key}/${head.path}`)?.feed === head.hash) pending.get(key)?.set(head.path, head.hash);
+        continue;
+      }
       notePeer(scope.threadId, `${key}/${head.path}`, "pull", head.hash);
       const unmet = head.lastSeq > (seen.get(head.writer) ?? 0)
         || Object.entries(head.seen).some(([peer, seq]) => seq > (seen.get(peer) ?? 0));
       if (unmet) { ahead = true; continue; }
-      hashes.set(head.path, head.hash);
+      // An older copy clears its listing but, as on base, is never applied.
+      if (!head.older) hashes.set(head.path, head.hash);
       if (pending.get(key)?.get(head.path) === head.hash) pending.get(key)!.delete(head.path);
     }
     applied.set(key, hashes);

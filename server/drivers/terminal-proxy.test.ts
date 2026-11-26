@@ -135,7 +135,7 @@ describe("terminal proxy", () => {
     expect(description).toContain(workerModelsText());
     expect(description).toContain("Muse Ember = muse-ember-1.0");
     expect(workerModelsText().length).toBeLessThan(1100);
-    expect(description).toContain("Gemini: Gemini 4 Carbon = gemini-4-carbon-<effort>, Gemini 4 Neon = gemini-4-neon-<effort>, Gemini 4 Hydrogen = gemini-4-hydrogen-<effort>, Gemini 4 Argon = gemini-4-argon-<effort>, Gemini 3.8 Flash = gemini-3.8-flash-<effort> (effort high/medium/low, part of the id; Neon also has xhigh).");
+    expect(description).toContain("Gemini: Gemini 4 Carbon = gemini-4-carbon-<effort>, Gemini 4 Neon = gemini-4-neon-<effort>, Gemini 4 Hydrogen = gemini-4-hydrogen-<effort>, Gemini 3.8 Flash = gemini-3.8-flash-<effort> (effort high/medium/low, part of the id; Neon also has xhigh).");
     const ids = STATIC_ANTIGRAVITY_MODELS.options.map((option) => option.id);
     for (const family of WORKER_GEMINI_FAMILIES) {
       for (const effort of WORKER_GEMINI_EFFORTS) expect(ids).toContain(`${family.id}-${effort}`);

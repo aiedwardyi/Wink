@@ -2285,6 +2285,23 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     expect(recorder.events.some((e) => e.type === "runtime.error" && e.signedOut)).toBe(false);
   });
 
+  it.each([
+    ["the CLI's past-due subscription result", "Claude Code can't use your Claude subscription, usually because a payment is past due · Pay or renew at https://claude.ai/settings/billing (if you just paid, try again shortly), or use an Anthropic API key instead", true],
+    ["another subscription error", "Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account", false],
+    ["a rate limit", "HTTP 429 Too Many Requests", false],
+  ])("marks payment due only for %s", async (_kind, result, due) => {
+    const fixture = join(scratch, "payment-due.json");
+    writeFileSync(fixture, JSON.stringify([{ type: "result", subtype: "success", is_error: true, result }]));
+    process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+    await create();
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-payment-due", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    const errors = recorder.events.filter((e) => e.type === "runtime.error");
+    expect(errors).toEqual([expect.objectContaining({ turnId, message: result })]);
+    expect(errors.some((e) => e.paymentDue)).toBe(due);
+    expect(errors.some((e) => e.signedOut)).toBe(false);
+  });
+
   it("refuses a turn on a blocked base Claude instance", async () => {
     process.env.FAKE_CLAUDE_DUMP = join(scratch, "healthy.json");
     const inputs = () => {
@@ -4291,7 +4308,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       const [cli, argv, options] = spawn.mock.calls[0]!;
       expect(cli).toBe(FAKE_CLI);
       expect(argv).toEqual([
-        "-p", "--model", "claude-haiku-5-5", "--output-format", "text",
+        "-p", "--model", "claude-haiku-5-5", "--output-format", "json",
         ...(kind === "summary" ? [] : ["--safe-mode", "--tools", "", "--strict-mcp-config"]),
         ...(kind === "review" ? [] : ["--effort", "low"]),
         ...(kind === "summary" ? [] : ["--no-session-persistence"]),
@@ -4304,6 +4321,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     } finally {
       spawn.mockRestore();
     }
+  });
+
+  it("reads the reply and usage from a verbose CLI's json array", async () => {
+    await create(undefined, { FAKE_CLAUDE_VERBOSE: "1" });
+    const onUsage = vi.fn();
+    await expect(instance.generateText?.("summarize", { onUsage })).resolves.toBe("fake generated text");
+    expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ input: 6188, output: 1436, cacheCreation: 468 }));
   });
 
   it("creates the lean helper folder when it is missing", async () => {
@@ -4323,7 +4347,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       await expect(instance.generateText?.("notes prompt", { ephemeral: true, lean: true })).resolves.toBe("fake generated text");
       await expect(instance.reviewPermission?.("review prompt")).resolves.toBe("fake generated text");
 
-      const base = ["-p", "--model", "claude-haiku-5-5", "--output-format", "text"];
+      const base = ["-p", "--model", "claude-haiku-5-5", "--output-format", "json"];
       expect(spawn.mock.calls.map(([, argv]) => argv)).toEqual([
         [...base, "--safe-mode", "--tools", "", "--strict-mcp-config", "--no-session-persistence"],
         [...base, "--no-session-persistence"],
@@ -4439,7 +4463,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.prompt).toBe("summarize");
-    expect(seen.argv[seen.argv.indexOf("--output-format") + 1]).toBe("text");
+    expect(seen.argv[seen.argv.indexOf("--output-format") + 1]).toBe("json");
     expect(seen.mcpConfig).toBeNull();
   });
 

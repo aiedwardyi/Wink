@@ -4,7 +4,6 @@ import { stripVTControlCharacters } from "node:util";
 import { augmentedPath, findCliCandidates, resolveCliSpawn } from "./env-path.ts";
 import { cliVersion, killCliTree } from "./procs.ts";
 import { accountLaunch, type AccountContext } from "./account-policy.ts";
-import { redactSecretsInText } from "./redact.ts";
 
 export interface LoginCapture {
   url?: string;
@@ -28,7 +27,7 @@ export function signInOwner(headers: { [name: string]: string | string[] | undef
 }
 
 export function logSignInRefusal(status: number, code?: string): void {
-  console.warn(`sign-in refused code=${code ?? `http-${status}`} status=${status} stderr=-`);
+  console.warn(`sign-in refused code=${code ?? `http-${status}`} status=${status} reason=-`);
 }
 
 function launchErrorCode(error: unknown): string {
@@ -36,23 +35,18 @@ function launchErrorCode(error: unknown): string {
   return typeof code === "string" && /^[A-Z][A-Z0-9_]{1,31}$/.test(code) ? code : "launch-error";
 }
 
-function safeStderr(line: string): string {
-  return redactSecretsInText(line
-    .replace(/\bhttps?:\/\/\S+/gi, "[url]")
-    .replace(/\b(?:[\w-]*(?:token|secret|password|api[-_]?key|authorization)|code)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, "[credential]")
-    .replace(/\bBearer\s+\S+/gi, "[credential]")
-    .replace(/\b[A-Z0-9]{4}(?:-[A-Z0-9]{4,5}){1,2}\b|[A-Za-z0-9_+\/=-]{24,}/g, "[code]"))
-    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, " ").slice(0, 320);
-}
-
-function logCliExit(code: string, line?: string): void {
-  console.warn(`sign-in CLI exit code=${code} stderr=${line ? JSON.stringify(line) : "-"}`);
+// CLI output can carry a device code or link in any form, so a failed exit logs only what Wink parsed from it.
+function logCliExit(code: string, reason?: LoginCapture["error"]): void {
+  console.warn(`sign-in CLI exit code=${code} reason=${reason ?? "-"}`);
 }
 
 const VERSION_PROBE_MS = 10_000;
 const PASTE_PROMPT = /^(?:Paste code here if prompted\s*>|Then paste the authorization code\b.*:)\s*$/;
 
 type LoginState = "pending" | "complete" | "failed" | "cancelled";
+export type SignInMode = "browser" | "code";
+type StartOptions = { scope?: string; account?: AccountContext; logExit?: boolean; paste?: boolean }
+  & ({ mode: SignInMode; owner: string } | { mode: "sign-out"; owner?: never });
 interface LoginJob {
   scope: string;
   generation: number;
@@ -64,8 +58,8 @@ interface LoginJob {
   changed: Set<() => void>;
   acknowledged: boolean;
   pasteBack: boolean;
+  mode: SignInMode | "sign-out";
   owner?: string;
-  lastStderr?: string;
 }
 
 export class EngineLogin {
@@ -97,6 +91,18 @@ export class EngineLogin {
     return { ...this.jobs.get(engine)?.capture };
   }
 
+  /** The waiting sign-in's link, code and paste prompt, for the session that started it only. */
+  captureFor(engine: string, owner: string): LoginCapture {
+    const job = this.jobs.get(engine);
+    return job?.state === "pending" && job.owner === owner ? { ...job.capture } : {};
+  }
+
+  /** A pending sign-in that opened its browser on this PC, which a code-flow device can neither see nor finish. */
+  opensBrowser(engine: string): boolean {
+    const job = this.jobs.get(engine);
+    return job?.state === "pending" && job.mode === "browser";
+  }
+
   /** Whether `owner` may answer or cancel this engine's sign-in: always, unless another session's is pending. */
   owns(engine: string, owner?: string): boolean {
     const job = this.jobs.get(engine);
@@ -112,18 +118,26 @@ export class EngineLogin {
     return true;
   }
 
-  needsRefresh(engine: string): boolean {
+  /** Whether a sign-in start from `owner` in `mode` joins this engine's waiting sign-in instead of replacing it. */
+  joins(engine: string, owner: string, mode: SignInMode): boolean {
     const job = this.jobs.get(engine);
-    return job?.state === "pending" || (job?.state === "complete" && !job.acknowledged);
+    return job?.state === "pending" && job.owner === owner && job.mode === mode;
   }
 
-  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: { scope?: string; account?: AccountContext; logExit?: boolean; paste?: boolean; owner?: string } = {}): Promise<LoginCapture> {
+  /** The newest sign-in wins: a waiting one is joined only by its own session in its own mode; any other start ends it. A sign-out is never replaced. */
+  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: StartOptions): Promise<LoginCapture> {
     if (this.disposed) return {};
     let job = this.jobs.get(engine);
     const scope = options.scope ?? engine;
     const owner = this.scopes.get(scope);
+    const waiting = [...new Set([job, owner])].filter((other): other is LoginJob => other?.state === "pending");
+    if (waiting.some((other) => other.mode === "sign-out" || (options.mode === "sign-out" && other !== job))) throw new LoginBusyError();
+    if (options.mode !== "sign-out" && !(job && this.joins(engine, options.owner, options.mode) && waiting.every((other) => other === job)) && waiting.length) {
+      for (const other of waiting) other.finish("cancelled");
+      await Promise.all(waiting.map((other) => other.done));
+      return this.start(engine, cli, args, env, authHosts, options);
+    }
     if (owner && owner !== job) {
-      if (owner.state === "pending") throw new LoginBusyError();
       await owner.done;
       if (this.scopes.get(scope) === owner) throw new LoginBusyError();
       return this.start(engine, cli, args, env, authHosts, options);
@@ -134,7 +148,7 @@ export class EngineLogin {
       return this.start(engine, cli, args, env, authHosts, options);
     }
     if (job?.state !== "pending") {
-      job = this.create(engine, scope);
+      job = this.create(engine, scope, options.mode);
       job.pasteBack = options.paste === true;
       job.owner = options.owner;
       try {
@@ -160,11 +174,11 @@ export class EngineLogin {
         job.child = child;
         child.stdin.on("error", () => {});
         this.read(child.stdout, job, authHosts);
-        this.read(child.stderr, job, authHosts, options.logExit);
+        this.read(child.stderr, job, authHosts);
         let spawnError: string | undefined;
         child.once("error", (error) => { spawnError = launchErrorCode(error); job!.finish("failed"); });
         child.once("close", (code, signal) => {
-          if (options.logExit && (spawnError || signal || code !== 0)) logCliExit(spawnError ?? signal ?? String(code), job!.lastStderr);
+          if (options.logExit && (spawnError || signal || code !== 0)) logCliExit(spawnError ?? signal ?? String(code), job!.capture.error);
           job!.finish(code === 0 ? "complete" : "failed");
         });
       } catch (error) {
@@ -178,13 +192,8 @@ export class EngineLogin {
 
   waitExternal(engine: string): LoginCapture {
     if (this.disposed) return {};
-    if (this.state(engine) !== "pending") this.create(engine);
+    if (this.state(engine) !== "pending") this.create(engine, engine, "browser");
     return {};
-  }
-
-  complete(engine: string): void {
-    const job = this.jobs.get(engine);
-    if (job?.state === "pending") job.finish("complete");
   }
 
   acknowledge(engine: string, authenticated: boolean): void {
@@ -213,16 +222,17 @@ export class EngineLogin {
     this.scopes.clear();
   }
 
-  private create(engine: string, scope = engine): LoginJob {
+  private create(engine: string, scope: string, mode: LoginJob["mode"]): LoginJob {
     let closed!: () => void;
     const job: LoginJob = {
-      scope,
+      scope, mode,
       generation: ++this.nextGeneration,
       capture: {}, state: "pending", changed: new Set(), acknowledged: false, pasteBack: false,
       done: new Promise<void>((resolve) => { closed = resolve; }),
       finish: (state) => {
         if (job.state !== "pending") return;
         job.state = state;
+        job.capture = job.capture.error ? { error: job.capture.error } : {};
         clearTimeout(timer);
         if (job.child && job.child.exitCode === null && job.child.signalCode === null) {
           let childClosed = false;
@@ -254,13 +264,12 @@ export class EngineLogin {
     return job;
   }
 
-  private read(stream: NodeJS.ReadableStream, job: LoginJob, authHosts: string[], stderr = false): void {
+  private read(stream: NodeJS.ReadableStream, job: LoginJob, authHosts: string[]): void {
     let line = "";
     let dropping = false;
     stream.setEncoding("utf8");
     const parse = () => {
       const clean = stripVTControlCharacters(line).trim();
-      if (stderr && clean) job.lastStderr = safeStderr(clean);
       if (job.state !== "pending") { line = ""; return; }
       if (job.pasteBack && PASTE_PROMPT.test(clean)) job.capture.inputGeneration = job.generation;
       if (job.scope === "codex" && /\bdevice[ _-]+limit(?:[ _-]+reached)?\b|\btoo many (?:paid )?accounts (?:on|for) (?:this|the same) device\b/i.test(clean)) {
@@ -297,7 +306,6 @@ export class EngineLogin {
           line += char;
           if (job.pasteBack && char === ">" && /^Paste code here if prompted\s*>$/.test(stripVTControlCharacters(line).trim())) parse();
           if (line.length > 8192) {
-            if (stderr) job.lastStderr = "[line too long]";
             line = ""; dropping = true;
           }
         }
@@ -314,7 +322,8 @@ export class EngineLogin {
         resolve();
       };
       const check = () => {
-        if (job.state !== "pending" || (job.capture.url && (job.capture.code || job.capture.inputGeneration))) finish();
+        // A browser sign-in has nothing more to show once its link is out; a code sign-in waits for its code or paste prompt.
+        if (job.state !== "pending" || (job.capture.url && (job.capture.code || job.capture.inputGeneration || (job.mode === "browser" && !job.pasteBack)))) finish();
       };
       const timer = setTimeout(finish, this.captureMs);
       job.changed.add(check);

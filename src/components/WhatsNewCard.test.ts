@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
 import { FORUM_SELECTION } from "@/lib/board";
-import { closeShow, useMapThread, useTimelineThread, useWorkersThread } from "@/lib/show-pane";
+import { closeShow, useMapThread, useTimelineThread, useToolsThread, useWorkersThread } from "@/lib/show-pane";
 import { WHATS_NEW } from "@/lib/whats-new";
 import { newerRelease } from "../../shared/release-order";
 import type { SceneModule } from "@/scenes/scene-host";
@@ -193,6 +193,34 @@ describe("whats new card", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it("opens this chat's side pane from its Show me, and a second press leaves it open", () => {
+    const { tile, text } = showMe("1.0.302", "Side pane tabs");
+    act(() => tile.querySelector<HTMLButtonElement>(".whats-new-show")!.click());
+    let opened: string | null = null;
+    const probe = createRoot(document.createElement("div"));
+    act(() => probe.render(createElement(() => ((opened = useToolsThread()), null))));
+    act(() => probe.unmount());
+    closeShow();
+    expect(opened).toBe("t-atlas");
+    expect(tile.textContent).toBe(text);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("shows the Side pane tile alone in 1.0.302, in English and Korean", () => {
+    const entry = WHATS_NEW["1.0.302"];
+    expect(entry.tiles.map((tile) => "show" in tile && tile.show)).toEqual(["pane"]);
+    for (const locale of ["en", "ko"] as const) {
+      applyLocale(locale);
+      act(() => root.unmount());
+      root = createRoot(host);
+      render("1.0.302");
+      const tiles = [...host.querySelectorAll(".whats-new-tile")];
+      expect(tiles).toHaveLength(1);
+      expect(tiles[0].querySelector(".whats-new-tile-title")?.textContent).toBe(entry.tiles[0].title[locale]);
+      expect(tiles[0].textContent).toContain(entry.tiles[0].line[locale]);
+    }
+  });
+
   it("opens the Forum from its Show me", () => {
     const { tile, text } = showMe("1.0.282", "Bots help each other in the Forum");
     expect(dispatch).toHaveBeenCalledExactlyOnceWith({ type: "select", id: FORUM_SELECTION, reveal: true });
@@ -207,6 +235,32 @@ describe("whats new card", () => {
     expect(opened).toHaveBeenCalledTimes(1);
     expect(tile.textContent).toBe(text);
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("opens the model picker in Quick style from the Quick tile's Show me", () => {
+    const views: unknown[] = [];
+    const opened = (event: Event) => views.push((event as CustomEvent).detail?.view);
+    window.addEventListener("orbit:open-model-picker", opened);
+    const { tile, text } = showMe("1.0.303", "Quick model picker");
+    window.removeEventListener("orbit:open-model-picker", opened);
+    expect(views).toEqual(["quick"]);
+    expect(tile.textContent).toBe(text);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("shows the Quick picker tile alone in 1.0.303, in English and Korean", () => {
+    const entry = WHATS_NEW["1.0.303"];
+    expect(entry.tiles.map((tile) => "show" in tile && tile.show)).toEqual(["quick"]);
+    for (const locale of ["en", "ko"] as const) {
+      applyLocale(locale);
+      act(() => root.unmount());
+      root = createRoot(host);
+      render("1.0.303");
+      const tiles = [...host.querySelectorAll(".whats-new-tile")];
+      expect(tiles).toHaveLength(1);
+      expect(tiles[0].querySelector(".whats-new-tile-title")?.textContent).toBe(entry.tiles[0].title[locale]);
+      expect(tiles[0].textContent).toContain(entry.tiles[0].line[locale]);
+    }
   });
 
   it("opens Settings > Themes at the four new themes from its Show me", () => {
@@ -526,7 +580,7 @@ describe("whats new card", () => {
   it("keeps the previews small", () => {
     const dir = "src/assets/whats-new";
     const bytes = readdirSync(dir).reduce((sum, file) => sum + statSync(join(dir, file)).size, 0);
-    expect(bytes).toBeLessThan(3.5 * 1024 * 1024);
+    expect(bytes).toBeLessThan(4 * 1024 * 1024);
   });
 
   it("keeps animated previews moving smoothly", () => {

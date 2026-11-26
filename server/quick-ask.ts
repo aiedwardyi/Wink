@@ -21,24 +21,13 @@ const BLOCK_HEAD =
   "[Your earlier fast replies in this chat, sent while you were busy. They are your own words and the person has seen them. If one was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you:]";
 const NOTE_HEAD =
   "[Wink note, automated, not from the person. You already sent the person this reply earlier in this chat, and they have seen it. Do not repeat it. Use it only if it changes your current work, and then say only what changes. If it was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you. The user's own words decide; if they don't match what you asked (like 'both' for 3 items), take every item or ask one short question.]";
-// An order gets a fixed line, never the helper's reading of it; the bot decides what the order means.
-const ORDER_ACK = "Got it, one moment while I finish this step, then I'll do it.";
-const ORDER_ACK_KO = "알겠어요, 이 단계 마무리하고 바로 할게요. 잠시만요.";
-const HANGUL = /[\u3131-\u318e\uac00-\ud7a3]/g;
-const LATIN = /[a-z]/gi;
-// the message's main script: one stray Hangul character ("merge 2번") stays English
-const isKorean = (text: string) => {
-  const korean = text.match(HANGUL)?.length ?? 0;
-  return korean > 0 && korean * 4 >= korean + (text.match(LATIN)?.length ?? 0);
-};
-const orderAck = (text: string) => (isKorean(text) ? ORDER_ACK_KO : ORDER_ACK);
 const BLOCK_PAIRS = 6;
 const BLOCK_TOKENS = 1_500;
 const INDEX_FILE = join(DATA_DIR, "quick-asks.json");
 // engines that passed the real-engine accuracy bar
 const QUICK_ENGINES: ReadonlySet<string> = new Set(["claudeAgent"]);
 
-export type QuickAsk = (bot: QuickBot, threadId: string, ask: { text: string; notes?: string; ack?: boolean }) => Promise<QuickResult>;
+export type QuickAsk = (bot: QuickBot, threadId: string, ask: { text: string; notes?: string }) => Promise<QuickResult>;
 
 export interface QuickGate {
   bot: BotRecord;
@@ -71,8 +60,8 @@ function route(gate: QuickGate): ReturnType<typeof nominate> {
 }
 
 export const routesQuick = (gate: QuickGate) => route(gate) === "quick";
-/** Steered to the bot as the person's own words, with one short helper reply beside it. */
-export const routesAck = (gate: QuickGate) => route(gate) === "ack";
+/** Steered to the bot as the person's own words; the helper answers only the question in it. */
+export const routesAside = (gate: QuickGate) => route(gate) === "aside";
 
 // The answers a thread's starting turn carries in its block, until that turn's first model event.
 const carried = new Map<string, string[]>();
@@ -316,7 +305,7 @@ function recoverThread(store: RecoveryStore, botId: string, threadId: string, fo
 
 type HelperDeps = Omit<QuickDeps, "handoff" | "drain">;
 
-async function askHelper(deps: HelperDeps, instance: ProviderInstance, botId: string, threadId: string, ask: Message, ack?: boolean): Promise<QuickResult> {
+async function askHelper(deps: HelperDeps, instance: ProviderInstance, botId: string, threadId: string, ask: Message, text = ask.text ?? ""): Promise<QuickResult> {
   const usageId = `quick:${ask.id}`;
   let result: QuickResult = { route: "handoff", ms: 0 };
   deps.usage?.start(botId, threadId, usageId);
@@ -324,10 +313,10 @@ async function askHelper(deps: HelperDeps, instance: ProviderInstance, botId: st
     const messages = deps.store.activePath(threadId).filter((message) => message.id !== ask.id);
     const calls = ask.call ? callLinesSinceLastUserTurn(messages, new Set()) : [];
     const notes = [...quickAnswersSinceLastUserTurn(messages, new Set()), ...calls].join("\n\n");
-    result = await deps.ask({ instance, messages, userName: deps.userName }, threadId, { text: ask.text ?? "", notes, ack });
+    result = await deps.ask({ instance, messages, userName: deps.userName }, threadId, { text, notes });
   } catch {}
   deps.usage?.settle(usageId);
-  console.info(`[quick] ${JSON.stringify({ id: usageId, accountId: instance.instanceId, route: result.route, ms: result.ms, ack, ...result.usage })}`);
+  console.info(`[quick] ${JSON.stringify({ id: usageId, accountId: instance.instanceId, route: result.route, ms: result.ms, ...result.usage })}`);
   return result;
 }
 
@@ -339,7 +328,6 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   const text = ask.text ?? "";
   if (isOrder(text)) {
     if (!bot || !pending(store, threadId, ask)) return;
-    store.appendMessage(threadId, { role: "bot", kind: "text", text: orderAck(text), engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
     // this route never gave the bot the order, so it waits for the bot's next turn here
     queueAsk(store, botId, threadId, ask);
     deps.drain();
@@ -389,16 +377,13 @@ async function land(store: QuickDeps["store"], instance: ProviderInstance | null
   })?.catch(() => false);
 }
 
-/** One short helper reply under a send the bot already took as the person's own words; none when the helper has none. */
-export async function ackQuick(deps: HelperDeps, botId: string, threadId: string, sent: Message): Promise<void> {
+/** The helper's answer to the question in a send the bot already took as the person's own words; none when the helper has none. */
+export async function answerAside(deps: HelperDeps, botId: string, threadId: string, sent: Message, question: string): Promise<void> {
   const { store } = deps;
   const bot = store.bot(botId);
   const instance = bot ? deps.instance(bot, threadId) : null;
   if (!instance) return;
-  const text = sent.text ?? "";
-  const result: QuickResult = isOrder(text)
-    ? { route: "answer", text: orderAck(text), ms: 0 }
-    : await askHelper(deps, instance, botId, threadId, sent, true);
+  const result = await askHelper(deps, instance, botId, threadId, sent, question);
   const current = store.bot(botId);
   if (!current || result.route === "handoff" || !result.text) return;
   const path = store.activePath(threadId);

@@ -335,16 +335,19 @@ export function useSharedWorkers(threadId: string | undefined): WorkerSource | u
 }
 
 /** The side pane's Workers tab: the chat's one worker list. */
-export function WorkerPage({ source, maximized, onClose }: { source: WorkerSource | undefined; maximized: boolean; onClose: () => void }) {
+export function WorkerPage({ source, maximized, kept, onClose }: { source: WorkerSource | undefined; maximized: boolean; kept?: boolean; onClose: () => void }) {
   const { t } = useI18n();
+  const phone = useIsPhone();
   useEffect(() => { trackScreen("workers"); }, []);
+  // The desktop pane goes along on a chat switch, so only the phone's sheet shuts with the worker menus.
   useEffect(() => {
+    if (!phone) return;
     window.addEventListener("orbit:close-worker-menu", onClose);
     return () => window.removeEventListener("orbit:close-worker-menu", onClose);
-  }, [onClose]);
+  }, [onClose, phone]);
   const listed = source ? listedFor(source) : [];
   return (
-    <div data-worker-list className="verify-watch-frame show-workers" data-maximized={maximized || undefined}>
+    <div data-worker-list className="verify-watch-frame show-workers" data-maximized={maximized || undefined} data-kept={kept}>
       <div className="verify-watch-bar show-frame-bar">
         <Bot size={14} aria-hidden className="show-frame-icon" />
         <h2 className="show-frame-name">{source ? t("workers.title", { name: source.name }) : t("show.workers")}</h2>

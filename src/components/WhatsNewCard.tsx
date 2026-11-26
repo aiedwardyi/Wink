@@ -4,7 +4,7 @@ import { useI18n, type LocaleId } from "@/lib/i18n";
 import { LIGHT_SKIN_IDS, useSkin, type SkinId } from "@/lib/skins";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { FORUM_SELECTION } from "@/lib/board";
-import { showMap, showTimeline, showWorkers } from "@/lib/show-pane";
+import { showMap, showPane, showTimeline, showWorkers } from "@/lib/show-pane";
 import { WHATS_NEW, releaseNotesUrl, type WhatsNewTarget, type WhatsNewTile } from "@/lib/whats-new";
 import { useStore } from "@/state/store";
 import { SCENE_NAME, sceneOf, type SceneId } from "./ChatScene";
@@ -157,8 +157,11 @@ export default function WhatsNewCard({ release, theme, closing, onClose }: { rel
                       if (thread) showWorkers(thread);
                     } else if (target === "timeline") {
                       if (thread) showTimeline(thread);
+                    } else if (target === "pane") {
+                      if (thread) showPane(thread);
                     } else if (target === "forum") dispatch({ type: "select", id: FORUM_SELECTION, reveal: true });
                     else if (target === "models") window.dispatchEvent(new Event("orbit:open-model-picker"));
+                    else if (target === "quick") window.dispatchEvent(new CustomEvent("orbit:open-model-picker", { detail: { view: "quick" } }));
                     else dispatch({ type: "toggleAppSettings", open: true, section: "themes", skins: target.skins });
                   }}
                 />

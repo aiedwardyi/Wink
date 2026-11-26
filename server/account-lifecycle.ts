@@ -51,8 +51,8 @@ export class AccountLifecycle {
 
   get busy() { return this.mutations > 0 || this.jobs.size > 0 || Object.values(this.accounts.drains).some((row) => row.phase !== "failed"); }
   settled(id: string) { return this.pending.get(id) ?? Promise.resolve(); }
-  signInResult(id: string) {
-    return this.results.get(id) ?? (this.pending.has(id) ? { ...this.registry.logins.capture(id), state: "pending" as const }
+  signInResult(id: string, owner: string) {
+    return this.results.get(id) ?? (this.pending.has(id) ? { ...this.registry.signInCapture(id, owner), state: "pending" as const }
       : this.accounts.get(id)?.state === "ready" ? { state: "complete" as const } : undefined);
   }
 
@@ -117,7 +117,7 @@ export class AccountLifecycle {
     });
   }
 
-  add(of: string, device = false, owner?: string) {
+  add(of: string, device: boolean, owner: string) {
     return this.exclusive(async () => {
       const account = await this.accounts.add(of);
       this.registry.blockAccount(account.id, true);
@@ -132,16 +132,22 @@ export class AccountLifecycle {
     });
   }
 
-  signIn(id: string, device = false, owner?: string) {
+  signIn(id: string, device: boolean, owner: string) {
     return this.exclusive(async () => {
       const destinations = Object.values(this.accounts.drains).filter((row) => row.destinationId === id);
       if (destinations.some((row) => row.phase !== "signed-out") || (destinations.length > 0 && this.registry.accountAvailable(id))) throw new AccountError("This account is the destination of a pending removal");
       const drain = this.accounts.drains[id];
       if (drain?.phase === "failed") await this.accounts.clearDrain(id);
       else if (drain) throw new AccountError("This account is draining");
+      const logins = this.registry.logins;
+      if (logins.joins(id, owner, this.registry.signInMode(id, device))) return this.registry.signInCapture(id, owner);
+      // Any other start replaces the waiting sign-in, so its pending job must not read as this account's active work.
+      if (logins.state(id) === "pending" && !this.registry.signingOutNow(id)) await this.registry.cancelSignIn(id);
       const account = this.accounts.get(id);
       if (!account) {
-        if (!this.accounts.list().some((row) => row.id === id && row.existing)) throw new AccountError("Unknown account", 404);
+        if (!this.accounts.isBase(id)) throw new AccountError("Unknown account", 404);
+        // A replaced sign-in first puts back the block it found.
+        await this.pending.get(id);
         const blocked = this.registry.accountBlocked(id);
         const home = this.promoHome(id);
         const guarded = blocked || (home && codexPromoBlocked(home)) || this.accounts.snapshot.length > 0 || destinations.length > 0;
@@ -159,20 +165,24 @@ export class AccountLifecycle {
           capture = await this.registry.startSignIn(id, device, owner);
           if (!capture) throw new AccountError("Unknown engine sign-in", 404, "unknown-engine-sign-in");
         } catch (error) { if (guarded) this.registry.blockAccount(id, blocked); throw error; }
-        if (this.registry.accountBlocked(id)) {
-          const finished = this.registry.logins.wait(id).then(async () => {
-            const snapshot = await this.registry.get(id)?.snapshot({ refresh: true });
-            if (snapshot?.authenticated !== true) return;
-            if (home && this.registry.logins.state(id) === "complete") clearCodexPromo(home);
-            this.registry.blockAccount(id, false);
-            this.hooks.changed?.();
-          }).catch(() => { console.error("Account sign-in snapshot could not be refreshed"); })
-            .finally(() => { if (this.pending.get(id) === finished) this.pending.delete(id); });
-          this.pending.set(id, finished);
-        }
+        const generation = logins.generation(id);
+        // Every device hears the end from here: reads never check a waiting sign-in.
+        const finished = logins.wait(id).then(async () => {
+          if (logins.generation(id) !== generation) return;
+          const state = logins.state(id);
+          const snapshot = state === "cancelled" ? undefined : await this.registry.settleSignIn(id, generation);
+          if (snapshot?.authenticated === true && home && state === "complete") clearCodexPromo(home);
+          if (guarded) this.registry.blockAccount(id, snapshot?.authenticated === true ? false : blocked);
+        }).catch(() => {
+          if (guarded) this.registry.blockAccount(id, blocked);
+          console.error("Account sign-in snapshot could not be refreshed");
+        }).finally(() => {
+          if (this.pending.get(id) === finished) this.pending.delete(id);
+          this.hooks.changed?.(id);
+        });
+        this.pending.set(id, finished);
         return capture;
       }
-      if (this.jobs.has(id)) return this.registry.logins.capture(id);
       const blocked = this.registry.accountBlocked(id);
       this.registry.blockAccount(id, true);
       try {
@@ -206,7 +216,7 @@ export class AccountLifecycle {
 
   cancel(id: string, from?: SignInRequest) {
     return this.exclusive(async () => {
-      if (!this.accounts.list().some((row) => row.id === id)) throw new AccountError("Unknown account", 404);
+      if (!this.accounts.get(id) && !this.accounts.isBase(id)) throw new AccountError("Unknown account", 404);
       this.mayEndSignIn(id, from);
       await this.registry.cancelSignIn(id);
       return {};
@@ -214,6 +224,8 @@ export class AccountLifecycle {
   }
 
   remove(id: string, destinationId?: string, from?: SignInRequest) {
+    // A press while this engine's sign-out runs joins it and gets its answer.
+    if (!destinationId && !this.accounts.get(id) && this.registry.signingOutNow(id)) return this.registry.signOut(id).then((success) => this.signedOutBase(success));
     return this.exclusive(async () => {
       this.mayEndSignIn(id, from);
       if (Object.values(this.accounts.drains).some((row) => row.destinationId === id)) throw new AccountError("This account is the destination of a pending removal");
@@ -233,10 +245,15 @@ export class AccountLifecycle {
         try { return await this.advanceDrain(id); } finally { this.scheduleDrains(); }
       }
       const account = this.accounts.get(id);
-      const lastExisting = !account && this.accounts.list().some((row) => row.id === id && row.existing) && !this.accounts.snapshot.some((row) => row.of === id);
+      const lastExisting = !account && this.accounts.isBase(id) && !this.accounts.snapshot.some((row) => row.of === id);
       if (this.bots?.hasReferences(id) && !lastExisting) throw new AccountError("This account is still used by a bot or pending choice; a confirmed destination account id is required", 400);
       if (!account) {
-        if (!this.accounts.list().some((row) => row.id === id && row.existing)) throw new AccountError("Unknown account", 404);
+        if (!this.accounts.isBase(id)) throw new AccountError("Unknown account", 404);
+        // Its sign-in ends first, so that sign-in's restored block can't land during the sign-out.
+        if (this.pending.has(id)) {
+          await this.registry.cancelSignIn(id);
+          await this.pending.get(id);
+        }
         const guarded = this.accounts.snapshot.length > 0;
         if (guarded) {
           const blocked = this.registry.accountBlocked(id);
@@ -248,8 +265,7 @@ export class AccountLifecycle {
             throw error;
           }
         }
-        const success = await this.registry.signOut(id);
-        if (!success) throw new AccountError("Sign-out failed", 502);
+        this.signedOutBase(await this.registry.signOut(id));
         if (guarded) {
           this.hooks.invalidate(id);
           // Invalidating drops the signed-out check and a stopped base never checks on its own: without a new one it reads as not installed.
@@ -272,6 +288,12 @@ export class AccountLifecycle {
       await this.discard(id);
       return {};
     });
+  }
+
+  private signedOutBase(success: boolean | null) {
+    if (success === null) throw new AccountError("Unknown engine sign-out", 404);
+    if (!success) throw new AccountError("Sign-out failed", 502);
+    return {};
   }
 
   observe(id: string, snapshot: ProviderSnapshot, generation?: number): Promise<void> {
@@ -368,7 +390,7 @@ export class AccountLifecycle {
     this.retries.set(account.id, retry);
   }
 
-  private async begin(account: AccountRecord, device: boolean, owner?: string) {
+  private async begin(account: AccountRecord, device: boolean, owner: string) {
     const token = {};
     this.results.delete(account.id);
     this.jobs.set(account.id, token);

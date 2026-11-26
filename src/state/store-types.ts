@@ -436,7 +436,8 @@ export interface RateLimitReport {
 /** One row of GET /api/instances - the model picker's data. */
 export interface InstanceInfo {
   loginState?: "pending" | "complete" | "failed" | "cancelled";
-  loginCapture?: { url?: string; code?: string; inputGeneration?: number };
+  /** The pending sign-in opened its browser on the PC. */
+  loginOpensBrowser?: boolean;
   loginError?: string;
   instanceId: string;
   driverKind: string;
