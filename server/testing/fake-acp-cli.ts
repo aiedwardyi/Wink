@@ -33,9 +33,12 @@
 //                     file exists — a deterministic busy window for the
 //                     steer-queue e2e, with the echo pinning exactly what a
 //                     drained turn was sent)
-//                   | read (Grok's plan mode: a read_file of notes.txt in the
-//                     session's cwd runs unasked, unless --disallowed-tools
-//                     removes read_file; what it read goes to FAKE_ACP_READ_OUT)
+//                   | read (like grok 1.0.92 over `agent stdio`: a read_file of
+//                     notes.txt in the session's cwd, or a `cat` through the
+//                     shell tool, runs unasked in every mode, plan included.
+//                     --tools and --disallowed-tools are ignored there; only an
+//                     --agent-profile `tools:` list removes the rest. What it
+//                     read goes to FAKE_ACP_READ_OUT)
 //   FAKE_ACP_DUMP   path to write {argv, env} as JSON, so a test can assert
 //                   argv shape (agent/stdio flags) and env hygiene. Per-session
 //                   settings land next to it in `<path>.config.json`, so a test
@@ -103,7 +106,13 @@ const sessionModels = () =>
 const argv = process.argv.slice(2);
 // the session's folder, where the read mode looks
 let sessionCwd: string | null = null;
-const readToolsOff = () => argv.includes("--disallowed-tools") && argv[argv.indexOf("--disallowed-tools") + 1]!.split(",").includes("read_file");
+// a built-in tool this launch offers: only an --agent-profile `tools:` list narrows them
+const offered = (tool: string): boolean => {
+  const at = argv.indexOf("--agent-profile");
+  if (at < 0) return true;
+  const list = readFileSync(argv[at + 1]!, "utf8").match(/\ntools:\n((?:\s+- .+\n)+)/)?.[1];
+  return list === undefined || list.split("\n").some((line) => line.trim() === `- ${tool}`);
+};
 const dumpEnv = Object.fromEntries(
   [
     "PATH",
@@ -506,9 +515,10 @@ function handle(msg: any) {
         dumpState.prompt = msg.params?.prompt;
         writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify(dumpState, null, 2));
       }
-      if (mode === "read" && sessionCwd && !readToolsOff()) {
+      const reader = ["read_file", "run_terminal_cmd"].find(offered);
+      if (mode === "read" && sessionCwd && reader) {
         const path = join(sessionCwd, "notes.txt");
-        out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "read-1", title: "read_file", kind: "read" } } });
+        out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "read-1", title: reader === "read_file" ? "read_file" : "cat notes.txt", kind: reader === "read_file" ? "read" : "execute" } } });
         if (existsSync(path)) writeFileSync(process.env.FAKE_ACP_READ_OUT ?? "read.txt", readFileSync(path));
         out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "read-1", status: "completed" } } });
       }

@@ -52,7 +52,8 @@
 //                   | read (a read_file of notes.txt in the session's
 //                     workspace root runs unasked, like Muse with
 //                     --disable-write --disable-shell; a resumed session keeps
-//                     the root it started in. What it read goes to
+//                     the root it started in unless session/resume names a
+//                     workspaceRoot, which moves it there. What it read goes to
 //                     FAKE_MSP_READ_OUT, roots to `<that path>.roots.json`)
 //   FAKE_MSP_STATE  path to a JSON file holding per-session models across
 //                   the one-process-per-turn spawns, so a switch sticks.
@@ -364,6 +365,7 @@ function handle(msg: any) {
         break;
       }
       const resumedId = msg.params?.sessionId ?? SESSION_ID;
+      if (READ_OUT && typeof msg.params?.workspaceRoot === "string") writeFileSync(`${READ_OUT}.roots.json`, JSON.stringify({ ...sessionRoots(), [resumedId]: msg.params.workspaceRoot }));
       result(msg.id, {
         session: { sessionId: resumedId, modelId: readModels()[resumedId] ?? "fake-msp-resumed" },
         history: { mode: "none" },

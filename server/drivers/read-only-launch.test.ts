@@ -289,7 +289,7 @@ describe("a room guest's read-only turn reads no host file", () => {
     return existsSync(out) ? readFileSync(out, "utf8") : null;
   };
 
-  it("Grok: plan mode reads unasked, so a guest's ask gets no read tool; the owner's lane and turns keep them", async () => {
+  it("Grok: over agent stdio plan mode and --disallowed-tools hold nothing, so a guest's ask gets no read tool or shell; the owner's lane and turns keep them", async () => {
     const out = join(scratch, "grok-read.txt");
     setEnv("FAKE_ACP_MODE", "read");
     setEnv("FAKE_ACP_READ_OUT", out);
@@ -300,6 +300,8 @@ describe("a room guest's read-only turn reads no host file", () => {
     expect(await read("t-grok-guest-resumed", { ...GUEST_ASK, resumeCursor: "s-host" })).toBeNull();
     expect(await read("t-grok-lane", OWNER_LANE)).toBe(CANARY);
     expect(await read("t-grok-owner", OWNER_TURN)).toBe(CANARY);
+    // the guest's tools come from its launch, not the saved session: the owner's next turn has them all
+    expect(await read("t-grok-guest", { ...OWNER_TURN, resumeCursor: "fake-acp-session" })).toBe(CANARY);
   });
 
   it("Muse: a guest's ask works in an empty folder and never resumes a session rooted in the host's project", async () => {
@@ -312,6 +314,8 @@ describe("a room guest's read-only turn reads no host file", () => {
     const read = reader(instance, hostProject(), out);
     expect(await read("t-muse-lane", OWNER_LANE)).toBe(CANARY);
     expect(await read("t-muse-guest", GUEST_ASK)).toBeNull();
+    // the session that ask started sits in its empty folder: the owner's next turn resumes it in the project
+    expect(await read("t-muse-guest", { ...OWNER_TURN, resumeCursor: "fake-msp-session" })).toBe(CANARY);
     // the owner's session, rooted in the project, is the one a guest's ask would resume
     expect(await read("t-muse-owner", OWNER_TURN)).toBe(CANARY);
     expect(await read("t-muse-guest-resumed", { ...GUEST_ASK, resumeCursor: "fake-msp-session" })).toBeNull();
