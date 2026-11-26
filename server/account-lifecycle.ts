@@ -268,7 +268,7 @@ export class AccountLifecycle {
         }
         this.signedOutBase(await this.registry.signOut(id));
         // A base can't be retired: it stays in the store, marked, and leaves Usage and Connections while another account is listed.
-        await this.accounts.markSignedOut(id, true);
+        await this.accounts.markSignedOut(id, true).catch(() => { console.error("Signed-out base could not be saved"); });
         if (guarded) {
           this.hooks.invalidate(id);
           // Invalidating drops the signed-out check and a stopped base never checks on its own: without a new one it reads as not installed.
