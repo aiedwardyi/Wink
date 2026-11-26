@@ -645,8 +645,13 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
   // decisions first, then tweaks, so a tweak can land on a pick made in the same lines
   const rank = (fact: Fact) => (fact.kind === "decision" ? 0 : fact.kind === "tweak" ? 1 : 2);
   const order = facts.map((fact, index) => ({ fact, index })).sort((a, b) => rank(a.fact) - rank(b.fact));
-  const kept = new Map(order.map(({ fact, index }) => [index, accept(fact)] as const));
-  return [...facts.flatMap((_, index) => kept.get(index) ?? []), ...cardAnswers(sources, answered, cardKeys, archived)];
+  const kept = new Map(order.filter(({ fact }) => fact.kind === "decision").map(({ fact, index }) => [index, accept(fact)] as const));
+  // a card answer filed in code is current before the tweaks, which may qualify it
+  const cards = cardAnswers(sources, answered, cardKeys, archived);
+  for (const { pick } of cards) if (pick) live.add(pickKey(pick.key));
+  for (const { fact, index } of order) if (fact.kind !== "decision") kept.set(index, accept(fact));
+  const picked = (decision: boolean) => facts.flatMap((fact, index) => (fact.kind === "decision") === decision ? kept.get(index) ?? [] : []);
+  return [...picked(true), ...cards, ...picked(false)];
 }
 
 // a long card question is cut in the middle: two questions that open alike differ at the end, a topic set first stays

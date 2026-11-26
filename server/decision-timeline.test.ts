@@ -477,6 +477,15 @@ describe("decision timeline", () => {
       expect(picksBlock(timeline())).toContain("also deploy it to staging");
     });
 
+    it("lands a qualification on a card answer filed in the same pass", async () => {
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Theme", subtitle: "Which theme?", options: ["Dark", "Light"], askUser: true } });
+      answer(card, "Dark");
+      say("Keep the header small");
+      reply({ kind: "tweak", key: "Which theme?", fact: "Keep the header small", quote: "Keep the header small" });
+      await settle();
+      expect(picksBlock(timeline())).toContain("Keep the header small");
+    });
+
     it("replaces a card's tap with a revised answer the note-taker files under its own key", async () => {
       const card = swapCard();
       answer(card, "Yes, swap");

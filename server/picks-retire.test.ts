@@ -86,6 +86,12 @@ describe("retiring finished one-off picks", () => {
     expect(retirePicks(text, NOW)).toBeNull();
   });
 
+  it("dates a pick that chose tomorrow by that day", () => {
+    const text = ["# Decision timeline", "", ...entry("2026-11-25 10:00", "Ship today or tomorrow?", "Tomorrow", "- Tapped: yes")].join("\n");
+    expect(retirePicks(text, NOW)).toBeNull();
+    expect(picksBlock(retirePicks(text, NOW + 86_400_000))).toBe("");
+  });
+
   it("never retires a recurring instruction, whatever time it names", () => {
     const text = ["# Decision timeline", "", ...entry("2026-11-20 10:00", "When should alerts go to the backup?", "Every day after 13:30", "- Tapped: yes")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();
