@@ -302,6 +302,12 @@ describe("motion", () => {
     expect(onClose).toHaveBeenCalledTimes(pointerType === "touch" ? 1 : 0);
     await act(async () => { document.querySelector<HTMLElement>("[data-engine-name]")!.click(); });
     expect(onClose).toHaveBeenCalledTimes(pointerType === "touch" ? 1 : 0);
+    // A press the browser took over for a scroll sends no click; a later click is not Close's.
+    const close = document.querySelector("[data-quick-close]");
+    close?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType }));
+    close?.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerType }));
+    await act(async () => { document.querySelector<HTMLElement>("[data-engine-name]")!.click(); });
+    expect(onClose).toHaveBeenCalledTimes(pointerType === "touch" ? 1 : 0);
   });
 
   it("fades the desk in when the board arrives after loading, not when it is already there", async () => {

@@ -173,11 +173,14 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
       event.stopPropagation();
       closeRef.current();
     };
+    const cancelled = () => { pressedClose = false; };
     document.addEventListener("pointerdown", away, true);
+    document.addEventListener("pointercancel", cancelled, true);
     document.addEventListener("click", tapped, true);
     document.addEventListener("keydown", key);
     return () => {
       document.removeEventListener("pointerdown", away, true);
+      document.removeEventListener("pointercancel", cancelled, true);
       document.removeEventListener("click", tapped, true);
       document.removeEventListener("keydown", key);
     };
