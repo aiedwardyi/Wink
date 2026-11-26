@@ -4620,6 +4620,8 @@ bus.subscribe((event: RuntimeEvent) => {
         }
         const disowned = Boolean(event.turnId && disownedTurnIds.delete(event.turnId));
         saveLandedCloses(event.threadId, event.turnId, !superseded && !disowned && (event.promptAccepted || event.ok && !interrupted));
+        // a held question rides until an engine accepted the next prompt; a failed start, even a late one, keeps it for a switch
+        if (!superseded && !disowned && (event.promptAccepted || event.ok && !interrupted)) heldQuestions.delete(event.threadId);
         if (!superseded && !disowned) {
           const seed = turnSeeds.take(event.threadId, event.turnId);
           if (seed && turnSeedsSession({
@@ -6591,9 +6593,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (recallNotes.length) memoryLookup.accepted(bot.id, threadId);
       store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
-      // a leftover counts as shown once an engine took the prompt; a setup failure leaves it, and a held question, for the retry
+      // a leftover counts as shown once an engine took the prompt; a setup failure leaves it for the retry
       stampShownAsks(threadId, turnText);
-      heldQuestions.delete(threadId);
       boardTurnStarted(bot.id, threadId, started.turnId);
       if (currentTurnEpoch(bot.id) !== epoch) return;
       if (started.turnId && settledTurnIdByThread.get(threadId) !== started.turnId) liveTurnIdByThread.set(threadId, started.turnId);
