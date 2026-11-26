@@ -170,7 +170,7 @@ export function memoryRevision(text: string): string {
 }
 
 /** The revision readMemoryFile reports for these raw bytes. */
-const rawRevision = (raw: string) => memoryRevision(!raw.trim() || raw === MEMORY_SEED ? "" : raw);
+export const rawRevision = (raw: string) => memoryRevision(!raw.trim() || raw === MEMORY_SEED ? "" : raw);
 
 /** ensureWorkspace first: the user may edit memory before the bot has ever
  * run a turn, and the write must not depend on that ordering. */

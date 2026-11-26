@@ -3195,17 +3195,24 @@ const dreamLive = createDreamLive({
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
   bots: () => store.bots.map((bot) => bot.id),
-  generate: noteHelper,
-  requiresGenerator: ownNoteEngine,
+  live: (botId) => dreamLive.live(botId),
+  judges: () => botAccounts.dreamJudges({ limits: rateLimitsByInstance, save: () => scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR), signedOut: signedOutHelpers }),
   enabled: (botId) => memoryJobEnabled(botId) && memoryJobsHere(botId),
   busy: (botId) => botHasActiveTurn(botId),
-  changed: (botId) => broadcast({ kind: "memory.changed", botId }),
+  changed: (botId) => {
+    broadcast({ kind: "memory.changed", botId });
+    void memoryLookup.refresh(botId, true);
+  },
   // saved now, so a restart before the next sync pass still knows the tidy alone made this change
   tidied: (botId, before, after) => {
     const botSyncId = chatSyncBotId(profileSyncSettings, botId);
     if (!botSyncId) return;
     markTidied(memorySyncLedger, botSyncId, before, after);
     saveMemoryLedger();
+  },
+  archived: (botId, tidy) => {
+    const bot = store.bot(botId);
+    if (bot) store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: MEMORY_SAVE_TOOL, ok: true, tidy, memoryBotId: botId } });
   },
   dream: dreamLive,
 });
@@ -3265,7 +3272,7 @@ const memoryLookup = createMemoryLookup({
   notesPath: (botId) => store.bot(botId)?.projectNotes,
   asks: (botId) => botAsks(store.bot(botId), (threadId) => store.taskPacket(threadId), notOwnerChats()),
 });
-for (const bot of store.bots) void memoryLookup.refresh(bot.id);
+for (const bot of store.bots) void memoryLookup.refresh(bot.id, true);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
 void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
 // Room thread → the instruction id its running turn was dispatched against.
@@ -5752,6 +5759,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     store.settleTaskPacket(threadId);
     return startedTurn(userMessage, { dispatchFailed: true, error: detail });
   }
+  // a line Dreaming just moved out of MEMORY.md is searchable before this turn's recall
+  const recallBuild = memoryLookup.ready(bot.id);
+  if (recallBuild) await recallBuild;
   let latestCompactionId = prepared.compactionId ?? null;
   if (prepared.compaction || prepared.replaySummary) {
     try {
@@ -9416,8 +9426,26 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "GET") {
       if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
-      const run = dreamLive.latest(m[1]);
+      const run = dreamLive.live(m[1]) ? memorySleep.latest(m[1]) : dreamLive.latest(m[1]);
       return run ? json(res, 200, { run }) : json(res, 404, { error: "no-run" });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/clean\/undo$/);
+    if (m && method === "POST") {
+      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const body = z.object({ runId: z.string() }).safeParse(await readBody(req));
+      if (!body.success) return json(res, 400, { error: "runId required" });
+      const result = memorySleep.undo(bot.id, body.data.runId);
+      if (!result.ok) return json(res, result.error === "no-run" ? 404 : 409, result);
+      // the line sits in the task that was open when the run archived, which may not be the open one now
+      for (const threadId of new Set([bot.threadId, ...store.tasks(bot.id).map((task) => task.threadId)])) {
+        const line = store.messagesFor(threadId).find((message) => message.tool?.tidy?.runId === body.data.runId);
+        if (!line?.tool?.tidy) continue;
+        store.patchMessage(threadId, line.id, { tool: { ...line.tool, tidy: { ...line.tool.tidy, undoneAt: Date.now() } } });
+        break;
+      }
+      return json(res, 200, result);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/import$/);
     if (m && method === "POST") {

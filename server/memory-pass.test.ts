@@ -2883,7 +2883,7 @@ describe("memory pass wiring", () => {
   it("keeps the legacy Claude selector and uses the resolved own account for other bots", () => {
     expect(index).toContain("botAccounts.notes(bot, { limits: rateLimitsByInstance,");
     expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: noteHelper,[\s\S]*?botHasActiveTurn/);
-    expect(index).toMatch(/createMemorySleep\(\{[\s\S]*?generate: noteHelper,/);
+    expect(index).toMatch(/createMemorySleep\(\{[\s\S]*?judges: \(\) => botAccounts\.dreamJudges\(\{ limits: rateLimitsByInstance,/);
     expect(index).toMatch(/memoryPass\.onSettled\(bot\.id, event\.threadId, flushNotes\);\s*if \(!store\.groupByThread\(event\.threadId\)\)/);
     expect(index).toContain("memoryPass.dispose();");
   });

@@ -4,6 +4,8 @@ import { localeTag, useI18n } from "@/lib/i18n";
 import type { DreamPr, DreamRun, MemoryCleanRun } from "@/lib/memory-clean";
 import { MemoryCleanTint } from "./MemoryCleanMotion";
 
+const DREAMED_FILE = "memory/dreamed.md";
+
 export function MemoryCleanUndo({ onUndo }: { onUndo: () => void }) {
   const { t } = useI18n();
   return <span className="whitespace-nowrap"><span aria-hidden="true">·</span> <button type="button" className="font-medium text-accent-text" onClick={onUndo}>{t("chat.memoryTidyUndo")}</button></span>;
@@ -12,16 +14,12 @@ export function MemoryCleanUndo({ onUndo }: { onUndo: () => void }) {
 function DreamList({ dream }: { dream: DreamRun }) {
   const { t, locale } = useI18n();
   const day = (at: number) => new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" }).format(at);
-  const month = (history: string) => {
-    const [year, number] = (/(\d{4})-(\d{2})/.exec(history) ?? []).slice(1).map(Number);
-    return year && number ? new Intl.DateTimeFormat(localeTag(locale), { month: "short", year: "numeric" }).format(new Date(year, number - 1)) : history;
-  };
   const quote = (text: string | null) => text === null ? t("bot.dreamHidden") : `"${text.replace(/^\s*[-*+]\s+/, "")}"`;
   const prs = (list: readonly DreamPr[]) => list.map((pr) => pr.repo ? `${pr.repo}#${pr.number}` : `PR ${pr.number}`).join(", ");
   const merged = (list: readonly DreamPr[]) => day(Math.max(...list.map((pr) => pr.mergedAt)));
   const lands = { stays: () => t("bot.dreamStays"), "leaves-now": () => t("bot.dreamLeavesNow", { date: day(dream.dropUntil) }), "leaves-next": () => t("bot.dreamLeavesNext", { date: day(dream.dropUntil) }) };
   const lines = [
-    ...dream.notes.items.map((item) => t(item.why === "duplicate" ? "bot.dreamMoveDuplicate" : "bot.dreamMoveReplaced", { text: quote(item.text), by: quote(item.by), month: month(item.history) })),
+    ...dream.notes.items.map((item) => t(item.why === "duplicate" ? "bot.dreamMoveDuplicate" : item.why === "replaced" ? "bot.dreamMoveReplaced" : "bot.dreamMoveExpired", { text: quote(item.text), by: quote(item.by), file: item.history })),
     ...dream.asks.items.map((item) => item.op === "close"
       ? `${t("bot.dreamClose", { ask: quote(item.ask), prs: prs(item.prs), date: merged(item.prs) })} ${lands[item.lands ?? "stays"]()}`
       : item.op === "ask"
@@ -61,14 +59,14 @@ export function MemoryCleanRow({ run, onUndo, nonce, className }: { run: MemoryC
   const row = useRef<HTMLDivElement>(null);
   if (run.dream) return <DreamRow run={{ ...run, dream: run.dream }} className={className} />;
   const date = new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" }).format(run.at);
-  const parts = [run.merged ? t("bot.memoryTidyMerged", { count: run.merged }) : "", run.replaced ? t("bot.memoryTidyReplaced", { count: run.replaced }) : "", run.moved ? t("bot.memoryTidyMoved", { count: run.moved }) : ""].filter(Boolean).join(", ").split("memory-history.md");
+  const parts = [run.merged ? t("bot.memoryTidyMerged", { count: run.merged }) : "", run.replaced ? t("bot.memoryTidyReplaced", { count: run.replaced }) : "", run.moved ? t("bot.memoryTidyMoved", { count: run.moved }) : ""].filter(Boolean).join(", ").split(DREAMED_FILE);
   return (
     <div ref={row} className={cn("mx-4 mb-4 border-t border-hairline/40 pt-3", className)}>
       <div className="mc-target break-keep text-[12px] leading-relaxed text-ink-secondary">
         {nonce !== undefined && <MemoryCleanTint key={nonce} nonce={nonce} row={row} />}
         <span>{run.undoneAt !== null ? t("chat.memoryTidyUndone") : t("bot.memoryTidied", { date })}</span>{run.undoneAt === null && run.undoable && <> <MemoryCleanUndo onUndo={onUndo} /></>}
       </div>
-      {run.undoneAt === null && <div className="break-keep text-[12px] leading-relaxed text-ink-secondary">{parts.map((part, i) => <span key={i}>{i > 0 && <span className="whitespace-nowrap">memory-history.md</span>}{part}</span>)}</div>}
+      {run.undoneAt === null && <div className="break-keep text-[12px] leading-relaxed text-ink-secondary">{parts.map((part, i) => <span key={i}>{i > 0 && <span className="whitespace-nowrap">{DREAMED_FILE}</span>}{part}</span>)}</div>}
     </div>
   );
 }

@@ -89,7 +89,7 @@ export interface Message {
     ok?: boolean;
     spoken?: string;
     lines?: string[];
-    tidy?: { runId: string; undoneAt?: number };
+    tidy?: { runId: string; count?: number; undoneAt?: number };
     summary?: string;
     durationMs?: number;
     detail?: ToolDetail;

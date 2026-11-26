@@ -433,7 +433,6 @@ export function QuickModelPicker({
       if (target !== event.currentTarget) target?.click();
       return onClose("composer");
     }
-    if (event.key.startsWith("Arrow") && event.target instanceof Element && event.target.closest("[data-quick-lab]")) return;
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       if (efforts.length < 2) return;
       event.preventDefault();

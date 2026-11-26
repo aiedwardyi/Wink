@@ -53,17 +53,33 @@ function useStill(): boolean {
   return still;
 }
 
+const isVideo = (src: string) => src.endsWith(".mp4");
+
 function Still({ src }: { src: string }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    const image = new Image();
-    image.onload = () => {
+    const draw = (source: CanvasImageSource, width: number, height: number) => {
       const node = canvas.current;
       if (!node) return;
-      node.width = image.naturalWidth;
-      node.height = image.naturalHeight;
-      node.getContext("2d")?.drawImage(image, 0, 0);
+      node.width = width;
+      node.height = height;
+      node.getContext("2d")?.drawImage(source, 0, 0);
     };
+    if (isVideo(src)) {
+      const video = document.createElement("video");
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = "auto";
+      video.onloadeddata = () => draw(video, video.videoWidth, video.videoHeight);
+      video.src = src;
+      return () => {
+        video.onloadeddata = null;
+        video.removeAttribute("src");
+        video.load();
+      };
+    }
+    const image = new Image();
+    image.onload = () => draw(image, image.naturalWidth, image.naturalHeight);
     image.src = src;
     return () => {
       image.onload = null;
@@ -95,7 +111,7 @@ function Tile({ tile, locale, onShow }: { tile: WhatsNewTile; locale: LocaleId; 
   return (
     <div className="whats-new-tile">
       <div ref={frame} className="whats-new-frame">
-        {seen && (still ? <Still src={clip} /> : <img src={clip} alt="" draggable={false} />)}
+        {seen && (still ? <Still src={clip} /> : isVideo(clip) ? <video src={clip} autoPlay muted loop playsInline disablePictureInPicture /> : <img src={clip} alt="" draggable={false} />)}
       </div>
       <div className="whats-new-tile-title">{tile.title[locale]}</div>
       <div key={String(how)} className="whats-new-line">{how && "how" in tile ? tile.how[locale] : tile.line[locale]}</div>

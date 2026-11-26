@@ -1,4 +1,5 @@
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dreamedPath } from "./dream-archive.ts";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +10,7 @@ import type { NoteGenerator } from "./memory-pass.ts";
 import { createMemorySleep, planTidy, SLEEP_GAP_MS, SLEEP_IDLE_MS, type MemorySleep } from "./memory-sleep.ts";
 import { isOpenAsk, type TaskAsk } from "./task-asks.ts";
 import { TASK_STATE_MAX_BYTES, type TaskResumePacket } from "./task-state.ts";
-import { loadedMemory, MEMORY_MAX_LINES, memoryFileRaw, workspaceDir, writeMemoryFile } from "./workspace.ts";
+import { loadedMemory, MEMORY_MAX_LINES, memoryFileRaw, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
 type GhView = { state: "MERGED" | "OPEN"; mergedAt?: string | null };
@@ -155,7 +156,7 @@ describe("dreaming, dry", () => {
       },
       reverted: async () => (pr) => reverts.has(pr),
     });
-    return { dream, sleep: createMemorySleep({ dataDir, bots: () => [bot], generate: () => generate, enabled: () => enabled, busy: () => false, changed, dream }) };
+    return { dream, sleep: createMemorySleep({ dataDir, bots: () => [bot], live: (botId) => dream.live(botId), judges: () => ({ claude: generate, gemini: async () => generate.mock.results.at(-1)!.value as Promise<string> }), enabled: () => enabled, busy: () => false, changed, dream }) };
   };
   const quiet = async (wait = SLEEP_IDLE_MS) => {
     await vi.advanceTimersByTimeAsync(wait);
@@ -172,7 +173,7 @@ describe("dreaming, dry", () => {
   };
   const history = () => {
     try {
-      return readFileSync(join(workspaceDir(bot), "memory-history", "2026-11.md"), "utf8");
+      return readFileSync(dreamedPath(bot), "utf8");
     } catch {
       return "";
     }
@@ -252,7 +253,7 @@ describe("dreaming, dry", () => {
   it("lists the notes Sleep would move with their history file, writing neither MEMORY.md nor the history", async () => {
     const raw = memory("- Prefers light mode (noted 2026-10-01)", "- Uses pnpm", "- Uses  pnpm.", "- Prefers dark mode, not light mode (noted 2026-11-12)");
     writeMemoryFile(bot, raw);
-    generator = reply({ disagree: [["L3", "L6"]] });
+    generator = reply({ disagree: [["L3", "L6"]], repeat: [{ drop: "L4", by: ["L5"], lost: "" }] });
     await quiet();
     expect(memoryFileRaw(bot)).toBe(raw);
     expect(history()).toBe("");
@@ -260,8 +261,8 @@ describe("dreaming, dry", () => {
     const plan = plans()[0]!;
     expect(plan.notes.state).toBe("checked");
     expect(plan.notes.items.map(({ text, why, history: file }) => [text, why, file])).toEqual([
-      ["- Prefers light mode (noted 2026-10-01)", "replaced", "memory-history/2026-11.md"],
-      ["- Uses pnpm", "duplicate", "memory-history/2026-11.md"],
+      ["- Prefers light mode (noted 2026-10-01)", "replaced", "memory/dreamed.md"],
+      ["- Uses pnpm", "duplicate", "memory/dreamed.md"],
     ]);
     expect(plan.runUntil - plan.at).toBe(14 * DAY);
     expect(plan.dropUntil - plan.at).toBe(90 * DAY);
@@ -272,8 +273,11 @@ describe("dreaming, dry", () => {
     expect(plans()[0]!.notes).toEqual({ state: "unchanged", items: plan.notes.items });
   });
 
-  it("keeps the last checked moves through a pass that skipped notes, under the month the reused plan runs in", async () => {
+  it("keeps the last checked moves through a pass that skipped notes", async () => {
+    // all three passes on one day: a new day judges again, since a one-off can expire overnight
+    vi.setSystemTime(new Date(2026, 10, 25, 0, 5));
     writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm."));
+    generator = reply({ repeat: [{ drop: "L3", by: ["L4"], lost: "" }] });
     await quiet();
     expect(plans()[0]!.notes.items).toHaveLength(1);
     enabled = false;
@@ -281,11 +285,10 @@ describe("dreaming, dry", () => {
     await quiet(SLEEP_GAP_MS);
     expect(plans()[0]!.notes).toEqual({ state: "off-here", items: [] });
     enabled = true;
-    vi.setSystemTime(new Date(2026, 11, 2, 12));
     sleep.onSettled(bot);
     await quiet(SLEEP_GAP_MS);
     expect(plans()[0]!.notes.state).toBe("unchanged");
-    expect(plans()[0]!.notes.items.map(({ text, history: file }) => [text, file])).toEqual([["- Uses pnpm", "memory-history/2026-12.md"]]);
+    expect(plans()[0]!.notes.items.map(({ text, history: file }) => [text, file])).toEqual([["- Uses pnpm", "memory/dreamed.md"]]);
   });
 
   it("tells an open Memory page each time a dry plan is saved", async () => {
@@ -295,7 +298,8 @@ describe("dreaming, dry", () => {
   });
 
   it("copies no note that may hold a login, and redacts the rest", async () => {
-    writeMemoryFile(bot, memory("- Wifi password is SunnyHarbor!42", "- Wifi password is SunnyHarbor!42"));
+    writeMemoryFile(bot, memory("- Wifi at home is SunnyHarbor!42", "- Wifi at home is SunnyHarbor!42"));
+    generator = reply({ repeat: [{ drop: "L3", by: ["L4"], lost: "" }] });
     await quiet();
     const plan = plans()[0]!;
     expect(plan.notes.items).toHaveLength(1);
@@ -343,17 +347,43 @@ describe("dreaming, dry", () => {
     expect(plans()[0]!.asks).toMatchObject({ threads: 1, skipped: 1, items: [] });
   });
 
-  it("leaves a bot with no entry, or one set to live, to today's tidy and writes no plan", async () => {
-    for (const mode of [undefined, "live"]) {
-      sleep.dispose();
-      bot = `dream-bot-${++seq}`;
-      setMode(mode ? { [bot]: mode } : {});
-      sleep = start().sleep;
-      writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm."));
-      await quiet();
-      expect(memoryFileRaw(bot)).toBe(memory("- Uses  pnpm."));
-      expect(plans()).toEqual([]);
-    }
+  it("moves notes for a bot set to live and writes no plan", async () => {
+    setMode({ [bot]: "live" });
+    writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm."));
+    generator = reply({ repeat: [{ drop: "L3", by: ["L4"], lost: "" }] });
+    await quiet();
+    expect(memoryFileRaw(bot)).toBe(memory("- Uses  pnpm."));
+    expect(plans()).toEqual([]);
+  });
+
+  it.each([
+    ["no mode file", () => rmSync(join(dataDir, "dream-live.json"), { force: true })],
+    ["a mode file that is not JSON", () => writeFileSync(join(dataDir, "dream-live.json"), "{ bots: ")],
+    ["a bot the list leaves out", () => setMode({ "another-bot": "live" })],
+  ])("dreams dry with %s", async (_, set) => {
+    set();
+    const raw = memory("- Keeps tea in the blue tin", "- Dentist on 11-02 at 3pm");
+    writeMemoryFile(bot, raw);
+    generator = reply({ stale: ["L4"] });
+    await quiet();
+    expect(memoryFileRaw(bot)).toBe(raw);
+    expect(history()).toBe("");
+    expect(plans()[0]!.notes.items).toMatchObject([{ why: "expired" }]);
+  });
+
+  it("moves nothing when the bot is set to dry while its judges think", async () => {
+    setMode({ [bot]: "live" });
+    const raw = memory("- Keeps tea in the blue tin", "- Dentist on 11-02 at 3pm");
+    writeMemoryFile(bot, raw);
+    let answer: (text: string) => void = () => {};
+    generator = () => new Promise((resolve) => (answer = resolve));
+    await vi.advanceTimersByTimeAsync(SLEEP_IDLE_MS);
+    expect(generate).toHaveBeenCalledTimes(1);
+    setMode({ [bot]: "dry" });
+    answer(JSON.stringify({ stale: ["L4"] }));
+    await sleep.idle();
+    expect(memoryFileRaw(bot)).toBe(raw);
+    expect(history()).toBe("");
   });
 
   it("keeps a SIM follow-up to-do and a SIM note through a pass, and touches no SIM file", async () => {
@@ -388,7 +418,7 @@ describe("dreaming, dry", () => {
     dream.plan(bot, NOW, { state: "off-here", moves: [] }, empty);
     expect(plans().map(({ at }) => at)).toEqual([NOW]);
     expect(dream.latest(bot)).toMatchObject({ undoable: false, moved: 0, dream: { mode: "dry" } });
-    setMode({});
+    setMode({ [bot]: "live" });
     expect(dream.latest(bot)).toBeNull();
   });
 });
@@ -400,6 +430,11 @@ describe("dreaming's wiring", () => {
   it("reads asks through the 30 s buffer, never the store's own copy", () => {
     expect(call).toContain("packet: (threadId) => taskPacketForWrite(threadId)");
     expect(call).not.toMatch(/store\.(taskPacket|writeTaskPacket)\b/);
+  });
+
+  it("refreshes recall whenever Sleep changes a bot's memory, so the next question finds a moved line", () => {
+    const sleepCall = index.slice(index.indexOf("const memorySleep = createMemorySleep({"), index.indexOf("const projectNotesCheck = "));
+    expect(sleepCall).toMatch(/changed: \(botId\) => \{\s*broadcast\(\{ kind: "memory\.changed", botId \}\);\s*void memoryLookup\.refresh\(botId, true\);/);
   });
 
   it("writes no packet in dry mode", () => {
