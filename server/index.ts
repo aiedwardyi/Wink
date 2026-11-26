@@ -281,7 +281,7 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, fileLeftovers, isStatusTurn, MORE_PROMISES, rotatedAsks, TASK_ASKS_PROMPT, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { sweepDroppedAsks } from "./task-dropped.ts";
@@ -313,6 +313,7 @@ import { TurnWatchdog } from "./turn-watchdog.ts";
 import { foldContinuationStart, joinRunningTurn } from "./continuation-turn.ts";
 import "./pending-model.ts";
 import { botClears, groupClears } from "./wire-clears.ts";
+import { answeredRows, type Leftover, turnLeftovers } from "./turn-leftovers.ts";
 import { ownTurnReply, turnAddedMessage, turnSummaries, turnUnread } from "./turn-reply.ts";
 import { terminalReadGrant } from "./terminal-grant.ts";
 import { updateBridgeResponse, updateStateFromMessage } from "./update-proxy.ts";
@@ -3047,6 +3048,25 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
   return store.taskPacket(threadId);
 }
 
+function saveHarnessAsks(threadId: string, change: (book: AskBook | undefined) => SavedAsks | null): void {
+  const current = taskPacketForWrite(threadId);
+  const saved = current && change(current);
+  if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
+}
+
+// a question the newest message asked, answered by the engine that took it: it files only if another engine or model takes the next turn
+const heldQuestions = new Map<string, Leftover[]>();
+
+// what a turn said it would do or skipped rides to the next reply on any engine, unchecked; only an engine closes it, by ID
+function fileTurnLeftovers(threadId: string, rows: readonly Message[]): void {
+  const found = turnLeftovers([...answeredRows(rows[0], (id) => store.row(threadId, id)), ...rows]);
+  const held = found.filter((item) => item.held);
+  const left = found.filter((item) => !item.held);
+  if (held.length) heldQuestions.set(threadId, held);
+  else heldQuestions.delete(threadId);
+  if (left.length) saveHarnessAsks(threadId, (book) => fileLeftovers(book, left, Date.now()));
+}
+
 function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }, seen: readonly TaskAsk[] = []): TaskResumePacket | null {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) clearTimeout(pending.timer);
@@ -3059,12 +3079,14 @@ function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }
   }
 }
 
-// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time
+// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time; a leftover no turn showed yet rides until one does
 function stampShownAsks(threadId: string, sent: string): void {
   const record = taskPacketForWrite(threadId);
   const now = Date.now();
-  const ids = record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) : null;
-  if (record && ids) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
+  const more = sent.split("\n").filter((line) => line.includes(MORE_PROMISES)).join(" ");
+  const left = record?.asks?.filter((ask) => ask.shown === 0 && (sent.includes(`- ${ask.id} `) || new RegExp(`\\b${ask.id}\\b`).test(more))).map((ask) => ask.id) ?? [];
+  const ids = [...(record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) ?? [] : []), ...left];
+  if (record && ids.length) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
 // a close saves once the turn that showed its line landed, and never over the bot's own edit in that turn
@@ -4580,7 +4602,8 @@ bus.subscribe((event: RuntimeEvent) => {
       lastReply.delete(event.threadId);
       // summaries are hidden, so a turn that wrote nothing else shows them instead; a pane-note turn may end silent
       for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchRow(event.threadId, id, { summarized: undefined });
-      const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => store.rowsSince(event.threadId, start));
+      let turnRows: readonly Message[] = [];
+      const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => (turnRows = store.rowsSince(event.threadId, start)));
       const lastReported = turnUsage.get(event.threadId);
       turnUsage.delete(event.threadId);
       roomTurnInstruction.delete(event.threadId);
@@ -4622,6 +4645,8 @@ bus.subscribe((event: RuntimeEvent) => {
         }
         const disowned = Boolean(event.turnId && disownedTurnIds.delete(event.turnId));
         saveLandedCloses(event.threadId, event.turnId, !superseded && !disowned && (event.promptAccepted || event.ok && !interrupted));
+        // a held question rides until an engine accepted the next prompt; a failed start, even a late one, keeps it for a switch
+        if (!superseded && !disowned && (event.promptAccepted || event.ok && !interrupted)) heldQuestions.delete(event.threadId);
         if (!superseded && !disowned) {
           const seed = turnSeeds.take(event.threadId, event.turnId);
           if (seed && turnSeedsSession({
@@ -4672,6 +4697,7 @@ bus.subscribe((event: RuntimeEvent) => {
               turnsAtWrite: usage?.turns ?? packet.turnsAtWrite,
               interrupted,
             }));
+            if (event.ok && !interrupted) fileTurnLeftovers(event.threadId, turnRows);
           }
           boardCalls.turnEnded(event.threadId, event.ok && !interrupted);
           limitWaits.settled(event.threadId, event.turnId, event.ok);
@@ -4841,11 +4867,7 @@ bus.subscribe((event: RuntimeEvent) => {
 
 // ask_user cards wait for the asking turn's reply.
 const askHold = watchAskHold(store, bus);
-watchSkippedQuestions(store, (threadId, change) => {
-  const current = taskPacketForWrite(threadId);
-  const saved = current && change(current);
-  if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
-});
+watchSkippedQuestions(store, saveHarnessAsks);
 
 // Drain queued delegations for a source thread after its turn settles.
 // Run as a separate subscriber so the drain logic stays out of the main
@@ -5598,13 +5620,15 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const messagesBeforeSummary = store.activePath(threadId);
   holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
-  let storedTaskRecord = taskPacketForWrite(threadId);
-  const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
-  let taskRecord = closes.shown(storedTaskRecord);
   const selectionChanged = task.lastInstanceId !== undefined && (
     task.lastInstanceId !== instanceId ||
     (task.lastModel !== undefined && task.lastModel !== model)
   );
+  const held = heldQuestions.get(threadId);
+  if (held && selectionChanged) saveHarnessAsks(threadId, (book) => fileLeftovers(book, held, Date.now()));
+  let storedTaskRecord = taskPacketForWrite(threadId);
+  const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
+  let taskRecord = closes.shown(storedTaskRecord);
   const latestUser = lastUserInstruction(messagesBeforeSummary, skipTranscript);
   const unsettled = routineTurn ? "" : unsettledRequest(priorTaskPacket, messagesBeforeSummary, skipTranscript);
   // Recovery Current request must be this send's text. skipTranscript excludes
@@ -5976,7 +6000,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     currentRequestText: recoveryLatestUserText,
     asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, elsewhereAsks) : "",
   });
-  stampShownAsks(threadId, turnText);
   const resumeFallback = buildResumeFallback({
     driverKind: instance.driverKind,
     model,
@@ -6598,6 +6621,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (recallNotes.length) memoryLookup.accepted(bot.id, threadId);
       store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
+      // a leftover counts as shown once an engine took the prompt; a setup failure leaves it for the retry
+      stampShownAsks(threadId, turnText);
       boardTurnStarted(bot.id, threadId, started.turnId);
       if (currentTurnEpoch(bot.id) !== epoch) return;
       if (started.turnId && settledTurnIdByThread.get(threadId) !== started.turnId) liveTurnIdByThread.set(threadId, started.turnId);

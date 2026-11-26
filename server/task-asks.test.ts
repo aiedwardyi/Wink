@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addQuestionAsk, answerQuestionAsk, ASK_VERDICT_MS, asksBlock, asksNudge, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, rotatedAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
+import { addQuestionAsk, answerQuestionAsk, ASK_VERDICT_MS, asksBlock, asksNudge, fileLeftovers, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, rotatedAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
 import { taskRecordBlock } from "./turn-context.ts";
 
 const HOUR = 60 * 60 * 1000;
@@ -163,6 +163,20 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
     expect(asksNudge([fresh], NOW, "thanks")).toBe("");
     expect(listed(asksNudge([fresh, due], NOW, "thanks"))).toEqual([`- A2 ${status} needs verdict 11-12: ask number 2`]);
     expect(asksNudge([ask(3, { status, ref: "PR #3", changedAt: 0 })], NOW, "thanks")).toBe("");
+  });
+
+  it("keeps the verdict nudge on an engine's own ask worded as a question, and spares only a filed leftover", () => {
+    const own = ask(1, { ask: "Could you fix the login redirect?", changedAt: NOW - ASK_VERDICT_MS });
+    expect(listed(asksNudge([own], NOW, "thanks"))).toEqual(["- A1 open needs verdict 11-12: Could you fix the login redirect?"]);
+    const filed = fileLeftovers({ asks: [], lastAskId: 0 }, [{ ask: "Could you fix the login redirect?" }], NOW - ASK_VERDICT_MS)!.asks[0]!;
+    expect(asksBlock([{ ...filed, shown: NOW - ASK_VERDICT_MS }], NOW)).not.toContain("needs verdict");
+  });
+
+  it("never takes a path in another case for a repeat of an ask filed without a key", () => {
+    const done = ask(1, { ask: "Could you fix src/Header.ts?", status: "done" });
+    const added = fileLeftovers({ asks: [done], lastAskId: 1 }, [{ ask: "Could you fix src/header.ts?" }, { ask: "Could you fix src/Header.ts" }], NOW);
+    expect(added?.asks.map((item) => item.ask)).toEqual(["Could you fix src/Header.ts?", "Could you fix src/header.ts?"]);
+    expect(fileLeftovers({ asks: [ask(1, { ask: "COULD you fix the Header" })], lastAskId: 1 }, [{ ask: "could you fix the header." }], NOW), "plain words still match in any case").toBeNull();
   });
 
   it("lists only the asks needing a verdict on an ordinary turn, and the full list on a status turn or a fresh session", () => {

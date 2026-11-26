@@ -546,6 +546,23 @@ describe("a closing turn in index.ts", () => {
     expect(source).not.toContain("const taskRecordToFlush = taskRecord;");
     expect(source.split("const taskRecordToFlush = storedTaskRecord;")).toHaveLength(3);
   });
+
+  it("stamps a 1:1 turn's leftovers shown only once an engine took the prompt, so a setup failure leaves them for the retry", () => {
+    const source = index();
+    const stamp = source.indexOf("  stampShownAsks(threadId, turnText);");
+    expect(source.split("stampShownAsks(threadId, turnText);")).toHaveLength(2);
+    expect(stamp).toBeGreaterThan(source.indexOf("return live.adapter.sendTurn({"));
+    expect(source.lastIndexOf("store.markReactionsDelivered(bot.id, threadId, reactionsSeen);", stamp)).toBeGreaterThan(source.indexOf("return live.adapter.sendTurn({"));
+  });
+
+  it("keeps the last turn's held question until an engine accepted the next prompt, so a failed start, even a late one, still carries it to a switch", () => {
+    const source = index();
+    const start = source.slice(source.indexOf("async function startClaimedTurn("), source.indexOf("async function startClaimedTurn(") + 60_000);
+    expect(start).toContain("heldQuestions.get(threadId)");
+    expect(start).not.toContain("heldQuestions.delete");
+    const settle = source.slice(source.indexOf('case "turn.completed": {'));
+    expect(settle).toContain("if (!superseded && !disowned && (event.promptAccepted || event.ok && !interrupted)) heldQuestions.delete(event.threadId);");
+  });
 });
 
 describe("an ask with a step left", () => {
