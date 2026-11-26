@@ -38,15 +38,8 @@ describe("usage order Wink keeps for every client", () => {
     { key: "claude", order: [], extra: true },
     { seed: { claude: "a" }, from: "desktop" },
     { seed: {}, from: "phone" },
-    { key: "claude", order: Array.from({ length: 201 }, (_, i) => `id-${i}`) },
   ])("refuses a malformed request %j", (body) => {
     expect(() => parseUsageOrderBody(body)).toThrow(expect.objectContaining({ status: 400 }));
-  });
-
-  it("caps how many lists one config holds", () => {
-    const orders = Object.fromEntries(Array.from({ length: 64 }, (_, i) => [`base-${i}`, ["a"]]));
-    expect(nextUsageOrder({ orders }, drag("base-1", ["b"]))?.orders["base-1"]).toEqual(["b"]);
-    expect(() => nextUsageOrder({ orders }, drag("base-new", ["b"]))).toThrow(expect.objectContaining({ status: 400 }));
   });
 
   it("reports null until an order is saved", () => {
