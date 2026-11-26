@@ -53,6 +53,11 @@ class FakeEventSource {
 const PRESENCE_ROW_PX = 48;
 const VIEWPORT_PX = 400;
 const TRANSCRIPT_PX = 1000;
+// Tailwind spacing in px: n * 4, or an arbitrary [npx]
+const px = (cls: string, name: string, variant = "") => {
+  const found = cls.match(new RegExp(`(?:^| )${variant}(-?)${name}-(?:\\[(\\d+)px\\]|([\\d.]+))(?= |$)`));
+  return found ? (found[1] ? -1 : 1) * (found[2] ? Number(found[2]) : Number(found[3]) * 4) : 0;
+};
 
 const baseBot = {
   title: "",
@@ -944,6 +949,38 @@ describe("ChatView transcript window", () => {
       expect(jump.closest("[data-dock-rail]")!.parentElement!.querySelector("[data-orbit-composer-frame]")).not.toBeNull();
     } finally {
       await unmount();
+    }
+  });
+
+  it.each(["chat", "room"] as const)("keeps the %s's Latest touch target inside the dock rail, off the transcript and the composer", async (kind) => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const messages = Array.from({ length: 370 }, (_, i) => userMsg(`m${i}`, `row ${i};`));
+    const group: Group = { id: "g", threadId: "thread-g", name: "Room", memberIds: ["a", "b"], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 1, setupCompletedAt: 1, hasMore: false, messages };
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, kind === "chat" ? createElement(ChatView, { bot: { ...botA, messages } }) : createElement(GroupView, { group }))));
+      await act(async () => button(host, "Show earlier messages")!.click());
+      const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => VIEWPORT_PX });
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => TRANSCRIPT_PX });
+      scroller.scrollTop = 0;
+      await act(async () => scroller.dispatchEvent(new Event("scroll")));
+      const jump = host.querySelector<HTMLElement>("[data-jump-latest]")!;
+      const rail = jump.closest<HTMLElement>("[data-dock-rail]")!.className;
+      // happy-dom has no layout: the rail's padding is all the room between the pill and the transcript or composer
+      const reach = -px(jump.className, "inset-y", "pointer-coarse:after:");
+      const pill = 2 + 2 * px(jump.className, "py") + px(jump.className, "leading");
+      expect(reach).toBeGreaterThan(0);
+      expect(reach).toBeLessThanOrEqual(px(rail, "py"));
+      expect(pill + 2 * reach).toBeGreaterThanOrEqual(36);
+      expect(px(jump.className, "inset-x", "pointer-coarse:after:")).toBeLessThan(0);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
     }
   });
 
