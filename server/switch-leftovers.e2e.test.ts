@@ -53,14 +53,18 @@ async function turn(id: string, text: string): Promise<void> {
   expect((await api("POST", `/api/bots/${id}/messages`, { text })).status).toBe(202);
   await waitFor(async () => (await getBot(id)).busy === false && (await getBot(id)).messages.some((row: any) => row.text === text), "the turn to settle");
 }
-/** Switches the bot to fake Claude and returns the text its first turn was sent. */
-async function switched(id: string, text: string): Promise<string> {
-  await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId: "claude", model: "claude-fake" } });
+/** The text fake Claude was sent for this turn. */
+async function claudeTurn(id: string, text: string): Promise<string> {
   const from = sent().length;
   await turn(id, text);
   const input = sent().slice(from).find((prompt) => prompt.includes(text));
   if (!input) throw new Error(`Claude never got "${text}"`);
   return input;
+}
+/** Switches the bot to fake Claude and returns the text its first turn was sent. */
+async function switched(id: string, text: string): Promise<string> {
+  await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId: "claude", model: "claude-fake" } });
+  return claudeTurn(id, text);
 }
 
 beforeAll(async () => {
@@ -69,13 +73,26 @@ beforeAll(async () => {
   // the user already said no to importing memory, so no turn carries an import offer
   writeFileSync(join(home, ".orbit", "about-you", "declined"), "");
   prompts = join(home, "claude-prompts.ndjson");
+  const leave = join(home, "claude-leave.json");
+  const result = (id: string) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: "notes" }] }] } });
+  writeFileSync(leave, JSON.stringify([
+    { type: "assistant", message: { id: "msg-1", stop_reason: "tool_use", content: [{ type: "text", text: "I'll update the picker labels." }, { type: "tool_use", id: "tu-1", name: "Read", input: { file_path: "notes.md" } }] } },
+    result("tu-1"),
+    { type: "assistant", message: { id: "msg-2", stop_reason: "end_turn", content: [{ type: "text", text: "Back soon." }] } },
+    { type: "result", subtype: "success", is_error: false, result: "Back soon.", total_cost_usd: 0 },
+  ]));
+  const claude = (environment: Record<string, string>) => ({ driver: "claudeAgent", environment: { FAKE_CLAUDE_PROMPT_LOG: prompts, ...environment }, config: { cli: `"${process.execPath}" "${FAKE_CLAUDE}"`, permissionMode: "bypassPermissions" } });
   const codex = (environment: Record<string, string>) => ({ driver: "codex", environment, config: { cli: `"${process.execPath}" "${FAKE_CODEX}"` } });
   writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({
     instances: {
       // two promises in commentary, then a steered color question the final answers alone
       codex: codex({ FAKE_CODEX_MODE: "steer", FAKE_CODEX_COMMENTARY: JSON.stringify([{ text: ANSWER, phase: "commentary" }, { text: PICKER, phase: "commentary" }]), FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "Blue.", phase: "final_answer" }]) }),
       codexLogs: codex({ FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "I'll check the logs first.", phase: "commentary" }, { text: "Logs are clean.", phase: "final_answer" }]) }),
-      claude: { driver: "claudeAgent", environment: { FAKE_CLAUDE_PROMPT_LOG: prompts }, config: { cli: `"${process.execPath}" "${FAKE_CLAUDE}"`, permissionMode: "bypassPermissions" } },
+      // a promise in hidden notes and a question a steer talked over, then another engine that answers and finishes both
+      codexLeave: codex({ FAKE_CODEX_MODE: "steer", FAKE_CODEX_COMMENTARY: JSON.stringify([{ text: "I'll update the picker labels.", phase: "commentary" }]), FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "Blue.", phase: "final_answer" }]) }),
+      codexDone: codex({ FAKE_CODEX_MESSAGES: JSON.stringify([{ text: "The keyboard shortcuts are in GUIDE.md. I updated the picker labels.", phase: "final_answer" }]) }),
+      claude: claude({}),
+      claudeLeave: claude({ FAKE_CLAUDE_REPLY_FIXTURE: leave }),
     },
   }));
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
@@ -98,7 +115,7 @@ beforeAll(async () => {
   await waitFor(async () => Boolean((await globalThis.fetch(`${BASE}/api/health`).catch(() => null))?.ok), "the server");
   await waitFor(async () => {
     const instances = (await api("GET", "/api/instances")).body.instances;
-    return ["codex", "codexLogs", "claude"].every((id) => instances.find((row: any) => row.instanceId === id)?.snapshot.state === "available");
+    return ["codex", "codexLogs", "codexLeave", "codexDone", "claude", "claudeLeave"].every((id) => instances.find((row: any) => row.instanceId === id)?.snapshot.state === "available");
   }, "the engines");
 }, 60_000);
 
@@ -143,4 +160,31 @@ it("files nothing when the turn did what it said, and the next engine gets no as
   const input = await switched(id, "thanks");
   expect(input).not.toContain(ASKS_LIST);
   if (process.env.LEFTOVERS_PROMPT_OUT) writeFileSync(process.env.LEFTOVERS_PROMPT_OUT, input);
+}, 90_000);
+
+it("closes what the next engine answered and finished, so switching back carries nothing", async () => {
+  const { id, threadId } = await bot("codexLeave", "gpt-fake-default");
+  expect((await api("POST", `/api/bots/${id}/messages`, { text: "Where are the keyboard shortcuts documented?" })).status).toBe(202);
+  await waitFor(async () => (await getBot(id)).messages.some((row: any) => row.text === "I'll update the picker labels."), "Codex's promise");
+  expect((await api("POST", `/api/bots/${id}/messages`, { text: "What color should the ramp be?" })).body).toMatchObject({ steered: true });
+  await waitFor(async () => (await getBot(id)).busy === false, "the Codex turn to settle");
+  expect(asks(threadId).map((ask) => [ask.ask, ask.status])).toEqual([["I'll update the picker labels.", "open"], ["Where are the keyboard shortcuts documented?", "open"]]);
+
+  await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId: "codexDone", model: "gpt-fake-default" } });
+  await turn(id, "go on");
+  const input = await switched(id, "ok");
+  expect(input).not.toContain(ASKS_LIST);
+  expect(asks(threadId).map((ask) => ask.status)).toEqual(["done", "done"]);
+  await turn(id, "thanks");
+  expect(asks(threadId).map((ask) => ask.status)).toEqual(["done", "done"]);
+}, 90_000);
+
+it("gives a resumed session what its last turn left open, once", async () => {
+  const { id, threadId } = await bot("claudeLeave", "claude-fake");
+  await turn(id, "Keep going on the picker");
+  expect(asks(threadId)).toMatchObject([{ id: "A1", ask: "I'll update the picker labels.", status: "open", kind: "promise" }]);
+  const next = await claudeTurn(id, "ok");
+  expect(next).toMatch(/^- A1 open promise \d\d-\d\d: I'll update the picker labels\.$/m);
+  expect(await claudeTurn(id, "thanks")).not.toContain("I'll update the picker labels.");
+  expect(asks(threadId)).toHaveLength(1);
 }, 90_000);

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { Message } from "./store.ts";
-import { asksBlock, fileLeftovers, type TaskAsk } from "./task-asks.ts";
-import { turnLeftovers } from "./turn-leftovers.ts";
+import { ASK_VERDICT_MS, asksBlock, asksNudge, fileLeftovers, type TaskAsk } from "./task-asks.ts";
+import { settledAsks, turnLeftovers } from "./turn-leftovers.ts";
 
 let n = 0;
 const user = (text: string, extra: Partial<Message> = {}): Message => ({ id: `m${++n}`, role: "user", kind: "text", text, at: n, ...extra });
@@ -39,7 +39,7 @@ describe("turn leftovers", () => {
     // the call it made after saying so took it up
     expect(turnLeftovers([user("Release?"), bot("I'll read the release notes."), tool("RELEASE-NOTES.md"), bot("Step 3 is fine."), bot("Ready.")])).toEqual([]);
     expect(turnLeftovers([user("Tests?"), bot("If you want, I'll add tests for the parser."), tool(), bot("Done.")])).toEqual([]);
-    expect(turnLeftovers([user("Ship it"), tool(), bot("Shipped. I'll watch CI tomorrow.")])).toEqual([]);
+    expect(turnLeftovers([user("Ship it"), tool(), bot("Shipped. I'll keep an eye on it.")])).toEqual([]);
     // a reply the user saw under the question, then a steer
     expect(turnLeftovers([user("What font is it?"), bot("Inter."), user("And the size?", { steered: true }), bot("14 px.")])).toEqual([]);
     // the final took the earlier question up
@@ -73,6 +73,51 @@ describe("turn leftovers", () => {
 
   it("keeps a question the quick helper handed into the turn as a steer", () => {
     expect(turnLeftovers([user("What font is it?"), user("And the ramp color?", { steered: true, quick: { state: "handoff" } }), bot("Blue.")])).toEqual([{ ask: "What font is it?" }]);
+  });
+
+  it("never refiles a closed promise or a short question and keeps asks a word apart distinct", () => {
+    const api = { asks: [ask("A1", "I'll fix the API", "done", "promise")], lastAskId: 1 };
+    expect(fileLeftovers(api, [{ ask: "I'll fix the API", promise: true }], 9)).toBeNull();
+    expect(fileLeftovers(api, [{ ask: "I'll fix the API.", promise: true }], 9)).toBeNull();
+    for (const status of ["open", "done", "declined"] as const) expect(fileLeftovers({ asks: [ask("A1", "Why is CI red?", status)], lastAskId: 1 }, [{ ask: "Why is CI red?" }], 9)).toBeNull();
+    expect(fileLeftovers(undefined, [{ ask: "I'll update the desktop toolbar icon.", promise: true }, { ask: "I'll update the desktop toolbar layout.", promise: true }], 9)?.asks).toHaveLength(2);
+  });
+
+  it("keeps the part of a promise the turn did not finish, and a job it reported running files as running", () => {
+    expect(turnLeftovers([user("Polish the toolbar"), bot("I'll update the icon and layout."), tool(), bot("The icon is updated.")])).toEqual([{ ask: "I'll update the icon and layout.", promise: true }]);
+    expect(turnLeftovers([user("Picker?"), bot("I'll rebuild the picker."), tool(), bot("I couldn't rebuild the picker.")])).toEqual([{ ask: "I'll rebuild the picker.", promise: true }]);
+    const running = turnLeftovers([user("Export the data"), bot("I'll run the data export in the background."), tool("export.ps1"), bot("Export running as PID 4128, leave it alone.")]);
+    expect(running).toEqual([{ ask: "I'll run the data export in the background.", promise: true, running: "Export running as PID 4128" }]);
+    const saved = fileLeftovers(undefined, running, 5)!;
+    expect(saved.asks[0]).toMatchObject({ status: "building", kind: "promise", ref: "Export running as PID 4128" });
+    const block = asksBlock(saved.asks, 5 + ASK_VERDICT_MS);
+    expect(block).toContain("- A1 building promise 01-01: I'll run the data export in the background. (Export running as PID 4128)");
+    expect(block).toContain("never start it again");
+    // an old promise never asks to be built
+    expect(asksBlock([ask("A1", "I'll update the picker labels.", "open", "promise")], 1 + ASK_VERDICT_MS)).not.toMatch(/needs? (a )?verdict|build, park or close/);
+  });
+
+  it("keeps the second question a reply skipped and a final reply's promise on a time", () => {
+    expect(turnLeftovers([user("What color should the ramp be? Where are the keyboard shortcuts documented?"), bot("The ramp should be blue.")])).toEqual([{ ask: "Where are the keyboard shortcuts documented?" }]);
+    expect(turnLeftovers([user("Invoice?"), tool(), bot("I'll review the invoice tomorrow.")])).toEqual([{ ask: "I'll review the invoice tomorrow.", promise: true }]);
+    // one question the reply took up its own way, and a final "I'll" with no time, stay off the list
+    expect(turnLeftovers([user("What font is it?"), bot("Inter.")])).toEqual([]);
+    expect(turnLeftovers([user("Fix it"), tool(), bot("Fixed. I'll keep it simple.")])).toEqual([]);
+  });
+
+  it("shows a newly filed item on the next turn once, resumed or not", () => {
+    const saved = fileLeftovers(undefined, [{ ask: "I'll update the picker labels.", promise: true }], 5)!;
+    expect(asksNudge(saved.asks, 6, "ok")).toContain("- A1 open promise 01-01: I'll update the picker labels.");
+    expect(asksNudge(saved.asks.map((item) => ({ ...item, shown: 6 })), 7, "ok")).toBe("");
+  });
+
+  it("closes a carried promise the next turn reports done and a question it answered, and only those", () => {
+    const open = [ask("A1", "I'll update the picker labels.", "open", "promise"), ask("A2", "Where are the keyboard shortcuts documented?", "open"), ask("A3", "I'll update the icon and layout.", "open", "promise"), ask("A4", "Pick the ramp color", "open")];
+    expect(settledAsks([user("go on"), bot("The keyboard shortcuts are in GUIDE.md. I updated the picker labels.")], open)).toEqual(["A1", "A2"]);
+    // half of a promise, a failure, a repeat, an instruction and the user's own ask close nothing
+    for (const reply of ["The icon is updated.", "I couldn't update the picker labels.", "I'll update the picker labels.", "Please update the picker labels.", "The ramp color is blue."]) expect(settledAsks([user("go on"), bot(reply)], open)).toEqual([]);
+    const saved = fileLeftovers({ asks: open, lastAskId: 4 }, [{ ask: "I'll update the picker labels.", promise: true }], 9, ["A1", "A2"])!;
+    expect(saved.asks.map((item) => item.status)).toEqual(["done", "done", "open", "open"]);
   });
 
   it("settles a long narrated turn in under 2 ms", () => {

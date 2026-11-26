@@ -54,10 +54,12 @@ export const isStatusTurn = (text: string): boolean => STATUS_TURN.test(text);
 export const isOpenAsk = (ask: TaskAsk): boolean => ask.status !== "done" && ask.status !== "declined";
 const isQuestion = (ask: TaskAsk) => ask.kind === "question";
 const isPromise = (ask: TaskAsk) => ask.kind === "promise";
+const isRunning = (ask: TaskAsk) => isPromise(ask) && ask.status === "building";
+const RUNNING_NOTE = " One building is already running: check on it, never start it again.";
 const isParked = (ask: TaskAsk, now: number) => isOpenAsk(ask) && ask.until !== undefined && ask.until > now;
 // a skipped question waits for a natural pause, so it never nags an ordinary turn
 const needsVerdict = (ask: TaskAsk, now: number) =>
-  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !ask.ref && now - Math.max(ask.changedAt, ask.until ?? 0) >= ASK_VERDICT_MS;
+  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !isPromise(ask) && !ask.ref && now - Math.max(ask.changedAt, ask.until ?? 0) >= ASK_VERDICT_MS;
 const words = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -139,27 +141,42 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
   return { asks, lastAskId };
 }
 
-// a reworded repeat: most of the shorter one's words, or three and half of them; "update the desktop icon" is never "... layout"
-function sameAsk(a: string, b: string): boolean {
-  const [x, y] = [terms(a), terms(b)];
+const ASKED = new Set("a an the i me my you your we us our it its this that to of for on in at with from and or is are was were be do does did have has will would can could should shall may might must what why how when where which who ll s".split(" "));
+// every word of any length, "the API" and "CI" too
+const gist = (text: string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((word) => !ASKED.has(word)).map((word) => word.replace(/(?<=[a-z]{3})s$/, "")));
+// #2073's: "PC A" and "PC B", or 4 pm and 5 pm: a number or one-letter name only one of them has keeps them apart
+const marks = (text: string) => [...new Set(text.replace(/\b(\d{1,2}):00\b/g, "$1").match(/\p{N}+|(?<![\p{L}\p{N}'’])\p{Lu}(?![\p{L}\p{N}'’])/gu)?.filter((mark) => mark !== "I"))].sort().join(" ");
+
+// a reworded repeat: most of the shorter one's words, or between a question and an ask three and half of them; "update the desktop toolbar icon" is never "... layout"
+function sameAsk(a: string, b: string, promises: boolean): boolean {
+  const [x, y] = [gist(a), gist(b)];
   const least = Math.min(x.size, y.size);
   const shared = [...x].filter((term) => y.has(term)).length;
-  return least > 0 && (shared >= 0.8 * least || (shared >= 3 && shared * 2 >= least));
+  return words(a) === words(b) || (least > 0 && marks(a) === marks(b) && (shared >= 0.8 * least || (!promises && shared >= 3 && shared * 2 >= least)));
 }
 
-/** Files what a turn left open, a promise as kind promise and the user's question as their ask; one an ask already has, open, done or declined, stays that ask. Null when nothing is new. */
-export function fileLeftovers(book: AskBook | undefined, left: readonly { ask: string; promise?: true }[], now: number): SavedAsks | null {
+/** Closes the done ids, then files what a turn left open, a promise as kind promise, building with its line when it said the work is running, and the user's question as their ask; one an ask already has, open, done or declined, stays that ask. Null when nothing changes. */
+export function fileLeftovers(book: AskBook | undefined, left: readonly { ask: string; promise?: true; running?: string }[], now: number, done: readonly string[] = []): SavedAsks | null {
   const asks = (book?.asks ?? []).map((item) => ({ ...item }));
   let lastAskId = lastAskIdOf(book);
+  let changed = false;
+  for (const item of asks) {
+    if (!isOpenAsk(item) || !done.includes(item.id)) continue;
+    Object.assign(item, { status: "done", changedAt: now });
+    changed = true;
+  }
   for (const item of left) {
     const ask = clip(item.ask, ASK_LIMITS.ask);
-    if (!ask || asks.some((filed) => sameAsk(filed.ask, ask))) continue;
+    if (!ask || asks.some((filed) => sameAsk(filed.ask, ask, isPromise(filed) && item.promise === true))) continue;
     lastAskId += 1;
-    const filed: TaskAsk = { id: `A${lastAskId}`, ask, status: "open", at: now, changedAt: now };
+    // shown 0: no turn showed it yet, so the next one does, resumed or not
+    const filed: TaskAsk = { id: `A${lastAskId}`, ask, status: item.running ? "building" : "open", shown: 0, at: now, changedAt: now };
     if (item.promise) filed.kind = "promise";
+    if (item.running) filed.ref = clip(item.running, ASK_LIMITS.ref);
     asks.push(filed);
+    changed = true;
   }
-  if (lastAskId === lastAskIdOf(book)) return null;
+  if (!changed) return null;
   trimClosed(asks);
   return { asks, lastAskId };
 }
@@ -223,7 +240,7 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, sta
   const waiting = ordered.length + parked.length - shown.length;
   const rotated = !waiting ? "" : verdictOnly ? ` ${waiting} more show on a status question.` : ` ${waiting} more wait for the next turn, least recently shown first.`;
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
-  const promises = shown.some(isPromise) ? " A promise is your own \"I'll\" a turn left undone, maybe on another engine: check what exists first (this list, merged PRs, files) and close it done if it is; never redo it." : "";
+  const promises = shown.some(isPromise) ? ` A promise is your own "I'll" a turn left undone, maybe on another engine: check what exists first (this list, merged PRs, files) and close it done if it is; never redo it.${shown.some(isRunning) ? RUNNING_NOTE : ""}` : "";
   return [
     `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}${promises}]`,
     ...shown.map(line),
@@ -253,6 +270,14 @@ function named(asks: readonly TaskAsk[], text: string): TaskAsk[] {
     .map(({ ask }) => ask);
 }
 
+function leftBlock(asks: readonly TaskAsk[], now: number): string {
+  if (!asks.length) return "";
+  return [
+    `[Wink asks the last turn left open - ${asks.length}: check what exists first, close done ones and never redo them.${asks.some(isRunning) ? RUNNING_NOTE : ""}]`,
+    ...asks.map((ask) => askLine(ask, now)),
+  ].join("\n");
+}
+
 // another chat's ids mean nothing here, so its asks show without them
 function elsewhereBlock(asks: readonly TaskAsk[], now: number): string {
   if (!asks.length) return "";
@@ -270,7 +295,8 @@ export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, tex
   const own = asks ?? [];
   if (status) return [asksBlock(asks, now, true), elsewhereBlock(elsewhere.filter(isOpenAsk), now)].filter(Boolean).join("\n");
   const block = own.some((ask) => needsVerdict(ask, now)) ? asksBlock(asks, now, false, true) : "";
-  const mine = new Set(own.filter((ask) => !needsVerdict(ask, now)));
+  const left = own.filter((ask) => isOpenAsk(ask) && ask.shown === 0 && !needsVerdict(ask, now));
+  const mine = new Set(own.filter((ask) => !needsVerdict(ask, now) && !left.includes(ask)));
   const render = (picked: readonly TaskAsk[]) => {
     const hits = picked.filter((ask) => mine.has(ask));
     return [
@@ -290,5 +316,5 @@ export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, tex
       break;
     }
   }
-  return [block, hits].filter(Boolean).join("\n");
+  return [block, leftBlock(left, now), hits].filter(Boolean).join("\n");
 }

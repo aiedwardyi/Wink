@@ -312,7 +312,7 @@ import { TurnWatchdog } from "./turn-watchdog.ts";
 import { foldContinuationStart, joinRunningTurn } from "./continuation-turn.ts";
 import "./pending-model.ts";
 import { botClears, groupClears } from "./wire-clears.ts";
-import { turnLeftovers } from "./turn-leftovers.ts";
+import { settledAsks, turnLeftovers } from "./turn-leftovers.ts";
 import { ownTurnReply, turnAddedMessage, turnSummaries, turnUnread } from "./turn-reply.ts";
 import { terminalReadGrant } from "./terminal-grant.ts";
 import { updateBridgeResponse, updateStateFromMessage } from "./update-proxy.ts";
@@ -3039,12 +3039,16 @@ function saveHarnessAsks(threadId: string, change: (book: AskBook | undefined) =
   if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
 }
 
-// what a turn said it would do, or let a steer talk over, rides to the next reply on any engine
+// what a turn said it would do or skipped rides to the next reply on any engine, and what it finished closes
 function fileTurnLeftovers(threadId: string, rows: readonly Message[]): void {
-  // only a steer needs the message that started the turn, which landed before the turn's first row
-  const opening = rows.some((row) => row.role === "user" && row.steered) && rows[0]?.parentId ? store.row(threadId, rows[0].parentId) : undefined;
-  const left = turnLeftovers(opening?.role === "user" ? [opening, ...rows] : rows);
-  if (left.length) saveHarnessAsks(threadId, (book) => fileLeftovers(book, left, Date.now()));
+  // the message that started the turn landed before the turn's first row
+  const opening = rows[0]?.parentId ? store.row(threadId, rows[0].parentId) : undefined;
+  const turn = opening?.role === "user" ? [opening, ...rows] : rows;
+  const left = turnLeftovers(turn);
+  saveHarnessAsks(threadId, (book) => {
+    const done = settledAsks(turn, book?.asks);
+    return left.length || done.length ? fileLeftovers(book, left, Date.now(), done) : null;
+  });
 }
 
 function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }, seen: readonly TaskAsk[] = []): TaskResumePacket | null {
@@ -3059,12 +3063,13 @@ function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }
   }
 }
 
-// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time
+// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time; a leftover no turn showed yet rides until one does
 function stampShownAsks(threadId: string, sent: string): void {
   const record = taskPacketForWrite(threadId);
   const now = Date.now();
-  const ids = record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) : null;
-  if (record && ids) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
+  const left = record?.asks?.filter((ask) => ask.shown === 0 && sent.includes(`- ${ask.id} `)).map((ask) => ask.id) ?? [];
+  const ids = [...(record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) ?? [] : []), ...left];
+  if (record && ids.length) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
 // a close saves once the turn that showed its line landed, and never over the bot's own edit in that turn
