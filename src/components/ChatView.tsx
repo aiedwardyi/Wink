@@ -1383,10 +1383,10 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const waitFloorId = liveWaiting ? floorNow.id : undefined;
   const liveTurn = useMemo(() => {
     const floor = waitFloorId === undefined ? undefined : { id: waitFloorId, settled: floorNow.settled };
-    if (liveTail) return liveTurnSteps(listed, listedStreaming, liveWaiting, floor);
-    // an older window finds the running turn in the whole transcript and keeps its live line at the tail
-    return { ...liveTurnSteps(messages, null, liveWaiting, floor), holdStream: false, fallbackText: null, stepIndex: -1 };
-  }, [liveTail, listed, messages, listedStreaming, liveWaiting, waitFloorId, floorNow.settled]);
+    // the whole transcript finds the running turn even when its prompt is above the mounted rows; its live line stays at the tail
+    const found = liveTurnSteps(messages, listedStreaming, liveWaiting, floor);
+    return liveTail ? found : { ...found, holdStream: false, fallbackText: null, stepIndex: -1 };
+  }, [liveTail, messages, listedStreaming, liveWaiting, waitFloorId, floorNow.settled]);
   const botFolder = activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd;
 
   // Docks under reply text while it streams, and fades there at turn end.

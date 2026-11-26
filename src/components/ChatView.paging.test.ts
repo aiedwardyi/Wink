@@ -600,6 +600,22 @@ describe("paged transcripts", () => {
     expect(scroller.scrollTop).toBe(500);
   });
 
+  it("keeps a running turn's progress out of the mounted tail when its prompt is above it", async () => {
+    const thread: Message[] = [{ id: "prompt", parentId: null, at: 1, role: "user", kind: "text", text: "running prompt;" }];
+    for (let i = 0; i < 130; i++) thread.push({ id: `t${i}`, parentId: thread.at(-1)!.id, at: 1, role: "bot", kind: "text", text: `progress ${i};` });
+    pagedServer("thread-a", thread, { bots: [{ ...bot(thread, false), busy: true } as Bot], groups: [] });
+    live.current = { streaming: {}, reasoning: {}, signal: { "thread-a": "started" }, gen: {}, turn: {} };
+    try {
+      const host = await mount("chat");
+      await vi.waitFor(() => expect(host.textContent).toContain("progress 129;"));
+      expect(host.querySelector('[data-mid="prompt"]')).toBeNull();
+      const bubbles = [...host.querySelectorAll("[data-mid]")].map((row) => row.getAttribute("data-mid")).filter((id) => id?.startsWith("t"));
+      expect(bubbles).toEqual([]);
+    } finally {
+      live.current = { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} };
+    }
+  });
+
   it("keeps an older window's answers while a turn runs", async () => {
     const thread: Message[] = Array.from({ length: 600 }, (_, i) => i % 2
       ? { id: `a${i}`, parentId: `q${i - 1}`, at: 1, role: "bot", kind: "text", text: `answer ${i};` }
