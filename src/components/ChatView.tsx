@@ -1374,15 +1374,16 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const liveTail = laterCount === 0 && !jump.messages;
   const listedStreaming = liveTail ? streamingMessage : null;
   const liveWaiting = waiting && !jump.messages;
-  // a wait this chat did not see begin, opened or jumped into mid-turn, has no known floor
-  const [waitFloor, setWaitFloor] = useState<{ threadId: string; on: boolean; id?: string }>(() => ({ threadId: bot.threadId, on: waiting }));
-  const floorMoved = waitFloor.threadId !== bot.threadId || waitFloor.on !== waiting;
-  const floorNow = floorMoved ? { threadId: bot.threadId, on: waiting, id: waiting && waitFloor.threadId === bot.threadId && !jump.messages ? listed.at(-1)?.id : undefined } : waitFloor;
+  const [waitFloor, setWaitFloor] = useState<{ threadId: string; on: boolean; id?: string; settled: boolean }>(() => ({ threadId: bot.threadId, on: waiting, settled: false }));
+  const floorMoved = waitFloor.threadId !== bot.threadId || waitFloor.on !== waiting || (liveWaiting && waitFloor.id === undefined && listed.length > 0);
+  const floorNow = floorMoved
+    ? { threadId: bot.threadId, on: waiting, id: liveWaiting ? listed.at(-1)?.id : undefined, settled: liveWaiting && waitFloor.threadId === bot.threadId && !waitFloor.on }
+    : waitFloor;
   if (floorMoved) setWaitFloor(floorNow);
   const waitFloorId = liveWaiting ? floorNow.id : undefined;
   const liveTurn = useMemo(
-    () => liveTurnSteps(listed, listedStreaming, liveWaiting, waitFloorId),
-    [listed, listedStreaming, liveWaiting, waitFloorId],
+    () => liveTurnSteps(listed, listedStreaming, liveWaiting, waitFloorId === undefined ? undefined : { id: waitFloorId, settled: floorNow.settled }),
+    [listed, listedStreaming, liveWaiting, waitFloorId, floorNow.settled],
   );
   const botFolder = activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd;
 

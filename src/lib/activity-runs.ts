@@ -362,18 +362,23 @@ export interface LiveTurnSteps {
   stepIndex: number;
 }
 
+export interface WaitFloor {
+  /** Tail row when the chat first saw the wait: an unechoed send or a note after it steers the turn, never starts it. */
+  id: string;
+  /** The wait began on screen, so rows at or before `id` had settled; false when opened or switched to mid-turn. */
+  settled: boolean;
+}
+
 /** Splits a running turn's bot texts so only the newest text renders in the quiet live line.
- * Steer replies and quick/sidekick/comm/voice lines stay out and remain visible bubbles.
- * `waitFloorId` is the tail row when the wait began: an unechoed send or a note there started the turn, later ones steer it.
- * Leave it unset when the wait was already running, as the tail then sits inside the turn. */
+ * Steer replies and quick/sidekick/comm/voice lines stay out and remain visible bubbles. */
 export function liveTurnSteps(
   messages: readonly Message[],
   streaming: Message | null,
   waiting: boolean,
-  waitFloorId?: string,
+  waitFloor?: WaitFloor,
 ): LiveTurnSteps {
   if (!waiting) return { hiddenIds: EMPTY_IDS, holdStream: false, fallbackText: null, stepIndex: -1 };
-  const floor = waitFloorId === undefined ? messages.length - 1 : messages.findIndex((row) => row.id === waitFloorId);
+  const floor = waitFloor ? messages.findIndex((row) => row.id === waitFloor.id) : messages.length - 1;
   let turnStart = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     const row = messages[i];
@@ -388,8 +393,8 @@ export function liveTurnSteps(
   if (turnStart < 0 || messages[turnStart].from || messages[turnStart].placeholder) return { hiddenIds: EMPTY_IDS, holdStream: false, fallbackText: null, stepIndex: -1 };
   const turnTexts: Message[] = [];
   let afterSteer = false;
-  // rows at or before a known floor had settled when the wait began, so a note that woke this turn never claims them
-  for (let i = Math.max(turnStart, waitFloorId === undefined ? -1 : floor) + 1; i < messages.length; i++) {
+  // a note that woke this turn never claims rows that had settled before it
+  for (let i = Math.max(turnStart, waitFloor?.settled ? floor : -1) + 1; i < messages.length; i++) {
     const row = messages[i];
     // send order can draw a reply that finished before this turn below its line
     if (row.at < messages[turnStart].at) continue;

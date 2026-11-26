@@ -33,7 +33,7 @@ describe("live line must not take the last turn's answer", () => {
       row("t2", 4, { role: "bot", kind: "text" }),
       row("u2", 5, { role: "user", kind: "text", placeholder: true }),
     ];
-    const live = liveTurnSteps(list, null, true, "u1");
+    const live = liveTurnSteps(list, null, true, { id: "u1", settled: true });
     expect({ hidden: [...live.hiddenIds], line: live.fallbackText }).toEqual({ hidden: ["t1", "t2"], line: "t2" });
   });
   it("a note that landed mid-turn wakes a turn after it: the answer just given and its steps stay", () => {
@@ -44,9 +44,9 @@ describe("live line must not take the last turn's answer", () => {
       row("s2", 4, { role: "bot", kind: "text", step: true }),
       row("a1", 5, { role: "bot", kind: "text" }),
     ];
-    const live = liveTurnSteps(list, null, true, "a1");
+    const live = liveTurnSteps(list, null, true, { id: "a1", settled: true });
     expect({ hidden: [...live.hiddenIds], line: live.fallbackText }).toEqual({ hidden: [], line: null });
-    const woke = liveTurnSteps([...list, row("t1", 6, { role: "bot", kind: "text" })], null, true, "a1");
+    const woke = liveTurnSteps([...list, row("t1", 6, { role: "bot", kind: "text" })], null, true, { id: "a1", settled: true });
     expect({ hidden: [...woke.hiddenIds], line: woke.fallbackText }).toEqual({ hidden: ["t1"], line: "t1" });
   });
   it("a second note during a note-woken turn wakes the next one: that answer stays", () => {
@@ -58,7 +58,7 @@ describe("live line must not take the last turn's answer", () => {
       row("n2", 5, { role: "bot", kind: "note" }),
       row("a1", 6, { role: "bot", kind: "text" }),
     ];
-    const live = liveTurnSteps(list, null, true, "a1");
+    const live = liveTurnSteps(list, null, true, { id: "a1", settled: true });
     expect({ hidden: [...live.hiddenIds], line: live.fallbackText }).toEqual({ hidden: [], line: null });
   });
 });
