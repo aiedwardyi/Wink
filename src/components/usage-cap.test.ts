@@ -12,8 +12,8 @@ import type { UsageBoardState } from "@/lib/usage-board-client";
 const h = vi.hoisted(() => ({ state: null as unknown as UsageBoardState, layout: "B", reduce: true }));
 vi.mock("@/lib/use-usage-board", () => ({ useUsageBoard: () => h.state }));
 vi.mock("@/lib/use-visible-clock", () => ({ useVisibleClock: () => usageBoardNow }));
-vi.mock("@/lib/use-phone-swipe", () => ({ useIsPhone: () => true }));
-vi.mock("@/lib/phone-swipe", () => ({ reducedMotion: () => h.reduce }));
+vi.mock("@/lib/use-phone-swipe", async (original) => ({ ...await original<typeof import("@/lib/use-phone-swipe")>(), useIsPhone: () => true }));
+vi.mock("@/lib/phone-swipe", async (original) => ({ ...await original<typeof import("@/lib/phone-swipe")>(), reducedMotion: () => h.reduce }));
 vi.mock("@/lib/skins", () => ({ useSkin: () => "github-dimmed", isTerminalSkin: () => false }));
 vi.mock("@/state/store", () => ({ useStore: () => ({ state: { instances: [] }, dispatch: vi.fn(), refreshInstances: vi.fn() }) }));
 vi.mock("./usage-layout", async (original) => ({ ...await original<typeof import("./usage-layout")>(), get USAGE_LAYOUT() { return h.layout; } }));
@@ -286,6 +286,48 @@ describe("motion", () => {
       expect(part?.hasAttribute("data-closing")).toBe(true);
       expect(part?.hasAttribute("inert")).toBe(true);
     }
+  });
+
+  it.each(["touch", "mouse"] as const)("a %s press on Close whose click lands beside it: touch closes once, mouse stays open", async (pointerType) => {
+    const anchor = document.createElement("button");
+    host.append(anchor);
+    anchor.getBoundingClientRect = () => ({ top: 700, left: 24, right: 300, bottom: 730, width: 276, height: 30, x: 24, y: 700, toJSON: () => ({}) });
+    const onClose = vi.fn();
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageQuickView, {
+      engine: engine(), account: engine().accounts[0]!, board, state: h.state, anchor: { current: anchor }, onClose,
+    }))));
+    // A refresh grew the view mid-tap: the finger went down on Close, the click hit the title the view slid under it.
+    document.querySelector("[data-quick-close]")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType }));
+    await act(async () => { document.querySelector<HTMLElement>("[data-engine-name]")!.click(); });
+    expect(onClose).toHaveBeenCalledTimes(pointerType === "touch" ? 1 : 0);
+    await act(async () => { document.querySelector<HTMLElement>("[data-engine-name]")!.click(); });
+    expect(onClose).toHaveBeenCalledTimes(pointerType === "touch" ? 1 : 0);
+    // A press the browser took over for a scroll sends no click; a later click is not Close's.
+    const close = document.querySelector("[data-quick-close]");
+    close?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType }));
+    close?.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerType }));
+    await act(async () => { document.querySelector<HTMLElement>("[data-engine-name]")!.click(); });
+    expect(onClose).toHaveBeenCalledTimes(pointerType === "touch" ? 1 : 0);
+  });
+
+  it("closes on an upward swipe from its header", async () => {
+    const anchor = document.createElement("button");
+    host.append(anchor);
+    anchor.getBoundingClientRect = () => ({ top: 700, left: 24, right: 300, bottom: 730, width: 276, height: 30, x: 24, y: 700, toJSON: () => ({}) });
+    const onClose = vi.fn();
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageQuickView, {
+      engine: engine(), account: engine().accounts[0]!, board, state: h.state, anchor: { current: anchor }, onClose,
+    }))));
+    const head = document.querySelector("[data-engine-name]")!;
+    [500, 490, 420, 340].forEach((y, index) => {
+      const event = new Event(index ? "touchmove" : "touchstart", { bubbles: true, cancelable: true });
+      Object.defineProperties(event, { touches: { value: [{ clientX: 100, clientY: y }] }, timeStamp: { value: index * 16 } });
+      head.dispatchEvent(event);
+    });
+    const end = new Event("touchend", { bubbles: true, cancelable: true });
+    Object.defineProperties(end, { touches: { value: [] }, timeStamp: { value: 64 } });
+    await act(async () => { head.dispatchEvent(end); });
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("fades the desk in when the board arrives after loading, not when it is already there", async () => {

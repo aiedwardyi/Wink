@@ -397,8 +397,8 @@ export function useDrawerSwipe(open: boolean, side: SidebarSide, close: () => vo
 
 type SheetDrag = { x: number; y: number; lastY: number; lastT: number; velocity: number; pulling: boolean };
 
-/** Swipe down on the open bottom sheet in `sheetRef` to close it through `close`. A scrolled list in it scrolls first: the sheet drags only from the list's top. */
-export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boolean, close: () => void): void {
+/** Swipe down on the open bottom sheet in `sheetRef` (up with `up`) to close it through `close`. A list in it scrolls first: the sheet drags only from the list's end in that direction. */
+export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boolean, close: () => void, up = false): void {
   const latest = useRef(close);
   useLayoutEffect(() => {
     latest.current = close;
@@ -422,7 +422,7 @@ export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boo
       const touch = e.touches[0];
       if (e.touches.length !== 1 || !touch || !(e.target instanceof Element)) return;
       for (let node: Element | null = e.target; node && node !== sheet.parentElement; node = node.parentElement) {
-        if (node.scrollTop > 0) return;
+        if (up ? node.scrollHeight - node.clientHeight - node.scrollTop > 1 && /auto|scroll/.test(getComputedStyle(node).overflowY) : node.scrollTop > 0) return;
       }
       drag = { x: touch.clientX, y: touch.clientY, lastY: touch.clientY, lastT: e.timeStamp, velocity: 0, pulling: false };
     };
@@ -433,7 +433,7 @@ export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boo
       const dy = touch.clientY - drag.y;
       if (!drag.pulling) {
         const axis = lockAxis(dx, dy);
-        if (axis === "x" || (axis === "y" && dy < 0)) {
+        if (axis === "x" || (axis === "y" && (up ? dy > 0 : dy < 0))) {
           drag = null;
           return;
         }
@@ -445,7 +445,7 @@ export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boo
       if (dt > 0) drag.velocity = (touch.clientY - drag.lastY) / dt;
       drag.lastY = touch.clientY;
       drag.lastT = e.timeStamp;
-      if (drag.pulling && !reducedMotion()) sheet.style.translate = `0 ${Math.max(0, dy)}px`;
+      if (drag.pulling && !reducedMotion()) sheet.style.translate = `0 ${up ? Math.min(0, dy) : Math.max(0, dy)}px`;
     };
     const finish = (commit: boolean, e: TouchEvent) => {
       const done = drag;
@@ -455,7 +455,8 @@ export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boo
       if (e.cancelable) e.preventDefault();
       // a finger that stopped before lifting is no flick
       const velocity = e.timeStamp - done.lastT > FLICK_STILL_MS ? 0 : done.velocity;
-      if (commit && sheetSwipeCloses(done.lastY - done.y, velocity, sheet.offsetHeight)) {
+      const sign = up ? -1 : 1;
+      if (commit && sheetSwipeCloses(sign * (done.lastY - done.y), sign * velocity, sheet.offsetHeight)) {
         // the exit fade plays from where the finger let go
         latest.current();
         return;
@@ -478,5 +479,5 @@ export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boo
       sheet.removeEventListener("touchcancel", onCancel);
       clearTimeout(springTimer);
     };
-  }, [sheetRef, open]);
+  }, [sheetRef, open, up]);
 }
