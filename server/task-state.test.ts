@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -195,6 +196,25 @@ describe("task resume packets", () => {
     expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual([...asks, ...filed]);
     stageTaskResumePacket(packet({ asks: [...asks, ...filed], nextAction: "Staged" }), { dir });
     expect(settleTaskResumePacket("thread-1", { dir })?.asks?.slice(-2)).toEqual(filed);
+  });
+
+  it("keeps the saved record's promise and key marks until the record replacing it is on disk", () => {
+    const filed: TaskAsk = { id: "A5", ask: "I'll update the file src/Header.ts.", status: "open", kind: "promise", key: "b".repeat(64), at: 130, changedAt: 130 };
+    writeTaskResumePacket(packet({ asks: [...asks, filed] }), { dir });
+    const real = atomic.writeFileAtomic;
+    const write = vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, ...rest) => {
+      if (String(path).endsWith("thread-1.json")) throw new Error("disk full");
+      return real(path, ...rest);
+    });
+    expect(() => writeTaskResumePacket(packet({ asks }), { dir })).toThrow("disk full");
+    write.mockRestore();
+    expect(readTaskResumePacket("thread-1", { dir })?.asks?.at(-1), "a failed write").toEqual(filed);
+    stageTaskResumePacket(packet({ asks }), { dir });
+    rmSync(join(dir, "thread-1.json.staged"));
+    expect(readTaskResumePacket("thread-1", { dir })?.asks?.at(-1), "a stage that never landed").toEqual(filed);
+    writeTaskResumePacket(packet({ asks }), { dir });
+    const marks = readdirSync(dir).filter((name) => name.endsWith(".promises.json")).map((name) => readFileSync(join(dir, name), "utf8")).join("");
+    expect(marks, "the committed record's own marks only").not.toContain("A5");
   });
 
   it("loads a record saved with an ask due time and wake id, asks and plan intact", () => {

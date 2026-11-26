@@ -5,8 +5,8 @@ const COMMIT = /\b(?:i['’]ll|i will(?! not\b)|i['’]m going to|i am going to)
 // #2073's time or trigger: a take-back's "tomorrow" names no promise
 const DEFERRED = /\b(?:later|tomorrow|tonight|today|overnight|noon|midnight|when|once|after|before|next|by|(?:mon|tues|wednes|thurs|fri|satur|sun)day|this (?:morning|afternoon|evening|week|weekend)|in (?:an?|\d+) (?:minutes?|hours?|days?|weeks?))\b|\b\d{1,2}(?::\d{2})?\s?[ap]\.?m\b|\bat \d{1,2}(?::\d{2})?\b|나중에|내일|오늘|이따|다음에|되면|끝나면|켜시면|하시면|후에|\d{1,2}시/i;
 const FILLER = /^(?:(?:ok(?:ay)?|sure|got it|alright)[,!.]?\s+)?(?:let me|lemme|one (?:moment|sec(?:ond)?)|give me a (?:sec(?:ond)?|moment|minute)|hold on|just a (?:sec(?:ond)?|moment))\b|^(?:잠시만|잠깐만)/i;
-// an offer waits on the user's yes; "check if it exists" and "the feature you want" are still promises
-const OFFER = /\b(?:if|unless) (?:you|needed|wanted|useful|helpful)\b|\b(?:want me to|would you like|shall i|maybe|perhaps)\b|원하시면|괜찮으시면/i;
+// an offer waits on the user's yes; "check if it exists", "check if you have access" and "the feature you want" are still promises
+const OFFER = /\b(?:if|unless) (?:you(?:['’]d| would)? (?:want|like|prefer)|needed|wanted|useful|helpful)\b|\b(?:want me to|would you like|shall i|maybe|perhaps)\b|원하시면|괜찮으시면/i;
 const DENIED = /\b(?:not|never|no|cannot)\b|n['’]t\b|(?:^|\s)(?:안|못)\s/i;
 const HEDGED = /\b(?:if|unless|maybe|perhaps|in case)\b/i;
 // #2073's take-back: it opens its sentence, and one that names nothing is about the promise right before it
@@ -17,6 +17,8 @@ const TIMES = new RegExp(DEFERRED.source, "gi");
 const SENTENCE = /(?<=[.!?。！？])\s+|\n+/;
 const CODE = /(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g;
 const QUESTION = /[?？]$/;
+// "I'll update the guide; I'll email the invoice": each promise its own line, so each gets its own ID
+const CLAUSE = /(?:;|,? and)\s+(?=(?:i['’]ll|i will|i['’]m going to|i am going to)\b)/i;
 
 const sentences = (text: string) => text.replace(CODE, "$1").split(SENTENCE)
   .map((part) => part.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -77,7 +79,7 @@ export interface Leftover { ask: string; promise?: true; note?: string }
 /** What a settled turn may have left open, to carry to the next reply unchecked: every "I'll" it kept, its last text's too, then each question of the user's the quick helper did not answer. A false one costs one checked line, so no wording decides an ask was answered or done: no line closes, narrows or drops a filed ask. rows: the turn in order, from the messages it answered. */
 export function turnLeftovers(rows: readonly Message[]): Leftover[] {
   const own = (row: Message) => said(row) && !row.quick;
-  const lines = rows.flatMap((row) => !own(row) ? [] : sentences(row.text!)
+  const lines = rows.flatMap((row) => !own(row) ? [] : sentences(row.text!).flatMap((line) => line.split(CLAUSE))
     .map((line) => ({ line, commit: COMMIT.test(spoken(line)) && !OFFER.test(line) && !FILLER.test(line) && !QUESTION.test(line) })));
   for (const [at, { line }] of lines.entries()) {
     if (!WITHDRAWN.test(line)) continue;

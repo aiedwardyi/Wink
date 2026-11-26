@@ -5,6 +5,9 @@ import { ASK_VERDICT_MS, asksBlock, asksNudge, fileLeftovers, type TaskAsk } fro
 import { answeredRows, turnLeftovers } from "./turn-leftovers.ts";
 
 let n = 0;
+// fixtures sit just past the epoch, which is 12-31 west of UTC: the list labels the local day
+const epoch = new Date(0);
+const DAY = `${String(epoch.getMonth() + 1).padStart(2, "0")}-${String(epoch.getDate()).padStart(2, "0")}`;
 const user = (text: string, extra: Partial<Message> = {}): Message => ({ id: `m${++n}`, role: "user", kind: "text", text, at: n, ...extra });
 const bot = (text: string, extra: Partial<Message> = {}): Message => ({ id: `m${++n}`, role: "bot", kind: "text", text, at: n, ...extra });
 const tool = (summary = "", ok = true): Message => ({ id: `m${++n}`, role: "bot", kind: "activity", tool: { name: "Read", ok, summary }, at: n });
@@ -35,7 +38,7 @@ describe("turn leftovers", () => {
     const saved = fileLeftovers(undefined, left, 5)!;
     expect(saved.asks.map((item) => [item.id, item.status, item.kind])).toEqual([["A1", "open", "promise"], ["A2", "open", "promise"], ["A3", "open", undefined], ["A4", "open", undefined]]);
     expect(saved.asks[0]!.ask).toHaveLength(80);
-    expect(asksBlock(saved.asks, 5)).toContain("- A2 open promise unchecked 01-01: I'll keep the picker changes moving.");
+    expect(asksBlock(saved.asks, 5)).toContain(`- A2 open promise unchecked ${DAY}: I'll keep the picker changes moving.`);
   });
 
   it("files every kept promise of the turn, since no later line or call decides it is done", () => {
@@ -56,6 +59,13 @@ describe("turn leftovers", () => {
     expect(turnLeftovers([user("Fix it"), tool(), bot("Fixed. I'll keep it simple.")])).toEqual([promise("I'll keep it simple.")]);
     expect(turnLeftovers([user("Ship it"), tool(), bot("Shipped. I'll keep an eye on it.")])).toEqual([promise("I'll keep an eye on it.")]);
     expect(turnLeftovers([user("Tests please"), bot("If you want, I'll add tests for the parser."), tool(), bot("Done.")])).toEqual([]);
+    expect(turnLeftovers([user("Tests please"), bot("I'll add tests for the parser if you'd like."), tool(), bot("Done.")])).toEqual([]);
+    // what the promised check is about is no offer
+    expect(turnLeftovers([user("Can't open it"), tool(), bot("I'll check if you have access.")])).toEqual([promise("I'll check if you have access.")]);
+    // two promises in one sentence get two IDs
+    const both = turnLeftovers([user("Wrap up"), tool(), bot("I'll update the guide; I'll email the invoice, and I'll close the ticket.")]);
+    expect(both).toEqual([promise("I'll update the guide"), promise("I'll email the invoice"), promise("I'll close the ticket.")]);
+    expect(fileLeftovers(undefined, both, 1)?.asks.map((item) => item.id)).toEqual(["A1", "A2", "A3"]);
     expect(turnLeftovers([user("고쳐 주세요"), bot("API를 수정할게요.")])).toEqual([promise("API를 수정할게요.")]);
     expect(turnLeftovers([user("고쳐 주세요"), bot("설정 파일을 수정할게요.")])).toEqual([promise("설정 파일을 수정할게요.")]);
     expect(turnLeftovers([user("고쳐 주세요"), tool(), bot("확인할게요.")])).toEqual([promise("확인할게요.")]);
@@ -110,7 +120,7 @@ describe("turn leftovers", () => {
     const saved = fileLeftovers(undefined, running, 5)!;
     expect(saved.asks[0]).toMatchObject({ status: "open", kind: "promise", ref: "Export running as PID 4128, leave it alone." });
     const next = asksNudge(saved.asks, 6, "ok");
-    expect(next).toContain("- A1 open promise unchecked 01-01: I'll run the data export in the background. (Export running as PID 4128, leave it alone.)");
+    expect(next).toContain(`- A1 open promise unchecked ${DAY}: I'll run the data export in the background. (Export running as PID 4128, leave it alone.)`);
     expect(next).toContain("running processes first");
     expect(next).toContain("never start one twice");
     // a running line about other work is no note
@@ -124,9 +134,9 @@ describe("turn leftovers", () => {
     expect(saved.asks.map((item) => [item.id, item.ask, item.ref])).toEqual(Array.from({ length: 60 }, (_, i) => [`A${i + 1}`, `I'll check step ${i} of the release notes.`, undefined]));
     const more = `- +57 more unchecked promises, each open by ID; a status question lists them: ${Array.from({ length: 57 }, (_, i) => `A${i + 4}`).join(", ")}`;
     for (const list of [asksBlock(saved.asks, 10), asksNudge(saved.asks, 10, "ok")]) {
-      expect(list.split("\n").slice(1)).toEqual([0, 1, 2].map((i) => `- A${i + 1} open promise unchecked 01-01: I'll check step ${i} of the release notes.`).concat(more));
+      expect(list.split("\n").slice(1)).toEqual([0, 1, 2].map((i) => `- A${i + 1} open promise unchecked ${DAY}: I'll check step ${i} of the release notes.`).concat(more));
     }
-    expect(asksBlock(saved.asks, 10, true)).toContain("- A60 open promise unchecked 01-01: I'll check step 59 of the release notes.");
+    expect(asksBlock(saved.asks, 10, true)).toContain(`- A60 open promise unchecked ${DAY}: I'll check step 59 of the release notes.`);
     const started = performance.now();
     for (let i = 0; i < 20; i++) fileLeftovers(undefined, turnLeftovers(rows), 9);
     expect((performance.now() - started) / 20).toBeLessThan(2);
@@ -143,7 +153,7 @@ describe("turn leftovers", () => {
     ]);
     expect(asksBlock(saved.asks, 6)).toContain("- +1 more unchecked promises, each open by ID; a status question lists them: A4");
     const closed = saved.asks.map((item) => item.id === "A4" ? item : { ...item, status: "done" as const });
-    for (const list of [asksBlock(closed, 7), asksBlock(closed, 7, true), asksNudge(closed, 7, "status?")]) expect(list).toContain("- A4 open promise unchecked 01-01: I'll email the release calendar.");
+    for (const list of [asksBlock(closed, 7), asksBlock(closed, 7, true), asksNudge(closed, 7, "status?")]) expect(list).toContain(`- A4 open promise unchecked ${DAY}: I'll email the release calendar.`);
   });
 
   it("knows a repeat by its full words, past the clip, and a path by its case (2226G identity)", () => {
@@ -163,7 +173,7 @@ describe("turn leftovers", () => {
     for (const at of [6, 7, 8]) {
       const list = asksBlock(filed, at);
       expect(list).toContain("check the transcript, files and running processes first");
-      expect(list).toContain("- A1 open unchecked 01-01: Could you write ready.txt?");
+      expect(list).toContain(`- A1 open unchecked ${DAY}: Could you write ready.txt?`);
       filed = filed.map((item) => ({ ...item, shown: at }));
     }
     expect(asksNudge(filed, 9, "did you write ready.txt")).toContain("never start one twice");
@@ -224,16 +234,16 @@ describe("turn leftovers", () => {
     const saved = fileLeftovers(undefined, [promise("I'll update the picker labels."), { ask: "Where are the keyboard shortcuts documented?" }], 5)!;
     const next = asksNudge(saved.asks, 6, "ok");
     expect(next).toContain("[Wink asks the last turn may have left open, unchecked - 2: check the transcript, files and running processes first");
-    expect(next).toContain("- A1 open promise unchecked 01-01: I'll update the picker labels.");
-    expect(next).toContain("- A2 open unchecked 01-01: Where are the keyboard shortcuts documented?");
+    expect(next).toContain(`- A1 open promise unchecked ${DAY}: I'll update the picker labels.`);
+    expect(next).toContain(`- A2 open unchecked ${DAY}: Where are the keyboard shortcuts documented?`);
     expect(asksNudge(saved.asks.map((item) => ({ ...item, shown: 6 })), 7, "ok")).toBe("");
     // a fresh engine's full list marks an open promise unchecked and says to close it by ID, not redo it
     expect(asksBlock(saved.asks, 6)).toContain("close each by ID or set it building with the job's ref through update_task_state; never start one twice.");
-    expect(asksBlock([{ ...saved.asks[0]!, status: "building", ref: "PID 4128" }], 6)).toContain("- A1 building promise 01-01: I'll update the picker labels. (PID 4128)");
+    expect(asksBlock([{ ...saved.asks[0]!, status: "building", ref: "PID 4128" }], 6)).toContain(`- A1 building promise ${DAY}: I'll update the picker labels. (PID 4128)`);
     // a carried question alone gets the same check on a fresh engine's full list
     const invoice = fileLeftovers(undefined, [{ ask: "Could you email the invoice?" }], 5)!.asks;
     expect(asksBlock(invoice, 6)).toContain("An unchecked row may be done or running already: check the transcript, files and running processes first");
-    expect(asksBlock(invoice, 6)).toContain("- A1 open unchecked 01-01: Could you email the invoice?");
+    expect(asksBlock(invoice, 6)).toContain(`- A1 open unchecked ${DAY}: Could you email the invoice?`);
   });
 
   it("keeps a long question's mark and never nags a question or promise to be built", () => {

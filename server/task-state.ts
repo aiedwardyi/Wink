@@ -247,9 +247,23 @@ function marked(packet: TaskResumePacket, marks: PromiseMarks): TaskResumePacket
   }) };
 }
 
-/** Before the packet: a mark whose ask never landed matches no ask's creation time. */
+const rawMark = (mark: PromiseMarks[string]): z.input<typeof marksSchema>[string] =>
+  !mark.key ? mark.at : mark.promise ? { at: mark.at, key: mark.key, promise: true } : { at: mark.at, key: mark.key };
+
+/** Before the packet, beside the marks the saved packet still reads, so a failed or cut write loses none of them;
+ * a mark whose ask never landed matches no ask's creation time, and the next commit drops it. */
 function writeMarks(path: string, saved: TaskResumePacket): void {
-  const marks = marksOf(saved.asks);
+  const kept = Object.entries(readMarks(path)).map(([id, mark]) => [id, rawMark(mark)]);
+  setMarks(path, { ...Object.fromEntries(kept), ...marksOf(saved.asks) });
+}
+
+/** Once a packet is on disk: only its own asks' marks. */
+function pruneMarks(path: string, packet: TaskResumePacket): void {
+  const kept = Object.entries(readMarks(path)).filter(([id, mark]) => packet.asks?.some((ask) => ask.id === id && ask.at === mark.at));
+  setMarks(path, Object.fromEntries(kept.map(([id, mark]) => [id, rawMark(mark)])));
+}
+
+function setMarks(path: string, marks: z.input<typeof marksSchema>): void {
   const text = Object.keys(marks).length ? JSON.stringify(marks) : "";
   if ((fileText(marksPath(path)) ?? "") === text) return;
   if (text) writeFileAtomic(marksPath(path), text, { mode: 0o600 });
@@ -322,6 +336,7 @@ export function writeTaskResumePacket(
   writeMarks(path, saved);
   writeFileAtomic(path, serialized, { mode: 0o600 });
   dropStaged(path);
+  pruneMarks(path, saved);
   return saved;
 }
 
@@ -346,6 +361,7 @@ export function settleTaskResumePacket(
   const staged = stagedRecord(path, threadId);
   if (staged) writeFileAtomic(path, staged.raw, { mode: 0o600 });
   dropStaged(path);
+  if (staged) pruneMarks(path, staged.packet);
   return staged ? marked(staged.packet, readMarks(path)) : null;
 }
 
