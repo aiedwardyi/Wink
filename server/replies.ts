@@ -25,6 +25,21 @@ export const typedByHost = (line: Line) => (line.author ? line.author.kind === "
 // a zero-width space or any of : , - / = \, with no ask; a zero-width space right after every "@" names no file in either
 export const inertMentions = (text: string) => text.replace(/@(?!\u200B)/g, "@\u200B");
 
+/** Prompt text whose every "@" may stand: Wink's own words, or words this PC's person typed. */
+export class PromptText {
+  readonly text: string;
+  constructor(text: string) {
+    this.text = text;
+  }
+}
+export const asIs = (text: string) => new PromptText(text);
+/** Prompt text from Wink's own template: every ${} value goes through inertMentions unless it is PromptText. */
+export const inert = (parts: TemplateStringsArray, ...values: readonly (string | PromptText)[]): PromptText =>
+  asIs(parts.reduce((out, part, index) => {
+    const value = values[index - 1]!;
+    return out + (value instanceof PromptText ? value.text : inertMentions(value)) + part;
+  }));
+
 /** A line's words as a prompt may carry them: a guest's @path names no file, and in a group nothing the host did not type does. */
 export const lineWords = (line: Line, text: string, group = false) => ((group ? !typedByHost(line) : typedByGuest(line.author)) ? inertMentions(text) : text);
 
