@@ -13,6 +13,8 @@ const PATH = "/api/usage-order";
 let orders: UsageOrders = {};
 let shown = "{}";
 let writes = 0;
+/** The newest copy Wink sent, by rev; replies and config frames can arrive in any order. */
+let newest: UsageOrderStatus | undefined;
 let legacyDone = false;
 const watchers = new Set<() => void>();
 
@@ -59,7 +61,9 @@ function put(body: object): Promise<{ ok: boolean; status?: UsageOrderStatus }> 
 
 /** Without a server answer (offline, a failed write) the session keeps the order it shows. */
 function land(status: UsageOrderStatus | undefined) {
-  if (status !== undefined && !writes) show(status?.orders ?? {});
+  if (status === undefined) return;
+  if (newest === undefined || (status?.rev ?? 0) >= (newest?.rev ?? 0)) newest = status;
+  if (!writes) show(newest?.orders ?? {});
 }
 
 /** The one-time move of this browser's old order. The desktop app's copy is what the user set,
@@ -99,6 +103,7 @@ export function resetUsageOrder() {
   orders = {};
   shown = "{}";
   writes = 0;
+  newest = undefined;
   legacyDone = false;
 }
 

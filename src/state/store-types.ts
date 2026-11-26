@@ -385,7 +385,7 @@ export interface TerminalAttention {
 export type TerminalAttentionMap = Record<string, TerminalAttention>;
 
 /** Lists by engine base, plus "engines" for the sections. seed: "browser" marks a browser's old local copy sent up once. */
-export type UsageOrderStatus = { orders: Record<string, string[]>; seed?: "browser" } | null;
+export type UsageOrderStatus = { orders: Record<string, string[]>; seed?: "browser"; rev?: number } | null;
 
 /** GET /api/config - configured flags only; secrets are never echoed. */
 export interface ConfigStatus {

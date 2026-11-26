@@ -4,8 +4,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard } from "@/lib/usage-board";
+import { nextUsageOrder, parseUsageOrderBody } from "../../server/usage-order.ts";
 
-type Status = { orders: Record<string, string[]>; seed?: "browser" } | null;
+type Status = { orders: Record<string, string[]>; seed?: "browser"; rev?: number } | null;
 const h = vi.hoisted(() => ({ board: null as unknown, config: undefined as unknown, api: vi.fn() }));
 vi.mock("@/state/store", async (original) => ({
   ...await original<typeof import("@/state/store")>(),
@@ -20,9 +21,7 @@ const LEGACY = "openmausbot.usageOrder.v1";
 let saved: Status;
 function answer(path: string, init?: RequestInit) {
   if (path !== "/api/usage-order" || init?.method !== "PUT") return Promise.resolve({});
-  const body = JSON.parse(String(init.body));
-  if ("key" in body) saved = { orders: { ...saved?.orders, [body.key]: body.order } };
-  else if (!saved || (saved.seed === "browser" && body.from === "desktop")) saved = { orders: body.seed, ...(body.from === "browser" ? { seed: "browser" as const } : {}) };
+  saved = nextUsageOrder(saved ?? undefined, parseUsageOrderBody(JSON.parse(String(init.body)))) ?? saved;
   // the config frame every client gets
   h.config = { usageOrder: saved };
   return Promise.resolve({ usageOrder: saved });
@@ -62,6 +61,7 @@ async function open({ storage = {}, desktop = false }: { storage?: Record<string
     },
     /** Wink's config frame reaches this client. */
     receive: render,
+    settle,
     close: () => React.act(async () => root.unmount()),
   };
   clients.push(client);
@@ -138,4 +138,53 @@ it("keeps a drag made after a phone's old order went up, over the desktop app's 
   expect(phone.rows()).toEqual(dragged);
   const desktop = await open({ desktop: true, storage: { [LEGACY]: JSON.stringify({ claude: [ids[2]!, ids[0]!, ids[1]!] }) } });
   expect(desktop.rows()).toEqual(dragged);
+});
+
+/** Wink takes each save at once; its reply and config frame wait until the test lets each one through. */
+function holdReplies() {
+  const held: (() => void)[] = [];
+  const frames: unknown[] = [];
+  h.api.mockImplementation((path: string, init?: RequestInit) => {
+    const shown = h.config;
+    const reply = answer(path, init);
+    frames.push(h.config);
+    h.config = shown;
+    return new Promise((resolve) => held.push(() => resolve(reply)));
+  });
+  return { held, frames };
+}
+
+it("keeps a newer drag when the older drag's reply or config frame arrives last", async () => {
+  const desktop = await open({ desktop: true });
+  const { held, frames } = holdReplies();
+  await desktop.move(ids[0]!, "ArrowDown");
+  await desktop.move(ids[0]!, "ArrowDown");
+  const newer = [ids[1], ids[2], ids[0]];
+  expect(desktop.rows()).toEqual(newer);
+  for (const frame of frames) {
+    h.config = frame;
+    await desktop.receive();
+  }
+  held[1]!();
+  await desktop.settle();
+  held[0]!();
+  await desktop.settle();
+  expect(desktop.rows()).toEqual(newer);
+  h.config = frames[0];
+  await desktop.receive();
+  expect(desktop.rows()).toEqual(newer);
+});
+
+it("shows another client's newer order once this client's own save settles", async () => {
+  const desktop = await open({ desktop: true });
+  const phone = await open();
+  const { held } = holdReplies();
+  await desktop.move(ids[0]!, "ArrowDown");
+  h.api.mockImplementation(answer);
+  await phone.move(ids[2]!, "ArrowUp");
+  const newer = [ids[0], ids[2], ids[1]];
+  await desktop.receive();
+  held[0]!();
+  await desktop.settle();
+  expect(desktop.rows()).toEqual(newer);
 });

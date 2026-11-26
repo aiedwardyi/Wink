@@ -9864,7 +9864,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // The order the user drags on Usage and Connections. It is a config.json setting so the
     // config frame carries it to every client; a write needs none of the provider reload above.
     if (method === "PUT" && path === "/api/usage-order") {
-      const next = nextUsageOrder(cfg.usageOrder, parseUsageOrderBody(await readBody(req)));
+      const body = parseUsageOrderBody(await readBody(req));
+      // Read the saved order only after the body arrives: another save may have landed meanwhile.
+      const next = nextUsageOrder(cfg.usageOrder, body);
       if (next) {
         saveConfig({ usageOrder: next });
         Object.assign(cfg, loadConfig());

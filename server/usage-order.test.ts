@@ -11,22 +11,22 @@ const seed = (orders: Record<string, string[]>, from: "desktop" | "browser") => 
 describe("usage order Wink keeps for every client", () => {
   it("sets one dragged list and keeps the others", () => {
     const saved = nextUsageOrder({ orders: { claude: ["a", "b"], engines: ["claude", "codex"] } }, drag("claude", ["b", "a", "b"]));
-    expect(saved).toEqual({ orders: { claude: ["b", "a"], engines: ["claude", "codex"] } });
+    expect(saved).toEqual({ orders: { claude: ["b", "a"], engines: ["claude", "codex"] }, rev: 1 });
   });
 
   it("takes a client's old local order only when Wink has none", () => {
-    expect(nextUsageOrder(undefined, seed({ claude: ["b", "a"] }, "desktop"))).toEqual({ orders: { claude: ["b", "a"] } });
+    expect(nextUsageOrder(undefined, seed({ claude: ["b", "a"] }, "desktop"))).toEqual({ orders: { claude: ["b", "a"] }, rev: 1 });
     expect(nextUsageOrder({ orders: { claude: ["a", "b"] } }, seed({ claude: ["b", "a"] }, "desktop"))).toBeNull();
     expect(nextUsageOrder({ orders: { claude: ["a", "b"] } }, seed({ claude: ["b", "a"] }, "browser"))).toBeNull();
   });
 
   it("lets the desktop app's old order replace one a browser sent first, until a drag", () => {
     const phone = nextUsageOrder(undefined, seed({ claude: ["c", "a"] }, "browser"));
-    expect(phone).toEqual({ orders: { claude: ["c", "a"] }, seed: "browser" });
+    expect(phone).toEqual({ orders: { claude: ["c", "a"] }, seed: "browser", rev: 1 });
     expect(nextUsageOrder(phone!, seed({ claude: ["x"] }, "browser"))).toBeNull();
-    expect(nextUsageOrder(phone!, seed({ claude: ["b", "a"] }, "desktop"))).toEqual({ orders: { claude: ["b", "a"] } });
+    expect(nextUsageOrder(phone!, seed({ claude: ["b", "a"] }, "desktop"))).toEqual({ orders: { claude: ["b", "a"] }, rev: 2 });
     const dragged = nextUsageOrder(phone!, drag("claude", ["a", "c"]));
-    expect(dragged).toEqual({ orders: { claude: ["a", "c"] } });
+    expect(dragged).toEqual({ orders: { claude: ["a", "c"] }, rev: 2 });
     expect(nextUsageOrder(dragged!, seed({ claude: ["b", "a"] }, "desktop"))).toBeNull();
   });
 
