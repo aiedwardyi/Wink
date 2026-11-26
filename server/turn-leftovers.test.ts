@@ -53,9 +53,15 @@ describe("turn leftovers", () => {
     expect(fileLeftovers(book, [{ ask: "What color should the ramp be?" }], 9)).toBeNull();
     expect(fileLeftovers(book, [{ ask: "I'll add the 60 fps clips.", promise: true }], 9)).toBeNull();
     expect(fileLeftovers(book, [{ ask: "I'll rename the release branch.", promise: true }], 9)).toBeNull();
+    // distinct promises sharing an action and place both file
+    expect(fileLeftovers(undefined, [{ ask: "I'll update the desktop icon.", promise: true }, { ask: "I'll update the desktop layout.", promise: true }], 9)?.asks).toHaveLength(2);
     const saved = fileLeftovers(book, [{ ask: "I'll renumber the labels.", promise: true }], 9)!;
     expect(saved.asks.slice(0, 4)).toEqual(open);
     expect(saved.asks.at(-1)).toMatchObject({ id: "A5", status: "open", kind: "promise" });
+  });
+
+  it("keeps a question the quick helper handed into the turn as a steer", () => {
+    expect(turnLeftovers([user("What font is it?"), user("And the ramp color?", { steered: true, quick: { state: "handoff" } }), bot("Blue.")])).toEqual([{ ask: "What font is it?" }]);
   });
 
   it("settles a long narrated turn in under 2 ms", () => {

@@ -326,7 +326,7 @@ export function settleTaskResumePacket(
   const staged = stagedRecord(path, threadId);
   if (staged) writeFileAtomic(path, staged.raw, { mode: 0o600 });
   dropStaged(path);
-  return staged?.packet ?? null;
+  return staged ? marked(staged.packet, readMarks(path)) : null;
 }
 
 export function readTaskResumePacket(

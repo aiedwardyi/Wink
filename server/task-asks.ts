@@ -139,12 +139,12 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
   return { asks, lastAskId };
 }
 
-// half the shorter one's words, and two unless it has one: a reworded repeat of the same ask
+// a reworded repeat: most of the shorter one's words, or three and half of them; "update the desktop icon" is never "... layout"
 function sameAsk(a: string, b: string): boolean {
   const [x, y] = [terms(a), terms(b)];
   const least = Math.min(x.size, y.size);
   const shared = [...x].filter((term) => y.has(term)).length;
-  return least > 0 && shared >= Math.min(2, least) && shared * 2 >= least;
+  return least > 0 && (shared >= 0.8 * least || (shared >= 3 && shared * 2 >= least));
 }
 
 /** Files what a turn left open, a promise as kind promise and the user's question as their ask; one an ask already has, open, done or declined, stays that ask. Null when nothing is new. */

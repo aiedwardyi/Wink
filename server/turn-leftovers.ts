@@ -47,7 +47,7 @@ export function turnLeftovers(rows: readonly Message[]): Leftover[] {
     const about = object(line);
     if (about.size && !covered(about, later)) left.unshift({ ask: line, promise: true });
   }
-  const asked = rows.flatMap((row, at) => row.role === "user" && row.kind === "text" && row.text?.trim() && !row.quick && (at === 0 || row.steered) ? [at] : []);
+  const asked = rows.flatMap((row, at) => row.role === "user" && row.kind === "text" && row.text?.trim() && (!row.quick || row.quick.state === "handoff") && (at === 0 || row.steered) ? [at] : []);
   for (const [i, at] of asked.slice(0, -1).entries()) {
     const shown = (row: Message) => said(row) && !row.summarized;
     if (rows.slice(at + 1, asked[i + 1]).some(shown) || rows.some((row) => row.quick?.askId === rows[at]!.id)) continue;

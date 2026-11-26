@@ -176,6 +176,13 @@ describe("task resume packets", () => {
     expect(existsSync(join(dir, "thread-1.promises.json"))).toBe(false);
   });
 
+  it("keeps a promise's kind when a staged record settles", () => {
+    const promise: TaskAsk = { id: "A4", ask: "I'll check the laptop backup tomorrow.", status: "open", kind: "promise", at: 130, changedAt: 130 };
+    writeTaskResumePacket(packet({ asks: [...asks, promise] }), { dir });
+    stageTaskResumePacket(packet({ asks: [...asks, promise], nextAction: "Staged" }), { dir });
+    expect(settleTaskResumePacket("thread-1", { dir })?.asks?.at(-1)).toEqual(promise);
+  });
+
   it("loads a record saved with an ask due time and wake id, asks and plan intact", () => {
     const old = [{ id: "A1", ask: "Send the brief", status: "open" as const, due: 1_800_000_000_000, wake: "wake-1", at: 100, changedAt: 100 }];
     writeFileSync(join(dir, "thread-1.json"), JSON.stringify(packet({ asks: old })));
