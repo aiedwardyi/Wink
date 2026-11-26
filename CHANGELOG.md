@@ -2,6 +2,15 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.305] - 2026-11-27
+
+### Added
+- Promises a bot made and questions a reply skipped carry to the next reply, even on another model, and it checks before redoing anything.
+
+### Fixed
+- Groups: a guest can't make your Claude or Gemini bot read your project files.
+- Groups: the "finished a task" note in a chat no longer shows a long ID.
+
 ## [1.0.304] - 2026-11-26
 
 ### Added
