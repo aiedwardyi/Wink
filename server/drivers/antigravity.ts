@@ -56,7 +56,7 @@ import { systemLedger } from "./system-ledger.ts";
 import { ANTIGRAVITY_KEYRING, antigravityCredentialStore, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
 import { antigravityHelperHome, dropAntigravityHelperToken } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
-import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
+import { FREE_ACCESS, guestText, type TurnAccess } from "./turn-access.ts";
 import { warmPool, type Lease } from "./warm-pool.ts";
 
 const DRIVER_KIND = "antigravityAgent";
@@ -805,7 +805,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       };
       // a standby started beside a running turn would load the conversation before that turn's messages
       if (disposed || active.has(threadId) || keyringSignOut.pending || mcpExclusiveWanted()) return finalizeMcp();
-      const args = buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd, model: turn.model, resumeCursor: conversation, readOnly: turn.readOnly, guestText: turn.readOnly === true && turn.ownerText !== true });
+      const args = buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd, model: turn.model, resumeCursor: conversation, readOnly: turn.readOnly, guestText: guestText(turn) });
       const lease = warmPool.reserve(warmKey(threadId), launchFingerprint(config.cli, args, cwd, childEnv, turn), captured(threadId), "speculative", { evict: true });
       if (lease === "denied" && conversation) refusedStandby.set(threadId, { conversation, turn, cwd, childEnv, epoch: warmPool.generation(warmKey(threadId)) });
       if (typeof lease !== "object" || standbys.has(lease)) return finalizeMcp();
@@ -1019,7 +1019,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         model: turn.model,
         resumeCursor,
         readOnly: turn.readOnly,
-        guestText: turn.readOnly === true && turn.ownerText !== true,
+        guestText: guestText(turn),
       });
       // a computer turn's mount carries its box token, so it never runs on or leaves a standby
       const ordinary = computer === null;

@@ -429,7 +429,7 @@ const playNarrationScript = async () => {
 // Under the ask rules, a read tool on a path inside the cwd runs in any mode.
 const allowedBy = (rules: string | null | undefined, tool: string): boolean =>
   (rules ?? "").split(",").some((rule) => rule === tool || (rule.startsWith("mcp__") && tool.startsWith(`${rule}__`)));
-const READ_TOOLS = ["Read", "Glob", "Grep"];
+const READ_TOOLS = ["Read", "Glob", "Grep", "LSP"];
 const insideCwd = (path: string): boolean => {
   const rel = relative(process.cwd(), resolve(path));
   return !rel.startsWith("..") && !isAbsolute(rel);
