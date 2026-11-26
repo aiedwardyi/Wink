@@ -469,6 +469,43 @@ describe("pinned ask_user question", () => {
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
   });
 
+  it("steps between open questions from the open card, staying open", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    expect(card()!.textContent).toContain("2/2");
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("1/2");
+    expect(card()!.textContent).toContain("Which region?");
+    await act(async () => pinButton("Next question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which plan?");
+  });
+
+  it("steps from a card opened over a draft to the next question open, and from a row to a row", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await type("thinking");
+    await settle();
+    expect(card()).toBeNull();
+    await expand();
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+    await act(async () => pinButton("Fold question").click());
+    await settle();
+    await act(async () => rowButton("Next question").click());
+    await settle();
+    expect(card()).toBeNull();
+    expect(row()!.textContent).toContain("Which plan?");
+    await type("");
+  });
+
   it("outlines the choices in secondary ink with a 44px touch target", async () => {
     await mount({ bot: bot([question]) });
     const choice = pinButton("Prod").className;

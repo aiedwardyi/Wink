@@ -34,10 +34,10 @@ function mark(questions: Set<string>, id: string, value: boolean) {
 }
 const useMarked = (questions: Set<string>, id: string) => useSyncExternalStore(subscribe, () => questions.has(id), () => false);
 
-/** Shows a question as its row from now on; it never shrinks by itself after that. */
-export function foldQuestion(id: string) {
+/** Shows a question as its row (or, with `folded` false, as the card) from now on; it never shrinks by itself after that. */
+export function foldQuestion(id: string, folded = true) {
   shrunkQuestions.add(id);
-  mark(rowQuestions, id, true);
+  mark(rowQuestions, id, folded);
 }
 
 // the arrow pressed unmounts with its question, so the next question's row takes the focus
@@ -75,8 +75,8 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   count: number;
   /** this question's place among them, oldest first */
   index?: number;
-  /** shows the question `step` places away */
-  onStep?: (step: number) => void;
+  /** shows the question `step` places away, folded as this one is */
+  onStep?: (step: number, folded: boolean) => void;
   /** scrolls the chat to the message behind this question; absent when none is there */
   onJump?: () => void;
   /** the message box's text and attachment count: a change after arrival shrinks the card */
@@ -137,7 +137,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   };
   const step = (by: number) => {
     stepFocus = by;
-    onStep?.(by);
+    onStep?.(by, folded);
   };
   const card = message.card;
   if (!card || hidden) return null;

@@ -1265,10 +1265,10 @@ export function Composer({
             count={questions.length}
             index={questionIndex}
             onJump={jumpId ? () => dispatch({ type: "focusMessage", threadId, messageId: jumpId }) : undefined}
-            onStep={(step) => {
+            onStep={(step, folded) => {
               const next = questions[questionIndex + step];
               if (!next || !pinned) return;
-              foldQuestion(next.id);
+              foldQuestion(next.id, folded);
               setQuestionPick({ id: next.id, newest: pinned.id });
             }}
             typed={text}
