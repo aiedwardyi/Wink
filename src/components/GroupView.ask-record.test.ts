@@ -71,8 +71,9 @@ describe("GroupView ask records", () => {
     const host = document.createElement("div");
     document.body.append(host);
     root = createRoot(host);
-    const older: Message = { ...ask, card: { ...ask.card!, staysOpen: true } };
-    const newest: Message = { ...ask, id: "q2", at: 2, card: { ...ask.card!, subtitle: "Which branch?", staysOpen: true } };
+    const from = { botId: "atlas", name: "Atlas", color: "blue" } as const;
+    const older: Message = { ...ask, from, card: { ...ask.card!, staysOpen: true } };
+    const newest: Message = { ...ask, id: "q2", at: 2, from, card: { ...ask.card!, subtitle: "Which branch?", staysOpen: true } };
     const messages = [older, newest];
     const group = { id: "room-1", name: "Room", threadId: "t1", messages } as unknown as Group;
     await act(async () =>
@@ -95,5 +96,7 @@ describe("GroupView ask records", () => {
       ),
     );
     expect(host.querySelectorAll('[data-ask-user-record="waiting"]')).toHaveLength(0);
+    // nor the asker's name over an empty row
+    expect(host.textContent).not.toContain("Atlas");
   });
 });

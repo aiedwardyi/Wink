@@ -29,7 +29,7 @@ import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { isTerminalSkin, isTerminalToolSkin, useSkin } from "@/lib/skins";
 import { logLine } from "@/lib/terminal-skin";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
-import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
+import { isAskUserCard, openQuestions, pinnedQuestion } from "@/lib/open-question";
 import { isRinging } from "@/lib/routine-ring";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { DEFAULT_MAUS_COLOR, normalizeState } from "@/lib/mascot";
@@ -280,6 +280,8 @@ export const Transcript = memo(function Transcript({
   // Several bots working at once turn a room into a wall of chips; fold the
   // finished ones the same way a 1:1 chat does.
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
+  // the waiting cards the composer's dock holds take no row, so no asker label stands over an empty one
+  const dockedAsks = useMemo(() => new Set(pinnedQuestion(group.messages) ? openQuestions(group.messages).map((m) => m.id) : []), [group.messages]);
   const items = useMemo(
     () => groupActivityRuns(
       streamingMessage ? [...messages, streamingMessage] : messages,
@@ -289,8 +291,8 @@ export const Transcript = memo(function Transcript({
     [messages, streamingMessage, terminal, showToolCalls, showActivities, workerAt],
   );
   const rows = useMemo(
-    () => roomTranscriptRows(items, { showToolCalls, showActivities, workers: workerAt }),
-    [items, showToolCalls, showActivities, workerAt],
+    () => roomTranscriptRows(items, { showToolCalls, showActivities, workers: workerAt, hidden: dockedAsks }),
+    [items, showToolCalls, showActivities, workerAt, dockedAsks],
   );
   const { pictured, tailPictures } = useMemo(() => picturedReplies(transcript), [transcript]);
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
