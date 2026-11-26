@@ -546,6 +546,14 @@ describe("a closing turn in index.ts", () => {
     expect(source).not.toContain("const taskRecordToFlush = taskRecord;");
     expect(source.split("const taskRecordToFlush = storedTaskRecord;")).toHaveLength(3);
   });
+
+  it("stamps a 1:1 turn's leftovers shown only once an engine took the prompt, so a setup failure leaves them for the retry", () => {
+    const source = index();
+    const stamp = source.indexOf("  stampShownAsks(threadId, turnText);");
+    expect(source.split("stampShownAsks(threadId, turnText);")).toHaveLength(2);
+    expect(stamp).toBeGreaterThan(source.indexOf("return live.adapter.sendTurn({"));
+    expect(source.lastIndexOf("store.markReactionsDelivered(bot.id, threadId, reactionsSeen);", stamp)).toBeGreaterThan(source.indexOf("return live.adapter.sendTurn({"));
+  });
 });
 
 describe("an ask with a step left", () => {
