@@ -1,5 +1,6 @@
-// An engine switch carries what the last turn may have left open: its "I'll" lines and the
-// questions no reply answered, filed unchecked in the asks list the next engine already reads.
+// An engine switch carries what the last turn may have left open: its "I'll" lines, a question a newer
+// message steered over, and the last question, filed unchecked in the asks list the next engine already reads.
+// The engine that answered a question keeps it: nothing files on the same engine.
 // Nothing a reply says closes one: the next engine checks, then closes it or sets it building by ID.
 import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -162,11 +163,11 @@ it("carries Codex's two promises and the questions no reply answered to Claude's
   expect(steer.body).toMatchObject({ steered: true });
   await waitFor(async () => (await getBot(id)).busy === false, "the Codex turn to settle");
   expect((await getBot(id)).messages.some((row: any) => row.text === "Blue.")).toBe(true);
+  // the question the steer talked over files now; the steer's own was answered here and waits for the switch
   expect(asks(threadId).map((ask) => [ask.ask.slice(0, 30), ask.status, ask.kind])).toEqual([
     [ANSWER.slice(0, 30), "open", "promise"],
     [PICKER.slice(0, 30), "open", "promise"],
     ["How does Wink keep my work whe", "open", undefined],
-    ["What color should the ramp be?", "open", undefined],
   ]);
 
   const input = await switched(id, "ok");
@@ -174,6 +175,8 @@ it("carries Codex's two promises and the questions no reply answered to Claude's
   expect(input.split("\n")).toEqual(expect.arrayContaining([
     expect.stringMatching(/^- A\d+ open promise unchecked \d\d-\d\d: I'll answer the model-switch question/),
     expect.stringMatching(/^- A\d+ open promise unchecked \d\d-\d\d: I'll keep the picker changes moving\.$/),
+    expect.stringMatching(/^- A3 open unchecked \d\d-\d\d: How does Wink keep my work when I switch models\?$/),
+    expect.stringMatching(/^- A4 open unchecked \d\d-\d\d: What color should the ramp be\?$/),
   ]));
 
   // the next turns file nothing again
@@ -196,13 +199,14 @@ it("shows finished work once, unchecked, and the engine that checks closes it by
   await waitFor(async () => (await getBot(id)).messages.some((row: any) => row.text === "I'll update the picker labels."), "Codex's promise");
   expect((await api("POST", `/api/bots/${id}/messages`, { text: "What color should the ramp be?" })).body).toMatchObject({ steered: true });
   await waitFor(async () => (await getBot(id)).busy === false, "the Codex turn to settle");
-  const filed = asks(threadId);
-  expect(filed.map((ask) => [ask.ask, ask.status])).toEqual([["I'll update the picker labels.", "open"], ["Where are the keyboard shortcuts documented?", "open"], ["What color should the ramp be?", "open"]]);
+  expect(asks(threadId).map((ask) => [ask.ask, ask.status])).toEqual([["I'll update the picker labels.", "open"], ["Where are the keyboard shortcuts documented?", "open"]]);
 
   // Claude says it is done; the words close nothing
   const input = await switched(id, "go on", "claudeDone");
   expect(input).toMatch(/^- A1 open promise unchecked \d\d-\d\d: I'll update the picker labels\.$/m);
-  expect(asks(threadId).map((ask) => ask.status)).toEqual(["open", "open", "open"]);
+  expect(input).toMatch(/^- A3 open unchecked \d\d-\d\d: What color should the ramp be\?$/m);
+  const filed = asks(threadId);
+  expect(filed.map((ask) => [ask.ask, ask.status])).toEqual([["I'll update the picker labels.", "open"], ["Where are the keyboard shortcuts documented?", "open"], ["What color should the ramp be?", "open"]]);
   // its update_task_state call does
   await updateAsks(id, threadId, filed.map((ask) => ({ id: ask.id, status: "done" })));
   expect(asks(threadId).map((ask) => ask.status)).toEqual(["done", "done", "done"]);
@@ -268,10 +272,10 @@ it("gives each of four promises its own ID, and after three close by ID a status
   expect(await claudeTurn(id, "status?")).toMatch(/^- A4 open promise unchecked \d\d-\d\d: I'll email the release calendar\.$/m);
 }, 90_000);
 
-it("keeps the check on a carried question on every switch until an engine settles it by ID", async () => {
+it("files a question asked right before a switch once and keeps its check on every switch until an engine settles it by ID", async () => {
   const { id, threadId } = await bot("codexPlain", "gpt-fake-default");
   await turn(id, "Could you write ready.txt?");
-  expect(asks(threadId)).toMatchObject([{ id: "A1", ask: "Could you write ready.txt?", status: "open" }]);
+  expect(asks(threadId)).toEqual([]);
   for (const text of ["go on", "ok", "next"]) {
     const input = await switched(id, text);
     expect(input).toContain("check the transcript, files and running processes first");
@@ -279,6 +283,20 @@ it("keeps the check on a carried question on every switch until an engine settle
     await api("PATCH", `/api/bots/${id}`, { modelSelection: { instanceId: "codexPlain", model: "gpt-fake-default" } });
     await turn(id, `back ${text}`);
   }
+  expect(asks(threadId)).toMatchObject([{ id: "A1", ask: "Could you write ready.txt?", status: "open" }]);
   await updateAsks(id, threadId, [{ id: "A1", status: "done" }]);
   expect(await switched(id, "thanks")).not.toContain(ASKS_LIST);
 }, 90_000);
+
+it("files nothing for questions the engine that took them answered: no row, no check, and a status question lists none", async () => {
+  const { id, threadId } = await bot("claude", "claude-fake");
+  for (const text of ["What is 2+2?", "thanks", "And what is 3+3?", "ok", "Could you write ready.txt?", "Why is CI red?", "great", "what's the status?", "fine"]) {
+    const input = await claudeTurn(id, text);
+    expect(input).not.toContain("[Wink asks");
+    expect(input).not.toContain("unchecked");
+  }
+  expect(asks(threadId)).toEqual([]);
+  // a fresh engine after them gets only the last turn's question, which it never saw answered: none here
+  expect(await switched(id, "hello", "claudeDone")).not.toContain(ASKS_LIST);
+  expect(asks(threadId)).toEqual([]);
+}, 120_000);

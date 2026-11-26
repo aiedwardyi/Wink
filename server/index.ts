@@ -312,7 +312,7 @@ import { TurnWatchdog } from "./turn-watchdog.ts";
 import { foldContinuationStart, joinRunningTurn } from "./continuation-turn.ts";
 import "./pending-model.ts";
 import { botClears, groupClears } from "./wire-clears.ts";
-import { answeredRows, turnLeftovers } from "./turn-leftovers.ts";
+import { answeredRows, type Leftover, turnLeftovers } from "./turn-leftovers.ts";
 import { ownTurnReply, turnAddedMessage, turnSummaries, turnUnread } from "./turn-reply.ts";
 import { terminalReadGrant } from "./terminal-grant.ts";
 import { updateBridgeResponse, updateStateFromMessage } from "./update-proxy.ts";
@@ -3039,9 +3039,16 @@ function saveHarnessAsks(threadId: string, change: (book: AskBook | undefined) =
   if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
 }
 
+// a question the newest message asked, answered by the engine that took it: it files only if another engine or model takes the next turn
+const heldQuestions = new Map<string, Leftover[]>();
+
 // what a turn said it would do or skipped rides to the next reply on any engine, unchecked; only an engine closes it, by ID
 function fileTurnLeftovers(threadId: string, rows: readonly Message[]): void {
-  const left = turnLeftovers([...answeredRows(rows[0], (id) => store.row(threadId, id)), ...rows]);
+  const found = turnLeftovers([...answeredRows(rows[0], (id) => store.row(threadId, id)), ...rows]);
+  const held = found.filter((item) => item.held);
+  const left = found.filter((item) => !item.held);
+  if (held.length) heldQuestions.set(threadId, held);
+  else heldQuestions.delete(threadId);
   if (left.length) saveHarnessAsks(threadId, (book) => fileLeftovers(book, left, Date.now()));
 }
 
@@ -5586,13 +5593,16 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const messagesBeforeSummary = store.activePath(threadId);
   holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
-  let storedTaskRecord = taskPacketForWrite(threadId);
-  const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
-  let taskRecord = closes.shown(storedTaskRecord);
   const selectionChanged = task.lastInstanceId !== undefined && (
     task.lastInstanceId !== instanceId ||
     (task.lastModel !== undefined && task.lastModel !== model)
   );
+  const held = heldQuestions.get(threadId);
+  heldQuestions.delete(threadId);
+  if (held && selectionChanged) saveHarnessAsks(threadId, (book) => fileLeftovers(book, held, Date.now()));
+  let storedTaskRecord = taskPacketForWrite(threadId);
+  const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
+  let taskRecord = closes.shown(storedTaskRecord);
   const latestUser = lastUserInstruction(messagesBeforeSummary, skipTranscript);
   const unsettled = routineTurn ? "" : unsettledRequest(priorTaskPacket, messagesBeforeSummary, skipTranscript);
   // Recovery Current request must be this send's text. skipTranscript excludes

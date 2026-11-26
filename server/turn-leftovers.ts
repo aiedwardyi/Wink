@@ -73,10 +73,10 @@ export function answeredRows(first: Message | undefined, row: (id: string) => Me
   return opening;
 }
 
-/** note: a later line of the turn saying that work is running */
-export interface Leftover { ask: string; promise?: true; note?: string }
+/** note: a later line of the turn saying that work is running; held: a question of the turn's newest message, which this engine answered, so it rides on only when another engine or model takes the next turn */
+export interface Leftover { ask: string; promise?: true; note?: string; held?: true }
 
-/** What a settled turn may have left open, to carry to the next reply unchecked: every "I'll" it kept, its last text's too, then each question of the user's the quick helper did not answer. A false one costs one checked line, so no wording decides an ask was answered or done: no line closes, narrows or drops a filed ask. rows: the turn in order, from the messages it answered. */
+/** What a settled turn may have left open, to carry to the next reply unchecked: every "I'll" it kept, its last text's too, then each question of the user's the quick helper did not answer: one a newer message steered over or folded in files now, the newest message's is held. A false one costs one checked line, so no wording decides an ask was answered or done: no line closes, narrows or drops a filed ask. rows: the turn in order, from the messages it answered. */
 export function turnLeftovers(rows: readonly Message[]): Leftover[] {
   const own = (row: Message) => said(row) && !row.quick;
   const lines = rows.flatMap((row) => !own(row) ? [] : sentences(row.text!).flatMap((line) => line.split(CLAUSE))
@@ -97,11 +97,12 @@ export function turnLeftovers(rows: readonly Message[]): Leftover[] {
   });
   // the messages the turn answered, folded ones too, and the steers it took
   const lead = rows.findIndex((row) => row.role !== "user");
-  for (const [at, row] of rows.entries()) {
-    if (row.role !== "user" || row.kind !== "text" || !row.text?.trim() || (row.quick && row.quick.state !== "handoff") || !(lead < 0 || at < lead || row.steered)) continue;
+  const asked = rows.filter((row, at) => row.role === "user" && row.kind === "text" && Boolean(row.text?.trim()) && (!row.quick || row.quick.state === "handoff") && (lead < 0 || at < lead || row.steered));
+  for (const row of asked) {
     // the quick helper answered it
     if (rows.some((other) => other.quick?.askId === row.id)) continue;
-    for (const ask of sentences(row.text).filter((line) => QUESTION.test(line))) left.push({ ask });
+    const held = row === asked.at(-1);
+    for (const ask of sentences(row.text!).filter((line) => QUESTION.test(line))) left.push(held ? { ask, held } : { ask });
   }
   return left;
 }

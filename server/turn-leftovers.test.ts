@@ -21,7 +21,7 @@ const promise = (text: string) => ({ ask: text, promise: true as const });
 const settle = (rows: Message[], asks: TaskAsk[]) => fileLeftovers({ asks, lastAskId: asks.length }, turnLeftovers(rows), 9)?.asks ?? asks;
 
 describe("turn leftovers", () => {
-  it("files the promises Codex's hidden notes made and the question a steer talked over, each its own ask", () => {
+  it("files the promises Codex's hidden notes made and the question a steer talked over, each its own ask; the steer's own waits for a switch", () => {
     const left = turnLeftovers([
       user("How does Wink keep my work when I switch models? Also keep the picker changes moving."),
       bot("I'll answer the model-switch question from how Wink actually stores chats and tasks.", { summarized: true }),
@@ -33,7 +33,7 @@ describe("turn leftovers", () => {
       promise("I'll answer the model-switch question from how Wink actually stores chats and tasks."),
       promise("I'll keep the picker changes moving."),
       { ask: "How does Wink keep my work when I switch models?" },
-      { ask: "What color should the ramp be?" },
+      { ask: "What color should the ramp be?", held: true },
     ]);
     const saved = fileLeftovers(undefined, left, 5)!;
     expect(saved.asks.map((item) => [item.id, item.status, item.kind])).toEqual([["A1", "open", "promise"], ["A2", "open", "promise"], ["A3", "open", undefined], ["A4", "open", undefined]]);
@@ -48,7 +48,7 @@ describe("turn leftovers", () => {
     expect(turnLeftovers([user("go on"), bot("I'll update PC A."), bot("PC B is updated.")])).toEqual([promise("I'll update PC A.")]);
     expect(turnLeftovers([user("go on"), bot("I'll update folder 1."), bot("folder 2 is updated.")])).toEqual([promise("I'll update folder 1.")]);
     expect(turnLeftovers([user("Check the logs"), bot("I'll check the logs first."), tool(), bot("Logs are clean.")])).toEqual([promise("I'll check the logs first.")]);
-    expect(turnLeftovers([user("Release?"), bot("I'll read the release notes."), tool("RELEASE-NOTES.md", false), bot("I couldn't read the release notes.")])).toEqual([promise("I'll read the release notes."), { ask: "Release?" }]);
+    expect(turnLeftovers([user("Release?"), bot("I'll read the release notes."), tool("RELEASE-NOTES.md", false), bot("I couldn't read the release notes.")])).toEqual([promise("I'll read the release notes."), { ask: "Release?", held: true }]);
   });
 
   it("files a final promise whatever its wording, never an offer or a quoted example", () => {
@@ -77,19 +77,20 @@ describe("turn leftovers", () => {
     expect(turnLeftovers([user("Keep going."), ...kept.map((line) => bot(line, { summarized: true })), bot("Back soon.")])).toEqual(kept.map(promise));
   });
 
-  it("files every question the user asked, since no reply wording decides it was answered", () => {
+  it("files a question a newer message steered over and holds the newest message's for a switch, whatever the reply says", () => {
     const shortcuts = { ask: "Where are the keyboard shortcuts documented?" };
+    const held = (ask: string) => ({ ask, held: true });
     for (const reply of [
       "The keyboard shortcuts changed yesterday.",
       "Blue.",
       "I still need to check where the keyboard shortcuts are documented.",
       "The keyboard shortcuts are documented in GUIDE.md.",
-    ]) expect(turnLeftovers([user(shortcuts.ask), bot(reply)])).toEqual([shortcuts]);
-    // a question no search term is left of still files
-    expect(turnLeftovers([user("Why?"), tool(), bot("Back soon.")])).toEqual([{ ask: "Why?" }]);
+    ]) expect(turnLeftovers([user(shortcuts.ask), bot(reply)])).toEqual([held(shortcuts.ask)]);
+    // a question no search term is left of is held too
+    expect(turnLeftovers([user("Why?"), tool(), bot("Back soon.")])).toEqual([held("Why?")]);
     const two = user(`What color should the ramp be? ${shortcuts.ask}`);
-    expect(turnLeftovers([two, bot("The ramp should be blue."), user("What size?", { steered: true }), bot("The size is 14 px.")])).toEqual([{ ask: "What color should the ramp be?" }, shortcuts, { ask: "What size?" }]);
-    expect(turnLeftovers([user("Why is CI red?"), user("Color?", { steered: true }), bot("Blue. CI is red from a flaky test.")])).toEqual([{ ask: "Why is CI red?" }, { ask: "Color?" }]);
+    expect(turnLeftovers([two, bot("The ramp should be blue."), user("What size?", { steered: true }), bot("The size is 14 px.")])).toEqual([{ ask: "What color should the ramp be?" }, shortcuts, held("What size?")]);
+    expect(turnLeftovers([user("Why is CI red?"), user("Color?", { steered: true }), bot("Blue. CI is red from a flaky test.")])).toEqual([{ ask: "Why is CI red?" }, held("Color?")]);
   });
 
   it("reads every message the turn answered, one folded in while it set up too", () => {
@@ -100,12 +101,12 @@ describe("turn leftovers", () => {
     rows.set("m-earlier", { ...bot("Earlier reply."), id: "m-earlier" });
     const opening = answeredRows(reply, (id) => rows.get(id));
     expect(opening.map((row) => row.text)).toEqual([first.text, folded.text]);
-    expect(turnLeftovers([...opening, reply])).toEqual([{ ask: first.text }, { ask: folded.text }]);
+    expect(turnLeftovers([...opening, reply])).toEqual([{ ask: first.text }, { ask: folded.text, held: true }]);
     expect(answeredRows(undefined, (id) => rows.get(id))).toEqual([]);
   });
 
   it("keeps a question the quick helper handed into the turn as a steer", () => {
-    expect(turnLeftovers([user("What font is it?"), user("And the ramp color?", { steered: true, quick: { state: "handoff" } }), bot("The ramp color is blue, like the toolbar.")])).toEqual([{ ask: "What font is it?" }, { ask: "And the ramp color?" }]);
+    expect(turnLeftovers([user("What font is it?"), user("And the ramp color?", { steered: true, quick: { state: "handoff" } }), bot("The ramp color is blue, like the toolbar.")])).toEqual([{ ask: "What font is it?" }, { ask: "And the ramp color?", held: true }]);
   });
 
   it("drops a promise a take-back names, or a bare one the promise right before it; a hedged one drops nothing", () => {
