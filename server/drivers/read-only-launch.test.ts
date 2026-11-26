@@ -1,6 +1,6 @@
 // Every engine's read-only turn, launched for real against its fake CLI on its most permissive
 // instance (full auto / bypass): the restriction must show in the launch itself, not just a flag.
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -137,7 +137,7 @@ const ENGINES: Record<string, Engine> = {
     },
     restricted({ argv }: { argv: string[] }) {
       expect(after(argv, "--mode")).toBe("plan");
-      expect(JSON.parse(after(argv, "--settings"))).toEqual({ allowNonWorkspaceAccess: false });
+      expect(JSON.parse(after(argv, "--settings"))).toEqual({ allowNonWorkspaceAccess: false, permissions: { deny: ["read_file(*)"] } });
       expect(argv).not.toContain("--dangerously-skip-permissions");
     },
   },
@@ -237,6 +237,50 @@ describe("Claude read-only turns run none of the owner's hooks", () => {
     expect(await turn("t-owner-resumed", { resumeCursor: "s-owner" })).toEqual([...owned].sort());
     expect(await turn("t-read-only", { readOnly: true })).toEqual([]);
     expect(await turn("t-read-only-resumed", { readOnly: true, resumeCursor: "s-owner" })).toEqual([]);
+  });
+});
+
+// GROUP-JOIN-REAL row 9: a joiner asked the host's Claude bot to read notes.txt in its project and it posted the file.
+// The access each turn gets is what index.ts gives a room turn (multiplayer.test.ts pins those shapes).
+describe("a room guest's read-only turn reads no host file", () => {
+  const CANARY = "host-only file: canary GJR-7731";
+  const GUEST_ASK: Partial<SendTurnInput> = { approval: "ask", readOnly: true };
+  const OWNER_LANE: Partial<SendTurnInput> = { approval: "auto", readOnly: true, ownerText: true };
+  const OWNER_TURN: Partial<SendTurnInput> = { approval: "ask" };
+
+  const claudeRead = async (threadId: string, access: Partial<SendTurnInput>) => {
+    const project = join(scratch, "proj");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, "notes.txt"), CANARY);
+    const out = join(scratch, "read-out.txt");
+    rmSync(out, { force: true });
+    setEnv("FAKE_CLAUDE_MODE", "read");
+    setEnv("FAKE_CLAUDE_READ_OUT", out);
+    const instance = await ClaudeDriver.create({ instanceId: `read-${threadId}`, displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-claude-cli.ts"), permissionMode: "acceptEdits" } });
+    live.push(instance);
+    await run(instance, threadId, { cwd: project, integrations: { agents }, ...access });
+    return existsSync(out) ? readFileSync(out, "utf8") : null;
+  };
+
+  it.each([["fresh", undefined], ["resumed", "s-host"]] as const)("Claude: a guest's ask can't read the host's project file (%s)", async (_how, cursor) => {
+    expect(await claudeRead("t-guest", { ...GUEST_ASK, ...(cursor && { resumeCursor: cursor }) })).toBeNull();
+  });
+
+  it("Claude: the owner's own read-only lane and owner turns still read it", async () => {
+    expect(await claudeRead("t-owner-lane", OWNER_LANE)).toBe(CANARY);
+    expect(await claudeRead("t-owner", OWNER_TURN)).toBe(CANARY);
+  });
+
+  it("agy: a guest's ask denies every file read; the owner's lane keeps its workspace", async () => {
+    setEnv("FAKE_AGY_DUMP", join(scratch, "agy.json"));
+    const instance = await AntigravityDriver.create({ instanceId: "read-agy", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-agy-cli.ts"), fullAuto: true } });
+    live.push(instance);
+    const settings = async (threadId: string, access: Partial<SendTurnInput>) => {
+      await run(instance, threadId, access);
+      return JSON.parse(after(dumped("agy.json").argv, "--settings"));
+    };
+    expect(await settings("t-agy-guest", GUEST_ASK)).toEqual({ allowNonWorkspaceAccess: false, permissions: { deny: ["read_file(*)"] } });
+    expect(await settings("t-agy-lane", OWNER_LANE)).toEqual({ allowNonWorkspaceAccess: false });
   });
 });
 

@@ -1316,7 +1316,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(existsSync(join(scratch, "ran.txt"))).toBe(false);
     expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
     const { argv } = JSON.parse(readFileSync(dump, "utf8"));
-    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("AskUserQuestion,Bash(git *),Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit");
+    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("AskUserQuestion,Bash(git *),Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,LSP");
   });
 
   it("turns off @file attach on a guest's read-only turn, not on an owner turn or the owner's own lane", async () => {
