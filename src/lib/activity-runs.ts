@@ -161,10 +161,11 @@ export const SERVER_LINES: ServerLine[] = [
   { re: /^Delegated turn completed$/, pick: () => ["chat.delegation.turnCompleted", {}], file: "peer-reply-publication.ts", needles: ["Delegated turn completed"] },
   { re: /^interrupted by a restart$/, pick: () => ["chat.delegation.interrupted", {}], file: "delegations.ts", needles: ["interrupted by a restart"] },
   {
-    re: /^@(.+?) finished task (\S+) in ([\s\S]+)$/,
-    pick: (m) => ["chat.delegation.finishedInRoom", { name: m[1], id: m[2], room: m[3] }],
+    // stored rows say "finished task <id> in"; new ones "finished a task in"
+    re: /^@(.+?) finished (?:a task|task \S+) in ([\s\S]+)$/,
+    pick: (m) => ["chat.delegation.finishedInRoom", { name: m[1], room: m[2] }],
     file: "peer-reply-publication.ts",
-    needles: [" finished task ", " in ${room.name}"],
+    needles: [" finished a task in ${room.name}"],
   },
   {
     re: /^(?:Agentic Mode paused: two tries made no progress|Keep going paused: two tries in a row made no progress on the approved steps)$/,
