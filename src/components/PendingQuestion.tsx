@@ -33,6 +33,7 @@ function mark(questions: Set<string>, id: string, value: boolean) {
   for (const notify of watchers) notify();
 }
 const useMarked = (questions: Set<string>, id: string) => useSyncExternalStore(subscribe, () => questions.has(id), () => false);
+export const useQuestionHidden = (id: string) => useMarked(hiddenQuestions, id);
 
 /** Shows a question as its row (or, with `folded` false, as the card) from now on; it never shrinks by itself after that. */
 export function foldQuestion(id: string, folded = true) {

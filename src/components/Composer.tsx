@@ -67,7 +67,7 @@ import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel } from "./PendingQuestion";
+import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel, useQuestionHidden } from "./PendingQuestion";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -287,9 +287,10 @@ export function Composer({
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
   const pinned = useMemo(() => pinnedQuestion(chatMessages, threadMessages), [chatMessages, threadMessages]);
   const questions = pinned ? openQuestions(chatMessages) : [];
-  // the row's arrows show another open question until it is answered or dismissed
-  const [questionPick, setQuestionPick] = useState<string | null>(null);
-  const question = (pinned && questions.find((open) => open.id === questionPick)) || pinned;
+  // the row's arrows show another open question until it is answered or dismissed; a swiped-away one gives way to a newer arrival
+  const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
+  const pickHidden = useQuestionHidden(questionPick?.id ?? "");
+  const question = ((!pickHidden || questionPick?.newest === pinned?.id) && questions.find((open) => open.id === questionPick?.id)) || pinned;
   const questionIndex = question ? questions.indexOf(question) : -1;
   const jumpId = question ? questionJumpId(threadMessages, question, pinned, Boolean(group ? group.hasMore : bot?.hasMore)) : null;
   const questionMovedOn = useMemo(() => question ? chatMovedOn(chatMessages, question) : false, [chatMessages, question]);
@@ -1267,9 +1268,9 @@ export function Composer({
             onJump={jumpId ? () => dispatch({ type: "focusMessage", threadId, messageId: jumpId }) : undefined}
             onStep={(step, folded) => {
               const next = questions[questionIndex + step];
-              if (!next) return;
+              if (!next || !pinned) return;
               foldQuestion(next.id, folded);
-              setQuestionPick(next.id);
+              setQuestionPick({ id: next.id, newest: pinned.id });
             }}
             typed={text}
             attached={attachments.length}

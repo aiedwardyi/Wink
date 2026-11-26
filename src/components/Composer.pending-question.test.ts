@@ -551,6 +551,23 @@ describe("pinned ask_user question", () => {
     await type("");
   });
 
+  it("shows a new question after the stepped-to row was swiped away", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    const third = ask({ subtitle: "Which color?", options: ["Red", "Blue"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await shrink();
+    await act(async () => rowButton("Previous question").click());
+    expect(row()!.textContent).toContain("Which region?");
+    await swipe(row()!, 200);
+    expect(pin()).toBeNull();
+    expect(dot()?.textContent).toBe("2");
+    await rerender({ bot: bot([first, second, third]) });
+    await settle();
+    expect(pin()!.textContent).toContain("Which color?");
+    expect(pin()!.textContent).toContain("3/3");
+  });
+
   it("outlines the choices in secondary ink with a 44px touch target", async () => {
     await mount({ bot: bot([question]) });
     const choice = pinButton("Prod").className;
