@@ -8,8 +8,8 @@ import type { TaskResumePacket } from "./task-state.ts";
 
 type Blocker = TaskResumePacket["blockers"][number];
 type Offer = { botId: string; key: string; postIds: string[] };
-export type ForumHold = { kind: "ask" | "call"; botId: string; threadId: string; postIds: string[] };
-/** One line per hold in the data folder, read by scripts/forum-replay.ts. */
+export type ForumHold = { kind: "ask" | "call" | "helped" | "missed"; botId: string; threadId: string; postIds: string[] };
+/** One line per hold in the data folder, then a held call's outcome: helped, or missed when the same blocker comes back. */
 export const FORUM_HOLDS_FILE = "forum-holds.ndjson";
 
 /** At most this many posts ride back to a held call (~200 tokens). */
@@ -31,7 +31,7 @@ export interface BoardCallDeps {
   projectOf(threadId: string): string;
   /** True on a turn other people share (a group, a hosted or joined room): nothing private is offered, posted or captured there. */
   room(threadId: string): boolean;
-  /** Each hold, for the replay: ids only, never the question or blocker. */
+  /** Each hold and outcome, for the replay and SIM: ids only, never the question or blocker. */
   held?(hold: ForumHold): void;
 }
 
@@ -78,7 +78,8 @@ export function createBoardCalls(deps: BoardCallDeps) {
         }
         const tried = offered.findIndex((offer) => offer.botId === botId && offer.key === key);
         if (tried >= 0) {
-          offered.splice(tried, 1);
+          const [miss] = offered.splice(tried, 1);
+          deps.held?.({ kind: "missed", botId, threadId, postIds: miss!.postIds });
           kept.push(blocker);
           continue;
         }
@@ -154,7 +155,10 @@ export function createBoardCalls(deps: BoardCallDeps) {
       if (!offered) return;
       offers.delete(threadId);
       if (!ok) return;
-      for (const offer of offered) deps.board.helped(offer.postIds, offer.botId);
+      for (const offer of offered) {
+        deps.board.helped(offer.postIds, offer.botId);
+        deps.held?.({ kind: "helped", botId: offer.botId, threadId, postIds: offer.postIds });
+      }
     },
   };
 }
