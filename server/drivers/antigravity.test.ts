@@ -3251,6 +3251,35 @@ require(${JSON.stringify(fake)});
         }
       });
 
+      it("keeps the standby of a chat reopened after it when a background turn ends on a full pool", async () => {
+        const instance = await make("open-focus");
+        const spawn = vi.spyOn(procs, "spawnCli");
+        const agys = () => spawn.mock.calls.filter(([, args]) => args.includes("--input-format"));
+        const recorder = recordEvents(instance.adapter);
+        rmSync(join(dir, "go"));
+        try {
+          const { turnId } = await instance.adapter.sendTurn({ ...chat, threadId: "t-focus-a", text: "a" });
+          const child = spawn.mock.results[spawn.mock.calls.lastIndexOf(agys().at(-1)!)]!.value as ReturnType<typeof procs.spawnCli>;
+          const closed = new Promise((done) => child.once("close", done));
+          await expect.poll(() => existsSync(dump) && JSON.parse(readFileSync(dump, "utf8")).prompt, { timeout: 5_000 }).toBe("a");
+          await open(instance, { threadId: "t-focus-b" });
+          await open(instance, { threadId: "t-focus-c" });
+          await open(instance, { threadId: "t-focus-b" });
+          await standbyAfter(3);
+          writeFileSync(join(dir, "go"), "");
+          await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+          await closed;
+          expect(agys()).toHaveLength(3);
+          expect(spawns().slice(1).map(({ pid }) => alive(pid))).toEqual([true, true]);
+          const b = await turn(instance, { ...chat, threadId: "t-focus-b", text: "b" });
+          expect(b.pid).toBe(spawns()[1]!.pid);
+        } finally {
+          recorder.stop();
+          spawn.mockRestore();
+          writeFileSync(join(dir, "go"), "");
+        }
+      });
+
       it("leaves no standby after room turns, which never resume, so the next chat still gets one", async () => {
         const gemini = await make("room-turns");
         const spawn = vi.spyOn(procs, "spawnCli");

@@ -97,6 +97,8 @@ export class WarmPool {
   private generations = new Map<string, number>();
   private holds = new Set<WarmMatch>();
   private owners = new Map<string, (key: WarmKey) => boolean>();
+  private opened = new Map<string, { key: WarmKey; seq: number }>();
+  private opens = 0;
   private closing = new Set<Promise<void>>();
   private paused = 0;
   private final = false;
@@ -140,8 +142,12 @@ export class WarmPool {
     return (this.generations.get("") ?? 0) + (this.generations.get(`e:${key.engine}`) ?? 0) + (this.generations.get(`i:${key.instanceId}`) ?? 0) + thread;
   }
 
+  /** A chat opened on any device; it ranks its slot above those of every chat opened before it. */
+  open(key: WarmKey): void { this.opened.set(keyOf(key), { key: { ...key }, seq: ++this.opens }); }
+
   /** A same-key reserve joins a pending lease; every caller that got it releases once. `pendingMs` bounds a prepare that never becomes ready.
-   * `evict` frees the engine's least recently used idle slots when its caps are full, so a slot no one will use cannot block the next chat. */
+   * `evict` frees the engine's least recently opened idle slots when its caps are full, so a slot no one will use cannot block the next chat.
+   * It takes only slots of chats opened before `key`'s, so a background turn's replacement never takes the open chat's. */
   reserve(key: WarmKey, fingerprint: string, captured: Captured, kind: Kind, opts: { pendingMs?: number; evict?: boolean } = {}): Lease | "busy" | "denied" {
     if (this.final) return "denied";
     this.reap();
@@ -155,7 +161,7 @@ export class WarmPool {
     if (existing) this.drop(existing, "replaced");
     const among = [...this.entries].filter((entry) => entry !== existing);
     if (kind === "speculative" && this.freemem() < this.floor()) return "denied";
-    if (kind !== "handshake" && !this.admits(key.engine, among) && !(opts.evict && this.evict(key.engine, among))) return "denied";
+    if (kind !== "handshake" && !this.admits(key.engine, among) && !(opts.evict && this.evict(key, among))) return "denied";
     return this.add(key, fingerprint, captured, kind, opts.pendingMs ?? PENDING_TTL_MS);
   }
 
@@ -372,9 +378,14 @@ export class WarmPool {
 
   private drop(entry: Entry, reason: string) { entry.close(reason); }
 
-  /** Closes nothing unless closing enough of them admits `engine`. */
-  private evict(engine: string, among: Entry[]): boolean {
-    const idle = among.filter((entry) => entry.state === "idle" && entry.lease.key.engine === engine).sort((a, b) => a.idleSince - b.idleSince);
+  private openSeq(key: WarmKey) { return this.opened.get(keyOf(key))?.seq ?? -Infinity; }
+
+  /** Closes nothing unless closing enough of them admits `key`'s engine. */
+  private evict(key: WarmKey, among: Entry[]): boolean {
+    const { engine } = key;
+    const since = this.openSeq(key);
+    const idle = among.filter((entry) => entry.state === "idle" && entry.lease.key.engine === engine && this.openSeq(entry.lease.key) < since)
+      .sort((a, b) => this.openSeq(a.lease.key) - this.openSeq(b.lease.key) || a.idleSince - b.idleSince);
     const victims: Entry[] = [];
     let rest = among;
     while (!this.admits(engine, rest)) {
@@ -417,6 +428,7 @@ export class WarmPool {
   private sweep() {
     const now = this.now();
     this.reap();
+    for (const [id, { key }] of this.opened) if (this.orphaned(key)) this.opened.delete(id);
     if (now - this.lastSweep > SLEEP_GAP_MS) this.closeIdle("sleep");
     this.lastSweep = now;
     for (const entry of [...this.entries]) {

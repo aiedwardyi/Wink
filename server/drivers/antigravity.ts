@@ -1504,6 +1504,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       },
       // a chat with a conversation gets its standby when its last turn exits
       prepare: async (_shape?: PrepareTurn, focus?: PrepareFocus) => {
+        if (focus) warmPool.open(warmKey(focus.threadId));
         if (!focus?.fresh || disposed || active.has(focus.threadId) || keyringSignOut.pending || mcpExclusiveWanted()) return;
         const { fresh, ...settings } = focus;
         const turn: SendTurnInput = { ...settings, ...fresh, text: "" };

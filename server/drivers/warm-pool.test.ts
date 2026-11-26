@@ -180,7 +180,10 @@ describe("warm pool", () => {
 
   it("an evicting reserve on a full engine frees its least recently used idle slot, never one in use", () => {
     const { pool, skip, mem } = fixture();
-    const evicting = (threadId: string) => pool.reserve(key(threadId, "antigravityAgent"), "fp", captured, "speculative", { evict: true });
+    const evicting = (threadId: string) => {
+      pool.open(key(threadId, "antigravityAgent"));
+      return pool.reserve(key(threadId, "antigravityAgent"), "fp", captured, "speculative", { evict: true });
+    };
     const oldest = ready(evicting("t1"));
     skip(1_000);
     const used = ready(evicting("t2"));
@@ -199,6 +202,26 @@ describe("warm pool", () => {
     mem.total = 4 * GiB;
     expect(evicting("t6")).toBe("denied");
     expect(newer.child.close).not.toHaveBeenCalled();
+  });
+
+  it("an evicting reserve frees only idle slots of chats opened before its own", () => {
+    const { pool } = fixture();
+    const gemini = (threadId: string) => key(threadId, "antigravityAgent");
+    const evicting = (threadId: string) => pool.reserve(gemini(threadId), "fp", captured, "speculative", { evict: true });
+    pool.open(gemini("a"));
+    pool.open(gemini("b"));
+    const b = ready(evicting("b"));
+    pool.open(gemini("c"));
+    const c = ready(evicting("c"));
+    pool.open(gemini("b"));
+    // a background turn ending: its chat was opened before both
+    expect(evicting("a")).toBe("denied");
+    expect(evicting("never-opened")).toBe("denied");
+    expect([b, c].map((made) => made.child.close.mock.calls.length)).toEqual([0, 0]);
+    pool.open(gemini("d"));
+    ready(evicting("d"));
+    expect(c.child.close).toHaveBeenCalledOnce();
+    expect(b.child.close).not.toHaveBeenCalled();
   });
 
   it("a healthy same-key child is not evicted for a repeat prepare", () => {
