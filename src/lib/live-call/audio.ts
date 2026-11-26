@@ -34,6 +34,7 @@ export class CallAudio {
   private readonly output: HTMLAudioElement;
   private mic: AnalyserNode | null = null;
   private tailMs = 0;
+  private handing = false;
   private faded = 0;
   private readonly samples = new Float32Array(256);
   onIdle: () => void = () => {};
@@ -137,8 +138,14 @@ export class CallAudio {
     }
   }
 
+  /** The next session takes this audio over: the old one's boop and close leave it running. */
+  handOver() {
+    this.handing = true;
+  }
+
   /** Call before close(): the output stays open just long enough to finish it. */
   boop() {
+    if (this.handing) return;
     this.tailMs = boop(this.ctx, this.out);
   }
 
@@ -255,6 +262,7 @@ export class CallAudio {
   }
 
   close() {
+    if (this.handing) return void (this.handing = false);
     this.closed = true;
     this.flush();
     this.node?.disconnect();

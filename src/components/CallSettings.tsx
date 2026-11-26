@@ -109,11 +109,10 @@ function CallLanguage({ bot }: { bot: Bot }) {
   );
 }
 
-/** Who answers calls, app-wide: the bot itself (its reply read out) or the Gemini voice. A call keeps the pick it started with. */
+/** Who answers calls, app-wide: the bot itself (its reply read out) or the Gemini voice. A call on now moves over once nothing is in flight. */
 function CallAnswerRow() {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
-  const onCall = Boolean(useActiveCall());
   const latest = useRef(0);
   const config = useRef(state.config);
   config.current = state.config;
@@ -130,7 +129,7 @@ function CallAnswerRow() {
     );
   };
   return (
-    <SegmentedRow<CallAnswer> label={t("callMenu.answer")} hint={onCall ? t("callMenu.answer.next") : undefined} value={value}
+    <SegmentedRow<CallAnswer> label={t("callMenu.answer")} value={value}
       options={(["bot", "gemini"] as const).map((id) => ({ id, label: t(`callMenu.answer.${id}`) }))} onChange={pick} />
   );
 }
