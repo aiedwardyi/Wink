@@ -1681,7 +1681,7 @@ export class LiveCall {
 
   /** Nothing said, heard, offered or waited on: another session can take over and lose nothing. */
   idle(): boolean {
-    return this.snapshot.status === "listening" && !this.pending && !this.held.length && !this.playing && !this.generating && !spokenText(this.heardBuf) && !this.sends.size && !this.open.text();
+    return this.snapshot.status === "listening" && !this.pending && !this.held.length && !this.playing && !this.generating && !this.loudAt && !spokenText(this.heardBuf) && !this.sends.size && !this.open.text();
   }
 
   hidden(isHidden: boolean) {

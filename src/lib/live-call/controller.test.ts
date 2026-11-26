@@ -1105,6 +1105,26 @@ describe("LiveCall", () => {
     expect(posts.find((p) => p.path.endsWith("/call/end"))?.body.stats).toMatchObject({ unheard: 1, micGaps: 0 });
   });
 
+  it("is not idle while his words are on their way, so a session switch waits for them", async () => {
+    vi.useFakeTimers();
+    let t = 1_000;
+    let frame!: (pcm: ArrayBuffer) => void;
+    const audio = { ...fakeAudio(), async capture(onFrame: (pcm: ArrayBuffer) => void) { frame = onFrame; } };
+    const { call, engine } = setup({}, audio, () => t);
+    await call.start();
+    engine().events.ready();
+    engine().events.turnDone();
+    expect(call.idle()).toBe(true);
+    frame(new Int16Array(640).fill(8_000).buffer);
+    expect(call.idle()).toBe(false);
+    for (let i = 0; i < 10; i++) {
+      t += 1_000;
+      frame(new Int16Array(640).buffer);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(call.idle()).toBe(true);
+  });
+
   it("mutes with audioStreamEnd and writes stats on end", async () => {
     const { call, engine, posts } = await started();
     call.mute(true);
