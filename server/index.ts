@@ -3193,8 +3193,7 @@ const dreamLive = createDreamLive({
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
   bots: () => store.bots.map((bot) => bot.id),
-  generate: noteHelper,
-  requiresGenerator: ownNoteEngine,
+  judges: () => botAccounts.dreamJudges({ limits: rateLimitsByInstance, save: () => scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR), signedOut: signedOutHelpers }),
   enabled: (botId) => memoryJobEnabled(botId) && memoryJobsHere(botId),
   busy: (botId) => botHasActiveTurn(botId),
   changed: (botId) => broadcast({ kind: "memory.changed", botId }),
@@ -3204,6 +3203,10 @@ const memorySleep = createMemorySleep({
     if (!botSyncId) return;
     markTidied(memorySyncLedger, botSyncId, before, after);
     saveMemoryLedger();
+  },
+  archived: (botId, tidy) => {
+    const bot = store.bot(botId);
+    if (bot) store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: MEMORY_SAVE_TOOL, ok: true, tidy, memoryBotId: botId } });
   },
   dream: dreamLive,
 });
@@ -9412,8 +9415,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "GET") {
       if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
-      const run = dreamLive.latest(m[1]);
+      const run = dreamLive.dry(m[1]) ? dreamLive.latest(m[1]) : memorySleep.latest(m[1]);
       return run ? json(res, 200, { run }) : json(res, 404, { error: "no-run" });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/clean\/undo$/);
+    if (m && method === "POST") {
+      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const body = z.object({ runId: z.string() }).safeParse(await readBody(req));
+      if (!body.success) return json(res, 400, { error: "runId required" });
+      const result = memorySleep.undo(bot.id, body.data.runId);
+      if (!result.ok) return json(res, result.error === "no-run" ? 404 : 409, result);
+      const line = store.messagesFor(bot.threadId).find((message) => message.tool?.tidy?.runId === body.data.runId);
+      if (line?.tool?.tidy) store.patchMessage(bot.threadId, line.id, { tool: { ...line.tool, tidy: { ...line.tool.tidy, undoneAt: Date.now() } } });
+      return json(res, 200, result);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/import$/);
     if (m && method === "POST") {

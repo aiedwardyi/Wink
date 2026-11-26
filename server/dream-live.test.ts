@@ -1,3 +1,4 @@
+import { dreamedPath } from "./dream-archive.ts";
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,7 @@ import type { NoteGenerator } from "./memory-pass.ts";
 import { createMemorySleep, planTidy, SLEEP_GAP_MS, SLEEP_IDLE_MS, type MemorySleep } from "./memory-sleep.ts";
 import { isOpenAsk, type TaskAsk } from "./task-asks.ts";
 import { TASK_STATE_MAX_BYTES, type TaskResumePacket } from "./task-state.ts";
-import { loadedMemory, MEMORY_MAX_LINES, memoryFileRaw, workspaceDir, writeMemoryFile } from "./workspace.ts";
+import { loadedMemory, MEMORY_MAX_LINES, memoryFileRaw, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
 type GhView = { state: "MERGED" | "OPEN"; mergedAt?: string | null };
@@ -155,7 +156,7 @@ describe("dreaming, dry", () => {
       },
       reverted: async () => (pr) => reverts.has(pr),
     });
-    return { dream, sleep: createMemorySleep({ dataDir, bots: () => [bot], generate: () => generate, enabled: () => enabled, busy: () => false, changed, dream }) };
+    return { dream, sleep: createMemorySleep({ dataDir, bots: () => [bot], judges: () => ({ claude: generate, gemini: async () => generate.mock.results.at(-1)!.value as Promise<string> }), enabled: () => enabled, busy: () => false, changed, dream }) };
   };
   const quiet = async (wait = SLEEP_IDLE_MS) => {
     await vi.advanceTimersByTimeAsync(wait);
@@ -172,7 +173,7 @@ describe("dreaming, dry", () => {
   };
   const history = () => {
     try {
-      return readFileSync(join(workspaceDir(bot), "memory-history", "2026-11.md"), "utf8");
+      return readFileSync(dreamedPath(bot), "utf8");
     } catch {
       return "";
     }
@@ -260,8 +261,8 @@ describe("dreaming, dry", () => {
     const plan = plans()[0]!;
     expect(plan.notes.state).toBe("checked");
     expect(plan.notes.items.map(({ text, why, history: file }) => [text, why, file])).toEqual([
-      ["- Prefers light mode (noted 2026-10-01)", "replaced", "memory-history/2026-11.md"],
-      ["- Uses pnpm", "duplicate", "memory-history/2026-11.md"],
+      ["- Prefers light mode (noted 2026-10-01)", "replaced", "memory/dreamed.md"],
+      ["- Uses pnpm", "duplicate", "memory/dreamed.md"],
     ]);
     expect(plan.runUntil - plan.at).toBe(14 * DAY);
     expect(plan.dropUntil - plan.at).toBe(90 * DAY);
@@ -272,7 +273,9 @@ describe("dreaming, dry", () => {
     expect(plans()[0]!.notes).toEqual({ state: "unchanged", items: plan.notes.items });
   });
 
-  it("keeps the last checked moves through a pass that skipped notes, under the month the reused plan runs in", async () => {
+  it("keeps the last checked moves through a pass that skipped notes", async () => {
+    // all three passes on one day: a new day judges again, since a one-off can expire overnight
+    vi.setSystemTime(new Date(2026, 10, 25, 0, 5));
     writeMemoryFile(bot, memory("- Uses pnpm", "- Uses  pnpm."));
     await quiet();
     expect(plans()[0]!.notes.items).toHaveLength(1);
@@ -281,11 +284,10 @@ describe("dreaming, dry", () => {
     await quiet(SLEEP_GAP_MS);
     expect(plans()[0]!.notes).toEqual({ state: "off-here", items: [] });
     enabled = true;
-    vi.setSystemTime(new Date(2026, 11, 2, 12));
     sleep.onSettled(bot);
     await quiet(SLEEP_GAP_MS);
     expect(plans()[0]!.notes.state).toBe("unchanged");
-    expect(plans()[0]!.notes.items.map(({ text, history: file }) => [text, file])).toEqual([["- Uses pnpm", "memory-history/2026-12.md"]]);
+    expect(plans()[0]!.notes.items.map(({ text, history: file }) => [text, file])).toEqual([["- Uses pnpm", "memory/dreamed.md"]]);
   });
 
   it("tells an open Memory page each time a dry plan is saved", async () => {
