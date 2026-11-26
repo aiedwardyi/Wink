@@ -11,6 +11,8 @@ const OFFER = /\b(?:if|unless) (?:you|needed|wanted|useful|helpful)\b|\b(?:want 
 const REPORT = /\b(?:done|checked|fixed|finished|confirmed|verified|sent|merged|tested)\b|했어요|했습니다|완료/i;
 const DENIED = /\b(?:not|never|no|cannot)\b|n['’]t\b|(?:^|\s)(?:안|못)\s/i;
 const HEDGED = /\b(?:if|unless|maybe|perhaps|in case)\b/i;
+// #2073's take-back: it opens its sentence, and one that names nothing is about the promise right before it
+const WITHDRAWN = /^(?:(?:actually|oh|oops|sorry|wait|no)[,!.]?\s+)*(?:scratch that|never ?mind|cancel that)\b|취소할게요/i;
 // "running as PID 4128": the work is underway, so the next reply must check on it, never start it again
 const RUNNING = /\b(?:running|in progress|under ?way|kicked off|pid \d+)\b|실행 중|진행 중/i;
 const TIMES = new RegExp(DEFERRED.source, "gi");
@@ -63,6 +65,8 @@ const forms = (does: string) => {
 const PAST = new Map([["build", ["built"]], ["do", ["did"]], ["find", ["found"]], ["make", ["made"]], ["put", ["put"]], ["read", ["read"]], ["run", ["ran"]], ["send", ["sent"]], ["set", ["set"]], ["write", ["wrote", "written"]]]);
 // "updated", "built": the promise's own action, said as done
 const pastOf = (does: string) => [...forms(does)].filter((form) => form.endsWith("ed")).concat(PAST.get(does) ?? []);
+const POINTED = new Set(["i", "me", "my", "myself", "you", "your", "yourself", "we", "us", "our", "them", "they", "their", "if", "until"]);
+const bare = (text: string) => (text.match(/[\p{L}\p{N}]+/gu) ?? []).every((word) => PLAIN.has(word.toLowerCase()) && !POINTED.has(word.toLowerCase()));
 const own = (promise: string) => {
   const does = verb(promise);
   return new Set([...terms(promise.replace(COMMIT, " ")), ...(does ? forms(does) : [])]);
@@ -112,15 +116,26 @@ export function turnLeftovers(rows: readonly Message[]): Leftover[] {
   const from = rows.findIndex((row) => own(row) && COMMIT.test(row.text!));
   const lines = from < 0 ? [] : rows.slice(from).flatMap((row) => row.tool
     ? [{ line: [row.tool.name, row.tool.summary, ...(row.tool.writes ?? [])].join(" "), commit: false, tool: true }]
-    : !own(row) ? [] : !COMMIT.test(row.text!) ? [{ line: row.text!, commit: false, tool: false }]
+    : !own(row) ? []
     : sentences(row.text!).map((line) => ({ line, tool: false, commit: COMMIT.test(line) && !OFFER.test(line) && !FILLER.test(line) && !QUESTION.test(line) && (row !== last || DEFERRED.test(line)) })));
+  for (const [at, { line }] of lines.entries()) {
+    if (!WITHDRAWN.test(line)) continue;
+    const taken = line.replace(WITHDRAWN, " ");
+    const promises = lines.slice(0, at).filter(({ commit }) => commit);
+    const dropped = bare(taken) ? promises.slice(-1) : promises.filter((promise) => namesPromise(taken, promise.line, promises.filter((other) => other !== promise).map((other) => other.line)));
+    for (const promise of dropped) promise.commit = false;
+  }
   const left: Leftover[] = [];
   // each word's last mention after the line at hand: what the turn ended up saying about it
   const latest = new Map<string, { at: number; text: string }>();
+  const heard = new Set<string>();
   let at = 0;
   for (const { line, commit, tool } of lines.toReversed()) {
     if (!commit) {
-      for (const text of (tool ? [line] : sentences(line).flatMap(clauses)).toReversed()) {
+      for (const text of (tool ? [line] : clauses(line)).toReversed()) {
+        // a repeat says nothing the later copy did not
+        if (heard.has(text)) continue;
+        heard.add(text);
         at += 1;
         for (const term of words(text)) if (!latest.has(term)) latest.set(term, { at, text });
       }

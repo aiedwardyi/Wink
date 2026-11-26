@@ -103,6 +103,10 @@ describe("turn leftovers", () => {
     // one question the reply took up its own way, and a final "I'll" with no time, stay off the list
     expect(turnLeftovers([user("What font is it?"), bot("Inter.")])).toEqual([]);
     expect(turnLeftovers([user("Fix it"), tool(), bot("Fixed. I'll keep it simple.")])).toEqual([]);
+    // a take-back drops the promise it names, or a bare one the promise right before it; a hedged one drops nothing
+    expect(turnLeftovers([user("Report?"), bot("I'll send the report tomorrow. Actually, scratch that.")])).toEqual([]);
+    expect(turnLeftovers([user("Report?"), bot("I'll send the report tomorrow. I'll email Bob tonight. Cancel that report.")])).toEqual([{ ask: "I'll email Bob tonight.", promise: true }]);
+    expect(turnLeftovers([user("Report?"), bot("I'll send the report tomorrow. Cancel that if we have to.")])).toEqual([{ ask: "I'll send the report tomorrow.", promise: true }]);
   });
 
   it("shows a newly filed item on the next turn once, resumed or not", () => {
