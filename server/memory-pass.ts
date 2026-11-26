@@ -616,7 +616,15 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
         overPictures: fact.over_pictures == null ? undefined : listOf(fact.over_pictures),
       }, bound, before, sources.filter((other) => other !== bound && (quoting.includes(other) || offersOption(other, line))));
       const old = target ? NOTED.exec(target) : null;
-      if (source.tap && source.id) answered.add(source.id);
+      if (source.tap && source.id) {
+        // a tap is the user's exact choice: a note that misses its card or answer leaves it to code, one that drops any of its words leaves code its key
+        if (!binding || binding.messageId !== source.id || binding.questionId !== source.questionId) return null;
+        if (!` ${pickKey(line)} `.includes(` ${pickKey(tapAnswer(source))} `)) {
+          cardKeys.set(binding.questionId, thing);
+          return null;
+        }
+        answered.add(source.id);
+      }
       if (binding) cardKeys.set(binding.questionId, thing);
       seen.add(id);
       live.add(pickKey(thing));
@@ -654,25 +662,30 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
   return [...picked(true), ...cards, ...picked(false)];
 }
 
-// a long card question is cut in the middle: two questions that open alike differ at the end, a topic set first stays
-function questionKey(question: string): string {
+// a long card question is cut in the middle: two questions that open alike differ at the end, a topic set first stays; a cut another card holds is a different question, cut at the end
+function questionKey(question: string, held: (key: string) => boolean): string {
   const chars = [...question];
-  return chars.length > KEY_MAX ? `${chars.slice(0, 27).join("").trimEnd()}...${chars.slice(-30).join("").trimStart()}` : question;
+  if (chars.length <= KEY_MAX) return question;
+  const middle = `${chars.slice(0, 27).join("").trimEnd()}...${chars.slice(-30).join("").trimStart()}`;
+  return held(middle) ? `${chars.slice(0, KEY_MAX - 3).join("").trimEnd()}...` : middle;
 }
 
 // what userTyping leaves of answerPrefix: the quote, or nothing once a long quote was cut
 const ANSWER_PREFIX = /^Re: (?:“[^\n]*”)?[ \t]*\n/;
+const tapAnswer = (source: UserLine) => source.text.replace(ANSWER_PREFIX, "").trim();
 
 /** Card answers the note-taker did not file, each a pick in the user's words; a card on file keeps its key, so a revised answer replaces the older one. */
 function cardAnswers(sources: UserLine[], answered: Set<string>, keys: Map<string, string>, archived: string): HeldNote[] {
   const entries = parseTimeline(archived).entries;
   return sources.flatMap((source) => {
     const question = source.question?.replace(/\s+/g, " ").trim();
-    const picked = source.text.replace(ANSWER_PREFIX, "").trim();
+    const picked = tapAnswer(source);
     if (!source.tap || !source.id || answered.has(source.id) || !question || !picked || secretValue(question) || secretValue(picked)) return [];
     const binding = validatePickBinding({ key: question, picked, over: [] }, source);
     if (!binding) return [];
-    const key = keys.get(binding.questionId) ?? entries.findLast((entry) => !entry.kind && entry.questionId === binding.questionId)?.key ?? questionKey(question);
+    const held = (key: string) => [...keys].some(([id, other]) => id !== binding.questionId && pickKey(other) === pickKey(key))
+      || entries.some((entry) => !entry.replacedBy && !entry.kind && entry.questionId !== binding.questionId && pickKey(entry.key) === pickKey(key));
+    const key = keys.get(binding.questionId) ?? entries.findLast((entry) => !entry.kind && entry.questionId === binding.questionId)?.key ?? questionKey(question, held);
     keys.set(binding.questionId, key);
     return [{ line: `${key}: ${picked}`, kind: "decision", pick: { kind: "pick", at: binding.at, key, picked, said: picked, binding, tapped: true } }];
   });
@@ -782,16 +795,18 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     return room ? deps.store.groupByThread(room[1])?.memberIds?.includes(room[0]) ? deps.store.bot?.(room[0]) : undefined : deps.store.botByThread(key);
   };
   const busy = (botId: string, key: string) => deps.busy(botId, sourceThread(key));
-  // every PR the pick names merged after it was picked
+  // every PR the pick names merged after it was picked; null while one is unread or open
   const prsMerged = (botId: string, threadId: string, entry: PickEntry) => {
     const ref = [entry.key, entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n");
     const prs = refPrs(ref);
+    if (!prs.length || !deps.merged) return false;
     // "PR #41 and #42": a PR the reader missed keeps the pick
-    if (!prs.length || [...ref.matchAll(PR_LIST)].some(([list]) => list.match(/\d+/g)!.some((number) => !prs.some((pr) => pr.number === Number(number))))) return false;
-    const checked = deps.merged?.(botId, threadId, ref, true);
+    if ([...ref.matchAll(PR_LIST)].some(([list]) => list.match(/\d+/g)!.some((number) => !prs.some((pr) => pr.number === Number(number))))) return null;
+    const checked = deps.merged(botId, threadId, ref, true);
+    if (!checked) return null;
     // a tweak after the merge is work the merge did not finish
     const since = Math.max(entryTime(entry), ...entry.tweaks.map(({ at }) => entryTime({ id: at })));
-    return Boolean(checked?.length && checked.every((pr) => (pr.mergedAt ?? 0) > since));
+    return checked.every((pr) => (pr.mergedAt ?? 0) > since);
   };
 
   let claim = false;

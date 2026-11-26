@@ -422,7 +422,8 @@ describe("decision timeline", () => {
       answer(card, "Yes, swap");
       reply({ kind: "decision", key: "marketing bot", fact: "Swap marketing bot", quote: "Yes, swap" });
       await settle();
-      expect(picks()).toEqual([["marketing bot", "Swap marketing bot", card.id]]);
+      // the note-taker's key, the user's own words
+      expect(picks()).toEqual([["marketing bot", "Yes, swap", card.id]]);
     });
 
     it("lands a revised answer the note-taker skipped on the key its card is filed under", async () => {
@@ -541,6 +542,57 @@ describe("decision timeline", () => {
       await settle();
       expect(currentPicks(timeline()).map(({ picked, said }) => [picked, said])).toEqual([[choice, choice]]);
       expect(memorySystemPrompt(BOT)).toContain("but wait for my approval before sending.");
+    });
+
+    it("files the whole tap when the note-taker quotes only part of it", async () => {
+      const choice = "Send the release notes to the mailing list, but wait for my approval before sending.";
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Share", subtitle: "How should we share the release notes?", options: [choice, "Save a draft"], askUser: true } });
+      const tap = answer(card, choice);
+      reply({ kind: "decision", key: "Release notes", fact: "Send the release notes to the mailing list", quote: "Send the release notes to the mailing list", message_id: tap.id, question_id: card.id });
+      await settle();
+      expect(currentPicks(timeline()).map(({ picked, questionId }) => [picked, questionId])).toEqual([[choice, card.id]]);
+      expect(memorySystemPrompt(BOT)).toContain("but wait for my approval before sending.");
+    });
+
+    it("keeps one answer when the note-taker gives the card id as the answer's", async () => {
+      const card = swapCard();
+      answer(card, "Yes, swap");
+      reply();
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      answer(card, "Re: “Swap the marketing bot or keep it?”\nKeep marketing bot");
+      reply({ kind: "decision", key: "Marketing bot", fact: "Keep marketing bot", quote: "Keep marketing bot", message_id: card.id, question_id: card.id });
+      await settle();
+      expect(picks()).toEqual([["Swap the marketing bot or keep it?", "Keep marketing bot", card.id]]);
+    });
+
+    it("keeps two cards apart when their shortened questions match", async () => {
+      const ask = (topic: string) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Signing", subtitle: `Which signing service should the ${topic} release pipeline use for distributing the signed release builds?`, options: ["Cloud signing", "Local signing"], askUser: true } });
+      const desktop = ask("desktop");
+      const mobile = ask("mobile");
+      answer(desktop, "Local signing");
+      answer(mobile, "Cloud signing");
+      reply();
+      await settle();
+      expect(picks().map(([, picked, question]) => [picked, question])).toEqual([["Local signing", desktop.id], ["Cloud signing", mobile.id]]);
+      expect(new Set(picks().map(([key]) => key)).size).toBe(2);
+      expect(picksBlock(timeline())).toContain("Local signing");
+      expect(picksBlock(timeline())).toContain("Cloud signing");
+    });
+
+    it("keeps a standing rule a merge starts, and a dated pick whose PR is open", async () => {
+      pass.dispose();
+      pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged: (_bot, _thread, ref) => (ref.includes("42") ? null : [{ number: 41, mergedAt: Date.now() }]) });
+      const ask = (subtitle: string, options: string[]) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Release", subtitle, options, askUser: true } });
+      answer(ask("Which release rule takes effect after PR #41 merges?", ["Always require approval", "No approval"]), "Always require approval");
+      answer(ask("Deploy after PR #42 merges?", ["Tonight", "Next week"]), "Tonight");
+      reply();
+      await settle();
+      vi.setSystemTime(NOW + 2 * 24 * 60 * MINUTE);
+      answer(ask("Which label color?", ["Mint", "Orange"]), "Mint");
+      reply();
+      await settle();
+      expect(currentPicks(timeline()).map(({ picked, retired }) => [picked, Boolean(retired)])).toEqual([["Always require approval", false], ["Tonight", false], ["Mint", false]]);
     });
 
     it("keeps a card pick live while any PR it names is unread or open", async () => {

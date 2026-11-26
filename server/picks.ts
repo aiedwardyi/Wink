@@ -588,27 +588,28 @@ export function currentOnly(text: string): string {
 }
 
 // a word that dates the action to the day it was said; "for now" and "from now on" do not
-const DATED = /(?<![\w.@])(?:tonight|today|right now|after \d{1,2}:\d{2})\b|(?<![\w.@]|\b(?:for|from) )now\b(?! on\b)/i;
+const DATED = /(?<![\w.@])(?:tonight|today|right now|after \d{1,2}:\d{2})\b|(?<![\w.@]|\b(?:for|from) )now\b(?! on\b)|(?<![\w.@]|\bfrom )tomorrow\b/i;
 // a tweak is the user's raw words, so it dates the pick only by these
 const DATED_SAID = /(?<![\w.@])(?:tonight|expires? today|right now|after \d{1,2}:\d{2})\b/i;
 // "every day after 13:30" is a standing rule, whatever time it names
 const RECURRING = /\b(?:every|each|daily|nightly|weekly|monthly|always|whenever|from now on|(?:mon|tues|wednes|thurs|fri|satur|sun)days|onwards?|going forward|starting (?:today|tomorrow|now))\b/i;
 
-/** Marks current picks that are finished one-offs as retired today: their newest words date the action to a day now past, or done() says the PRs they name merged since. Null when none. */
-export function retirePicks(text: string, now: number, done: (entry: PickEntry) => boolean = () => false): string | null {
+/** Marks current picks that are finished one-offs as retired today: the chosen answer or the user's newest words date it to a day now past, or done() says the PRs it names merged since; null from done() is a PR still open. Null when none. */
+export function retirePicks(text: string, now: number, done: (entry: PickEntry) => boolean | null = () => false): string | null {
   const timeline = parseTimeline(text);
   const today = pickStamp(now).slice(0, 10);
   let retired = 0;
   for (const entry of timeline.entries) {
     if (entry.replacedBy || entry.kind || entry.retired) continue;
+    if (RECURRING.test([entry.key, entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n"))) continue;
+    const finished = done(entry);
+    if (finished === null) continue;
     const tweak = entry.tweaks.at(-1);
-    // a card question can say what holds "right now" before or after what it asks
-    const asked = entry.key.match(/[^.?!]*\?/g)?.join(" ") ?? entry.key;
     const due = new Date(entryTime(entry));
     if (/\btomorrow\b/i.test(entry.picked)) due.setDate(due.getDate() + 1);
-    const day = tweak ? DATED_SAID.test(tweak.said) && tweak.at.slice(0, 10) : DATED.test(`${asked}\n${entry.picked}`) && pickStamp(due.getTime()).slice(0, 10);
-    const dated = day && day < today && !RECURRING.test([entry.key, entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n"));
-    if (!dated && !done(entry)) continue;
+    // the question and the options it beat never date the answer
+    const day = tweak ? DATED_SAID.test(tweak.said) && tweak.at.slice(0, 10) : DATED.test(entry.picked) && pickStamp(due.getTime()).slice(0, 10);
+    if (!finished && !(day && day < today)) continue;
     entry.retired = today;
     retired += 1;
   }

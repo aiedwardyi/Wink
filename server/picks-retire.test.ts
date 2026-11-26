@@ -41,7 +41,8 @@ describe("retiring finished one-off picks", () => {
     expect(retired.match(/^- Retired: 2026-11-26$/gm)).toHaveLength(ONE_OFFS.length);
     expect(retired).toContain("- Picked: Merge the Timeline demo now, since time is short");
     expect(retirePicks(retired, NOW)).toBeNull();
-    expect(picksBlock(retirePicks(retired, NOW + 86_400_000))).not.toContain("Ship the Gemini fix tonight?");
+    // the question's "tonight" never dates the answer
+    expect(retirePicks(retired, NOW + 86_400_000)).toBeNull();
   });
 
   it("retires a pick whose PRs done() finds merged", () => {
@@ -56,23 +57,23 @@ describe("retiring finished one-off picks", () => {
   });
 
   it("dates a pick retyped on a later day by when it was last confirmed", () => {
-    const text = ["# Decision timeline", "", ...entry("2026-11-25 20:00", "Which lane tonight?", "Work PC", `- At: ${new Date("2026-11-26T09:00:00").getTime()}`, "- Binding: verified")].join("\n");
+    const text = ["# Decision timeline", "", ...entry("2026-11-25 20:00", "Which lane?", "Work PC tonight", `- At: ${new Date("2026-11-26T09:00:00").getTime()}`, "- Binding: verified")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();
   });
 
   it("brings a retired pick back when the user confirms it again", () => {
     // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
-    const tapped = applyPicks("", [{ kind: "pick", key: "Which lane tonight?", picked: "Work PC", said: "Work PC", tapped: true, at: new Date("2026-11-25T20:00:00").getTime(), binding: { at: new Date("2026-11-25T20:00:00").getTime(), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
+    const tapped = applyPicks("", [{ kind: "pick", key: "Which lane?", picked: "Work PC tonight", said: "Work PC tonight", tapped: true, at: new Date("2026-11-25T20:00:00").getTime(), binding: { at: new Date("2026-11-25T20:00:00").getTime(), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
     const old = retirePicks(tapped, NOW)!;
-    const typed = applyPicks(old, [{ kind: "pick", key: "Which lane tonight?", picked: "Work PC", said: "Work PC again", at: NOW, binding: { at: NOW, messageId: "a2", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
+    const typed = applyPicks(old, [{ kind: "pick", key: "Which lane?", picked: "Work PC tonight", said: "Work PC tonight again", at: NOW, binding: { at: NOW, messageId: "a2", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
     expect(picksBlock(typed)).toContain("Work PC");
   });
 
   it("keeps a renewed confirmation over a retired copy through a sync merge", () => {
     // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
-    const tapped = applyPicks("", [{ kind: "pick", key: "Which lane tonight?", picked: "Work PC", said: "Work PC", tapped: true, at: new Date("2026-11-25T20:00:00").getTime(), binding: { at: new Date("2026-11-25T20:00:00").getTime(), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
+    const tapped = applyPicks("", [{ kind: "pick", key: "Which lane?", picked: "Work PC tonight", said: "Work PC tonight", tapped: true, at: new Date("2026-11-25T20:00:00").getTime(), binding: { at: new Date("2026-11-25T20:00:00").getTime(), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
     const old = retirePicks(tapped, NOW)!;
-    const typed = applyPicks(old, [{ kind: "pick", key: "Which lane tonight?", picked: "Work PC", said: "Work PC again", at: NOW, binding: { at: NOW, messageId: "a2", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
+    const typed = applyPicks(old, [{ kind: "pick", key: "Which lane?", picked: "Work PC tonight", said: "Work PC tonight again", at: NOW, binding: { at: NOW, messageId: "a2", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
     for (const merged of [mergeTimelines(old, typed)!, mergeTimelines(typed, old)!]) expect(picksBlock(merged)).toContain("Work PC");
   });
 
@@ -89,7 +90,7 @@ describe("retiring finished one-off picks", () => {
   it("dates a pick that chose tomorrow by that day", () => {
     const text = ["# Decision timeline", "", ...entry("2026-11-25 10:00", "Ship today or tomorrow?", "Tomorrow", "- Tapped: yes")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();
-    expect(picksBlock(retirePicks(text, NOW + 86_400_000))).toBe("");
+    expect(picksBlock(retirePicks(text, NOW + 86_400_000)!)).toBe("");
   });
 
   it("lands a tweak keyed like a revised card answer on the card's pick", () => {
@@ -111,6 +112,25 @@ describe("retiring finished one-off picks", () => {
     } finally {
       process.env.TZ = zone;
     }
+  });
+
+  it("judges the day by the chosen answer, never the question or an option it beat", () => {
+    const text = ["# Decision timeline", "",
+      ...entry("2026-11-24 10:00", "update now or wait for helpers", "Wait, ping me (my pick)", "- Over: Update now, restart them", "- Tapped: yes"),
+      ...entry("2026-11-24 10:01", "Deploy today or wait for my approval?", "Wait for my approval", "- Tapped: yes"),
+      ...entry("2026-11-24 10:02", "When should we package the beta?", "Tonight", "- Tapped: yes"),
+    ].join("\n");
+    expect(currentPicks(retirePicks(text, NOW)).filter((pick) => pick.retired).map(({ picked }) => picked)).toEqual(["Tonight"]);
+  });
+
+  it("keeps a standing rule a merged PR starts", () => {
+    const text = ["# Decision timeline", "", ...entry("2026-11-24 10:00", "Which release rule takes effect after PR #41 merges?", "Always require approval", "- Tapped: yes")].join("\n");
+    expect(retirePicks(text, NOW, () => true)).toBeNull();
+  });
+
+  it("keeps a dated pick while a PR it waits on is open", () => {
+    const text = ["# Decision timeline", "", ...entry("2026-11-24 10:00", "Deploy after PR #42 merges?", "Tonight", "- Tapped: yes")].join("\n");
+    expect(retirePicks(text, NOW, () => null)).toBeNull();
   });
 
   it("never retires a recurring instruction, whatever time it names", () => {
