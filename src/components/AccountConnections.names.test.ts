@@ -408,6 +408,32 @@ it.each([
   expect(line!.contains(button(action, row())!), `${action} sits on its own row, clear of the menu`).toBe(false);
 });
 
+it.each([[false, "en"], [true, "ko"]] as const)("offers Remove at the bottom of a signed-out row's menu, and the row leaves once the board folds it (phone=%s, %s)", async (phone, locale) => {
+  const remove = locale === "en" ? "Remove" : "제거";
+  Object.assign(accounts[0]!, { accountMain: false, snapshot: { state: "available", authenticated: false } });
+  accounts[1]!.accountMain = true;
+  const fetchMock = vi.mocked(fetch);
+  const answer = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url, init) => String(url).endsWith("/sign-out") ? (calls.push({ path: String(url), init }), Response.json({})) : answer(url, init));
+  await mount({ phone, locale });
+  for (const other of host.querySelectorAll<HTMLElement>('[data-connection-account]:not([data-connection-account="claude"])')) {
+    if (phone) await click(other.querySelector<HTMLElement>("[data-connection-menu]"));
+    expect(button(remove, other), "a signed-in row has no Remove").toBeUndefined();
+    expect(button(locale === "en" ? "Sign Out" : "로그아웃", other)).toBeTruthy();
+  }
+  await click(row()!.querySelector<HTMLElement>("[data-connection-menu]"));
+  const items = [...row()!.querySelectorAll<HTMLButtonElement>("[data-fold] button")];
+  expect(items.at(-1)?.textContent).toBe(remove);
+  await click(items.at(-1));
+  expect(calls.filter((call) => call.path.endsWith("/sign-out")).map((call) => [call.path, call.init?.body])).toEqual([["/api/accounts/claude/sign-out", "{}"]]);
+  await unmount();
+  const claude = board.engines[0]!;
+  Object.assign(claude, { accounts: claude.accounts.filter((account) => account.id !== "claude"), duplicates: ["claude"] });
+  Object.assign(board, { revision: board.revision + 1, cursor: "fixture-43" });
+  await mount({ phone, locale });
+  expect(row()).toBeNull();
+});
+
 it("shows a base signed in as an added account once, as Usage does", async () => {
   const claude = board.engines[0]!;
   const kept = claude.accounts.filter((account) => account.id !== "claude");

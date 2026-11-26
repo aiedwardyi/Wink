@@ -130,22 +130,25 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
     }
   }, [editing, phone]);
   const closeEditor = () => { restoreFocus.current = true; setEditing(false); };
+  const draining = account.drain && account.drain.phase !== "failed";
+  // Its first check has not answered: neither signed in nor signed out yet.
+  const checking = !ready && !account.drain && engineChecking(account);
+  const signInRow = !ready && !account.drain && !checking;
   const controls = <>
     {phone && canName && <button type="button" disabled={busy} className={ROW_BUTTON}
       onClick={() => { inlineEditor.current = false; setMenu(false); setEditing(true); }}>{t("accounts.name.edit")}</button>}
     {(ready || account.drain?.phase === "failed") && <button type="button" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
+    {/* A signed-out row is cleared through the same sign-out: the server marks it and Usage and Connections drop it. */}
+    {signInRow && <button type="button" data-remove-account="" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
+      className={ROW_BUTTON}>{t("accounts.remove")}</button>}
   </>;
-  const draining = account.drain && account.drain.phase !== "failed";
-  // Its first check has not answered: neither signed in nor signed out yet.
-  const checking = !ready && !account.drain && engineChecking(account);
-  const signInRow = !ready && !account.drain && !checking;
   const toggleMenu = () => afterFold(`${id}-actions`, () => setMenu(!menu));
   const more = <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu} aria-controls={`${id}-actions`}
     onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button>;
   // A signed-out row keeps its menu on the name line and Sign In on its own line below, so neither covers the other.
   const control = draining ? <span role="status">{t("accounts.removing")}</span> : checking ? <span aria-live="polite">{t("engines.checking")}</span>
-    : signInRow ? phone && canName && more : phone ? more : controls;
+    : signInRow ? more : phone ? more : controls;
   return (
     <div data-connection-account={account.instanceId} data-account-row={account.instanceId} tabIndex={-1} {...(reorder && reorderable(t("usage.desk.reorder", { name: name?.name ?? account.displayName })))} className={ACCOUNT_ROW}>
       {(name || !signInRow) && <AccountHead control={control} email={!signInRow && !checking && label} name={<>

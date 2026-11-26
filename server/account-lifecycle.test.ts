@@ -1308,6 +1308,25 @@ describe("a user Sign Out removes the account from Usage and Connections", () =>
     expect(await listed(f, base)).toMatchObject({ usage: [base, added.id], connections: [base, added.id], signIn: { [base]: "signed-out" } });
   });
 
+  it.each(["codex", "claude"])("Remove takes an expired %s base's leftover row off both lists", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await f.controller.useForBots(added.id);
+    f.statuses.set(base, { state: "available", authenticated: false });
+    await f.controller.signedOut(base);
+    await f.controller.remove(base);
+    expect(await listed(f, base)).toMatchObject({ usage: [added.id], connections: [added.id], mainId: added.id });
+  });
+
+  it("hands Main on when a leftover signed-out Main is removed", async () => {
+    const f = await fixture(vi.fn());
+    const added = await f.add("codex");
+    f.statuses.set("codex", { state: "available", authenticated: false });
+    await f.controller.signedOut("codex");
+    await expect(f.controller.remove("codex", added.id)).resolves.toEqual({ state: "removed", destinationId: added.id });
+    expect(await listed(f, "codex")).toMatchObject({ usage: [added.id], connections: [added.id], mainId: added.id });
+  });
+
   it("keeps a lone base's signed-out row, the engine's own signed-out state", async () => {
     const f = await fixture(vi.fn());
     await f.controller.remove("codex");
