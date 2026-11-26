@@ -328,9 +328,8 @@ it("a right swipe on the desktop pane does nothing", async () => {
   const stage = aside.querySelector(".show-stage")!;
   await touch("touchstart", [[100, 300]], stage, 400);
   await touch("touchmove", [[300, 300]], stage);
-  await touch("touchend", [], stage);
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
   expect(aside.style.transform).toBe("");
+  await touch("touchend", [], stage);
   let shown: ShowItem | null = null;
   function Probe() { shown = useShowItem(); return null; }
   await act(async () => root.render(createElement(Probe)));
