@@ -10,7 +10,7 @@ import { isTerminalSkin, useSkin } from "@/lib/skins";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine } from "@/lib/usage-board";
 import { checkedMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { useBackLayer } from "@/lib/use-back-layer";
-import { useIsPhone } from "@/lib/use-phone-swipe";
+import { useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
 import { useSpinUntilTurnEnds } from "@/lib/use-spin-until-turn-ends";
 import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
 import { useVisibleClock } from "@/lib/use-visible-clock";
@@ -120,6 +120,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
   const closeRef = useRef(close);
   useLayoutEffect(() => { closeRef.current = close; });
   useBackLayer(!closing, close);
+  useSheetSwipe(box, phone && !closing && Boolean(spot), close, true);
 
   useLayoutEffect(() => {
     const update = () => {
