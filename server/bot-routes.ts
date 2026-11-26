@@ -477,7 +477,7 @@ export function createBotRoutes(deps: BotRouteDeps) {
         Object.assign(patch, modelPickPatch(existingBot, normalizedSelection));
       }
       const instanceOf = (record: BotRecord) => deps.accountBots ? deps.accountBots.instance(record) : registry.get(record.modelSelection.instanceId);
-      const engineBefore = existingBot && instanceOf(existingBot)?.instanceId;
+      const engineBefore = normalizedSelection && existingBot && instanceOf(existingBot)?.instanceId;
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
       // a warm child serves only the engine it started for; the new engine's Stop and Delete never reach it

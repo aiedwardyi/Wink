@@ -268,7 +268,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop }, webhooks: { disableForBot: noop },
     lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,
     computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes, accountNotices: { forget: noop }, limitWaits: { cancel: noop },
-    perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(),
+    perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(), warmPool: { invalidate: noop },
     EVENTS_DIR: "events", NATIVE_DIR: "native", join: (...parts: string[]) => parts.join("/"), removeRotatingLog: noop,
   };
   const deleteBotFully = load("deleteBotFully", { ...deleteDeps, stopBotWork: load("stopBotWork", deleteDeps) });
