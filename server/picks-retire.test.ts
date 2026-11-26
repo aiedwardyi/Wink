@@ -81,6 +81,11 @@ describe("retiring finished one-off picks", () => {
     expect(retirePicks(text, NOW)).toBeNull();
   });
 
+  it("keeps a recurring card whose recurrence comes before what it asks", () => {
+    const text = ["# Decision timeline", "", ...entry("2026-11-25 10:00", "Daily backups. Which server after 13:30?", "Home server", "- Tapped: yes")].join("\n");
+    expect(retirePicks(text, NOW)).toBeNull();
+  });
+
   it("never retires a recurring instruction, whatever time it names", () => {
     const text = ["# Decision timeline", "", ...entry("2026-11-20 10:00", "When should alerts go to the backup?", "Every day after 13:30", "- Tapped: yes")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();
