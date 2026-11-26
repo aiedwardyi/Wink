@@ -117,7 +117,7 @@ export interface WebReaderDeps {
   /** Defaults to READ_DEADLINE_MS. */
   deadlineMs?: number;
   /** Bots this caller could borrow for step 4. */
-  readers?: () => Array<WebReadReader & { busy: boolean }>;
+  readers?: () => Array<WebReadReader & { busy: boolean; hidden?: boolean }>;
 }
 
 export function createWebReader(deps: WebReaderDeps = {}) {
@@ -354,7 +354,7 @@ export function createWebReader(deps: WebReaderDeps = {}) {
     // An empty engine is a caller whose provider is not ready (index.ts stores ""): which engine failed is unknown, so no other bot is known to differ.
     if (own === "") return undefined;
     const reader = bots
-      .filter((bot) => bot.botId !== callerBotId && bot.engine !== own && !bot.busy && rank(bot.engine) >= 0)
+      .filter((bot) => bot.botId !== callerBotId && bot.engine !== own && !bot.busy && !bot.hidden && rank(bot.engine) >= 0)
       .sort((a, b) => rank(a.engine) - rank(b.engine))[0];
     return reader ? { botId: reader.botId, name: reader.name, engine: reader.engine } : undefined;
   }

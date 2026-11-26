@@ -8397,7 +8397,7 @@ const webRead = webReadRoute(createWebReader({
     const instance = registry.get(bot.modelSelection.instanceId);
     const snapshot = providerSnapshots.get(bot.modelSelection.instanceId);
     const ready = snapshot?.state === "available" && snapshot.authenticated !== false;
-    return { botId: bot.id, name: bot.name, engine: ready ? instance?.driverKind ?? "" : "", busy: Boolean(bot.busy) };
+    return { botId: bot.id, name: bot.name, engine: ready ? instance?.driverKind ?? "" : "", busy: Boolean(bot.busy), hidden: Boolean(bot.hidden) };
   }),
 }), (header) => commsCallers.resolve(header), guestRoomTurn);
 const verifySite = createVerifySite({
