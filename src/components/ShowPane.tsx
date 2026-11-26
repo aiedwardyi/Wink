@@ -7,7 +7,9 @@ import { useI18n } from "@/lib/i18n";
 import { mediaFile, type MediaSource } from "@/lib/show-media";
 import { openOutside, saveFile } from "@/lib/open-file";
 import { closeTab, linkedFileSrc, linkedFolder, PANE_TOOLS, showItem, showName, tabKey, takeFolder, usePanePulse, usePaneTabs, watchFolder, type FolderListing, type PaneEntry, type ShowItem } from "@/lib/show-pane";
+import { hapticTick } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
+import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { canWatch, closePane, closeVerifyWatch, openPaneTool } from "@/lib/verify-watch";
 import { edgeFade } from "./Segmented";
 import { FILE_ICON, PaneEdge, PaneTabs, PaneToolList, PaneToolMenu, TOOL_ICON, TOOL_LABEL, usePaneWidth, type TabView, type ToolRow } from "./PaneTabs";
@@ -147,6 +149,14 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
     row.scrollTo({ left: to, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
   };
 
+  // A phone sheet goes off to the right like Bot Details; the tab row, the Timeline canvas and the Media thumb keep their own drags.
+  useSettingsSwipe(ref, phone && !closing, false, () => {
+    hapticTick();
+    // the swipe already settled offscreen; do not replay the entrance
+    if (ref.current) ref.current.style.animation = "none";
+    closePane();
+  });
+
   useEffect(() => {
     if (closing) return;
     const onKey = (event: KeyboardEvent) => {
@@ -162,7 +172,7 @@ export function ShowPane({ item, watch, media = false, check = false, map = fals
     <aside ref={ref} style={{ "--pane-width": paneWidth ? `${paneWidth}px` : undefined, "--dock": dock.current ? `${dock.current}px` : undefined } as CSSProperties} className={cn("verify-watch show-pane max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in", pulses !== pulsed && "arrival-glow")} onAnimationEnd={(event) => { if (event.animationName === "arrival-glow-once") setPulsed(pulses); }} data-verify-watch data-side-panel="" data-tab={tab} data-wide="" data-closing={closing || undefined} inert={closing || undefined}>
       {!phone && !expanded && !closing && <PaneEdge pane={ref} width={paneWidth} onWidth={setPaneWidth} />}
       <div className="show-pane-head">
-        {threadId && views.length > 0 && <div ref={strip} role="tablist" className="show-pane-tabs" onScroll={(event) => setFade(edgeFade(event.currentTarget, TAB_FADE))} onWheel={wheel} style={{ maskImage: fade, WebkitMaskImage: fade }}>
+        {threadId && views.length > 0 && <div ref={strip} role="tablist" data-no-swipe className="show-pane-tabs" onScroll={(event) => setFade(edgeFade(event.currentTarget, TAB_FADE))} onWheel={wheel} style={{ maskImage: fade, WebkitMaskImage: fade }}>
           <PaneTabs row={strip} threadId={threadId} tabs={views} active={active} onOpen={open} onClose={close} onSay={setSaid} />
         </div>}
         {threadId && <PaneToolMenu rows={rows} onPick={open} />}
