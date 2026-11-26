@@ -356,6 +356,8 @@ it("dragging the scroll thumb shows the month beside it until 600 ms after relea
   await render({ threadId: "t1", messages: [] });
   await settle();
   const thumb = host.querySelector("[data-media-thumb]")!;
+  // a phone pane's right swipe to close leaves the thumb its drag
+  expect(thumb.closest("[data-no-swipe]")).not.toBeNull();
   const bubble = () => host.querySelector("[data-media-bubble]");
   expect(bubble()?.hasAttribute("data-shown") ?? false).toBe(false);
   await pointer(thumb, "pointerdown", 0);
