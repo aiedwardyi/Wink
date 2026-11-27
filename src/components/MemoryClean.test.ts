@@ -74,7 +74,7 @@ describe("cleanup copy", () => {
     await mount(createElement(MemoryCleanRow, { run: { ...run, dream }, onUndo: vi.fn(), onFix: vi.fn() }));
     expect(host.textContent).toContain("Would move 0 notes and close 0 to-dos.");
     await act(async () => host.querySelector("button")!.click());
-    expect(host.querySelector("li")!.textContent).toContain("Out of date: you wrote about this note since, so nothing changed.");
+    expect(host.querySelector("li")!.textContent).toContain("Out of date - rechecks tonight.");
     expect(host.querySelectorAll("li button")).toHaveLength(0);
   });
   it.each(["en", "ko"] as const)("says an OK'd fix tidied the notes in %s, and a dry run with none changed nothing", async (locale) => {

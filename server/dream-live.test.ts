@@ -452,12 +452,11 @@ describe("dreaming, dry", () => {
       const refs = [...prompt.matchAll(/^PAIR\nL(\d+) [^\n]*\n(M\d+) /gm)].map(([, at, ref]) => [`L${at}`, ref!] as const);
       return JSON.stringify({ wrong: wrong.flatMap((flag) => refs.filter(([note]) => note === flag.note).map(([, message]) => ({ ...flag, message }))) });
     };
+    // one message, the owner's newest, shows both notes wrong
+    const M1 = "For the main account plan leave it. It lasts till march and thats my main account anyways. Also say groups instead in every user-facing string, we removed that name";
     beforeEach(() => {
       writeMemoryFile(bot, raw);
-      typed.set("t1", [
-        said("m1", NOW - DAY, "For the main account plan leave it. It lasts till march and thats my main account anyways."),
-        said("m2", NOW - DAY + 60_000, "say groups instead in every user-facing string, we removed that name"),
-      ]);
+      typed.set("t1", [said("m1", NOW - DAY, M1)]);
       generator = flags([
         { note: line(OLD), quote: "It lasts till march", fix: NEW },
         { note: line(RULE), quote: "say groups instead in every user-facing string", fix: "- GROUPS WORD (11-20): say groups and Group Details to them in every user-facing string." },
@@ -471,8 +470,8 @@ describe("dreaming, dry", () => {
       const plan = plans()[0]!;
       expect(plan.fixes).toMatchObject({ state: "checked", through: NOW + SLEEP_IDLE_MS });
       expect(plan.fixes!.items).toEqual([
-        { op: "fix", target: `note:${sha8(OLD)}`, text: OLD, by: NEW, why: "wrong", listOnly: false, evidence: { thread: "t1", message: "m1", at: NOW - DAY, quote: "It lasts till march" } },
-        expect.objectContaining({ text: RULE, listOnly: true, evidence: expect.objectContaining({ message: "m2" }) }),
+        { op: "fix", target: `note:${sha8(OLD)}`, text: OLD, by: NEW, why: "wrong", listOnly: false, evidence: { thread: "t1", message: "m1", at: NOW - DAY, quote: "It lasts till march" }, seen: { at: NOW - DAY, sha: sha8(M1) } },
+        expect.objectContaining({ text: RULE, listOnly: true, evidence: expect.objectContaining({ message: "m1" }) }),
       ]);
       expect(start().dream.latest(bot)!.dream.fixes).toEqual(plan.fixes);
       // the next pass reads only lines typed since, and keeps the list
@@ -688,7 +687,8 @@ describe("dreaming, dry", () => {
       };
       sleep.onSettled(bot);
       await quiet(SLEEP_GAP_MS);
-      expect(judged).toEqual(expect.arrayContaining([april, withdraw]));
+      // only the newest message is judged: nothing after it needs reading
+      expect(judged).toEqual([withdraw]);
       expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)).toBeUndefined();
       expect(approve(false)).toEqual({ ok: false, error: "no-item" });
       expect(memoryFileRaw(bot)).toBe(raw);
@@ -772,14 +772,37 @@ describe("dreaming, dry", () => {
       ["- The main U.S. account on version 2.1 costs 9.50 a month through January (noted 2026-11-20)", "Please disregard March and April. The main U.S. account on version 2.1 costs 9.50 a month through January."],
       ["- The main U.S. account on version 2.1 costs 9.50 a month through January (noted 2026-11-20)", "Please disregard March and April.\r\nThe main U.S. account on version 2.1 costs 9.50 a month through January."],
     ];
-    // judges that read every line about the note as a fix to the last month it names
-    const eager = (note: string): NoteGenerator => async (prompt) => JSON.stringify({
+    const PLAN_DOTTED = "- The main U.S. account on version 2.1 costs 9.50 a month through January (noted 2026-11-20)";
+    // the later reviews' wordings: abbreviations, paragraphs past what a judge reads, a message past six lines
+    WITHDRAWALS.push(
+      [OLD, "Jan. is correct. Ignore Mar. and Apr."],
+      [OLD, "January is correct. Ignore March and April."],
+      [OLD, "No, Jan. Ignore Mar. and Apr."],
+      [OLD, "No, Jan. Ignore Mar."],
+      [OLD, "No, January. Ignore March and April."],
+      [OLD, "The main account's plan ends in January."],
+      [OLD, "Jan. is correct. Ignore Apr."],
+      [OLD, "January is correct. Ignore April."],
+      [TWO, "Strike March / April! (The main account's plan is billed monthly. It ends in January.)"],
+      [PLAN_DOTTED, "Billing confirmed: The main U.S. account on version 2.1 costs 9.50 a month through January. Ignore March and April."],
+      [OLD, "Please disregard March and April. The main account's plan ends in January. I checked the renewal paperwork against the signed invoice from the vendor. The first email was a draft. I had already copied its date into our team calendar before billing sent us the signed copy. The dates for the other subscriptions are fine. I compared the signed copy with the previous renewal and asked billing to look."],
+      [OLD, "Please disregard March and April. The main account's plan ends in January. I checked the renewal paperwork against the signed invoice from the vendor. The first email was a draft. I had already copied its date into our team calendar before billing sent us the signed copy. The dates for the other subscriptions are fine. I compared the signed copy with the previous renewal and asked billing to look ."],
+      [OLD, "Please disregard March and April. The main account's plan ends in January. I checked the renewal paperwork against the signed invoice from the vendor. The first email was a draft. I had already copied its date into our team calendar before billing sent us the signed copy. The dates for the other subscriptions are fine. I compared the signed copy with the previous renewal and asked billing to look again. Please use the signed version when preparing the handover for next week."],
+      [OLD, "Please disregard March and April. The main account's plan ends in January.\nBilling update for the team:\nInvoice checked.\nCalendar checked.\nContract checked.\nNo further changes.\nThanks."],
+      [OLD, "Disregard March and April. The main account's plan ends in January. I checked the renewal paperwork against the invoice from the vendor. The first email was a draft and I had copied the date into our team calendar before the person who manages billing sent the signed copy. The dates on the other subscriptions are fine. I cross-checked the signed copy against last year's renewal and asked billing ."],
+      [OLD, "Disregard March and April. The main account's plan ends in January. I checked the renewal paperwork against the invoice from the vendor. The first email was a draft and I had copied the date into our team calendar before the person who manages billing sent the signed copy. The dates on the other subscriptions are fine. I cross-checked the signed copy against last year's renewal and asked billing t."],
+      [OLD, "Disregard March and April. The main account's plan ends in January. I checked the renewal paperwork against the invoice from the vendor. The first email was a draft and I had copied the date into our team calendar before the person who manages billing sent the signed copy. The dates on the other subscriptions are fine. I cross-checked the signed copy against last year's renewal and asked billing to look again. Please use the signed version when preparing the handover for next week."],
+      [PLAN_DOTTED, "March and April are wrong. The main U.S. account on version 2.1 costs 9.50 a month through January. I checked the renewal paperwork against the invoice from the vendor. The first email was a draft and I had copied the date into our team calendar before the person who manages billing sent the signed copy. The dates on the other subscriptions are fine. I cross-checked the signed copy against last year's renewal and asked billing to look again. Please use the signed version when preparing the handover for next week."],
+      [OLD, "The main account plan stays in January. The password is SampleFixtureOnly42!"],
+    );
+    // judges that read every earlier line about the note as a fix to the last month it names; the withdrawal itself they read as written
+    const eager = (note: string, withdraw: string): NoteGenerator => async (prompt) => JSON.stringify({
       wrong: [...prompt.matchAll(/^PAIR\n(L\d+) \(written [^)]*\): ([^\n]+)\n(M\d+) \([^)]*\): ([^\n]+)/gm)].flatMap(([, ref, old, message, row]) => {
         const month = /april/i.test(row!) ? "April" : /march/i.test(row!) ? "March" : null;
-        return old === note && month ? [{ note: ref, message, quote: row!.trim(), fix: note.replace("January", month) }] : [];
+        return old === note && month && !withdraw.startsWith(row!) ? [{ note: ref, message, quote: row!.trim(), fix: note.replace("January", month) }] : [];
       }),
     });
-    it.each(WITHDRAWALS.flatMap(([note, withdraw]) => (["waiting", "waiting, then April", "same pass"] as const).map((when) => [when, withdraw, note] as const)))("writes no withdrawn value, %s: %s", async (when, withdraw, note) => {
+    it.each(WITHDRAWALS.flatMap(([note, withdraw]) => (["waiting", "OK before the next pass", "waiting, then April", "same pass", "same pass after April"] as const).map((when) => [when, withdraw, note] as const)))("writes no withdrawn value, %s: %s", async (when, withdraw, note) => {
       const text = raw.replace(OLD, note);
       writeMemoryFile(bot, text);
       mkdirSync(join(dreamedPath(bot), ".."), { recursive: true });
@@ -787,24 +810,44 @@ describe("dreaming, dry", () => {
       writeFileSync(dreamedPath(bot), archive);
       const april = "The main account plan ends in April now, instead of March.";
       const lines = [said("m1", NOW - DAY, "For the main account plan leave it. It lasts till march and thats my main account anyways.")];
-      if (when === "same pass") lines.push(said("withdraw", NOW - DAY + 120_000, withdraw));
+      if (when === "same pass after April") lines.push(said("april", NOW - DAY + 60_000, april));
+      if (when.startsWith("same pass")) lines.push(said("withdraw", NOW - DAY + 120_000, withdraw));
       typed.set("t1", lines);
-      generator = eager(note);
+      generator = eager(note, withdraw);
       await quiet();
-      if (when !== "same pass") {
+      if (!when.startsWith("same pass")) {
         expect(plans()[0]!.fixes!.items.find((item) => item.text === note)?.by).toBe(note.replace("January", "March"));
-        typed.set("t1", [...(when === "waiting, then April" ? [said("april", Date.now() + 90_000, april)] : []), said("withdraw", Date.now() + 180_000, withdraw)]);
-        sleep.onSettled(bot);
-        await quiet(SLEEP_GAP_MS);
+        typed.set("t1", [...lines, ...(when === "waiting, then April" ? [said("april", Date.now() + 90_000, april)] : []), said("withdraw", Date.now() + 180_000, withdraw)]);
+        if (when !== "OK before the next pass") {
+          sleep.onSettled(bot);
+          await quiet(SLEEP_GAP_MS);
+        }
       }
       for (const plan of plans()) for (const item of plan.fixes?.items ?? []) start().dream.fix(bot, plan.runId, item.target, false);
       expect(memoryFileRaw(bot)).toBe(text);
       expect(readFileSync(dreamedPath(bot), "utf8")).toBe(archive);
     });
 
-    it("refuses an OK once a newer line names the note or the fix, and keeps the item out of date", async () => {
+    it.each([
+      ["past what a judge reads", "The main account plan ends in April now.\n\nI looked at the renewal spreadsheet while preparing the handover this morning. It was the version we circulated before the vendor sent back the signed paperwork. I have also asked billing to annotate the row so that the next person can tell where it came from.\n\nOne more detail before you send the renewal summary to the team. Our reminders are already in the shared calendar, and the invoice number matches the order we placed. I will include both documents in the handover so anyone reviewing the dates has all the background.\n\nI checked the signed copy. Disregard April and keep the saved date.", false],
+      ["in a short message", "The main account plan ends in April now. I checked the signed copy. Disregard April and keep the saved date.", true],
+      ["in one rejecting line", "It would be wrong to say the main account plan ends in April now. Keep the date we have.", true],
+    ])("gives the judges every word of a message that takes its own value back %s, or none of it", async (_, owner, whole) => {
+      typed.set("t1", [said("self", NOW - DAY, owner)]);
+      const read: string[] = [];
+      generator = async (prompt) => {
+        if (prompt.includes("<pairs>")) read.push(prompt);
+        return JSON.stringify({ wrong: [] });
+      };
       await quiet();
-      typed.get("t1")!.push(said("later", Date.now() + 1000, "Please disregard March."));
+      expect(read.length > 0).toBe(whole);
+      expect(read.every((prompt) => prompt.includes(owner))).toBe(true);
+      expect(plans()[0]!.fixes!.items).toEqual([]);
+    });
+
+    it("refuses an OK once the owner wrote anything since, and keeps the item out of date", async () => {
+      await quiet();
+      typed.get("t1")!.push(said("later", Date.now() + 1000, "The weekly sync moved to Thursday afternoons."));
       expect(approve(false)).toEqual({ ok: false, error: "outdated" });
       expect(memoryFileRaw(bot)).toBe(raw);
       expect(history()).toBe("");
@@ -815,30 +858,37 @@ describe("dreaming, dry", () => {
     });
 
     it.each([
-      ["a line about the note cut whole as sensitive", said("later", NOW + SLEEP_IDLE_MS + 1000, "The main account password is SunnyHarbor! now")],
-      ["its own line edited to hold the old value", said("m1", NOW - DAY, "For the main account plan leave it. It lasts till march or January.")],
+      ["a line cut whole as sensitive", said("later", NOW + SLEEP_IDLE_MS + 1000, "The main account password is SunnyHarbor! now")],
+      ["a paragraph no judge reads", said("later", NOW + SLEEP_IDLE_MS + 1000, "Please disregard March and April. The main account's plan ends in January. I checked the renewal paperwork against the signed invoice from the vendor. The first email was a draft. I had already copied its date into our team calendar before billing sent us the signed copy. The dates for the other subscriptions are fine. I compared the signed copy with the previous renewal and asked billing to look again. Please use the signed version when preparing the handover for next week.")],
+      ["a picture with no words", { ...said("later", NOW + SLEEP_IDLE_MS + 1000, '<attached-image path="a.png" />'), hasImage: true }],
+      ["a message in another chat", said("t2:later", NOW + SLEEP_IDLE_MS + 1000, "ok")],
+      ["its own line edited", said("m1", NOW - DAY, "For the main account plan leave it. It lasts till march or January.")],
     ])("refuses an OK after %s", async (_, change) => {
       await quiet();
-      const rows = typed.get("t1")!.filter((each) => each.id !== change.id);
-      typed.set("t1", [...rows, change].sort((a, b) => a.at - b.at));
+      const thread = change.id.startsWith("t2:") ? "t2" : "t1";
+      const rows = (typed.get(thread) ?? []).filter((each) => each.id !== change.id);
+      typed.set(thread, [...rows, change].sort((a, b) => a.at - b.at));
       expect(approve(false)).toEqual({ ok: false, error: "outdated" });
       expect(memoryFileRaw(bot)).toBe(raw);
     });
 
-    it("takes an OK past a newer line about something else", async () => {
+    it("takes an OK while the owner wrote nothing since, a bot's own reply after it", async () => {
       await quiet();
-      typed.get("t1")!.push(said("other", Date.now() + 1000, "The weekly sync moved to Thursday afternoons."));
+      // SAFETY: the check reads only id, at, role, kind and text of a row.
+      typed.get("t1")!.push({ id: "reply", at: Date.now() + 1000, role: "bot", kind: "text", text: "Noted." } as Message);
       expect(approve(false).ok).toBe(true);
       expect(memoryFileRaw(bot)).toBe(raw.replace(OLD, NEW));
     });
 
-    it("keeps a waiting fix through a pass that checked nothing about its note", async () => {
+    it("drops a waiting fix once the owner writes anything after it, and judges the newest line fresh", async () => {
       await quiet();
       typed.set("t1", [said("other", Date.now() + 1000, "The weekly sync moved to Thursday afternoons.")]);
       generator = async () => JSON.stringify({ wrong: [] });
       sleep.onSettled(bot);
       await quiet(SLEEP_GAP_MS);
-      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)?.by).toBe(NEW);
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)).toBeUndefined();
+      expect(approve(false)).toEqual({ ok: false, error: "no-item" });
+      expect(memoryFileRaw(bot)).toBe(raw);
     });
 
     it("offers the newest of two agreed corrections in one pass", async () => {
@@ -872,7 +922,7 @@ describe("dreaming, dry", () => {
       const second = "- The app uses a blue theme (noted 2026-11-20)";
       const two = `${raw}${second}\r\n`;
       writeMemoryFile(bot, two);
-      typed.get("t1")!.push(said("m3", NOW - DAY + 120_000, "For the app theme use green from now on."));
+      typed.set("t1", [said("m1", NOW - DAY, `${M1}. For the app theme use green from now on.`)]);
       generator = flags([
         { note: line(OLD), quote: "It lasts till march", fix: NEW },
         { note: `L${two.split("\r\n").indexOf(second) + 1}`, quote: "use green from now on", fix: second.replace("blue", "green") },
