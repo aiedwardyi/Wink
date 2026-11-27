@@ -106,7 +106,7 @@ export function cardChoice(answer: string, options: readonly string[]): string |
   return own[place === "last" ? own.length - 1 : (PLACES.indexOf(place) + 1 || Number(place[0])) - 1];
 }
 
-const QUOTED = /^\s*>/;
+export const QUOTED = /^\s*>/;
 const QUOTE_MARKS = /^\s*(?:>\s?)+/;
 const plain = (text: string) => text.replace(/[*_`~]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 

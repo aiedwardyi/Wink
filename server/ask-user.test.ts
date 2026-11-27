@@ -178,7 +178,7 @@ const askCard = (id: string, question: string, extra: Partial<Message> = {}, car
   card: { title: "Your bot has a question", subtitle: question, options: ["Yes", "No"], askUser: true, ...card },
 });
 const said = (id: string, text: string, extra: Partial<Message> = {}): Message => ({ id, at: 2, role: "user", kind: "text", text, ...extra });
-const OPEN = '[2 of your question cards are still open: "Ship it?"; "Which region?". If their latest message answers one in their own words, close that card with ask_user close:true and its exact question text.]';
+const OPEN = '[2 of your question cards are still open: "Ship it?"; "Which region?". If their latest message answers one in their own words, close that card with ask_user close:true, its exact question text and their exact words as answer.]';
 const CLOSED = '[Your question card ("Ship it?") closed unanswered when they typed their latest message. It is gone from their screen; if you still need it, ask again.]';
 
 describe("closed ask_user card note", () => {

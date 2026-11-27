@@ -7,6 +7,7 @@
 import { z } from "zod";
 
 import { ANSWERED_IN_CHAT, answerPrefix, answersQuestion, askStates, isSentByPerson, scanQuestion, type AskState } from "../shared/open-question.ts";
+import { QUOTED } from "./pick-sources.ts";
 import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { addQuestionAsk, answerQuestionAsk, isOpenAsk, lastAskIdOf, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
@@ -86,9 +87,9 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
   const question = request.question.trim().slice(0, ASK_USER_QUESTION_MAX);
   if (!question) return { status: 400, body: { error: "question required" } };
   if (request.close) {
-    let closed = deps.cancelHeld(from.id, request.fromThreadId, question);
     let settled: Exclude<AskState["state"], "waiting"> | undefined;
     const path = deps.activePath(request.fromThreadId);
+    const closing: [Message, Message][] = [];
     for (const [message, state] of askStates(path)) {
       if (message.card!.subtitle.trim() !== question) continue;
       if (owner.group ? message.from?.botId !== from.id : Boolean(message.from)) continue;
@@ -96,9 +97,14 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
         settled = state.state;
         continue;
       }
-      const card = { ...message.card!, answered: ANSWERED_IN_CHAT };
-      const by = request.answer === undefined ? undefined : chatAnswer(path, message, request.answer);
-      if (by) card.answeredBy = by.id;
+      // a card closed with no message to file loses its answer at the next restart
+      const source = chatAnswer(path, message, request.answer ?? "");
+      if ("error" in source) return { status: 400, body: { error: source.error } };
+      closing.push([message, source.by]);
+    }
+    let closed = deps.cancelHeld(from.id, request.fromThreadId, question);
+    for (const [message, by] of closing) {
+      const card = { ...message.card!, answered: ANSWERED_IN_CHAT, answeredBy: by.id };
       closed = Boolean(deps.patchMessage(request.fromThreadId, message.id, { card })) || closed;
     }
     return { status: 200, body: closed || !settled ? { closed } : { closed, settled } };
@@ -137,17 +143,24 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
 
 const flat = (text: string) => text.replace(/\s+/g, " ").trim();
 
-/** The one message from the person since `card` holding `words` as typed: what a close:true answered; none when no message or two hold them. */
-function chatAnswer(path: readonly Message[], card: Message, words: string): Message | undefined {
+/** The one message from the person since `card` holding `words` as typed, or saying them outside a quotation when several hold them: what a close:true answered. */
+function chatAnswer(path: readonly Message[], card: Message, words: string): { by: Message } | { error: string } {
   const said = flat(words);
-  if (!said) return undefined;
+  if (!said) return { error: "answer required: the person's exact words from the message that answered it" };
   const own = answerPrefix(card);
+  const body = (row: Message) => {
+    const text = row.text ?? "";
+    return text.startsWith(own) ? text.slice(own.length) : text;
+  };
   const holding = path.slice(path.indexOf(card) + 1).filter((row) => {
     const text = row.text ?? "";
     return answersQuestion(row) && (!row.answersCard || row.answersCard === card.id) && (!text.startsWith("Re: “") || text.startsWith(own))
-      && flat(text.startsWith(own) ? text.slice(own.length) : text).includes(said);
+      && flat(body(row)).includes(said);
   });
-  return holding.length === 1 ? holding[0] : undefined;
+  const saying = holding.length > 1 ? holding.filter((row) => flat(body(row).split("\n").filter((line) => !QUOTED.test(line)).join("\n")).includes(said)) : holding;
+  if (saying.length === 1) return { by: saying[0]! };
+  if (!holding.length) return { error: "no message from the person since this question holds those words; copy them exactly as they typed them" };
+  return { error: `${holding.length} messages since this question hold those words; pass more of the one that answered it` };
 }
 
 /** Per bot and thread, the current turn's last text: where a tap on its ask_user card lands. */
@@ -209,7 +222,7 @@ function openAsksNote(messages: readonly Message[], end: number, text: string, b
   if (states.some(([, state]) => state.state === "answered" && state.by === typed)) return [];
   const open = states.filter(([card, state]) => state.state === "waiting" && (!botId || card.from?.botId === botId)).map(([card]) => `"${card.card!.subtitle.trim()}"`);
   if (open.length < 2) return [];
-  return [`[${open.length} of your question cards are still open: ${open.join("; ")}. If their latest message answers one in their own words, close that card with ask_user close:true and its exact question text.]`];
+  return [`[${open.length} of your question cards are still open: ${open.join("; ")}. If their latest message answers one in their own words, close that card with ask_user close:true, its exact question text and their exact words as answer.]`];
 }
 
 /** A room member's note, until it first speaks after the message that closed its card. */

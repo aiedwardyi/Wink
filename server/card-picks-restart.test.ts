@@ -329,20 +329,48 @@ describe("every way to answer a card files it under that card", () => {
 
   it.each([
     { name: "names no words", answer: undefined },
-    { name: "names words no message holds", answer: "Use Prod" },
-    { name: "names words two messages hold", answer: "Staging" },
-  ])("binds no message to a close that $name", async ({ answer }) => {
+    { name: "fixes the person's spelling", answer: "Use Staging for the customer demo, then wait for my sign-off" },
+  ])("keeps a card open when its close $name, and files the reply a corrected close names after restart", async ({ answer }) => {
+    const { ask, send, settle, restarted, close, card: cardOf } = setup();
+    const question = "Which environment should the customer demo use?";
+    const card = ask(question, ["Production", "Staging"]);
+    const reply = send("Use Stagign for the customer demo, then wait for my sign-off");
+    expect(close(question, answer)).toMatchObject({ status: 400, body: { error: expect.any(String) } });
+    expect(cardOf(card.id)?.answered).toBeUndefined();
+    expect(close(question, reply.text!)).toEqual({ status: 200, body: { closed: true } });
+    expect(cardOf(card.id)?.answeredBy).toBe(reply.id);
+    await settle();
+    const { picks } = await restarted();
+    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId])).toEqual([[reply.text, card.id, reply.id]]);
+  });
+
+  it("keeps a card open when two messages hold the words its close names, and files the one a fuller close names", async () => {
     const { ask, send, settle, restarted, close, card: cardOf } = setup();
     const question = "Which environment should the preview use?";
     const card = ask(question, ["Prod", "Staging"]);
     send("Staging looks fine", { actedAt: Date.now() - 2 * MINUTE });
-    send("Use Staging for the preview", { actedAt: Date.now() - MINUTE });
-    expect(close(question, answer)).toEqual({ status: 200, body: { closed: true } });
-    expect(cardOf(card.id)).toMatchObject({ answered: ANSWERED_IN_CHAT });
-    expect(cardOf(card.id)?.answeredBy).toBeUndefined();
+    const reply = send("Use Staging for the preview", { actedAt: Date.now() - MINUTE });
+    expect(close(question, "Staging")).toMatchObject({ status: 400, body: { error: expect.stringContaining("2 messages") } });
+    expect(cardOf(card.id)?.answered).toBeUndefined();
+    expect(close(question, "Use Staging for the preview")).toEqual({ status: 200, body: { closed: true } });
     await settle();
     const { picks } = await restarted();
-    expect(picks).toEqual([]);
+    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId])).toEqual([["Use Staging for the preview", card.id, reply.id]]);
+  });
+
+  it("files the reply that says a close's words, not an earlier message quoting them, after restart", async () => {
+    const { ask, send, settle, restarted, close, card: cardOf } = setup();
+    const format = ask("Which export format?", ["CSV", "JSON"]);
+    const demo = ask("Which environment should the customer demo use?", ["Production", "Staging"]);
+    const first = send("CSV for the export. The plan from last week:\n> Use Staging for the customer demo, then wait for my sign-off", { actedAt: Date.now() - 2 * MINUTE });
+    const second = send("Use Staging for the customer demo, then wait for my sign-off", { actedAt: Date.now() - MINUTE });
+    expect(close(format.card!.subtitle, "CSV for the export")).toEqual({ status: 200, body: { closed: true } });
+    expect(close(demo.card!.subtitle, second.text!)).toEqual({ status: 200, body: { closed: true } });
+    expect([cardOf(format.id)?.answeredBy, cardOf(demo.id)?.answeredBy]).toEqual([first.id, second.id]);
+    await settle();
+    const { picks } = await restarted();
+    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId]))
+      .toEqual([[expect.stringContaining("CSV for the export"), format.id, first.id], [second.text, demo.id, second.id]]);
   });
 
   it("files a close the bot makes after its reply's notes pass settled", async () => {

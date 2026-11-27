@@ -1032,7 +1032,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
       if (typeof result.notice === "string") return { text: result.notice };
       return { text: "Asked. Their answer will arrive as a new message." };
     } catch (e) {
-      return { text: `Couldn't ask: ${e instanceof Error ? e.message : String(e)}`, isError: true };
+      return { text: `Couldn't ${args.close === true ? "close" : "ask"}: ${e instanceof Error ? e.message : String(e)}`, isError: true };
     }
   }
   if (name === "show_image") {
