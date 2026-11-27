@@ -342,6 +342,20 @@ describe("the owner's newest message, by what the store holds", () => {
     expect(newestOwned([], none)).toBeUndefined();
   });
 
+  it("names it only when no other message of the owner's, in any chat, is as new by when it was stored, stamped, acted on or counted", () => {
+    const april = mark("april", 2000, 3, { actedAt: 2000, sendSeq: 2 });
+    // the withdrawal reached the chat first, the April send held for after the turn landed last
+    for (const withdraw of [{ actedAt: 2100, sendSeq: 3 }, { actedAt: 2100, sendSeq: 1 }, { actedAt: 1900, sendSeq: 3 }, { actedAt: 1900, sendSeq: 2 }, { actedAt: 2000, sendSeq: 1 }]) {
+      for (const thread of ["t1", "t2"]) expect([withdraw, thread, newestOwned([mark("withdraw", 1500, 2, { thread, ...withdraw }), april], none)]).toEqual([withdraw, thread, undefined]);
+    }
+    // a peer's April pulled after a withdrawal stamped on a clock 1.5 s behind
+    expect(newestOwned([mark("april", 2000, 2, { actedAt: 2000, sendSeq: 1 }), mark("withdraw", 500, 1, { thread: "t2", actedAt: 500, sendSeq: 1 })], none)).toBeUndefined();
+    expect(newestOwned([mark("withdraw", 1500, 2, { actedAt: 1500 }), mark("april", 2000, 3)], none)).toBeUndefined();
+    expect(newestOwned([mark("older", 1500, 2, { thread: "t2", actedAt: 1500, sendSeq: 1 }), april], none)?.id).toBe("april");
+    // a row from before action times and send counts were kept is placed by the rest
+    expect(newestOwned([mark("legacy", 1500, 2), april], none)?.id).toBe("april");
+  });
+
   it("counts only what the owner typed", () => {
     const original = mark("original", 1000, 1);
     const others = [mark("peer", 2000, 2, { from: '{"botId":"peer"}' }), mark("guest", 2000, 3, { guest: 1 }), mark("routine", 2000, 4, { origin: "routine" }), mark("comm", 2000, 5, { comm: "{}" }), mark("bot", 2000, 6, { role: "bot" })];
@@ -376,6 +390,18 @@ describe("the owner's newest message, by what the store holds", () => {
     expect(newestOwned(after, rowsUnder)).toBeUndefined();
     expect(ownedIds(after)).not.toBe(ownedIds(before));
   });
+
+  it("reads when the owner acted and the send count from the store, so a held send that landed last is not the newest", async () => {
+    const { insertMessage, rowsUnder, userMarks } = await import("./message-db.ts");
+    const read = (thread: string) => userMarks(thread).map((each) => ({ ...each, thread }));
+    for (const [thread, acted] of [["held-order", 900], ["held-control", 2100]] as const) {
+      insertMessage(thread, { id: "withdraw", at: 1000, role: "user", kind: "text", text: "Disregard April and keep the saved date.", parentId: null, actedAt: 2000, sendSeq: acted > 2000 ? 1 : 2 });
+      insertMessage(thread, { id: "april", at: 3000, role: "user", kind: "text", text: "The main account plan ends in April now.", parentId: "withdraw", actedAt: acted, sendSeq: acted > 2000 ? 2 : 1, waited: true });
+    }
+    expect(read("held-order").find((each) => each.id === "april")).toMatchObject({ actedAt: 900, sendSeq: 1 });
+    expect(newestOwned(read("held-order"), rowsUnder)).toBeUndefined();
+    expect(newestOwned(read("held-control"), rowsUnder)?.id).toBe("april");
+  });
 });
 
 describe("what the judges read and agree on", () => {
@@ -403,12 +429,23 @@ describe("what the judges read and agree on", () => {
     expect((await ask(withdrawn, [may, null])).items).toEqual([]);
     expect((await ask(withdrawn, [null, may])).items).toEqual([]);
     expect((await ask(withdrawn, [may, may])).items).toEqual([may]);
-    expect((await ask(withdrawn, [may, may.replace("The main", "the main").replace(" (noted", ". (noted")])).items).toEqual([may]);
+    expect((await ask(withdrawn, [`  ${may}\n`, may])).items).toEqual([may]);
+    expect((await ask(withdrawn, [may, may.replace("The main", "the main")])).items).toEqual([]);
     for (const [one, other] of [["1.5", "1/5"], ["9.50", "950"], ["v2.1", "v2-1"], ["src/app", "src.app"]]) {
       const owner = `The main account plan ends in May ${one} now, after the April estimate was withdrawn.`;
       const [right, close] = [one, other].map((each) => may.replace("May", `May ${each}`));
       expect([one, (await ask(owner, [right, right], "The main account plan ends in May")).items]).toEqual([one, [right]]);
       expect([one, (await ask(owner, [right, close], "The main account plan ends in May")).items, (await ask(owner, [close, right], "The main account plan ends in May")).items]).toEqual([one, [], []]);
+    }
+  });
+
+  it("lists nothing when the judges' new lines differ only in case or inner spaces", async () => {
+    const quote = "The main account plan ends in May";
+    for (const [one, other] of [["20 mW", "20 MW"], ["Team Folder", "team folder"], ["Team  Folder", "Team Folder"]]) {
+      const owner = `The main account plan ends in May with ${one} now, after the April estimate was withdrawn.`;
+      const [right, close] = [one, other].map((each) => may.replace("May", `May with ${each}`));
+      expect([one, (await ask(owner, [right, right], quote)).items]).toEqual([one, [right]]);
+      expect([one, (await ask(owner, [right, close], quote)).items, (await ask(owner, [close, right], quote)).items]).toEqual([one, [], []]);
     }
   });
 

@@ -931,6 +931,31 @@ describe("dreaming, dry", () => {
       expect(history()).toBe("");
     });
 
+    // the withdrawal reached a chat first; April, sent before it after the turn or drained after it, landed last
+    it.each([
+      ["a held send in the same chat", "t1", 500, 2, false],
+      ["holds drained in reverse across chats", "t2", 500, 2, false],
+      ["a send count no newer than the withdrawal's", "t2", 1500, 3, false],
+      ["every order agreeing", "t2", 1500, 4, true],
+    ] as const)("writes no value from %s that landed after a newer withdrawal", async (_, chat, acted, seq, listed) => {
+      await quiet();
+      const sent = Date.now();
+      const withdraw = { ...said("withdraw", sent + 1000, "Disregard April and keep the saved date."), actedAt: sent + 1000, sendSeq: 3 };
+      const april = { ...said("april", sent + 2000, "The main account plan ends in April now."), actedAt: sent + acted, sendSeq: seq, waited: true };
+      places.set(withdraw, ++place);
+      places.set(april, ++place);
+      typed.set("t1", [...typed.get("t1")!, ...(chat === "t1" ? [withdraw] : []), april]);
+      if (chat === "t2") typed.set("t2", [withdraw]);
+      generator = flags([{ note: line(OLD), quote: "plan ends in April now", fix: OLD.replace("January", "April") }]);
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)?.evidence.message).toBe(listed ? "april" : undefined);
+      if (listed) return;
+      for (const plan of plans()) for (const item of plan.fixes?.items ?? []) start().dream.fix(bot, plan.runId, item.target, false);
+      expect(memoryFileRaw(bot)).toBe(raw);
+      expect(history()).toBe("");
+    });
+
     it("refuses an OK while an owner send waits to reach the chat, and keeps the item out of date", async () => {
       await quiet();
       waiting = true;

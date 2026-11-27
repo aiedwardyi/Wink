@@ -530,12 +530,12 @@ export function typedSince(threadId: string, at: number, tool: string): Message[
 }
 
 /** A user row as the store holds it: row is its rowid, so one stored later sorts after whatever its time. */
-export type UserMark = { row: number; id: string; at: number; role: string; parentId?: string | null; sentAfterId?: string | null; replyToId?: string | null; from?: unknown; origin?: unknown; comm?: unknown; guest?: unknown };
+export type UserMark = { row: number; id: string; at: number; role: string; actedAt?: number | null; sendSeq?: number | null; parentId?: string | null; sentAfterId?: string | null; replyToId?: string | null; from?: unknown; origin?: unknown; comm?: unknown; guest?: unknown };
 
-/** Every user row in a chat, whatever its time, with what says who typed it and what it follows. */
+/** Every user row in a chat, whatever its time, with what says who typed it, when they acted, and what it follows. */
 export function userMarks(threadId: string): UserMark[] {
-  // SAFETY: This projection selects SQLite's rowid, three columns and six JSON fields as scalars.
-  return db().prepare("SELECT rowid AS row, id, at, role, json_extract(json, '$.parentId') AS parentId, json_extract(json, '$.sentAfterId') AS sentAfterId, json_extract(json, '$.replyToId') AS replyToId, json_extract(json, '$.from') AS \"from\", json_extract(json, '$.origin') AS origin, json_extract(json, '$.comm') AS comm, json_extract(json, '$.guest') AS guest FROM messages WHERE thread_id = ? AND role = 'user'").all(threadId) as UserMark[];
+  // SAFETY: This projection selects SQLite's rowid, three columns and eight JSON fields as scalars.
+  return db().prepare("SELECT rowid AS row, id, at, role, json_extract(json, '$.actedAt') AS actedAt, json_extract(json, '$.sendSeq') AS sendSeq, json_extract(json, '$.parentId') AS parentId, json_extract(json, '$.sentAfterId') AS sentAfterId, json_extract(json, '$.replyToId') AS replyToId, json_extract(json, '$.from') AS \"from\", json_extract(json, '$.origin') AS origin, json_extract(json, '$.comm') AS comm, json_extract(json, '$.guest') AS guest FROM messages WHERE thread_id = ? AND role = 'user'").all(threadId) as UserMark[];
 }
 
 /** The ids of every row under this one by parent links. */

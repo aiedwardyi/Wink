@@ -62,9 +62,6 @@ const body = (text: string) => text.replace(/^\s*[-*+]\s+/, "").replace(/\s*\(no
 const lowWords = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
 
 const squash = (text: string) => text.replace(/\s+/g, " ").trim();
-// a fix line's words in order, so two judges naming one value read alike whatever their case or marks
-// only case, spacing and an end stop may differ: punctuation inside a value can change it
-const value = (line: string) => squash(body(line)).toLowerCase().replace(/\.$/, "");
 
 /** The owner's own typing in these rows after `since`; a line that may hold a login or code is marked guarded. */
 export function ownerRows(thread: string, messages: readonly Message[], since: number): OwnerRow[] {
@@ -90,15 +87,22 @@ export function ownedIds(rows: readonly StoredRow[]): string {
   return sha256(rows.filter(ownerTyped).map((row) => `${row.thread}\0${row.id}`).sort().join("\n"));
 }
 
-/** The owner's newest message, only when every order agrees: alone at the latest time, the last of theirs the store took in, and none of theirs follows it. */
+// every order the store keeps: where it was stored, its stamp, when the owner acted, and the send count their window knew
+const ORDERS: readonly ((row: StoredRow) => number | null | undefined)[] = [(row) => row.row, (row) => row.at, (row) => row.actedAt, (row) => row.sendSeq];
+
+/** The owner's newest message in any of the bot's chats, only when every order agrees: none of theirs ties or passes it by any order, and none follows it. */
 export function newestOwned(rows: readonly StoredRow[], under: (thread: string, id: string) => readonly string[]): Newest | undefined {
   const own = rows.filter(ownerTyped);
-  const top = Math.max(...own.map((row) => row.at));
-  const [newest, ...tied] = own.filter((row) => row.at === top);
-  if (!newest || tied.length) return undefined;
+  const newest = own.reduce<StoredRow | undefined>((best, row) => (!best || row.row > best.row ? row : best), undefined);
+  if (!newest) return undefined;
   const others = own.filter((row) => row !== newest);
-  // a synced row stamped earlier still came in later, or names the message it follows
-  if (others.some((row) => row.row > newest.row || (row.thread === newest.thread && [row.parentId, row.sentAfterId, row.replyToId].includes(newest.id)))) return undefined;
+  // a held send lands after a newer one, a peer's clock runs behind: one order that does not put it last is enough to abstain
+  for (const order of ORDERS) {
+    const mine = order(newest);
+    const theirs = others.map(order).filter((each) => typeof each === "number");
+    if (theirs.length && (typeof mine !== "number" || theirs.some((each) => each >= mine))) return undefined;
+  }
+  if (others.some((row) => row.thread === newest.thread && [row.parentId, row.sentAfterId, row.replyToId].includes(newest.id))) return undefined;
   const below = new Set(under(newest.thread, newest.id));
   if (others.some((row) => row.thread === newest.thread && below.has(row.id))) return undefined;
   return { thread: newest.thread, id: newest.id, at: newest.at };
@@ -310,8 +314,8 @@ export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: Readon
       continue;
     }
     const by = fixLine(note.text, one.fix);
-    // both judges name the one new line, not just a pair the first that passes is taken from
-    if (value(by) !== value(fixLine(note.text, other.fix))) {
+    // both judges name the one new line byte for byte: case, spaces and marks inside a value can change it
+    if (one.fix.trim() !== other.fix.trim()) {
       no("judges fix different values");
       continue;
     }
