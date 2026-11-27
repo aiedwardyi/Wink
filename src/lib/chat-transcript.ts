@@ -5,7 +5,7 @@
 // is not a blank chat.
 import { shouldHideOnboardingCard } from "@/components/OptionCard";
 import { readContextCompaction } from "../../shared/context-compaction";
-import { activityRunVisible, activityVisibleInChat, isStepText, type TranscriptItem } from "./activity-runs";
+import { activityRunVisible, activityVisibleInChat, type TranscriptItem } from "./activity-runs";
 import { isShownMessage } from "./shown-message";
 import type { Message } from "@/state/store";
 
@@ -25,7 +25,7 @@ export interface ChatTranscriptRow {
 
 /** Mirrors the row ChatView's Transcript renders for one message. */
 export function messageVisible(message: Message, options: ChatTranscriptOptions): boolean {
-  if (message.id === options.emergingId || (!isShownMessage(message) && !isStepText(message))) return false;
+  if (message.id === options.emergingId || !isShownMessage(message)) return false;
   switch (message.kind) {
     case "compaction": {
       const parsed = readContextCompaction({ value: message.compaction });
@@ -57,28 +57,6 @@ export function messageVisible(message: Message, options: ChatTranscriptOptions)
     default:
       return true;
   }
-}
-
-/** Window-boundary visibility: a Steps fold counts once (on its first step) so
- * compact windows like phone peek never slice a Steps (n) run in half. */
-export function windowRowVisible(
-  messages: readonly Message[],
-  index: number,
-  options: ChatTranscriptOptions,
-): boolean {
-  const message = messages[index];
-  if (!message || !messageVisible(message, options)) return false;
-  if (!isStepText(message)) return true;
-  const day = new Date(message.at).toDateString();
-  for (let i = index - 1; i >= 0; i--) {
-    const prev = messages[i];
-    if (!isShownMessage(prev) && !isStepText(prev)) continue;
-    if (prev.role !== message.role || prev.from?.botId !== message.from?.botId || new Date(prev.at).toDateString() !== day) break;
-    if (isStepText(prev)) return false;
-    if (prev.kind === "activity" && prev.tool && !prev.comm && !prev.tool.name.startsWith("error:") && prev.tool.name !== "memory.save") continue;
-    break;
-  }
-  return true;
 }
 
 export function chatTranscriptRows(

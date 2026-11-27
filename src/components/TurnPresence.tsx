@@ -8,7 +8,6 @@ import { termElapsed } from "@/lib/terminal-skin";
 import { SwitchModelAction } from "@/lib/no-reply-switch";
 import type { Message } from "@/state/store";
 import { BotAvatar, type BotAvatarProps } from "./Avatar";
-import { FoldClip } from "./FoldClip";
 import { OrbitMark } from "./OrbitRing";
 
 /** One bad markdown node must not white-screen the app — the bubble
@@ -82,8 +81,6 @@ export function TurnPresence({
   quiet = false,
   wrap = false,
   since,
-  liveStep,
-  liveStepKey,
   onSwitch,
 }: {
   avatar: ReactNode;
@@ -99,10 +96,6 @@ export function TurnPresence({
   wrap?: boolean;
   /** When the turn began; the label counts up from it. */
   since?: number;
-  /** Newest mid-turn progress text, clipped cleanly at 3 lines via FoldClip. */
-  liveStep?: ReactNode;
-  /** Stable key per turn segment so a new step animates in while a commit stays steady. */
-  liveStepKey?: string;
   onSwitch?: () => void;
 }) {
   const terminal = isTerminalSkin(useSkin());
@@ -121,16 +114,7 @@ export function TurnPresence({
 
   if (docked || (!visible && !fading)) return null;
   return (
-    <div className="turn-presence flex w-full flex-col items-start">
-      {visible && liveStep ? (
-        <div
-          key={liveStepKey}
-          data-live-step=""
-          className="animate-step-in mb-2 w-full max-w-[min(42rem,100%)] border-l-2 border-hairline/70 py-0.5 pl-3 text-[13.5px] leading-[1.55] text-ink-secondary"
-        >
-          <FoldClip>{liveStep}</FoldClip>
-        </div>
-      ) : null}
+    <div className="turn-presence flex flex-col items-start">
       <div data-turn-mascot className={cn("flex max-w-full items-center gap-2", terminal ? "text-[14px]" : "text-[13px]", visible ? "turn-mascot-in" : "turn-mascot-out")}>
         {terminal ? <TermGlyph ring={visible} /> : ringFace(avatar, visible)}
         {visible ? <WorkingLabel label={label} instant={instant} quiet={quiet} wrap={wrap} /> : null}

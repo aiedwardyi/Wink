@@ -593,7 +593,7 @@ describe("Antigravity turns (fake CLI)", () => {
       await replay("t-stream-notice", [...lines, result(raw)]);
 
       expect(deltas().join("")).toBe("Checking.\nDone.");
-      expect(replies()).toEqual(["Checking.\n", "Done."]);
+      expect(replies()).toEqual(["Checking.\nDone."]);
       expect(recorder.events.some((event) => JSON.stringify(event).includes("SYSTEM_MES"))).toBe(false);
       const types = recorder.events.map((event) => (event.type === "item.started" || event.type === "item.completed" ? `${event.type}:${event.itemType}` : event.type));
       expect(types.indexOf("item.started:tool")).toBeGreaterThan(types.indexOf("content.delta"));

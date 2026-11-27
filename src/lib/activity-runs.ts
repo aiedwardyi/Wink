@@ -8,10 +8,8 @@
 import { chatErrorText } from "./error-text";
 import { t as translate, type MessageKey, type Translate } from "@/lib/i18n";
 import { en } from "./i18n-catalog";
-import { isShownMessage } from "./shown-message";
 import type { Message } from "@/state/store";
 import { termVerb } from "@/lib/terminal-skin";
-import { isVoiceLine } from "../../shared/live-call";
 
 export type ApprovalLabel = "auto" | "always" | "review";
 
@@ -337,102 +335,10 @@ function noticesFor(steps: Message[], byStep: Map<string, LinkedApproval[]>): Ma
   return map.size ? map : undefined;
 }
 
-/** A settled mid-turn line that folds under Steps above the answer, Codex commentary a final hid included.
- * Never swallows quick/sidekick answers, peer/comm rows or voice lines. */
-export function isStepText(message: Message): boolean {
-  return Boolean(
-    message.role === "bot" &&
-      message.kind === "text" &&
-      message.step &&
-      !message.roomEcho &&
-      !message.comm &&
-      !message.quick &&
-      !isVoiceLine(message),
-  );
-}
-
-const EMPTY_IDS: ReadonlySet<string> = new Set();
-
-export interface LiveTurnSteps {
-  /** Committed live-turn text rows hidden while the newest one sits in TurnPresence. */
-  hiddenIds: ReadonlySet<string>;
-  /** True when the live streaming buffer belongs in TurnPresence instead of a full bubble. */
-  holdStream: boolean;
-  /** Latest committed turn step text, shown when no new segment is streaming. */
-  fallbackText: string | null;
-  /** Stable index of the active step so committing a stream keeps the same key without flicker. */
-  stepIndex: number;
-}
-
-export interface WaitFloor {
-  /** Tail row when the chat first saw the wait: an unechoed send or a note after it steers the turn, never starts it. */
-  id: string;
-  /** The wait began on screen, so rows at or before `id` had settled; false when opened or switched to mid-turn. */
-  settled: boolean;
-}
-
-/** Splits a running turn's bot texts so only the newest text renders in the quiet live line.
- * Steer replies and quick/sidekick/comm/voice lines stay out and remain visible bubbles. */
-export function liveTurnSteps(
-  messages: readonly Message[],
-  streaming: Message | null,
-  waiting: boolean,
-  waitFloor?: WaitFloor,
-): LiveTurnSteps {
-  if (!waiting) return { hiddenIds: EMPTY_IDS, holdStream: false, fallbackText: null, stepIndex: -1 };
-  const floor = waitFloor ? messages.findIndex((row) => row.id === waitFloor.id) : messages.length - 1;
-  let turnStart = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const row = messages[i];
-    // a sidekick question asked mid-turn starts no turn of its own; a room echo wakes none either
-    if (row.queued || row.steered || row.quick?.state === "asked" || row.roomEcho) continue;
-    const userLine = row.role === "user" && row.kind === "text" && (!row.placeholder || i <= floor);
-    if (userLine || (row.role === "bot" && row.kind === "note" && i <= floor)) {
-      turnStart = i;
-      break;
-    }
-  }
-  // a peer turn streams its labelled reply as before; an unechoed send owns no rows yet, its turn's replies land after its echo
-  if (turnStart < 0 || messages[turnStart].from || messages[turnStart].placeholder) return { hiddenIds: EMPTY_IDS, holdStream: false, fallbackText: null, stepIndex: -1 };
-  const turnTexts: Message[] = [];
-  let afterSteer = false;
-  // a note that woke this turn never claims rows that had settled before it
-  for (let i = Math.max(turnStart, waitFloor?.settled ? floor : -1) + 1; i < messages.length; i++) {
-    const row = messages[i];
-    // send order can draw a reply that finished before this turn below its line
-    if (row.at < messages[turnStart].at) continue;
-    if (row.role === "user" && row.kind === "text" && row.steered && !row.queueId) {
-      afterSteer = true;
-      continue;
-    }
-    if (
-      row.role === "bot" &&
-      row.kind === "text" &&
-      !row.summarized &&
-      !row.roomEcho &&
-      !row.comm &&
-      !row.quick &&
-      !isVoiceLine(row)
-    ) {
-      if (afterSteer) {
-        afterSteer = false;
-        continue;
-      }
-      turnTexts.push(row);
-    }
-  }
-  const hiddenIds = turnTexts.length ? new Set(turnTexts.map((row) => row.id)) : EMPTY_IDS;
-  const holdStream = Boolean(streaming && !afterSteer);
-  const fallbackText = turnTexts.at(-1)?.text ?? null;
-  const stepIndex = holdStream ? turnTexts.length : turnTexts.length - 1;
-  return { hiddenIds, holdStream, fallbackText, stepIndex };
-}
-
 /** A named tool, running or settled. A running step joins the run so it
  * settles in place; the fold's header carries its spinner. Turn-level
  * `error:` chips and memory-save stay out — those are not a work run. */
 function foldable(message: Message): boolean {
-  if (isStepText(message)) return true;
   const tool = message.tool;
   if (message.kind !== "activity" || !tool) return false;
   if (message.comm) return false;
@@ -440,9 +346,9 @@ function foldable(message: Message): boolean {
   return true;
 }
 
-/** A folded run shows when tool calls are on, or whenever it carries Steps text. */
-export function activityRunVisible(messages: Message[], showToolCalls: boolean): boolean {
-  return showToolCalls || messages.some(isStepText);
+/** A folded run shows only when tool calls are on, failures included. */
+export function activityRunVisible(_messages: Message[], showToolCalls: boolean): boolean {
+  return showToolCalls;
 }
 
 const SEARCH_TOOLS = new Set(["Read", "Grep", "Glob"]);
@@ -455,7 +361,6 @@ export function groupActivityRuns(messages: Message[], terminal = false, shown: 
   let run: Message[] = [];
   let saves: Message[] = [];
   let held: TranscriptItem[] = [];
-  let quiet: Message[] = [];
   const flushSaves = () => {
     if (saves.length > 1) items.push({ kind: "memory", id: `memory:${saves[0].id}`, messages: saves });
     else for (const message of saves) items.push({ kind: "message", message });
@@ -473,26 +378,18 @@ export function groupActivityRuns(messages: Message[], terminal = false, shown: 
   };
   const flush = () => {
     const notices = noticesFor(run, linked.byStep);
-    const hasSteps = run.some(isStepText);
-    // one tool step on its own is cheaper to read than a fold; a text step always folds into Steps (n)
-    if (run.length > (terminal || hasSteps ? 0 : 1)) {
+    // one step on its own is cheaper to read than a fold that hides it
+    if (run.length > (terminal ? 0 : 1)) {
       const id = `run:${run[0].id}`;
-      emit(notices ? { kind: "run", id, messages: run, notices } : { kind: "run", id, messages: run }, hasSteps || shown(run[0]));
+      emit(notices ? { kind: "run", id, messages: run, notices } : { kind: "run", id, messages: run }, shown(run[0]));
     } else for (const message of run) emit(messageItem(message, linked.byStep.get(message.id)), shown(message));
     run = [];
-    for (const message of quiet) emit(messageItem(message, linked.byStep.get(message.id)), shown(message));
-    quiet = [];
   };
   for (const message of messages) {
     if (linked.consumed.has(message.id)) continue;
-    if (isStepText(message) || (foldable(message) && (!terminal || SEARCH_TOOLS.has(termVerb(message.tool?.verb ?? message.tool?.name ?? ""))))) {
+    if (foldable(message) && (!terminal || SEARCH_TOOLS.has(termVerb(message.tool?.verb ?? message.tool?.name ?? "")))) {
       if (run[0] && startsNewStretch(run[0], message)) flush();
       run.push(message);
-      continue;
-    }
-    // a room echo never renders, so it follows the fold instead of splitting Steps (n)
-    if (run.length && !isShownMessage(message)) {
-      quiet.push(message);
       continue;
     }
     flush();
@@ -510,12 +407,6 @@ export function groupActivityRuns(messages: Message[], terminal = false, shown: 
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 
-/** Label for a folded Steps run ("Steps (3)"). */
-export function describeSteps(messages: Message[], t: Translate = translate): string {
-  const count = messages.filter(isStepText).length;
-  return t("chat.stepsFold", { count });
-}
-
 /** The one line a folded run has to earn its place with: how much work it
  * was and how many files it touched. Status is the icon beside it. */
 export function describeRun(messages: Message[], t: Translate = translate): string {
@@ -530,15 +421,13 @@ export function describeRun(messages: Message[], t: Translate = translate): stri
   return `${t(steps.length === 1 ? "chat.runStep" : "chat.runSteps", { count: steps.length })}${files}`;
 }
 
-/** Default skins drop approval rows from an opened run. Step text always shows; tool chips stay gated by showActivities. */
+/** Default skins drop approval rows from an opened run. A find hit still shows. */
 export function shownRunStep(
   step: Message,
-  options: { terminal: boolean; showActivities: boolean; findId: string | null; notices?: LinkedApproval[]; hasSteps?: boolean },
+  options: { terminal: boolean; showActivities: boolean; findId: string | null; notices?: LinkedApproval[] },
 ): boolean {
-  if (isStepText(step)) return true;
   const found = step.id === options.findId || (options.notices?.some((notice) => notice.message.id === options.findId) ?? false);
   if (!options.terminal && isApprovalNotice(step) && step.id !== options.findId) return false;
-  if (options.hasSteps && !options.showActivities) return found;
   return options.showActivities || step.tool?.ok === false || found;
 }
 

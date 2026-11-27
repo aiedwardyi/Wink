@@ -74,11 +74,6 @@ describe("unreadReplyCount", () => {
     expect(unreadReplyCount(true, 20, [...read, reply(30), { role: "bot", kind: "activity", at: 31 }, { ...reply(32), summarized: true }, reply(33)])).toBe(2);
   });
 
-  it("counts an answer once, not its folded steps", () => {
-    const steps = [reply(11), reply(12), reply(13)].map((step) => ({ ...step, step: true as const }));
-    expect(unreadReplyCount(true, 5, [mine(6), ...steps, reply(14)])).toBe(1);
-  });
-
   it("counts 1 after Mark as Unread", () => {
     const messages = [mine(5), reply(10), reply(11), reply(12), { role: "bot", kind: "activity", at: 13 }];
     expect(markUnreadReadAt(messages)).toBe(11);

@@ -356,30 +356,3 @@ describe("ActivityRun in Korean", () => {
     expect(html).not.toMatch(/Searched|Read \d|read \d/);
   });
 });
-
-describe("ActivityRun Steps fold", () => {
-  const stepMsg = (id: string, text: string): Message => ({ id, role: "bot", kind: "text", text, at: 1, step: true });
-
-  it("renders Steps (n) closed by default and opens step texts with clickable links", () => {
-    const steps = [
-      stepMsg("s1", "Pulling worker logs."),
-      stepMsg("s2", "See [Stripe docs](https://docs.stripe.com/api/pagination) for details."),
-    ];
-    const closed = render("precision", createElement(ActivityRun, { messages: steps, children: null }));
-    expect(closed).toContain("Steps (2)");
-    expect(closed).toContain('aria-expanded="false"');
-
-    const opened = render("precision", createElement(
-      ActivityRun,
-      {
-        messages: steps,
-        forceOpen: true,
-        children: steps.map((message) => createElement(ActivityStep, { key: message.id, message })),
-      },
-    ));
-    expect(opened).toContain('aria-expanded="true"');
-    expect(opened).toContain("Pulling worker logs.");
-    expect(opened).toContain('href="https://docs.stripe.com/api/pagination"');
-    expect(opened).toContain("Stripe docs");
-  });
-});
