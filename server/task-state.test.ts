@@ -627,6 +627,13 @@ describe("task state clipping", () => {
     calls.forEach((fn) => expect(fn).not.toHaveBeenCalled());
   });
 
+  it("drops an artifact whose real path lands on a network share before the second lookup", () => {
+    vi.mocked(realpathSync).mockReturnValueOnce("\\\\server\\share\\brief.md");
+    vi.mocked(realpathSync.native).mockClear();
+    expect(groundTaskArtifacts([{ ref: "brief.md", label: "L" }], cwd, { kind: "any" }).dropped).toEqual(["brief.md"]);
+    expect(realpathSync.native).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform === "win32")("scopes a folder given by its Windows short name", (context) => {
     const short = execFileSync("powershell", ["-NoProfile", "-Command", `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${cwd}').ShortPath`], { encoding: "utf8", windowsHide: true }).trim();
     if (short.toLowerCase() === cwd.toLowerCase()) return context.skip();
