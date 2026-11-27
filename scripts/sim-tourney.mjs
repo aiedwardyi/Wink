@@ -98,23 +98,22 @@ export function tourney({ spec, on = "held-out", sets, ledger, out = join(sets, 
       trees.push(path);
       return path;
     };
-    const baseScore = score(tree("base", base), on, sets, join(dir, "base.json"), PARITY);
-    if (baseScore.parity.mismatches || baseScore.parity.checked < Math.min(PARITY, baseScore.totals.cases)) refuse(`bench parity ${baseScore.parity.checked - baseScore.parity.mismatches}/${baseScore.parity.checked} with the base lookup: the scorer no longer reads the real pick`);
-    const scored = arms.map((arm) => {
-      let { sha } = arm;
-      if (arm.patch) {
-        const path = tree(arm.name, base);
-        git(path, "apply", "--whitespace=nowarn", arm.patch);
-        git(path, "add", "-A", "--", ".", ":!node_modules");
-        git(path, "-c", "user.name=sim-tourney", "-c", "user.email=sim-tourney@localhost", "commit", "--quiet", "--no-verify", "-m", `arm ${arm.name}`);
-        sha = git(path, "rev-parse", "HEAD");
-        git(repo, "update-ref", `refs/sim-tourney/${run}/${arm.name}`, sha);
-      }
+    const baseRoot = tree("base", base);
+    const ready = arms.map((arm) => {
+      if (!arm.patch) return { ...arm, root: tree(arm.name, arm.sha) };
+      const root = tree(arm.name, base);
+      git(root, "apply", "--whitespace=nowarn", arm.patch);
+      git(root, "add", "-A");
+      git(root, "-c", "user.name=sim-tourney", "-c", "user.email=sim-tourney@localhost", "commit", "--quiet", "--no-verify", "-m", `arm ${arm.name}`);
+      const sha = git(root, "rev-parse", "HEAD");
+      git(repo, "update-ref", `refs/sim-tourney/${run}/${arm.name}`, sha);
       const diff = armDiff(repo, base, sha);
       lockCheck(arm.name, diff);
-      const root = arm.patch ? join(dir, "wt", arm.name) : tree(arm.name, sha);
-      return { ...arm, sha, diff, score: score(root, on, sets, join(dir, `${arm.name}.json`), 0) };
+      return { ...arm, sha, diff, root };
     });
+    const baseScore = score(baseRoot, on, sets, join(dir, "base.json"), PARITY);
+    if (baseScore.parity.mismatches || baseScore.parity.checked < Math.min(PARITY, baseScore.totals.cases)) refuse(`bench parity ${baseScore.parity.checked - baseScore.parity.mismatches}/${baseScore.parity.checked} with the base lookup: the scorer no longer reads the real pick`);
+    const scored = ready.map((arm) => ({ ...arm, score: score(arm.root, on, sets, join(dir, `${arm.name}.json`), 0) }));
     const round = judge({ base: baseScore.rows, arms: scored.map((arm) => ({ name: arm.name, sham: arm.sham, rows: arm.score.rows })) });
     const result = {
       run,
