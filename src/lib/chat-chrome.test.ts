@@ -195,6 +195,7 @@ describe("call mark on a sent message", () => {
   it("follows the bubble text color instead of the dim secondary ink", () => {
     const [, user, bot] = mark.match(/user \? "([^"]*)" : "([^"]*)"/)!.map((c) => `className="${c}"`);
     expect(classTokens(user).has("text-current")).toBe(true);
+    expect(classTokens(user).has("opacity-70")).toBe(true);
     expect([...classTokens(user)].some((c) => c.startsWith("text-ink-secondary"))).toBe(false);
     expect(classTokens(bot).has("text-ink-secondary/70")).toBe(true);
   });
