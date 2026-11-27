@@ -103,7 +103,7 @@ function setup({ messages, nativePrompt, driverKind = "claudeAgent", model = MOD
       cfg: {}, accounts: { snapshot: [] }, process: { env: {} }, instanceConfigs: () => ({ claude: { environment: env } }),
       text: "next request", userMessage, skipTranscript, opts: {}, holdNotes: undefined, routineTurn: false, recovering: false, priorTaskPacket: undefined, commsDepth: 0,
       latencySendId: "send", memoryLookup: { ready: () => undefined }, taskPacketForWrite: () => undefined, closeMergedAsks: () => ({ ids: [], shown: (record: unknown) => record, notes: () => [] }), persistTaskPacket: () => undefined, stampTaskResumePacket: () => undefined,
-      unsettledRequest: () => "", lastUserInstruction: () => undefined, decodeInjectId: () => null, logSummaryCall: () => {}, startedTurn: () => ({}),
+      unsettledRequest: () => "", lastUserInstruction: () => undefined, taskRows: (rows: Message[]) => rows, decodeInjectId: () => null, logSummaryCall: () => {}, startedTurn: () => ({}),
     });
     return { ...result, skipTranscript };
   };

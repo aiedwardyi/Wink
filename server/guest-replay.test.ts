@@ -19,7 +19,7 @@ import { closeMessageDb } from "./message-db.ts";
 import { roomEchoesSinceLastUserTurn } from "./one-mind.ts";
 import { GuestSessions } from "./rooms/guest-sessions.ts";
 import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
-import { composeUserTurnPrompt, inertMentions, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
+import { composeUserTurnPrompt, inertMentions, turnReplaysTranscript, unstampedAsGuest, userTurnReactionKeys } from "./replies.ts";
 import { _resetSteerQueue, foldQueuedSends, queueMark } from "./steer-queue.ts";
 import { Store } from "./store.ts";
 import { asksNudge, isStatusTurn } from "./task-asks.ts";
@@ -60,13 +60,17 @@ const rowJavascript = ts.transpileModule(`function row(scope) { with (scope) {
   return { opts, userMessage };
 } }`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None } }).outputText;
 const joinedRow = new Function(`${rowJavascript}\nreturn row;`)();
-// The task record and the unfinished request
+// The task record, the unfinished request and the rows the model context reads
 const recorded = section("  const priorTaskPacket = taskPacketForWrite(threadId);", "\n  // the model context below reads the whole chat");
+const rows = section("  const taskRows =", "\n  // a teammate's turn leaves");
+const before = section("  const messagesBeforeSummary =", "\n  holdNotes?.(messagesBeforeSummary);");
 const record = section("  let storedTaskRecord = taskPacketForWrite(threadId);", "\n  const catalogWindow =");
 const recordJavascript = ts.transpileModule(`function rec(scope) { with (scope) {
   ${recorded}
+  ${rows}
+  ${before}
   ${record}
-  return { taskRecord, durableTaskRecordText, unsettled, recovering, recoveryLatestUserText };
+  return { taskRows, messagesBeforeSummary, taskRecord, durableTaskRecordText, unsettled, recovering, recoveryLatestUserText };
 } }`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None } }).outputText;
 const taskRecordOf = new Function(`${recordJavascript}\nreturn rec;`)();
 
@@ -136,10 +140,10 @@ const rig = async () => {
       store, opts, text: prompt, userMessage, task, bot, threadId, skipTranscript, commsDepth: 0, modelContextWindow: 200_000,
       taskPacketForWrite: (id: string) => packets.get(id) ?? null, persistTaskPacket: (packet: Parameters<typeof recordTaskCompletion>[0]) => (packets.set(threadId, packet), packet),
       isRecoveringPacket, recordTaskInstruction, seedTaskResumePacket, lastUserInstruction, unsettledRequest, isStatusTurn, taskRecordBlock: turns.taskRecordBlock,
-      closeMergedAsks: () => ({ shown: (packet: unknown) => packet }), messagesBeforeSummary: store.activePath(threadId),
+      closeMergedAsks: () => ({ shown: (packet: unknown) => packet }), roomTaskThreads: () => new Set([threadId]), unstampedAsGuest,
     });
-    const activeMessages = store.activePath(threadId);
-    const prepared = await context.prepareModelContext({ messages: activeMessages, contextWindow: 200_000, taskRecordText: rec.durableTaskRecordText, excludeIds: skipTranscript, userName: "Peter", referenceMessages: store.messagesFor(threadId) });
+    const activeMessages = rec.messagesBeforeSummary;
+    const prepared = await context.prepareModelContext({ messages: activeMessages, contextWindow: 200_000, taskRecordText: rec.durableTaskRecordText, excludeIds: skipTranscript, userName: "Peter", referenceMessages: rec.taskRows(store.messagesFor(threadId)) });
     if (prepared.status !== "ready") throw new Error(prepared.status);
     rmSync(out, { force: true });
     const recorder = recordEvents(instance.adapter);
@@ -175,7 +179,13 @@ const rig = async () => {
     packets.set(threadId, recordTaskCompletion(packets.get(threadId)!, { ok: ended !== "failed", ...(ended === "interrupted" && { interrupted: true }), reply: reply?.text ?? "", messageId: reply?.id, now: Date.now(), turnsAtWrite: 0 }));
     return { read: existsSync(out) ? readFileSync(out, "utf8") : null, sent, unsettled: rec.unsettled as string };
   };
-  return { send, restart: () => { ref.sessions = new GuestSessions(); }, ask: `@Pete-Coder what does @notes.txt say? and @${elsewhere}` };
+  // a row as Wink wrote it before the guest stamp: the typed words, no author, no stamp
+  const old = (typed: string) => {
+    store.appendMessage(threadId, { role: "user", kind: "text", text: typed });
+    answer();
+    settle(`old-session-${store.messagesFor(threadId).length}`);
+  };
+  return { send, old, restart: () => { ref.sessions = new GuestSessions(); }, ask: `@Pete-Coder what does @notes.txt say? and @${elsewhere}` };
 };
 
 // GATE-REVIEW-2239G: a guest turn that starts over replays the task, whose rows keep a guest's typed words raw
@@ -222,6 +232,29 @@ it("an owner's own unfinished request still carries as typed", async () => {
   expect(owner.unsettled).toBe(r.ask);
   expect(owner.read).toContain("outside canary");
 }, 30_000);
+
+// GATE-REVIEW-2245A must-fix 2: a joined room's rows from before the stamp may be a guest's
+it("an owner turn that starts over in a room task inlines no file an unstamped row names, and still the owner's stamped one", async () => {
+  const r = await rig();
+  r.old(r.ask);
+  setEnv("FAKE_ACP_LOAD_FAILS", "1");
+  const after = await r.send("owner", "@Pete-Coder thanks");
+  expect(after.read).not.toContain("outside canary");
+  expect(after.read?.split(CANARY).length).toBe(2);
+  expect(after.sent.resumeFallback?.text).toContain(inertMentions(r.ask));
+  const own = await rig();
+  setEnv("FAKE_ACP_LOAD_FAILS", "");
+  await own.send("owner", own.ask);
+  setEnv("FAKE_ACP_LOAD_FAILS", "1");
+  expect((await own.send("owner", "@Pete-Coder thanks")).read).toContain("outside canary");
+}, 30_000);
+
+it("reads a room task's rows for the model through taskRows", () => {
+  const turn = section("async function startClaimedTurn(", "\nasync function ");
+  expect(turn.match(/referenceMessages: (?!taskRows\()/g), "wrap the rows in taskRows so a room task's unstamped row reads as a guest's").toBeNull();
+  expect(turn).toContain("const messagesBeforeSummary = taskRows(store.activePath(threadId));");
+  expect(turn).toContain("messages: taskRows(messages),");
+});
 
 it("hands every engine send and steer in index.ts through guestTurnInput", () => {
   expect(source.match(/\.sendTurn\((?!input\)|guestTurnInput\()/g), "build the input with guestTurnInput (drivers/turn-access.ts) so a guest turn's every text is inert").toBeNull();

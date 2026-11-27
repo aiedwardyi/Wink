@@ -43,6 +43,9 @@ export const inert = (parts: TemplateStringsArray, ...values: readonly (string |
 /** A line's words as a prompt may carry them: a guest's @path names no file, and in a group nothing the host did not type does. */
 export const lineWords = (line: Line, text: string, group = false) => ((group ? !typedByHost(line) : line.guest || typedByGuest(line.author)) ? inertMentions(text) : text);
 
+/** A room task's user row with no stamp predates it and may be anyone's, so it reads as a guest's. */
+export const unstampedAsGuest = (rows: Message[]) => rows.map((row) => (row.role === "user" && row.guest === undefined ? { ...row, guest: true } : row));
+
 export function replyExcerpt(text: string, limit = MAX_REPLY_EXCERPT): string {
   const clean = text
     .replace(/<attached-image\s+path="[^"]*"\s*\/>/g, "[image]")
