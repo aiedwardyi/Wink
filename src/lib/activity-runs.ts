@@ -383,8 +383,8 @@ export function liveTurnSteps(
   let turnStart = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     const row = messages[i];
-    // a sidekick question asked mid-turn starts no turn of its own
-    if (row.queued || row.steered || row.quick?.state === "asked") continue;
+    // a sidekick question asked mid-turn starts no turn of its own; a room echo wakes none either
+    if (row.queued || row.steered || row.quick?.state === "asked" || row.roomEcho) continue;
     const userLine = row.role === "user" && row.kind === "text" && (!row.placeholder || i <= floor);
     if (userLine || (row.role === "bot" && row.kind === "note" && i <= floor)) {
       turnStart = i;

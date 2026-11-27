@@ -88,6 +88,22 @@ describe("ChatView back on a chat mid-turn", () => {
     }
   });
 
+  it.each([
+    ["switching back", true],
+    ["reopening the chat", false],
+  ])("keeps the running turn's lines in the live line after a room echo lands, %s", async (_, switched) => {
+    live.current = { streaming: {}, reasoning: {}, signal: { "thread-a": "started" }, gen: {}, turn: {} };
+    const echoed = working([...turn, row("e1", 4, { role: "bot", kind: "note", roomEcho: { groupId: "g" } })]);
+    const chat = await mount(switched ? idle : echoed);
+    try {
+      if (switched) await chat.show(echoed);
+      expect(chat.bubbles()).toEqual([]);
+      expect(chat.liveLine()).toContain("line t2");
+    } finally {
+      await chat.unmount();
+    }
+  });
+
   it("a wait that begins on screen after a mid-turn note keeps the answer just given", async () => {
     const answered = [
       row("u1", 1, { role: "user", kind: "text" }),
