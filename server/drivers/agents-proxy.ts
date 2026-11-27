@@ -475,7 +475,7 @@ const TOOLS = [
       properties: {
         question: { type: "string", description: "One short question, 1-2 lines on a phone. Background goes in your message, not here. When closing, repeat the exact question." },
         close: { type: "boolean", description: "Close your matching open question as answered in chat. Use when the user answered it in their own words; no new card or alert." },
-        answer: { type: "string", description: "With close: the user's words that answered it, copied exactly from their message." },
+        answer: { type: "string", description: "Exact words" },
         fact: { type: "boolean", description: "Missing information, not a decision, preference or sign-off: the Forum may answer first." },
         choices: {
           type: "array",
