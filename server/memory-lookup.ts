@@ -66,7 +66,7 @@ const localDay = (at: number) => new Date(at).toLocaleDateString("sv-SE");
 const yieldLoop = () => new Promise((resolve) => setImmediate(resolve));
 
 export type NoteFile = { source: string; tier: 0 | 1; text: string; mtime: number; firstLine?: number };
-type Piece = { key: string; ref: string; source: string; tier: 0 | 1; date: string; topic: string; title: string[]; text: string; tokens: string[] };
+type Piece = { key: string; ref: string; source: string; tier: 0 | 1; date: string; topic: string; label: string[]; title: string[]; text: string; tokens: string[] };
 export type RecallHit = Piece & { score: number };
 type Terms = { list: string[]; groups: string[][] };
 
@@ -139,6 +139,7 @@ function piecesOfFile(file: NoteFile): Piece[][] {
       tier: file.tier,
       date: rowDate(text, file.mtime),
       topic: label.length ? label.join(" ") : key,
+      label,
       title: table ? cell : [...cell, ...heading],
     };
     rows.push(piecesOf(text).map((part) => ({ ...shared, text: part, tokens: words(part) })));
@@ -339,7 +340,7 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
       const whole = inNotes.reduce((sum, options) => sum + weight(options), 0);
       const weights = inNotes.map(weight);
       const found = matched.get(terms) ?? groupBits(inNotes);
-      return hits.filter((hit) => {
+      const passed = hits.filter((hit) => {
         if (!hit.title.some((token) => found.has(token))) return false;
         const at = inNotes.map((): number[] => []);
         for (const [position, token] of hit.tokens.entries()) {
@@ -351,6 +352,24 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
         const rare = at.some((list, group) => list.length && weights[group]! >= rareBar);
         return positions.length >= 2 && rare && cover / whole >= MIN_COVER && hasNearPair(positions);
       });
+      // a row whose label names what was asked comes first: share of the ask the label holds, times share of the label the ask
+      // holds, both by rarity, so an unasked rare label word (another project, a sub-item) costs more than a common one
+      const named = (hit: RecallHit) => {
+        const label = [...new Set(hit.label.filter((token) => !skipped(token)))];
+        if (!label.length) return 0;
+        let mask = 0;
+        let held = 0;
+        for (const token of label) {
+          const groups = found.get(token);
+          if (!groups) continue;
+          mask |= groups;
+          held += idf(token);
+        }
+        const asked = weights.reduce((sum, value, group) => sum + (mask & (1 << group) ? value : 0), 0);
+        return (asked / whole) * (held / label.reduce((sum, token) => sum + idf(token), 0));
+      };
+      const ranked = passed.map((hit, at) => ({ hit, at, named: named(hit) }));
+      return ranked.sort((a, b) => (Math.abs(b.named - a.named) > 1e-9 ? b.named - a.named : a.at - b.at)).map(({ hit }) => hit);
     },
     close: () => db.close(),
   };

@@ -221,6 +221,16 @@ describe("corpus", () => {
     expect(ask(lookup, botId, "cobalt walrus")[0]).toContain("north office");
   });
 
+  it("ranks the row whose label names the ask above short rows that only mention it", async () => {
+    const { botId, lookup } = await lookupFor(`${FILLER}\n- Mentioned the quartz pump filter in passing (2026-11-02)\n- Asked about the quartz pump filter again (2026-11-03)\n- Quartz pump filter: the steel mesh one, part 88-B, ordered from the north depot with the spare gaskets (2026-11-01)\n`);
+    expect(ask(lookup, botId, "which quartz pump filter is it")[0]!.split("\n")[1]).toContain("steel mesh");
+  });
+
+  it("ranks a label with no unasked rare word first", async () => {
+    const { botId, lookup } = await lookupFor(`${FILLER}\n- Quartz pump filter gasket: rubber, size 12 (2026-11-02)\n- Quartz pump filter: the steel mesh one, part 88-B, ordered from the north depot with the spare gaskets (2026-11-01)\n`);
+    expect(ask(lookup, botId, "which quartz pump filter is it")[0]!.split("\n")[1]).toContain("steel mesh");
+  });
+
   it("reads a project-notes file named MEMORY.md whole", async () => {
     const dir = join(DATA_DIR, randomUUID());
     mkdirSync(dir, { recursive: true });
