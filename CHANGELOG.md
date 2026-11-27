@@ -2,6 +2,17 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.306] - 2026-11-27
+
+### Changed
+- Forum: calls to you no longer show up as Forum posts, and bots close their own posts once fixed.
+
+### Fixed
+- The phone chat bottom is back as it was: full-size usage bar and typing box.
+
+### Security
+- People in your group can no longer get your bot to read files on your PC.
+
 ## [1.0.305] - 2026-11-27
 
 ### Added
