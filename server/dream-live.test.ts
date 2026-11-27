@@ -1019,6 +1019,26 @@ describe("dreaming, dry", () => {
       expect(plans()[0]!.fixes!.items[0]!.done!.putBack).toMatchObject({ message: "m1" });
     });
 
+    it.each(["t1", "t2"])("puts the old bytes back once a send the owner made before the OK lands in %s held until after it", async (chat) => {
+      await quiet();
+      expect(approve(false).ok).toBe(true);
+      const okAt = Date.now();
+      vi.advanceTimersByTime(60_000);
+      typed.set(chat, [...typed.get(chat) ?? [], { ...said("withdraw", Date.now(), "Disregard March and keep the saved date."), actedAt: okAt - 5_000 }]);
+      expect(start().dream.settle(bot)).toBe(true);
+      expect(Buffer.compare(Buffer.from(memoryFileRaw(bot)), Buffer.from(raw))).toBe(0);
+    });
+
+    it("keeps the fix for a held send the owner made after the OK", async () => {
+      await quiet();
+      expect(approve(false).ok).toBe(true);
+      const okAt = Date.now();
+      vi.advanceTimersByTime(60_000);
+      typed.set("t2", [{ ...said("withdraw", Date.now(), "Disregard March and keep the saved date."), actedAt: okAt + 1_000 }]);
+      expect(start().dream.settle(bot)).toBe(false);
+      expect(memoryFileRaw(bot)).toBe(raw.replace(OLD, NEW));
+    });
+
     it.each(["t1", "t2"])("keeps the fix for an owner line typed in %s after the OK", async (chat) => {
       await quiet();
       expect(approve(false).ok).toBe(true);

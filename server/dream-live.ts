@@ -312,8 +312,11 @@ export function createDreamLive(deps: DreamLiveDeps) {
     }
   }
 
-  // the owner rows an OK stood on: from a day before the evidence, so a peer clock running behind still counts, up to the OK
-  const inView = (row: StoredRow, item: FixItem, at: number) => ownerTyped(row) && row.at >= item.evidence.at - DAY && row.at <= at;
+  // the owner rows an OK stood on: from a day before the evidence, so a peer clock running behind still counts, up to the OK; a held send counts from when the owner acted
+  const inView = (row: StoredRow, item: FixItem, at: number) => {
+    const acted = row.actedAt ?? row.at;
+    return ownerTyped(row) && Math.max(row.at, acted) >= item.evidence.at - DAY && Math.min(row.at, acted) <= at;
+  };
   const viewKey = (row: StoredRow) => `${row.thread}\0${row.id}`;
 
   // the OK's own check over rows typed up to it: its evidence gone or changed, or an owner row it did not see
