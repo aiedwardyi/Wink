@@ -2,6 +2,20 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.307] - 2026-11-27
+
+### Changed
+- Replies look as they did before: no live draft line and no Steps row; each in-between message is its own bubble again.
+
+### Fixed
+- The bot answers right after you end a call again, with no wait.
+- Sign Out now also removes the account from Usage and Connections.
+- Closing a card you already answered no longer shows an error.
+- The call icon on your own messages is easier to see.
+
+### Security
+- A group guest can no longer get your bot to read files on your PC through an earlier message.
+
 ## [1.0.306] - 2026-11-27
 
 ### Changed
