@@ -70,8 +70,8 @@ export async function saveLocalFile(rawPath, { dialog, downloads, window, ...opt
 }
 
 // File name the Save dialog offers for an image menu target. A data: URL
-// takes its extension from the media type; a name-less path falls back to
-// image.png; the query never becomes the name.
+// takes its extension from the media type; a linked file takes its path's
+// name; a name-less path falls back to image.png.
 export function imageSaveName(srcURL) {
   try {
     if (typeof srcURL !== "string") return "image.png";
@@ -82,7 +82,10 @@ export function imageSaveName(srcURL) {
       if (media === "image/webp") return "image.webp";
       return "image.png";
     }
-    const name = path.basename(new URL(srcURL).pathname);
+    const url = new URL(srcURL);
+    // a linked file's route ends in "linked-file"; its real name is in the query
+    const isLinked = /^\/api\/threads\/[\w-]+\/linked-file$/.test(url.pathname);
+    const name = isLinked ? (url.searchParams.get("path") ?? "").split(/[\\/]/).pop() : path.basename(url.pathname);
     return name || "image.png";
   } catch {
     return "image.png";
