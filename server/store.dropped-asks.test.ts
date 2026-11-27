@@ -77,7 +77,7 @@ describe("Store drop log", () => {
     const store = new Store(selection);
     const bot = store.createBot();
     store.writeTaskPacket(taskPacket(bot.id, bot.threadId, { asks: Array.from({ length: 145 }, (_, index) => ask(index + 1)), lastAskId: 145 }));
-    const routes = createInternalRoutes({ store, readOnlyTurn: () => false, taskPacketForWrite: store.taskPacket.bind(store), persistTaskPacket: store.writeTaskPacket.bind(store) } as unknown as Parameters<typeof createInternalRoutes>[0]);
+    const routes = createInternalRoutes({ store, readOnlyTurn: () => false, ownerTurn: () => false, taskPacketForWrite: store.taskPacket.bind(store), persistTaskPacket: store.writeTaskPacket.bind(store) } as unknown as Parameters<typeof createInternalRoutes>[0]);
     const update = async (asks: object[]) => {
       const req = new EventEmitter() as IncomingMessage;
       let status = 0;

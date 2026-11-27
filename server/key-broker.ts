@@ -57,7 +57,7 @@ const fail = (status: number, message: string) => Object.assign(new Error(messag
 function multipartBody(form: NonNullable<CallApiRequest["form"]>, roots: readonly string[]): FormData {
   let total = 0;
   const files = (form.files ?? []).map((file) => {
-    const resolved = resolveLocalFile(file.path, roots);
+    const resolved = resolveLocalFile(file.path, { kind: "roots", roots });
     if (resolved.size > MAX_UPLOAD_FILE_BYTES) throw fail(413, "file exceeds 25 MB");
     total += resolved.size;
     if (total > MAX_UPLOAD_BYTES) throw fail(413, "upload exceeds 50 MB");

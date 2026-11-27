@@ -45,7 +45,7 @@ type AskBotAndWait = (...args: never[]) => Promise<{ replied: boolean; text: str
 const bus = () => ({ store, broadcast: () => {} });
 
 async function call(method: "askBot" | "delegateBot", askBotAndWait: AskBotAndWait = completingAsk(), extra: Record<string, unknown> = {}, callers?: CommsCallers) {
-  const route = createInternalRoutes({ readOnlyTurn: () => false, store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
+  const route = createInternalRoutes({ readOnlyTurn: () => false, ownerTurn: () => false, store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
     MAX_WORKSPACE_BOTS: 100, checkedMemberIds: (memberIds: string[]) => ({ ok: true, memberIds }),
     connectorThread: (botId: string, threadId: string) => store.conversationForBot(botId, threadId),
     delegationWatch: new Map(), askBotAndWait, resolveCommsCaller: callers && ((header: string | string[] | undefined) => callers.resolve(header)),

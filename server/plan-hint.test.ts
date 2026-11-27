@@ -43,7 +43,7 @@ beforeEach(() => {
     store,
     taskPacketForWrite: (threadId: string) => structuredClone(packets.get(threadId)!),
     persistTaskPacket: (next: TaskResumePacket) => (packets.set(next.threadId, next), next),
-    readOnlyTurn: () => readOnly,
+    readOnlyTurn: () => readOnly, ownerTurn: () => false,
     planHint: { room: sharedTurn(store, new Set()), workerReady: () => ready, livePanes: async () => panes },
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
 });
@@ -125,7 +125,7 @@ describe("plan-save helper hint wiring", () => {
   const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 
   it("marks only typed user turns with the terminal mounted", () => {
-    expect(source).toContain("rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text), helperHint: turnStartedByUser(opts) && Boolean(integrations.terminal) });");
+    expect(source).toContain("rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text), helperHint: turnStartedByUser(opts) && Boolean(integrations.terminal), typed: turnStartedByUser(opts) });");
     const start = source.indexOf("function turnStartedByUser");
     const end = source.indexOf("const SHOW_IMAGE_GUIDANCE", start);
     if (start < 0 || end < start) throw new Error("index.ts no longer has turnStartedByUser before SHOW_IMAGE_GUIDANCE; update this slice");

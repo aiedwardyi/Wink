@@ -7,6 +7,8 @@ export function botRoute(path: string, botId: string): boolean {
   return BOT_ROUTE.test(path) || path.startsWith(`/api/bots/${botId}/map/`) && /^(?:live|file|repo|flow)$/.test(path.slice(`/api/bots/${botId}/map/`.length));
 }
 
+export type CommsCaller = { botId: string; threadId: string; ownerFiles?: true };
+
 export class CommsCallers {
   /** The internal-route gate: a bot's own token opens only botRoute, any other caller needs the boot token. */
   allows(header: string | string[] | undefined, path: string, bootToken: (header: string | string[] | undefined) => boolean): boolean {
@@ -15,20 +17,21 @@ export class CommsCallers {
   }
 
   private readonly tokens = new Map<string, string>();
-  private readonly callers = new Map<string, { botId: string; threadId: string }>();
+  private readonly callers = new Map<string, CommsCaller>();
 
-  token(botId: string, threadId: string): string {
-    const key = `${botId}\0${threadId}`;
+  /** The owner's typed turns get a token of their own: a token any other turn in the chat got never opens files outside the bot's folders. */
+  token(botId: string, threadId: string, ownerFiles = false): string {
+    const key = `${botId}\0${threadId}${ownerFiles ? "\0owner" : ""}`;
     let token = this.tokens.get(key);
     if (!token) {
       token = randomBytes(24).toString("hex");
       this.tokens.set(key, token);
-      this.callers.set(token, { botId, threadId });
+      this.callers.set(token, { botId, threadId, ...(ownerFiles && { ownerFiles: true as const }) });
     }
     return token;
   }
 
-  resolve(header: string | string[] | undefined): { botId: string; threadId: string } | undefined {
+  resolve(header: string | string[] | undefined): CommsCaller | undefined {
     return typeof header === "string" && header.startsWith("Bearer ") ? this.callers.get(header.slice(7)) : undefined;
   }
 }
