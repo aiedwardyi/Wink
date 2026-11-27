@@ -236,24 +236,70 @@ describe("summary build after settle", () => {
     expect(appended).toEqual([]);
   });
 
-  it("leaves a fallback chain to the repair", async () => {
+  it("uses a ready build at the next send with no inline call", async () => {
     const generateText = vi.fn(async () => "SUMMARY\nbuilt");
     const { threads, appended, build, sendPrepares } = setup(generateText);
     threads.set("t", overBudgetThread("a"));
+
+    build.onSettled("bot", "t");
+    await build.idle();
+    threads.get("t")!.push(message("send", "next question"));
+    const waited = await build.settle("t", claudeSend, 90_000, () => true, { grace: graceInputs(threads.get("t")!) });
+    const { prepared, summarize } = await sendPrepares("t", "send");
+
+    expect(waited).toBe(0);
+    expect(generateText).toHaveBeenCalledOnce();
+    expect(summarize).not.toHaveBeenCalled();
+    expect(prepared).toMatchObject({ status: "ready", compactionId: appended[0]!.id });
+  });
+
+  async function fallbackChain(setupResult: ReturnType<typeof setup>) {
+    const { threads, sendPrepares } = setupResult;
+    threads.set("t", overBudgetThread("a"));
     threads.get("t")!.push(message("send", "next question"));
     const { prepared } = await sendPrepares("t", "send", { summarize: undefined });
-    expect(prepared.status === "ready" && isFallbackSummary(prepared.compaction!.summary)).toBe(true);
-    if (prepared.status !== "ready") return;
+    if (prepared.status !== "ready" || !isFallbackSummary(prepared.compaction!.summary)) throw new Error("the fixture did not land a fallback");
     threads.get("t")!.push(
       { id: "fallback", at: 2_000, role: "bot", kind: "compaction", compaction: prepared.compaction! },
       ...overBudgetThread("b"),
     );
+    return prepared.compaction!;
+  }
+
+  it("builds a fallback chain's next summary after settle, so the send makes no call", async () => {
+    const generateText = vi.fn(async () => "SUMMARY\nbuilt");
+    const harness = setup(generateText);
+    const { threads, appended, build, sendPrepares } = harness;
+    await fallbackChain(harness);
 
     build.onSettled("bot", "t");
     await build.idle();
 
-    expect(generateText).not.toHaveBeenCalled();
+    expect(generateText).toHaveBeenCalledOnce();
+    expect(appended).toHaveLength(1);
+    expect(appended[0]!.compaction.previousCompactionId).toBe("fallback");
+    threads.get("t")!.push(message("next", "next question"));
+    const { prepared, summarize } = await sendPrepares("t", "next");
+    expect(summarize).not.toHaveBeenCalled();
+    expect(prepared).toMatchObject({ status: "ready", compactionId: appended[0]!.id });
+  });
+
+  it("drops a build chained from a fallback when a repair lands on that boundary first", async () => {
+    const { calls, generateText } = deferred();
+    const harness = setup(generateText);
+    const { threads, appended, build } = harness;
+    const fallback = await fallbackChain(harness);
+
+    build.onSettled("bot", "t");
+    await tick();
+    expect(calls).toHaveLength(1);
+    threads.get("t")!.push(message("repair", "", { role: "bot", kind: "compaction", compaction: { ...fallback, summary: "repaired summary" } }));
+    calls[0]!.resolve("SUMMARY\nchained from the fallback");
+    await build.idle();
+
     expect(appended).toEqual([]);
+    const dropped = vi.mocked(console.info).mock.calls.map(([line]) => String(line)).filter((line) => line.startsWith("[summary-build] dropped "));
+    expect(dropped).toHaveLength(1);
   });
 
   it("lands nothing when the leaf moved", async () => {

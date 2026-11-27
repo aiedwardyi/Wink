@@ -1,4 +1,4 @@
-import { applicableCompaction, buildCompaction, nativeCycleMoved, planCompaction, planSummaryGrace, repairTarget, type CompactionNeeded, type NativePromptSize } from "./context-compaction.ts";
+import { applicableCompaction, buildCompaction, nativeCycleMoved, planCompaction, planSummaryGrace, type CompactionNeeded, type NativePromptSize } from "./context-compaction.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import type { Message, Store } from "./store.ts";
 import { abortable, logSummaryCall, type SummaryCallContext } from "./summary-repair.ts";
@@ -222,8 +222,8 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
 
   const prepare = async ({ botId, threadId, messages, leafId, settledPrompt }: BuildJob, controller: AbortController): Promise<Ready | null> => {
     if (deps.busy(botId, threadId) && !graceThreads.has(threadId)) return null;
-    // a build would chain from the fallback and void its repair
-    if (!leafId || !eligible(leafId) || repairTarget(messages)) return null;
+    // a fallback chain builds too: the send chains from it anyway, and place() drops a build a repair beat
+    if (!leafId || !eligible(leafId)) return null;
     const inputs = await deps.sendInputs(botId, threadId, messages);
     if (disposed || controller.signal.aborted || !inputs?.instance.generateText) return null;
     const nativePrompt = inputs.nativeAt && settledPrompt?.cursor === inputs.cursor ? settledPrompt : undefined;
