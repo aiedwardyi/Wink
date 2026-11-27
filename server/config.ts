@@ -23,6 +23,7 @@ import { resolveDataDir } from "./data-dir.ts";
 import type { PhoneRelayConfig } from "./phone-relay/index.ts";
 import { hostMatchesRemote } from "./remote-access.ts";
 import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schema.ts";
+import { usageOrderConfigSchema, type UsageOrderConfig } from "./usage-order.ts";
 
 const optionalText = z.string().optional();
 const SSH_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -82,6 +83,8 @@ const featureConfigSchema = z.object({
   memoryNotes: z.boolean().optional(),
   /** Experimental dial view of the model picker. Off unless explicitly enabled. */
   modelDial: z.boolean().optional(),
+  /** One solved Forum fix before a typed turn. Off unless explicitly enabled. */
+  forumRecall: z.boolean().optional(),
 });
 const instanceConfigSchema = z.object({
   driver: z.string().min(1),
@@ -143,6 +146,7 @@ const appConfigSchema = z.object({
   instances: instanceConfigMapSchema.optional(),
   // A bad section turns the feature off instead of discarding the whole file.
   phoneRelay: phoneRelayConfigSchema.optional().catch(undefined),
+  usageOrder: usageOrderConfigSchema.optional().catch(undefined),
 });
 /** Custom keys by host, validated against their binding. Env and patches only, never config.json. */
 const customKeysSchema = z
@@ -162,7 +166,7 @@ const profilePatchSchema = z
     ...(avatarUrl === undefined ? {} : { avatarUrl: avatarUrl || undefined, avatarCleared: avatarUrl ? undefined : true }),
   }));
 const appConfigPatchSchema = appConfigSchema
-  .omit({ instances: true, phoneRelay: true })
+  .omit({ instances: true, phoneRelay: true, usageOrder: true })
   .extend({ profile: profilePatchSchema.optional(), customKeys: customKeysSchema.optional() })
   .refine(
     (patch) =>
@@ -192,9 +196,11 @@ export interface AppConfig {
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Product switches. Every flag defaults to off except memoryNotes and liveVerifyAuto. */
-  features?: { showToolCalls?: boolean; toolDetailCapture?: boolean; liveVerifyAuto?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
+  features?: { showToolCalls?: boolean; toolDetailCapture?: boolean; liveVerifyAuto?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean; forumRecall?: boolean };
   instances?: InstanceConfigMap;
   phoneRelay?: PhoneRelayConfig;
+  /** Usage order the user set by drag; only PUT /api/usage-order writes it. */
+  usageOrder?: UsageOrderConfig;
 }
 export type ConfigPatch = z.output<typeof appConfigPatchSchema>;
 
@@ -300,6 +306,10 @@ export function detailedRepliesEnabled(cfg: AppConfig): boolean {
 
 export function showToolCallsEnabled(cfg: AppConfig): boolean {
   return cfg.features?.showToolCalls === true;
+}
+
+export function forumRecallEnabled(cfg: AppConfig): boolean {
+  return cfg.features?.forumRecall === true;
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
@@ -510,6 +520,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     disk[key] = merged;
   }
   if (checkedPatch.vps !== undefined) disk.vps = normalizeVpsConfig(checkedPatch.vps);
+  if (checkedPatch.usageOrder !== undefined) disk.usageOrder = checkedPatch.usageOrder;
   if (checkedPatch.instances) {
     const currentInstances = jsonObjectSchema.safeParse(disk.instances);
     const diskInstances: JsonObject = currentInstances.success ? currentInstances.data : {};

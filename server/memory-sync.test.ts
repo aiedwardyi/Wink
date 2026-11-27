@@ -5,7 +5,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ensureMemorySyncDevice, markTalked, memorySyncDir, pinMemoryJobOwner, syncBotMemory, tidiesHere, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
+import { DREAMED_FILE, DREAMED_HEAD, dreamedEntry, markUndone } from "./dream-archive.ts";
+import { ensureMemorySyncDevice, markTalked, markTidied, memorySyncDir, pinMemoryJobOwner, syncBotMemory, tidiesHere, type LegacyMemoryLedger, type MemorySyncLedger } from "./memory-sync.ts";
 import { MEMORY_SEED } from "./workspace.ts";
 import { applyPicks, currentPicks, parseTimeline } from "./picks.ts";
 
@@ -52,6 +53,7 @@ function edit(pc: PC, text: string | null, file = "MEMORY.md", at?: number) {
 }
 
 const read = (pc: PC, file = "MEMORY.md") => (existsSync(join(pc.workspace, file)) ? readFileSync(join(pc.workspace, file), "utf8") : null);
+const nonblankLines = (text: string) => text.split("\n").filter((line) => line.trim());
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
 // the set-aside copies' text, without the note memory sync puts on top
@@ -201,6 +203,55 @@ describe("memory sync", () => {
       expect(read(pc, "memory/work.md")).toBe("work notes\n");
       expect(parked(pc)).toEqual([]);
     }
+  });
+
+  it.each(["its own run", "an undo", "a hand edit"])("keeps a line one PC dreamed into the archive when the other PC's copy has %s", (variant) => {
+    const [a, b] = pcs();
+    const at = new Date(2026, 10, 19, 12).getTime();
+    const before = "# Memory\n\n- Keeps tea in the blue tin\n- Dentist on 11-02 at 3pm\n";
+    const after = "# Memory\n\n- Keeps tea in the blue tin\n";
+    const archive = `${DREAMED_HEAD}\n${dreamedEntry("old", [{ at: 3, text: "- Lives in Busan", by: "", why: "replaced" }], at)}\n`;
+    edit(a, before);
+    edit(a, archive, DREAMED_FILE);
+    settle(a, b);
+    edit(a, after);
+    markTidied(a.ledger, "bot-1", before, after);
+    edit(a, `${archive}\n${dreamedEntry("night", [{ at: 3, text: "- Dentist on 11-02 at 3pm", by: "", why: "expired" }], at)}\n`, DREAMED_FILE);
+    sync(a);
+    const theirs = variant === "its own run"
+      ? `${archive}\n${dreamedEntry("other", [{ at: 2, text: "- Likes green tea", by: "", why: "duplicate" }], at)}\n`
+      : variant === "an undo" ? markUndone(archive, "old", at) : archive.replace("- Lives in Busan", "- Lives in Busan, Haeundae");
+    edit(b, theirs, DREAMED_FILE);
+    sync(b);
+    settle(a, b);
+    for (const pc of [a, b]) {
+      expect(read(pc)).toBe(after);
+      const kept = read(pc, DREAMED_FILE)!;
+      expect(kept).toContain("- Dentist on 11-02 at 3pm\n");
+      for (const line of nonblankLines(theirs)) expect(kept).toContain(line);
+    }
+    expect(read(a, DREAMED_FILE)).toBe(read(b, DREAMED_FILE));
+  });
+
+  it.each([["deletes", null], ["empties", ""]] as const)("keeps a line one PC dreamed when the PC the user last messaged %s its older archive", (_, gone) => {
+    const [a, b] = pcs();
+    const at = new Date(2026, 10, 19, 12).getTime();
+    const archive = `${DREAMED_HEAD}\n${dreamedEntry("old", [{ at: 3, text: "- Lives in Busan", by: "", why: "replaced" }], at)}\n`;
+    edit(a, "# Memory\n\n- Keeps tea in the blue tin\n");
+    edit(a, archive, DREAMED_FILE);
+    settle(a, b);
+    edit(a, `${archive}\n${dreamedEntry("night", [{ at: 3, text: "- Opaline kestrel parcels go to Alverton", by: "", why: "expired" }], at)}\n`, DREAMED_FILE);
+    markTalked(a.ledger, "bot-1", 5_000);
+    sync(a);
+    edit(b, gone, DREAMED_FILE);
+    markTalked(b.ledger, "bot-1", 9_000);
+    sync(b);
+    settle(a, b);
+    for (const pc of [a, b]) {
+      expect(read(pc, DREAMED_FILE)).toContain("- Opaline kestrel parcels go to Alverton\n");
+      expect(parked(pc)).toEqual([]);
+    }
+    expect(read(a, DREAMED_FILE)).toBe(read(b, DREAMED_FILE));
   });
 
   it("keeps the copy from the PC the user last messaged and sets the other aside on both PCs", () => {

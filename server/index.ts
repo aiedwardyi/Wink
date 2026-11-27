@@ -56,13 +56,13 @@ import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.
 import { createUsageStats, type TurnFacts } from "./usage-stats.ts";
 import { watchLoopStalls } from "./loop-stalls.ts";
 import { openWhatsNew } from "./whats-new.ts";
-import { createRoomFixes, type RoomFixes } from "./room-fixes.ts";
+import { createRoomFixes, groupPostSchema, type RoomFixes } from "./room-fixes.ts";
 import { ghRun } from "./map-pr.ts";
 import { mapGit } from "./map-git.ts";
 import { openCallIntro } from "./call-intro.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { createLaneHandoffs, createRoomLanes, LANE_HANDOFF_LINE, laneHandoff, laneHandoffNote, laneKey } from "./room-lane.ts";
-import { accessRules, type AccessTurn } from "./drivers/turn-access.ts";
+import { accessRules, guestTurnInput, type AccessTurn } from "./drivers/turn-access.ts";
 import { hostedRoomView, isHostedThread, linkedFilesClosed, sharedTurn } from "./rooms/guards.ts";
 import { ASK_DENY_NOTE, askById, askFromHost, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
@@ -73,12 +73,13 @@ import { captureHostBotPicture, hostSend, liveBotChain } from "./rooms/send.ts";
 import { keepRoomUploads } from "./rooms/upload-timeouts.ts";
 import { roomNotification, roomPing, type RoomAlert } from "./rooms/alerts.ts";
 import { configureRoomDoor, handleRoomDoor, hostNameChanged } from "./rooms/door.ts";
-import { roomById } from "./rooms/db.ts";
+import { roomById, ROOM_TEXT_MAX } from "./rooms/db.ts";
 import { GuestClient } from "./rooms/guest-client.ts";
 import { ownerRoomCode } from "./rooms/invites.ts";
 import { joinedRooms, leftByHand, myRoomBotThreads, roomTaskThreads, seatTaken } from "./rooms/joined.ts";
 import { joinedRoute } from "./rooms/joined-routes.ts";
 import { MyRoomBotTurns } from "./rooms/my-room-bots.ts";
+import { GuestSessions } from "./rooms/guest-sessions.ts";
 import { hostFileRoute } from "./rooms/file-routes.ts";
 import { sweepRoomFiles } from "./rooms/files.ts";
 import { joinedFileRoute } from "./rooms/joined-files.ts";
@@ -114,6 +115,7 @@ import {
   roomTurnTimeoutMinutes,
   saveConfig,
   showToolCallsEnabled,
+  forumRecallEnabled,
   detailedRepliesEnabled,
   memoryNotesEnabled,
   sweepLegacyOpencodeKey,
@@ -134,17 +136,19 @@ import { BotAccounts } from "./bot-accounts.ts";
 import { createBotCalls } from "./bot-call.ts";
 import { BOARD_DIR, createBoard, projectIdOf } from "./board.ts";
 import { createBoardCalls, FORUM_HOLDS_FILE } from "./board-calls.ts";
+import { createBoardRecall, withBoardRecall } from "./board-recall.ts";
 import { BOARD_ROUTES, createBoardRoutes } from "./board-routes.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
 import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
-import { LoginBusyError, logSignInRefusal, signInOwner, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
+import { signInOwner } from "./engine-login.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
+import { nextUsageOrder, parseUsageOrderBody, usageOrderStatus } from "./usage-order.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse, usageReportWithAge } from "./usage-refresh.ts";
 import { createUsageSwapRefresh } from "./usage-swap-refresh.ts";
 import { usageStatusText } from "./usage-status.ts";
@@ -183,7 +187,7 @@ import {
   sendWebPushToDevices,
   type PushTarget,
 } from "./web-push.ts";
-import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
+import { receiveChatSwitch, receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
@@ -204,7 +208,7 @@ import "./comms-visibility.ts";
 import type { CommsBus } from "./comms-visibility.ts";
 import { lastMessageAt } from "./message-db.ts";
 import "./turn-index.ts";
-import { composeUserTurnPrompt, inertMentions, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
+import { composeUserTurnPrompt, inertMentions, turnReplaysTranscript, unstampedAsGuest, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
 import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
@@ -280,7 +284,7 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { ASKS_LIST, asksNudge, isStatusTurn, rotatedAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, fileLeftovers, isStatusTurn, MORE_PROMISES, rotatedAsks, TASK_ASKS_PROMPT, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { sweepDroppedAsks } from "./task-dropped.ts";
@@ -312,6 +316,7 @@ import { TurnWatchdog } from "./turn-watchdog.ts";
 import { foldContinuationStart, joinRunningTurn } from "./continuation-turn.ts";
 import "./pending-model.ts";
 import { botClears, groupClears } from "./wire-clears.ts";
+import { answeredRows, type Leftover, turnLeftovers } from "./turn-leftovers.ts";
 import { ownTurnReply, turnAddedMessage, turnSummaries, turnUnread } from "./turn-reply.ts";
 import { terminalReadGrant } from "./terminal-grant.ts";
 import { updateBridgeResponse, updateStateFromMessage } from "./update-proxy.ts";
@@ -321,6 +326,7 @@ import { commitLaunchNote, submittedAgo } from "./launch-note.ts";
 import { createTerminalLive } from "./terminal-live.ts";
 import { createWorkerMap } from "./map-pane.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
+import { traceTerminalRead } from "./terminal-read-log.ts";
 import { deferMailboxAuto, mailboxSecretFor } from "./mailbox.ts";
 import { receiveMailboxPost } from "./mailbox-delivery.ts";
 import { recoverHandedMail } from "./mail-index.ts";
@@ -341,6 +347,7 @@ import {
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
+import { createDreamLive } from "./dream-live.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
 import { goalRoute } from "./goal-route.ts";
@@ -1148,6 +1155,8 @@ roomFixes = createRoomFixes({
 const botAccounts = new BotAccounts(accounts, registry, store, {
   captured: (threadId) => providerReload.current(threadId),
 });
+// every way a Gemini chat or room ends (delete, engine pick, a room's roster) frees its standby's slot
+warmPool.setOwner("antigravityAgent", (key) => store.threadBots(key.threadId).some((bot) => !bot.hidden && botAccounts.instance(bot, key.threadId)?.instanceId === key.instanceId));
 const snagUserData = process.env.OMB_USER_DATA;
 const teamSnags = snagUserData ? new TeamSnags({
   userData: snagUserData,
@@ -1971,6 +1980,8 @@ async function stopBotWork(bot: BotRecord): Promise<void> {
   const instance = botAccounts.instance(bot);
   for (const group of store.groups.filter((g) => g.busyBotId === bot.id)) await botAccounts.instance(bot, group.threadId)?.adapter.interruptTurn(group.threadId).catch(() => {});
   await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
+  // a warm child from an engine the bot has left is not the current engine's to stop
+  warmPool.retire({ threadId: bot.threadId }, "bot deleted");
   stopScreenPoller(bot.id);
   activeVpsThreads.delete(bot.id);
   routines!.disableForBot(bot.id);
@@ -2891,6 +2902,8 @@ const readOnlyTurnThreads = new Set<string>();
 const joinedRoomThreads = new Set<string>();
 /** Joined-room task threads whose current turn someone other than this PC's person asked for. */
 const joinedGuestThreads = new Set<string>();
+/** Threads whose native session only guests' read-only turns built. */
+const guestSessions = new GuestSessions();
 
 function settlePendingToolMessages(threadId: string, turnId?: string): void {
   const prefix = `${threadId}:`;
@@ -3006,7 +3019,17 @@ function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
 // can carry what the bot actually said
 const lastReply = new Map<string, { text: string; messageId: string }>();
 const askTexts = askTurnTexts();
-const turnSummary = turnSummaries((threadId, ids, restated) => { for (const id of ids) store.patchRow(threadId, id, { summarized: true, restated }); });
+const turnSummary = turnSummaries(
+  (threadId, ids, restated) => { for (const id of ids) store.patchRow(threadId, id, { summarized: true, restated }); },
+  // 1:1 only: a room keeps every line as its own entry
+  (threadId, ids) => {
+    if (!store.botByThread(threadId)) return;
+    for (const id of ids) {
+      const row = store.row(threadId, id);
+      if (row && !row.quick && !row.comm && !isVoiceLine(row)) store.patchRow(threadId, id, { step: true });
+    }
+  },
+);
 const unreadTurns = turnUnread();
 
 const TASK_PACKET_FLUSH_MS = 30_000;
@@ -3030,6 +3053,25 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
   return store.taskPacket(threadId);
 }
 
+function saveHarnessAsks(threadId: string, change: (book: AskBook | undefined) => SavedAsks | null): void {
+  const current = taskPacketForWrite(threadId);
+  const saved = current && change(current);
+  if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
+}
+
+// a question the newest message asked, answered by the engine that took it: it files only if another engine or model takes the next turn
+const heldQuestions = new Map<string, Leftover[]>();
+
+// what a turn said it would do or skipped rides to the next reply on any engine, unchecked; only an engine closes it, by ID
+function fileTurnLeftovers(threadId: string, rows: readonly Message[]): void {
+  const found = turnLeftovers([...answeredRows(rows[0], (id) => store.row(threadId, id)), ...rows]);
+  const held = found.filter((item) => item.held);
+  const left = found.filter((item) => !item.held);
+  if (held.length) heldQuestions.set(threadId, held);
+  else heldQuestions.delete(threadId);
+  if (left.length) saveHarnessAsks(threadId, (book) => fileLeftovers(book, left, Date.now()));
+}
+
 function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }, seen: readonly TaskAsk[] = []): TaskResumePacket | null {
   const pending = pendingTaskPackets.get(packet.threadId);
   if (pending) clearTimeout(pending.timer);
@@ -3042,12 +3084,14 @@ function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }
   }
 }
 
-// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time
+// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time; a leftover no turn showed yet rides until one does
 function stampShownAsks(threadId: string, sent: string): void {
   const record = taskPacketForWrite(threadId);
   const now = Date.now();
-  const ids = record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) : null;
-  if (record && ids) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
+  const more = sent.split("\n").filter((line) => line.includes(MORE_PROMISES)).join(" ");
+  const left = record?.asks?.filter((ask) => ask.shown === 0 && (sent.includes(`- ${ask.id} `) || new RegExp(`\\b${ask.id}\\b`).test(more))).map((ask) => ask.id) ?? [];
+  const ids = [...(record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) ?? [] : []), ...left];
+  if (record && ids.length) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
 // a close saves once the turn that showed its line landed, and never over the bot's own edit in that turn
@@ -3168,15 +3212,37 @@ const memoryPass = createMemoryPass({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   host: deviceMachine,
 });
+const dreamLive = createDreamLive({
+  dataDir: DATA_DIR,
+  pc: () => profileSyncSettings.deviceId,
+  threads: (botId) => {
+    const bot = store.bot(botId);
+    return bot ? ownerChats(bot, notOwnerChats()) : [];
+  },
+  packet: (threadId) => taskPacketForWrite(threadId),
+  busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
+  cite: (botId) => knownRepos.cite(botId),
+  merged: (botId, threadId, ask, start) => askPrs.merged(botId, threadId, ask, start),
+  checked: () => askPrs.settled(),
+  reverted: async (botId, threadId) => {
+    const pinned = store.taskByThread(botId, threadId)?.cwd;
+    const dir = pinned === undefined ? store.bot(botId)?.cwd : pinned ?? undefined;
+    if (dir) await revertIndex.refresh(dir);
+    return (pr) => Boolean(dir && revertIndex.undid(dir, pr));
+  },
+});
 // the same switch as Auto Notes: it edits the same file
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
   bots: () => store.bots.map((bot) => bot.id),
-  generate: noteHelper,
-  requiresGenerator: ownNoteEngine,
+  live: (botId) => dreamLive.live(botId),
+  judges: () => botAccounts.dreamJudges({ limits: rateLimitsByInstance, save: () => scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR), signedOut: signedOutHelpers }),
   enabled: (botId) => memoryJobEnabled(botId) && memoryJobsHere(botId),
   busy: (botId) => botHasActiveTurn(botId),
-  changed: (botId) => broadcast({ kind: "memory.changed", botId }),
+  changed: (botId) => {
+    broadcast({ kind: "memory.changed", botId });
+    void memoryLookup.refresh(botId, true);
+  },
   // saved now, so a restart before the next sync pass still knows the tidy alone made this change
   tidied: (botId, before, after) => {
     const botSyncId = chatSyncBotId(profileSyncSettings, botId);
@@ -3184,6 +3250,11 @@ const memorySleep = createMemorySleep({
     markTidied(memorySyncLedger, botSyncId, before, after);
     saveMemoryLedger();
   },
+  archived: (botId, tidy) => {
+    const bot = store.bot(botId);
+    if (bot) store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: MEMORY_SAVE_TOOL, ok: true, tidy, memoryBotId: botId } });
+  },
+  dream: dreamLive,
 });
 const projectNotesCheck = createProjectNotesCheck({
   notesPath: (botId) => store.bot(botId)?.projectNotes,
@@ -3236,12 +3307,25 @@ startupTiming.afterPaint("unlanded", async () => {
   for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
   for (const bot of store.bots) await knownRepos.cite(bot.id, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
 });
-const memoryLookup = createMemoryLookup({
+const boardCalls = createBoardCalls({
+  board,
+  projectOf: boardProject,
+  room: sharedTurn(store, joinedRoomThreads),
+  held: (hold) => {
+    try {
+      appendRotatingLog(join(DATA_DIR, FORUM_HOLDS_FILE), `${JSON.stringify({ at: Date.now(), ...hold })}\n`);
+    } catch (cause) {
+      console.warn(`forum holds: ${cause}`);
+    }
+  },
+});
+
+const memoryLookup = withBoardRecall(createMemoryLookup({
   dataDir: DATA_DIR,
   notesPath: (botId) => store.bot(botId)?.projectNotes,
   asks: (botId) => botAsks(store.bot(botId), (threadId) => store.taskPacket(threadId), notOwnerChats()),
-});
-for (const bot of store.bots) void memoryLookup.refresh(bot.id);
+}), createBoardRecall({ on: () => forumRecallEnabled(cfg), board, projectOf: boardProject, room: sharedTurn(store, joinedRoomThreads), calls: boardCalls }));
+for (const bot of store.bots) void memoryLookup.refresh(bot.id, true);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
 void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
 // Room thread → the instruction id its running turn was dispatched against.
@@ -3385,26 +3469,12 @@ function boardProject(threadId: string): string {
   return projectIdOf(pinned === undefined ? bot.cwd : pinned);
 }
 
-const boardCalls = createBoardCalls({
-  board,
-  projectOf: boardProject,
-  room: sharedTurn(store, joinedRoomThreads),
-  held: (hold) => {
-    try {
-      appendRotatingLog(join(DATA_DIR, FORUM_HOLDS_FILE), `${JSON.stringify({ at: Date.now(), ...hold })}\n`);
-    } catch (cause) {
-      console.warn(`forum holds: ${cause}`);
-    }
-  },
-});
-
 const botCalls = createBotCalls({
   send: (payload) => void sendWebPushToDevices(DATA_DIR, payload, webPushSubject(), phoneSignedIn).catch((cause) => console.warn(`web-push: ${cause}`)),
   current: (threadId) => taskPacketForWrite(threadId)?.blockers ?? [],
   chat: (threadId) => store.groupByThread(threadId)?.id,
   skip: (threadId) => isHostedThread(store, threadId),
   calls: () => teamReports.member(),
-  called: (botId, threadId, blocker) => void boardCalls.called(botId, threadId, blocker),
 });
 
 function phonePing(botId: string, ping: PhonePing | null, open: PushTarget) {
@@ -3511,7 +3581,7 @@ const accountRuntime = createAccountRuntime({
   onMainChanged: (change) => { accountNotices.mainChanged(change); usageBoard.recordMain(change); },
 });
 const accountRoutes = createAccountRoutes(accountRuntime, registry, {
-  names: accountNames, onNamesChanged: () => { usageBoard.touch(); void accountUpdates(); },
+  names: accountNames, onNamesChanged: () => { usageBoard.touch(); void accountUpdates(); }, usageOrder: () => cfg.usageOrder?.orders,
 });
 const accountUpdates = createAccountUpdates({
   describe: async () => botAccounts.pickerInstances(botAccounts.accountInstances(withRateLimits(await registry.describeCached()))),
@@ -3975,6 +4045,7 @@ bus.subscribe((event: RuntimeEvent) => {
   quickAnswersTaken(store, event);
   roomEchoesTaken(store, event);
   const visibleEvent = peerUserRuntime(event);
+  if (event.type === "turn.completed") turnSummary.fold(event.threadId, event.turnId);
   if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
   // the settle below writes to disk; the reply's last frame must not wait behind it
   if (event.type === "turn.completed") for (const client of sseClients) sendNow(client.res);
@@ -4056,6 +4127,8 @@ bus.subscribe((event: RuntimeEvent) => {
         // the line answering a direct steer stays shown and is never hidden as restated: the final does not repeat it
         const anchor = event.summarized ? undefined : store.findLast(event.threadId, (m) => !isVoiceLine(m) && (m.role === "user" || (m.role === "bot" && m.kind === "text")));
         const steerReply = anchor?.role === "user" && anchor.steered && !anchor.queueId;
+        // a peer turn keeps every line as its own row, as before
+        const peerTurn = !event.summarized && Boolean(store.findLast(event.threadId, (m) => m.role === "user" && m.kind === "text" && !m.steered && !isVoiceLine(m))?.from);
         const message = pushMessage(
           event.summarized
             ? { role: "bot", kind: "text", text: event.text, summarized: true, engine: event.provider }
@@ -4069,7 +4142,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // just that something ended; an engine summary is not the bot's words
         if (!event.summarized) lastReply.set(event.threadId, { text: event.text, messageId: message.id });
         if (!event.summarized && turnOwnerId) askTexts.text(turnOwnerId, event.threadId, event.turnId, message.id, event.phase);
-        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply && event.phase === "commentary" ? undefined : event.phase, steerReply || stamp ? undefined : event.text);
+        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply && event.phase === "commentary" ? undefined : event.phase, steerReply || stamp ? undefined : event.text, !steerReply && !stamp && !peerTurn);
       } else if (event.itemType === "tool" && event.itemId) {
         const itemKey = `${event.threadId}:${event.itemId}`;
         const pending = toolMessageByItem.get(itemKey);
@@ -4499,6 +4572,7 @@ bus.subscribe((event: RuntimeEvent) => {
     }
     case "runtime.error": {
       refreshCodexPromo(event.message, usageBoard.touch);
+      if (event.paymentDue && event.providerInstanceId) usageBoard.paymentDue(event.providerInstanceId);
       if (!event.usageLimit && !event.setup && !event.signIn && !event.folder && !writeChatError(event.message, terminalBridgeAccess)) break;
       if (event.message === INCOMPLETE_LOG_MESSAGE) void reportServerFailure(terminalBridgeAccess);
       unreadTurns.start(event.threadId, event.turnId, store.rowMark(event.threadId));
@@ -4532,7 +4606,8 @@ bus.subscribe((event: RuntimeEvent) => {
       lastReply.delete(event.threadId);
       // summaries are hidden, so a turn that wrote nothing else shows them instead; a pane-note turn may end silent
       for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchRow(event.threadId, id, { summarized: undefined });
-      const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => store.rowsSince(event.threadId, start));
+      let turnRows: readonly Message[] = [];
+      const addedMessage = unreadTurns.settle(event.threadId, event.turnId, (start) => (turnRows = store.rowsSince(event.threadId, start)));
       const lastReported = turnUsage.get(event.threadId);
       turnUsage.delete(event.threadId);
       roomTurnInstruction.delete(event.threadId);
@@ -4574,6 +4649,8 @@ bus.subscribe((event: RuntimeEvent) => {
         }
         const disowned = Boolean(event.turnId && disownedTurnIds.delete(event.turnId));
         saveLandedCloses(event.threadId, event.turnId, !superseded && !disowned && (event.promptAccepted || event.ok && !interrupted));
+        // a held question rides until an engine accepted the next prompt; a failed start, even a late one, keeps it for a switch
+        if (!superseded && !disowned && (event.promptAccepted || event.ok && !interrupted)) heldQuestions.delete(event.threadId);
         if (!superseded && !disowned) {
           const seed = turnSeeds.take(event.threadId, event.turnId);
           if (seed && turnSeedsSession({
@@ -4624,6 +4701,7 @@ bus.subscribe((event: RuntimeEvent) => {
               turnsAtWrite: usage?.turns ?? packet.turnsAtWrite,
               interrupted,
             }));
+            if (event.ok && !interrupted) fileTurnLeftovers(event.threadId, turnRows);
           }
           boardCalls.turnEnded(event.threadId, event.ok && !interrupted);
           limitWaits.settled(event.threadId, event.turnId, event.ok);
@@ -4793,11 +4871,7 @@ bus.subscribe((event: RuntimeEvent) => {
 
 // ask_user cards wait for the asking turn's reply.
 const askHold = watchAskHold(store, bus);
-watchSkippedQuestions(store, (threadId, change) => {
-  const current = taskPacketForWrite(threadId);
-  const saved = current && change(current);
-  if (current && saved) persistTaskPacket({ ...current, ...saved, updatedAt: Date.now(), updatedBy: "harness" });
-});
+watchSkippedQuestions(store, saveHarnessAsks);
 
 // Drain queued delegations for a source thread after its turn settles.
 // Run as a separate subscriber so the drain logic stays out of the main
@@ -4872,7 +4946,7 @@ bus.subscribe((event: RuntimeEvent) => {
   if (event.turnId) {
     if (settleMail(store, event.threadId, event.turnId, event.ok, event.stopReason ?? undefined)) paneWake.noteArrived(sourceBotId ?? "", event.threadId);
     turnRegistry.settle(event.turnId);
-    usageBoard.turnSettled(event.turnId);
+    usageBoard.turnSettled(event.turnId, event.ok);
   }
   drainQueuedSends();
   if (!event.ok || event.stopReason === "cancelled" || event.stopReason === "interrupted") discardDelegations(commsBus, event.threadId, sourceBotId, event.turnId);
@@ -5180,6 +5254,8 @@ type StartTurnOptions = {
   commsAsk?: boolean;
   /** Someone else in a room this PC joined asked: no edits or shell, Wink's safe tools only, nothing approved. */
   readOnly?: boolean;
+  /** A room this PC joined: true when anyone but this PC's person typed it. Stamped on the user row. */
+  guest?: boolean;
   /** web_read's borrowed reader: page text steers it, so read-only with no Wink tools. */
   webReader?: boolean;
 };
@@ -5196,7 +5272,7 @@ const SHOW_IMAGE_GUIDANCE =
 const ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS =
   " When reporting after time away, in a summary or wrap-up, or after helpers finish, list every finished deliverable and every item waiting on the user, each with its picture or clickable link. If any part of what the user asked was skipped, cut, left for them to do by hand, or failed, say so in plain words at the top of that reply. Keep it short and drop nothing." +
   " If the user answers an open card in their own words, close the card." +
-  " Always give a visible reply to a message the user types. A turn woken by a pane note, helper report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes while you work, reply immediately in one short visible line (for a question, the short answer; for a correction or instruction, acknowledge it), then continue unless they asked you to stop or pause; thinking alone is not a reply. When a Wink note with their message says a fast reply answers it, skip that line and continue. If that line answered it, do not recap or expand it in your final reply unless later work changed the answer or a Wink note says the user never saw it; then send the answer once more. This applies to user-typed messages, not automated notes. Text outside tool calls appears in chat: never write notes to yourself or your next step there ('Now the tests.', 'Need X.', a bare filename); make the tool call. Some engines replace long between-tool text with a summary the user never sees. Give the full answer once, after your last tool call, with every detail, link and list the user must read exactly. Before then, give at most one short activity line, never the answer, so the final reply does not repeat it. Write every line, including mid-turn text, in the user's language. Say each thing once: repeat no information or status from this or earlier turns unless it changed. If a user-started turn brings nothing new, reply in one short line. For a decision or input needed to continue, use ask_user so it gets noticed; reply text alone is insufficient. The tool does not pause you. After verifying a task's result, remove its temporary files, folders and worktrees you created, by exact path only. Never delete by wildcard, age or anything you did not create; ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a helper, CI, the user), never 'we'; call a cause likely until reproduced. Quote numbers only from sources you opened; name the run, file or date. Before proposing, planning or building, follow existing work and decisions (feature list, status board, decision notes, memory); say first if your plan would redo or contradict them. In any build card, hand-off or note, each thing the user decided or asked quotes their words with the date, like: \"use cards\" (Nov 17). Mark everything else 'suggestion, not agreed' and ask before building it. When the user changes their mind, replace the old note; never keep two that disagree. Judge ideas on merit; plainly say when the user's idea is wrong or low value. If you change your mind, say what convinced you. State usage limits plainly, with a known reset time. Never promise to resume yourself; chat shows whether Wink will continue.";
+  " Always give a visible reply to a message the user types. A turn woken by a pane note, helper report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes while you work, answer a question at once in one short visible line (thinking alone is not a reply); for an instruction or correction, act on it; write a line only if it changes what they see now or you must ask; your final reply covers it. Continue unless they asked you to stop or pause. When a Wink note with their message says a fast reply answers it, skip that line and continue. If that line answered it, do not recap or expand it in your final reply unless later work changed the answer or a Wink note says the user never saw it; then send the answer once more. This applies to user-typed messages, not automated notes. Text outside tool calls appears in chat: never write notes to yourself or your next step there ('Now the tests.', 'Need X.', a bare filename); make the tool call. Some engines replace long between-tool text with a summary the user never sees. Give the full answer once, after your last tool call, with every detail, link and list the user must read exactly. Before then, give at most one short activity line, never the answer, so the final reply does not repeat it. Write every line, including mid-turn text, in the user's language. Say each thing once: repeat no information or status from this or earlier turns unless it changed. If a user-started turn brings nothing new, reply in one short line. For a decision or input needed to continue, use ask_user so it gets noticed; reply text alone is insufficient. The tool does not pause you. After verifying a task's result, remove its temporary files, folders and worktrees you created, by exact path only. Never delete by wildcard, age or anything you did not create; ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a helper, CI, the user), never 'we'; call a cause likely until reproduced. Quote numbers only from sources you opened; name the run, file or date. Before proposing, planning or building, follow existing work and decisions (feature list, status board, decision notes, memory); say first if your plan would redo or contradict them. In any build card, hand-off or note, each thing the user decided or asked quotes their words with the date, like: \"use cards\" (Nov 17). Mark everything else 'suggestion, not agreed' and ask before building it. When the user changes their mind, replace the old note; never keep two that disagree. Judge ideas on merit; plainly say when the user's idea is wrong or low value. If you change your mind, say what convinced you. State usage limits plainly, with a known reset time. Never promise to resume yourself; chat shows whether Wink will continue.";
 const REPLY_STYLE_INSTRUCTIONS =
   " Default voice (role description and user requests override it, including length and teaching style): answer first, 2-5 short lines, the few key points unless asked for every option, plain words, a few bullets over paragraphs, warm like a friend on the user's side. Celebrate real wins, name frustration in a few words before fixing it, and never flatter ordinary messages or agree when the user is wrong. Work out questions before answering. Skip preamble, recaps and generic closing offers; needed questions and asking before acting are not padding. Give code, plans, drafts, commands and anything to paste or follow step by step in full. Otherwise go longer only when asked or needed, still verdict first.";
 const ALWAYS_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS + REPLY_STYLE_INSTRUCTIONS;
@@ -5364,8 +5440,8 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
 // turn mounts something only a send may set up (a remote or VM computer, connected apps).
 function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullable<PrepareFocus["fresh"]> | null {
   const task = store.taskByThread(bot.id, bot.threadId);
-  // only Claude starts a session ahead of Send; other engines' prepare ignores this shape
-  if (instance.driverKind !== "claudeAgent" || !task || task.resumeCursors[instance.instanceId]) return null;
+  // Claude starts a session and Gemini an agy ahead of Send; other engines' prepare ignores this shape
+  if (!["claudeAgent", "antigravityAgent"].includes(instance.driverKind) || !task || task.resumeCursors[instance.instanceId]) return null;
   if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) return null;
   if (bot.computer !== undefined && bot.computer !== "off") return null;
   if (bot.cloudBackend === "vps" || box.boxConfigured(cfg)) return null;
@@ -5501,6 +5577,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sendSeq: opts?.sendSeq,
           sentAfterId: opts?.sentAfterId,
           waited: opts?.waited,
+          guest: opts?.guest,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -5543,20 +5620,24 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // Model context follows the active branch only. The durable transcript is
   // never pruned; only this provider-facing projection is bounded.
   const skipTranscript = new Set<string>([userMessage.id, ...(opts?.excludeMessageIds ?? [])]);
+  // the guest stamp came later: a room task's older rows may be anyone's
+  const taskRows = (rows: Message[]) => (roomTaskThreads().has(threadId) ? unstampedAsGuest(rows) : rows);
   // a teammate's turn leaves worker notes pending, for this whole dispatch
   const holdNotes = hasPeerWatch(threadId) ? (messages: Message[]) => holdWorkerNotes(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined) : undefined;
   const modelContextWindow = contextWindowFor(instance.models, model, instance.driverKind === "claudeAgent" ? reportedWindow(task, model) : null);
   const nativeAt = nativeCompactAt(instance.driverKind, model, modelContextWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[instanceId]?.environment });
-  const messagesBeforeSummary = store.activePath(threadId);
+  const messagesBeforeSummary = taskRows(store.activePath(threadId));
   holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
-  let storedTaskRecord = taskPacketForWrite(threadId);
-  const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
-  let taskRecord = closes.shown(storedTaskRecord);
   const selectionChanged = task.lastInstanceId !== undefined && (
     task.lastInstanceId !== instanceId ||
     (task.lastModel !== undefined && task.lastModel !== model)
   );
+  const held = heldQuestions.get(threadId);
+  if (held && selectionChanged) saveHarnessAsks(threadId, (book) => fileLeftovers(book, held, Date.now()));
+  let storedTaskRecord = taskPacketForWrite(threadId);
+  const closes = closeMergedAsks(bot.id, threadId, storedTaskRecord);
+  let taskRecord = closes.shown(storedTaskRecord);
   const latestUser = lastUserInstruction(messagesBeforeSummary, skipTranscript);
   const unsettled = routineTurn ? "" : unsettledRequest(priorTaskPacket, messagesBeforeSummary, skipTranscript);
   // Recovery Current request must be this send's text. skipTranscript excludes
@@ -5603,7 +5684,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ...nativeCycle,
     resumeNativeReplay,
     userName: cfg.profile?.name?.trim() || "User",
-    referenceMessages: store.messagesFor(threadId),
+    referenceMessages: taskRows(store.messagesFor(threadId)),
   });
   const summaryGrace: SummaryGrace = {
     knownWindow: catalogWindow === null ? null : Math.min(catalogWindow, modelContextWindow),
@@ -5679,7 +5760,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     }
     const taskRecordToFlush = storedTaskRecord;
     return prepareModelContext({
-      messages,
+      messages: taskRows(messages),
       contextWindow: modelContextWindow,
       taskRecordText: durableTaskRecordText || "No durable task record is available.",
       excludeIds: inlineNotes?.ids?.length ? new Set([...skipTranscript, ...inlineNotes.ids]) : skipTranscript,
@@ -5689,7 +5770,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       summaryGrace: grace,
       plan: grace ? planBeforeSummary : undefined,
       userName: cfg.profile?.name?.trim() || "User",
-      referenceMessages: store.messagesFor(threadId),
+      referenceMessages: taskRows(store.messagesFor(threadId)),
       summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),
       goals: () => goalsOf(bot.id),
       onSummaryCall: (record) => logSummaryCall({
@@ -5727,6 +5808,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     store.settleTaskPacket(threadId);
     return startedTurn(userMessage, { dispatchFailed: true, error: detail });
   }
+  // a line Dreaming just moved out of MEMORY.md is searchable before this turn's recall
+  const recallBuild = memoryLookup.ready(bot.id);
+  if (recallBuild) await recallBuild;
   let latestCompactionId = prepared.compactionId ?? null;
   if (prepared.compaction || prepared.replaySummary) {
     try {
@@ -5815,10 +5899,14 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     // an unseeded session never got Wink's context, so it still recycles
     ...(nativeAt ? { native: !unseeded, reseedTokens: prepared.estimatedTokens } : {}),
   });
+  // Someone else's read-only turn never resumes a session an owner's turn built: that turn's file
+  // reads are in it. It starts over from the chat's words, even past background work.
+  const guestRecycle = (opts?.readOnly === true ? guestSessions.guestTurn(threadId) : (guestSessions.ownerTurn(threadId), false))
+    && !rewound && !fresh && task.resumeCursors[instanceId] !== undefined;
   // A recycle closes the live CLI and kills its background work. Resume it
   // instead; the first turn after that work settles recycles on the same checks.
-  let recycleDeferred = recycleWanted && !fresh && instance.adapter.hasBackgroundWork?.(threadId) === true;
-  const recycled = recycleWanted && !recycleDeferred;
+  let recycleDeferred = recycleWanted && !fresh && !guestRecycle && instance.adapter.hasBackgroundWork?.(threadId) === true;
+  const recycled = (recycleWanted && !recycleDeferred) || guestRecycle;
   // Transcript-replay engines never `--resume`; clearing an already-empty
   // map is a no-op. Resume-cursor engines drop the stale/fat session here.
   // Stop / crash Continuity on an uncompacted thread keeps the cursor.
@@ -5839,7 +5927,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   if (rewound || fresh || recycled || recycleDeferred) {
     console.info(`[session] ${JSON.stringify({
       threadId,
-      reason: rewound ? "rewound" : fresh ? "fresh" : recycleDeferred ? "recycle-deferred-background" : unseeded && !compactedThisTurn ? "unseeded" : recycleReason,
+      reason: rewound ? "rewound" : fresh ? "fresh" : recycleDeferred ? "recycle-deferred-background" : guestRecycle && !recycleWanted ? "guest" : unseeded && !compactedThisTurn ? "unseeded" : recycleReason,
       lastTurnToolRounds,
       sessionToolRounds,
       promptTokens: sessionPrompt?.last,
@@ -5925,7 +6013,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     currentRequestText: recoveryLatestUserText,
     asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, elsewhereAsks) : "",
   });
-  stampShownAsks(threadId, turnText);
   const resumeFallback = buildResumeFallback({
     driverKind: instance.driverKind,
     model,
@@ -6502,7 +6589,26 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           limitWaits.track(bot.id, threadId, selection, opts?.limitWaitId, { unattended: opts?.unattended, keepGoingWake: opts?.keepGoingWake, paneNoteWake: opts?.paneNoteWake });
         }
         pendingInterruptThreads.started(threadId, bot.id, epoch);
-        const joined = await joinRunningTurn(live.adapter, { threadId, text, resumeCursor, systemUpdate }, runningTurnIdByThread.get(threadId));
+        const input = guestTurnInput({
+          ...(trace ? { trace } : {}),
+          threadId,
+          text,
+          model,
+          effort,
+          leanStartup,
+          resumeCursor,
+          resumeFallback: resumeCursor !== undefined ? { text: withLate(resumeFallback) } : undefined,
+          ...(nativeReplayPrefix ? { nativeReplayPrefix } : {}),
+          transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
+          system,
+          systemUpdate,
+          approval,
+          ...(readOnly ? { readOnly } : {}),
+          attended: !isUnattended(bot.id),
+          integrations,
+          cwd,
+        });
+        const joined = await joinRunningTurn(live.adapter, input, runningTurnIdByThread.get(threadId));
         if (joined) {
           disownedTurnIds.delete(joined.turnId);
           turnRegistry.started(joined.turnId, threadId);
@@ -6510,28 +6616,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           return joined;
         }
         trace?.input(currentPrompt, [...turnNotes, notesNotice, memoryNotice], durableTaskRecordText, systemUpdate);
-        trace?.assembled(system, text);
+        trace?.assembled(system, input.text);
         if (cwd) turnCwdByThread.set(threadId, cwd);
         else turnCwdByThread.delete(threadId);
-        return live.adapter.sendTurn({
-        ...(trace ? { trace } : {}),
-        threadId,
-        text,
-        model,
-        effort,
-        leanStartup,
-        resumeCursor,
-        resumeFallback: resumeCursor !== undefined ? { text: withLate(resumeFallback) } : undefined,
-        ...(nativeReplayPrefix ? { nativeReplayPrefix } : {}),
-        transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
-        system,
-        systemUpdate,
-        approval,
-        ...(readOnly ? { readOnly } : {}),
-        attended: !isUnattended(bot.id),
-        integrations,
-        cwd,
-      });
+        return live.adapter.sendTurn(input);
       });
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
       if (reservation) commit(reservation);
@@ -6547,6 +6635,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (recallNotes.length) memoryLookup.accepted(bot.id, threadId);
       store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
+      // a leftover counts as shown once an engine took the prompt; a setup failure leaves it for the retry
+      stampShownAsks(threadId, turnText);
       boardTurnStarted(bot.id, threadId, started.turnId);
       if (currentTurnEpoch(bot.id) !== epoch) return;
       if (started.turnId && settledTurnIdByThread.get(threadId) !== started.turnId) liveTurnIdByThread.set(threadId, started.turnId);
@@ -7122,7 +7212,7 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     joinedRoomThreads.add(threadId);
     if (guest) joinedGuestThreads.add(threadId);
     else joinedGuestThreads.delete(threadId);
-    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) });
+    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}), guest });
   },
   readOnlyTurns: (botId, threadId) => {
     const bot = store.bot(botId);
@@ -7611,16 +7701,17 @@ async function runClaimedGroupMemberTurn(
       pendingInterruptThreads.started(threadId, turnKey, epoch);
       if (cwd) turnCwdByThread.set(threadId, cwd);
       else turnCwdByThread.delete(threadId);
-      return live.adapter.sendTurn({
+      return live.adapter.sendTurn(guestTurnInput({
         threadId,
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
         system: roomSystem,
+        hosted: true,
         ...access,
         attended: !isUnattended(bot.id),
         cwd,
         integrations,
         ...memberTurnSelection(selection, bot.leanStartup),
-      });
+      }));
     })
       .then((started) => {
         bindInterruptedTurn(threadId, started.turnId, turnKey, epoch);
@@ -8190,6 +8281,7 @@ function configStatus() {
       googlePhoto: googlePhotoOffered(googleAccount.idToken(), googleAccount.owner()?.sub, cfg.profile),
     },
     rooms: { turnTimeoutMinutes: roomTurnTimeoutMinutes(cfg) },
+    usageOrder: usageOrderStatus(cfg.usageOrder),
     localVm: {
       mode: localVmMode(cfg),
       maxInstances: localVmMaxInstances(cfg),
@@ -8344,7 +8436,7 @@ const webRead = webReadRoute(createWebReader({
     const instance = registry.get(bot.modelSelection.instanceId);
     const snapshot = providerSnapshots.get(bot.modelSelection.instanceId);
     const ready = snapshot?.state === "available" && snapshot.authenticated !== false;
-    return { botId: bot.id, name: bot.name, engine: ready ? instance?.driverKind ?? "" : "", busy: Boolean(bot.busy) };
+    return { botId: bot.id, name: bot.name, engine: ready ? instance?.driverKind ?? "" : "", busy: Boolean(bot.busy), hidden: Boolean(bot.hidden) };
   }),
 }), (header) => commsCallers.resolve(header), guestRoomTurn);
 const verifySite = createVerifySite({
@@ -8486,6 +8578,7 @@ const workerMap = createWorkerMap(store, () => terminalBridgeAccess);
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
+  const received = performance.now();
   if (!req.headers.accept?.includes("text/event-stream")) res.once("close", requestQuiet.track());
   try {
     // Relay traffic is known by socket identity. It needs this PC's relay Host
@@ -8676,6 +8769,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!body.success) return json(res, 400, { error: "bad request" });
         const linked = await roomFixes!.link({ botId: body.data.fromBotId, threadId: body.data.fromThreadId, sessionId: body.data.sessionId, title: body.data.title, room: body.data.room });
         return "error" in linked ? json(res, linked.error === "unknown sender" ? 403 : 400, linked) : json(res, 200, linked);
+      }
+      if (method === "POST" && path === "/api/internal/post-to-group") {
+        const source = commsCallers.resolve(req.headers.authorization);
+        if (!source) return json(res, 403, { error: "unknown sender" });
+        const body = groupPostSchema.safeParse(await readBody(req));
+        if (guestRoomTurn(source.botId, source.threadId)) return json(res, 403, { error: "Only the owner can ask you to post to a group." });
+        if (!body.success) return json(res, 400, { error: `post_to_group needs a group name and text up to ${ROOM_TEXT_MAX} characters.` });
+        const posted = roomFixes!.postToGroup(source.botId, body.data);
+        return "error" in posted ? json(res, posted.error === "unknown sender" ? 403 : 400, posted) : json(res, 200, posted);
       }
       // terminal_spawn, before the pane opens: the playbook hold, or the engine's usage left.
       if (method === "POST" && path === "/api/internal/spawn-usage") {
@@ -9014,8 +9116,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const [result] = await sendWebPushToDevices(DATA_DIR, test, webPushSubject(), phoneSignedIn, body.data.endpoint);
       return result?.ok ? json(res, 200, { ok: true }) : json(res, 502, { error: result?.error ?? "push failed" });
     }
+    if (method === "POST" && path === "/api/diag/chat-switch") {
+      const received = await receiveChatSwitch(req);
+      return received.status === 200 ? json(res, 200, { ok: true }) : json(res, received.status, { error: received.error });
+    }
     if (method === "POST" && path === "/api/diag/cold-open") {
-      const received = await receiveColdOpen(req, DATA_DIR);
+      const received = await receiveColdOpen(req, DATA_DIR, relay ? "relay" : hostMatchesRemote(req.headers.host, REMOTE_HOST) ? "tailnet" : "local");
       return received.status === 200 ? json(res, 200, { ok: true }) : json(res, received.status, { error: received.error });
     }
 
@@ -9324,6 +9430,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      traceTerminalRead(bot.id, relay, received, res);
       const snapshot = await terminalSnapshotResponse(terminalBridgeAccess, bot.id, url.searchParams.get("sessionId"), undefined, { panesOnly: url.searchParams.get("panes") === "1" });
       return json(res, snapshot.status, snapshot.body);
     }
@@ -9378,6 +9485,31 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (m && method === "PUT") {
       return await botRoutes.putMemory(req, res, m);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/clean$/);
+    if (m && method === "GET") {
+      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const run = dreamLive.live(m[1]) ? memorySleep.latest(m[1]) : dreamLive.latest(m[1]);
+      return run ? json(res, 200, { run }) : json(res, 404, { error: "no-run" });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/clean\/undo$/);
+    if (m && method === "POST") {
+      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const body = z.object({ runId: z.string() }).safeParse(await readBody(req));
+      if (!body.success) return json(res, 400, { error: "runId required" });
+      const result = memorySleep.undo(bot.id, body.data.runId);
+      if (!result.ok) return json(res, result.error === "no-run" ? 404 : 409, result);
+      // the line sits in the task that was open when the run archived, which may not be the open one now
+      for (const threadId of new Set([bot.threadId, ...store.tasks(bot.id).map((task) => task.threadId)])) {
+        const line = store.messagesFor(threadId).find((message) => message.tool?.tidy?.runId === body.data.runId);
+        if (!line?.tool?.tidy) continue;
+        store.patchMessage(threadId, line.id, { tool: { ...line.tool, tidy: { ...line.tool.tidy, undoneAt: Date.now() } } });
+        break;
+      }
+      return json(res, 200, result);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/import$/);
     if (m && method === "POST") {
@@ -9576,51 +9708,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const install = registry.install(engineInstall[1]);
       return install ? json(res, 200, install) : json(res, 404, { error: "Unknown engine install" });
     }
-    const engineSignIn = /^\/api\/instances\/([^/]+)\/sign-in$/.exec(path);
-    if (engineSignIn) {
-      const id = engineSignIn[1];
-      const refuse = (status: number, error: string, code?: string) => {
-        logSignInRefusal(status, code);
-        return json(res, status, { error });
-      };
-      if (!isInstanceId(id)) return refuse(400, "Invalid instance id");
-      try {
-        if (method === "POST") {
-          if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-            return refuse(415, "content-type must be application/json");
-          }
-          const body = await readBody(req);
-          if (body?.device !== undefined && typeof body.device !== "boolean") return refuse(400, "device must be a boolean");
-          const capture = await registry.startSignIn(id, body?.device === true, signInOwner(req.headers, phone?.id));
-          return capture ? json(res, 200, capture) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
-        }
-        if (method === "DELETE" && !registry.logins.owns(id, signInOwner(req.headers, phone?.id))) return refuse(403, SIGNED_IN_ELSEWHERE, "sign-in-elsewhere");
-        if (method === "DELETE") return await registry.cancelSignIn(id)
-          ? json(res, 200, {}) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
-        if (method === "GET") {
-          const signIn = registry.signIn(id);
-          return signIn ? json(res, 200, signIn) : refuse(404, "Unknown engine sign-in", "unknown-engine-sign-in");
-        }
-      } catch (error) {
-        const failure = requestError(error, () => {});
-        logSignInRefusal(failure.status, error instanceof LoginBusyError ? error.code : undefined);
-        return json(res, failure.status, failure.body);
-      }
-    }
-    const engineSignOut = /^\/api\/instances\/([^/]+)\/sign-out$/.exec(path);
-    if (engineSignOut && !isInstanceId(engineSignOut[1])) return json(res, 400, { error: "Invalid instance id" });
-    if (method === "POST" && engineSignOut) {
-      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "content-type must be application/json" });
-      }
-      // Owner check and sign-out's cancel run in this one turn, so no newer sign-in can slip between them.
-      // A press while this instance's sign-out runs joins it: the pending job is that sign-out's own logout, and no sign-in can start meanwhile.
-      if (!registry.signingOutNow(engineSignOut[1]) && !registry.logins.owns(engineSignOut[1], signInOwner(req.headers, phone?.id))) return json(res, 403, { error: SIGNED_IN_ELSEWHERE, code: "sign-in-elsewhere" });
-      const signedOut = await registry.signOut(engineSignOut[1]);
-      return signedOut === null ? json(res, 404, { error: "Unknown engine sign-out" })
-        : signedOut ? json(res, 200, {}) : json(res, 502, { error: "Sign-out failed" });
-    }
-
     if (method === "GET" && path === "/api/usage/board") {
       const board = await usageBoard.handle(url);
       return json(res, board.status, board.body);
@@ -9821,6 +9908,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (changingLocalVmMode) localVmModeChangeBusy = false;
         providerConfigBusy = false;
       }
+    }
+
+    // The order the user drags on Usage and Connections. It is a config.json setting so the
+    // config frame carries it to every client; a write needs none of the provider reload above.
+    if (method === "PUT" && path === "/api/usage-order") {
+      const body = parseUsageOrderBody(await readBody(req));
+      // Read the saved order only after the body arrives: another save may have landed meanwhile.
+      const next = nextUsageOrder(cfg.usageOrder, body);
+      if (next) {
+        saveConfig({ usageOrder: next });
+        Object.assign(cfg, loadConfig());
+        broadcast({ kind: "config", ...configStatus() });
+      }
+      return json(res, 200, { usageOrder: usageOrderStatus(cfg.usageOrder) });
     }
 
     // ── voice ─────────────────────────────────────────────────────────

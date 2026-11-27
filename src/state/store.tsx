@@ -47,6 +47,7 @@ import { noteJoinedFrame } from "@/lib/joined-rooms";
 import { BOARD_CHANGED_EVENT, isForumSelection } from "@/lib/board";
 import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
+import { noteDispatch, reportChatSwitch } from "@/lib/chat-switch-diag";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
 import { relaySignInSite } from "@/lib/devices-setup";
 import { leaveSignedOut, sessionLive, sessionState } from "@/lib/signed-out";
@@ -56,6 +57,7 @@ import { holdReload } from "@/lib/reload-hold";
 import { usageBoardFrame, usageBoardReconnected } from "@/lib/usage-board-client";
 import { botDraftId, recoverFailedComposerSend, returnSendsToComposer, takeClosedRoomHold, takeQueuedDraft } from "@/lib/drafts";
 import { hapticTick } from "@/lib/phone-swipe";
+import { holdsReply } from "@/lib/held-reply";
 import { isShownMessage } from "@/lib/shown-message";
 import { arrivalChatForFrame, arrivalChatForRoutinePatch, noteArrival } from "@/lib/arrival-glow";
 import {
@@ -130,15 +132,17 @@ const STOP_HOLD_MS = 10_000;
 // not something that just happened
 const NOTIFY_TOAST_MS = 2 * 60_000;
 
+type HeldFrame = { threadId: string; imported?: boolean; message: Message };
+
 /** Buzz once for a settled bot reply in the chat on screen, never for imported history. */
 export function buzzOnReply(
-  frame: { threadId: string; imported?: boolean; message?: { role?: string; kind?: string; summarized?: boolean } },
+  frame: { threadId: string; imported?: boolean; message?: { role?: string; kind?: string; summarized?: boolean; step?: boolean } },
   state: NotificationRoutingState & Pick<AppState, "selectedId">,
   pageVisible: boolean,
   buzz: () => void = hapticTick,
 ): void {
   if (!pageVisible || frame.imported) return;
-  if (frame.message?.role !== "bot" || frame.message.kind !== "text" || !isShownMessage(frame.message)) return;
+  if (frame.message?.role !== "bot" || frame.message.kind !== "text" || frame.message.step || !isShownMessage(frame.message)) return;
   if (visibleNotificationThread(state) === frame.threadId) buzz();
 }
 
@@ -1134,9 +1138,9 @@ export const initialState: AppState = {
  * smaller page can leave a first screen with only a handful of bubbles. */
 export const MESSAGE_PAGE = 200;
 
-export function api(path: string, init?: RequestInit): Promise<any> {
-  const call = request(path, init);
-  const method = init?.method?.toUpperCase() ?? "GET";
+export function api(...args: Parameters<typeof request>): Promise<any> {
+  const call = request(...args);
+  const method = args[1]?.method?.toUpperCase() ?? "GET";
   return method === "GET" || method === "HEAD" ? call : holdReload(call);
 }
 
@@ -1212,8 +1216,19 @@ const StoreContext = createContext<{
 
 const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 
+// Every path that moves the open chat goes through here (CHAT-JUMP diag).
+function tracedReducer(state: AppState, action: Action): AppState {
+  const next = reducer(state, action);
+  if (state.selectedId && next.selectedId !== state.selectedId) reportChatSwitch(action, state.selectedId, next.selectedId);
+  return next;
+}
+
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [state, rawDispatch] = useReducer(reducer, initialState, withCachedSnapshot);
+  const [state, reactDispatch] = useReducer(tracedReducer, initialState, withCachedSnapshot);
+  const rawDispatch = useCallback((action: Action) => {
+    noteDispatch(action);
+    reactDispatch(action);
+  }, []);
   const stateRef = useRef(state);
   const reconnectLiveRef = useRef<(() => void) | null>(null);
   const reconnectLive = useCallback(() => {
@@ -1320,6 +1335,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   };
   const streamTails = useRef<Record<string, string>>({});
   const liveTurns = useRef<Record<string, string>>({});
+  const heldReplies = useRef(new Map<string, HeldFrame[]>());
   const [origins, updateOrigin] = useReducer(nextTurnOrigins, {});
   // a finished turn's origin is not the next send's; that one counts from its own dispatch
   const turnOrigin = useCallback((threadId: string) => origins[threadId]?.active ? origins[threadId].origin?.originMs : undefined, [origins]);
@@ -2366,6 +2382,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // The hydrate decision belongs to the hello frame, not to onopen: the
     // server replays what we missed when it can, and re-downloading every
     // transcript on a reconnect it already covered is pure waste.
+    const replyEffects = (frame: HeldFrame) => {
+      buzzOnReply(frame, stateRef.current, document.visibilityState === "visible");
+      // Auto-speak lives HERE rather than in the chat view so a bot
+      // you switched away from still reads its answer out — which is
+      // the whole point of listening while you do something else. A
+      // Auto-speak is disabled during any call. Call mode owns both the
+      // singleton speaker and microphone ordering for its whole lifetime.
+      const owner = stateRef.current.bots.find((b) => b.threadId === frame.threadId);
+      if (owner?.speakReplies && currentCall() === null && autoSpeaks(frame) && frame.message.text) {
+        void speaker.speak(frame.message.text, {
+          botId: owner.id,
+          messageId: frame.message.id,
+          voiceId: owner.voice,
+        });
+      }
+    };
+
     handleFrame = (frame) => {
       const now = receivedAt.get(frame) ?? Date.now();
       const frameThread: string | undefined = frame.threadId ?? frame.event?.threadId ?? frame.bot?.threadId ?? frame.group?.threadId;
@@ -2410,8 +2443,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             appendStreamRow(frame.threadId, frame.message);
             updateOrigin({ threadId: frame.threadId, event: { type: "row", row: frame.message, now } });
           }
+          const textOwner = frame.message?.role === "bot" && frame.message.kind === "text" && !isVoiceLine(frame.message)
+            ? stateRef.current.bots.find((b) => b.threadId === frame.threadId)
+            : undefined;
+          const held = Boolean(textOwner && holdsReply(frame.message, frame.threadId in liveTurns.current, visibleMessages(textOwner)));
           // the sidebar's one-shot arrival glow; per-chat, store state untouched
-          const arrivalId = arrivalChatForFrame(frame, stateRef.current);
+          const arrivalId = held ? null : arrivalChatForFrame(frame, stateRef.current);
           if (arrivalId) noteArrival(arrivalId);
           if (frame.message?.role === "user" && typeof frame.message.queueId === "string") {
             rawDispatch({
@@ -2424,22 +2461,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const reset = frame.message && streamResetFor(frame.message);
           if (reset === "reasoning") clearReasoning(frame.threadId);
           if (reset === "stream") clearStream(frame.threadId);
-          if (frame.message?.role === "bot" && frame.message?.kind === "text" && !isVoiceLine(frame.message)) {
-            buzzOnReply(frame, stateRef.current, document.visibilityState === "visible");
-            // Auto-speak lives HERE rather than in the chat view so a bot
-            // you switched away from still reads its answer out — which is
-            // the whole point of listening while you do something else. A
-            // Auto-speak is disabled during any call. Call mode owns both the
-            // singleton speaker and microphone ordering for its whole lifetime.
-            const owner = stateRef.current.bots.find((b) => b.threadId === frame.threadId);
-            if (owner?.speakReplies && currentCall() === null && autoSpeaks(frame)) {
-              void speaker.speak(frame.message.text, {
-                botId: owner.id,
-                messageId: frame.message.id,
-                voiceId: owner.voice,
-              });
-            }
-          }
+          if (held) heldReplies.current.set(frame.threadId, [...(heldReplies.current.get(frame.threadId) ?? []), frame]);
+          else if (frame.message?.role === "bot" && frame.message?.kind === "text" && !isVoiceLine(frame.message)) replyEffects(frame);
           break;
         }
         case "message.patch": {
@@ -2447,6 +2470,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const arrivalId = arrivalChatForRoutinePatch(frame, stateRef.current);
           rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message });
           if (arrivalId) noteArrival(arrivalId);
+          // a held text the turn's end folds into Steps or hides was never its answer
+          const heldTexts = heldReplies.current.get(frame.threadId);
+          if (heldTexts && frame.message?.id) {
+            heldReplies.current.set(frame.threadId, heldTexts
+              .map((entry) => entry.message.id === frame.message.id ? { ...entry, message: { ...entry.message, ...frame.message } } : entry)
+              .filter((entry) => !entry.message.step && !entry.message.summarized));
+          }
           break;
         }
         case "thread":
@@ -2566,6 +2596,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             flushDeltas();
             clearStream(event.threadId, "completed", event.ok !== false);
             turnCompleted(event.threadId);
+            const held = heldReplies.current.get(event.threadId)?.at(-1);
+            heldReplies.current.delete(event.threadId);
+            if (held) {
+              const arrivalId = arrivalChatForFrame(held, stateRef.current);
+              if (arrivalId) noteArrival(arrivalId);
+              replyEffects(held);
+            }
           } else if (event.type === "turn.started" || event.type === "turn.retrying") {
             if (!isReplacementTurnStart(liveTurns.current, event.threadId, event.turnId, event.createdAt)) break;
             liveTurns.current = liveTurnIdAfter(liveTurns.current, event.threadId, event);

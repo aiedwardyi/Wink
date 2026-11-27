@@ -69,7 +69,7 @@ type InternalRouteDeps = {
   turnText?: (botId: string, threadId: string) => string | undefined;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
-  boardCalls?: Pick<BoardCalls, "hold" | "cleared" | "ask">;
+  boardCalls?: Pick<BoardCalls, "hold" | "cleared" | "ask" | "ownStuck">;
   routines: RoutineManager;
   delegationWatch: Map<string, DelegatedTurn & { endTakeover?: () => void }>;
   askHold: ReturnType<typeof watchAskHold>;
@@ -258,7 +258,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       }
       const hint = saved && body.plan ? await planHint(bot.id, body.fromThreadId, body.plan) : "";
       return saved
-        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note, board?.notice, hint].filter(Boolean).join(" ") })
+        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note, board?.notice, deps.boardCalls?.ownStuck(bot.id, body.fromThreadId), hint].filter(Boolean).join(" ") })
         : json(res, 409, { error: "task record could not be saved" });
     },
     agents: async (res: ServerResponse, url: URL) => {

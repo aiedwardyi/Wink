@@ -1008,6 +1008,19 @@ describe("relative file links", () => {
       expect(button()!.getAttribute("aria-label")).toBe("전체 화면 종료");
     });
 
+    it("hands Space back to a desktop video after the browser's full screen button", async () => {
+      await mount(false);
+      const video = host.querySelector("video")!;
+      const blurred = vi.fn();
+      video.addEventListener("blur", blurred);
+      video.setAttribute("tabindex", "0");
+      video.focus();
+      await act(async () => setFullscreen(video));
+      await act(async () => setFullscreen(null));
+      expect(blurred).toHaveBeenCalledTimes(2);
+      expect(document.activeElement).toBe(video);
+    });
+
     it("sizes the touch target and keeps it off the seek bar", async () => {
       await mount();
       const classes = button()!.className;

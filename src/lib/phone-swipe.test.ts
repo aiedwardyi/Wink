@@ -2,7 +2,7 @@ import "@/components/ProfileFields.test-dom.ts";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createElement } from "react";
+import { createElement, useRef } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,7 +21,7 @@ import {
   swipeStep,
   vibrationEnabled,
 } from "./phone-swipe";
-import { useDrawerSwipe, usePhoneSwipe } from "./use-phone-swipe";
+import { useDrawerSwipe, usePhoneSwipe, useSheetSwipe } from "./use-phone-swipe";
 import { userSectionId } from "./sidebar-layout";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -621,5 +621,98 @@ describe("useDrawerSwipe", () => {
     expect(app).toMatch(/const closeDrawer = \(\) => \{\r?\n\s+setDrawerOpen\(false\);\r?\n\s+menuButtonRef\.current\?\.focus\(\);\r?\n\s+\};/);
     expect(app).toContain("onClose={closeDrawer}");
     expect(app).toContain("useDrawerSwipe(drawerOpen && !sidebarOverlay,");
+  });
+});
+
+describe("useSheetSwipe up", () => {
+  let host: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+  let close: ReturnType<typeof vi.fn<() => void>>;
+
+  function Harness() {
+    const sheet = useRef<HTMLDivElement>(null);
+    useSheetSwipe(sheet, true, close, true);
+    return createElement("div", { ref: sheet, id: "sheet" },
+      createElement("p", { id: "head" }, "Claude"),
+      createElement("div", { id: "list", style: { overflowY: "auto" } }, createElement("p", { id: "row" }, "account")));
+  }
+
+  function touch(target: string, type: string, y: number, timeStamp: number) {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: 100, clientY: y }] });
+    Object.defineProperty(event, "timeStamp", { value: timeStamp });
+    document.querySelector(target)!.dispatchEvent(event);
+    return event;
+  }
+
+  function swipe(target: string, ys: number[]) {
+    ys.forEach((y, index) => touch(target, index === 0 ? "touchstart" : "touchmove", y, index * 16));
+    return touch(target, "touchend", 0, ys.length * 16);
+  }
+
+  const sheet = () => document.querySelector<HTMLElement>("#sheet")!;
+  const list = (scrollHeight: number, scrollTop = 0) => {
+    const node = document.querySelector<HTMLElement>("#list")!;
+    Object.defineProperty(node, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(node, "scrollHeight", { configurable: true, value: scrollHeight });
+    node.scrollTop = scrollTop;
+  };
+
+  beforeEach(() => {
+    close = vi.fn<() => void>();
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root.render(createElement(Harness)));
+    Object.defineProperty(sheet(), "offsetHeight", { configurable: true, value: 400 });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  it("closes on a long upward drag from the header and swallows the click", () => {
+    const end = swipe("#head", [500, 490, 420, 340]);
+    expect(close).toHaveBeenCalledOnce();
+    expect(end.defaultPrevented).toBe(true);
+  });
+
+  it("follows the finger up and springs back from a short slow drag", () => {
+    touch("#head", "touchstart", 500, 0);
+    touch("#head", "touchmove", 485, 100);
+    touch("#head", "touchmove", 470, 200);
+    expect(sheet().style.translate).toBe("0 -30px");
+    touch("#head", "touchend", 0, 300);
+    expect(close).not.toHaveBeenCalled();
+    expect(sheet().style.translate).toBe("0 0");
+  });
+
+  it("leaves a downward drag alone", () => {
+    const end = swipe("#head", [300, 320, 380, 460]);
+    expect(close).not.toHaveBeenCalled();
+    expect(sheet().style.translate).toBe("");
+    expect(end.defaultPrevented).toBe(false);
+  });
+
+  it("lets a list that can still scroll down scroll, and dismisses from its end", () => {
+    list(600, 100);
+    swipe("#row", [500, 490, 420, 340]);
+    expect(close).not.toHaveBeenCalled();
+    list(600, 400);
+    swipe("#row", [500, 490, 420, 340]);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("closes without following the finger under reduced motion", () => {
+    const matchMedia = window.matchMedia.bind(window);
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ ...matchMedia(query), matches: query === "(prefers-reduced-motion: reduce)" || matchMedia(query).matches }));
+    touch("#head", "touchstart", 500, 0);
+    touch("#head", "touchmove", 480, 16);
+    touch("#head", "touchmove", 340, 32);
+    expect(sheet().style.translate).toBe("");
+    touch("#head", "touchend", 0, 48);
+    expect(close).toHaveBeenCalledOnce();
   });
 });

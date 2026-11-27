@@ -1,6 +1,6 @@
 // Every engine's read-only turn, launched for real against its fake CLI on its most permissive
 // instance (full auto / bypass): the restriction must show in the launch itself, not just a flag.
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,7 @@ import { BUILT_IN_DRIVERS } from "./builtIn.ts";
 import { ClaudeDriver } from "./claude.ts";
 import { CodexDriver, READ_ONLY_FEATURES_OFF } from "./codex.ts";
 import { MspMuseAgentDriver } from "./msp/muse.ts";
+import { lineWords } from "../replies.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fake = (name: string) => join(here, "..", "testing", name);
@@ -137,7 +138,7 @@ const ENGINES: Record<string, Engine> = {
     },
     restricted({ argv }: { argv: string[] }) {
       expect(after(argv, "--mode")).toBe("plan");
-      expect(JSON.parse(after(argv, "--settings"))).toEqual({ allowNonWorkspaceAccess: false });
+      expect(JSON.parse(after(argv, "--settings"))).toEqual({ allowNonWorkspaceAccess: false, permissions: { deny: ["read_file(*)"] } });
       expect(argv).not.toContain("--dangerously-skip-permissions");
     },
   },
@@ -237,6 +238,116 @@ describe("Claude read-only turns run none of the owner's hooks", () => {
     expect(await turn("t-owner-resumed", { resumeCursor: "s-owner" })).toEqual([...owned].sort());
     expect(await turn("t-read-only", { readOnly: true })).toEqual([]);
     expect(await turn("t-read-only-resumed", { readOnly: true, resumeCursor: "s-owner" })).toEqual([]);
+  });
+});
+
+// GROUP-JOIN-REAL row 9: a joiner asked the host's Claude bot to read notes.txt in its project and it posted the file.
+// The access each turn gets is what index.ts gives a room turn (multiplayer.test.ts pins those shapes).
+describe("a room guest's read-only turn reads no host file", () => {
+  const CANARY = "host-only file: canary GJR-7731";
+  const GUEST_ASK: Partial<SendTurnInput> = { approval: "ask", readOnly: true };
+  const OWNER_LANE: Partial<SendTurnInput> = { approval: "auto", readOnly: true, ownerText: true };
+  const OWNER_TURN: Partial<SendTurnInput> = { approval: "ask" };
+
+  const claudeRead = async (threadId: string, access: Partial<SendTurnInput>) => {
+    const project = join(scratch, "proj");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, "notes.txt"), CANARY);
+    const out = join(scratch, "read-out.txt");
+    rmSync(out, { force: true });
+    setEnv("FAKE_CLAUDE_MODE", "read");
+    setEnv("FAKE_CLAUDE_READ_OUT", out);
+    const instance = await ClaudeDriver.create({ instanceId: `read-${threadId}`, displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-claude-cli.ts"), permissionMode: "acceptEdits" } });
+    live.push(instance);
+    await run(instance, threadId, { cwd: project, integrations: { agents }, ...access });
+    return existsSync(out) ? readFileSync(out, "utf8") : null;
+  };
+
+  it.each([["fresh", undefined], ["resumed", "s-host"]] as const)("Claude: a guest's ask can't read the host's project file (%s)", async (_how, cursor) => {
+    expect(await claudeRead("t-guest", { ...GUEST_ASK, ...(cursor && { resumeCursor: cursor }) })).toBeNull();
+  });
+
+  it("Claude: the owner's own read-only lane and owner turns still read it", async () => {
+    expect(await claudeRead("t-owner-lane", OWNER_LANE)).toBe(CANARY);
+    expect(await claudeRead("t-owner", OWNER_TURN)).toBe(CANARY);
+  });
+
+  it("Claude: LSP reads like Read: an owner turn keeps it, a guest's ask can't", async () => {
+    setEnv("FAKE_CLAUDE_READ_TOOL", "LSP");
+    expect(await claudeRead("t-owner-lsp", OWNER_TURN)).toBe(CANARY);
+    expect(await claudeRead("t-guest-lsp", GUEST_ASK)).toBeNull();
+  });
+
+  const hostProject = () => {
+    const project = join(scratch, "proj");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, "notes.txt"), CANARY);
+    return project;
+  };
+  const reader = (instance: ProviderInstance, cwd: string, out: string) => async (threadId: string, access: Partial<SendTurnInput>) => {
+    rmSync(out, { force: true });
+    await run(instance, threadId, { cwd, integrations: { agents }, ...access });
+    return existsSync(out) ? readFileSync(out, "utf8") : null;
+  };
+
+  it("Grok: over agent stdio plan mode and --disallowed-tools hold nothing, so a guest's ask gets no read tool or shell; the owner's lane and turns keep them", async () => {
+    const out = join(scratch, "grok-read.txt");
+    setEnv("FAKE_ACP_MODE", "read");
+    setEnv("FAKE_ACP_READ_OUT", out);
+    const instance = await GrokAgentDriver.create({ instanceId: "read-grok", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-acp-cli.ts"), fullAuto: true } });
+    live.push(instance);
+    const read = reader(instance, hostProject(), out);
+    expect(await read("t-grok-guest", GUEST_ASK)).toBeNull();
+    expect(await read("t-grok-guest-resumed", { ...GUEST_ASK, resumeCursor: "s-host" })).toBeNull();
+    expect(await read("t-grok-lane", OWNER_LANE)).toBe(CANARY);
+    expect(await read("t-grok-owner", OWNER_TURN)).toBe(CANARY);
+    // the guest's tools come from its launch, not the saved session: the owner's next turn has them all
+    expect(await read("t-grok-guest", { ...OWNER_TURN, resumeCursor: "fake-acp-session" })).toBe(CANARY);
+  });
+
+  // GATE-REVIEW-2239C: grok inlines an @path with no tool, so a guest's words must reach it with every @ broken
+  it("Grok: a guest's @path inlines no file in any form grok expands; the owner's own @path still does", async () => {
+    const out = join(scratch, "grok-at.txt");
+    setEnv("FAKE_ACP_MODE", "read");
+    setEnv("FAKE_ACP_READ_OUT", out);
+    const instance = await GrokAgentDriver.create({ instanceId: "at-grok", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-acp-cli.ts"), fullAuto: true } });
+    live.push(instance);
+    const elsewhere = join(scratch, "elsewhere.txt");
+    writeFileSync(elsewhere, "outside canary");
+    const read = reader(instance, hostProject(), out);
+    const ask = ["", "\u200B", ":", ",", "-", "/", "=", "\\"].map((before) => `${before}@notes.txt and ${before}@${elsewhere}`).join(", ");
+    const mina = { author: { kind: "person", id: "p1", name: "Mina" } };
+    expect(await read("t-grok-at-guest", { ...GUEST_ASK, text: lineWords(mina, ask, true) })).toBeNull();
+    expect(await read("t-grok-at-owner", { ...OWNER_TURN, text: lineWords({ author: { kind: "host" } }, ask, true) })).toContain("outside canary");
+  });
+
+  it("Muse: a guest's ask works in an empty folder and never resumes a session rooted in the host's project", async () => {
+    const out = join(scratch, "muse-read.txt");
+    setEnv("META_API_KEY", "meta-key");
+    setEnv("FAKE_MSP_MODE", "read");
+    setEnv("FAKE_MSP_READ_OUT", out);
+    const instance = await MspMuseAgentDriver.create({ instanceId: "read-muse", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-msp-cli.ts"), fullAuto: true } });
+    live.push(instance);
+    const read = reader(instance, hostProject(), out);
+    expect(await read("t-muse-lane", OWNER_LANE)).toBe(CANARY);
+    expect(await read("t-muse-guest", GUEST_ASK)).toBeNull();
+    // the session that ask started sits in its empty folder: the owner's next turn resumes it in the project
+    expect(await read("t-muse-guest", { ...OWNER_TURN, resumeCursor: "fake-msp-session" })).toBe(CANARY);
+    // the owner's session, rooted in the project, is the one a guest's ask would resume
+    expect(await read("t-muse-owner", OWNER_TURN)).toBe(CANARY);
+    expect(await read("t-muse-guest-resumed", { ...GUEST_ASK, resumeCursor: "fake-msp-session" })).toBeNull();
+  });
+
+  it("agy: a guest's ask denies every file read; the owner's lane keeps its workspace", async () => {
+    setEnv("FAKE_AGY_DUMP", join(scratch, "agy.json"));
+    const instance = await AntigravityDriver.create({ instanceId: "read-agy", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-agy-cli.ts"), fullAuto: true } });
+    live.push(instance);
+    const settings = async (threadId: string, access: Partial<SendTurnInput>) => {
+      await run(instance, threadId, access);
+      return JSON.parse(after(dumped("agy.json").argv, "--settings"));
+    };
+    expect(await settings("t-agy-guest", GUEST_ASK)).toEqual({ allowNonWorkspaceAccess: false, permissions: { deny: ["read_file(*)"] } });
+    expect(await settings("t-agy-lane", OWNER_LANE)).toEqual({ allowNonWorkspaceAccess: false });
   });
 });
 

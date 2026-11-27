@@ -159,7 +159,7 @@ describe("dream-check script", () => {
   };
   const DUPES = memory("- Uses pnpm (noted 2026-11-01)", "- Lives in Seoul", "- Uses pnpm (noted 2026-11-20)");
 
-  it("runs one real tidy on a copy and reports nothing lost", () => {
+  it("runs one tidy on a copy, moving no twin without both judges, and reports nothing lost", () => {
     const copy = mkdtempSync(join(testHome(), "orbit-copy-"));
     mkdirSync(join(copy, "workspaces", "bot-a"), { recursive: true });
     writeFileSync(join(copy, "bots.json"), JSON.stringify([{ id: "bot-a", name: "Alpha" }]));
@@ -169,7 +169,7 @@ describe("dream-check script", () => {
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     const [row, trap] = JSON.parse(readFileSync(json, "utf8")).results;
-    expect(row).toMatchObject({ name: "Alpha", result: "saved", moved: 1, linesBefore: 5, linesAfter: 4, lost: [], madeUp: [], quiz: { asked: 0, right: 0 }, undone: { asked: 0 }, conflicts: 0 });
+    expect(row).toMatchObject({ name: "Alpha", result: "none", moved: 0, linesBefore: 5, linesAfter: 5, lost: [], madeUp: [], quiz: { asked: 0, right: 0 }, undone: { asked: 0 }, conflicts: 0 });
     expect(trap).toMatchObject({ trap: true, proposed: 30, moved: 0, lost: [] });
     expect(readFileSync(join(copy, "workspaces", "bot-a", "MEMORY.md"), "utf8")).toContain("(noted 2026-11-01)");
   });
@@ -200,7 +200,7 @@ describe("dream-check script", () => {
     const result = run(copy, "--no-model", "--detail", json);
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
-    expect(JSON.parse(readFileSync(json, "utf8")).results[0]).toMatchObject({ result: "saved", moved: 1, lost: [] });
+    expect(JSON.parse(readFileSync(json, "utf8")).results[0]).toMatchObject({ result: "none", moved: 0, lost: [] });
     expect(readdirSync(outside)).toEqual(["2026-10.md"]);
     expect(readFileSync(join(outside, "2026-10.md"), "utf8")).toBe("# Memory history\n");
   });
@@ -210,8 +210,8 @@ describe("dream-check script", () => {
     const json = join(copy, "out.json");
     const result = capped(copy, "--detail", json);
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("FAILED Alpha night 1: tidy error");
-    expect(JSON.parse(readFileSync(json, "utf8")).results[0]).toMatchObject({ name: "Alpha", result: "error", moved: 0 });
+    expect(result.stdout).toContain("FAILED Alpha night 1: tidy unjudged");
+    expect(JSON.parse(readFileSync(json, "utf8")).results[0]).toMatchObject({ name: "Alpha", result: "unjudged", moved: 0 });
     expect(result.left).toEqual([]);
   });
 
@@ -222,9 +222,9 @@ describe("dream-check script", () => {
     const json = join(copy, "out.json");
     const result = capped(copy, "--detail", json);
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("FAILED Alpha night 1: tidy error, model token cap reached");
+    expect(result.stdout).toContain("FAILED Alpha night 1: tidy unjudged, model token cap reached");
     const [row] = JSON.parse(readFileSync(json, "utf8")).results;
-    expect(row).toMatchObject({ result: "error", error: "model token cap reached", filed: 0, lost: [], madeUp: [] });
+    expect(row).toMatchObject({ result: "unjudged", error: "model token cap reached", filed: 0, lost: [], madeUp: [] });
     expect(readFileSync(join(copy, "workspaces", "bot-a", "MEMORY.md"), "utf8")).toBe(raw);
     expect(result.left).toEqual([]);
   });
@@ -252,9 +252,9 @@ describe("dream-check script", () => {
     const result = run(copy, "--no-model", "--json", json, "--detail", detail, "--build", "9f2983532");
     expect(result.status).toBe(0);
     const summary = nightSummarySchema.parse(JSON.parse(readFileSync(json, "utf8")));
-    expect(summary.bots[0]).toMatchObject({ bot: "bot-a", result: "saved", moved: 1, lost: [], madeUp: [], error: null });
+    expect(summary.bots[0]).toMatchObject({ bot: "bot-a", result: "none", moved: 0, lost: [], madeUp: [], error: null });
     expect(readFileSync(json, "utf8")).not.toContain("Alpha");
-    expect(JSON.parse(readFileSync(detail, "utf8")).results[0]).toMatchObject({ name: "Alpha", result: "saved" });
+    expect(JSON.parse(readFileSync(detail, "utf8")).results[0]).toMatchObject({ name: "Alpha", result: "none" });
   });
 
   it("removes a killed night's temp root and leaves a running one", () => {

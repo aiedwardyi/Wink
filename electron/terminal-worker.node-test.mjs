@@ -126,10 +126,10 @@ test("existing panes retain their captured id and generation across a bot accoun
   const first = await f.host.openForBot("bot-1", { label: "first", command: "codex 'task'" });
   selected = launch({ id: "acct_fourth", generation: 4 });
   await f.host.openForBot("bot-1", { label: "second", command: "codex 'task'" });
-  assert.deepEqual(f.host.livePanesForAccount?.(THIRD.id), { count: 1, unknown: 0, generations: { "3": 1 } });
-  assert.deepEqual(f.host.livePanesForAccount?.("acct_fourth"), { count: 1, unknown: 0, generations: { "4": 1 } });
+  assert.deepEqual(await f.host.livePanesForAccount?.(THIRD.id), { count: 1, unknown: 0, generations: { "3": 1 } });
+  assert.deepEqual(await f.host.livePanesForAccount?.("acct_fourth"), { count: 1, unknown: 0, generations: { "4": 1 } });
   f.children[0].exit({ exitCode: 0 });
-  assert.equal(f.host.livePanesForAccount(THIRD.id).count, 0);
+  assert.equal((await f.host.livePanesForAccount(THIRD.id)).count, 0);
   assert.equal(f.host.readBot("bot-1", { sessionId: first.sessionId }).exited, true);
 });
 
@@ -189,12 +189,12 @@ test("pending launches block removal until a plain shell is confirmed unrelated"
   t.after(() => f.host.dispose());
   const opening = f.host.openForBot("bot-1", { label: "shell" });
   try {
-    assert.equal(f.host.livePanesForAccount?.(THIRD.id).unknown, 1);
+    assert.equal((await f.host.livePanesForAccount?.(THIRD.id)).unknown, 1);
   } finally {
     release?.({ kind: "shell" });
     await opening;
   }
-  assert.deepEqual(f.host.livePanesForAccount(THIRD.id), { count: 0, unknown: 0, generations: {} });
+  assert.deepEqual(await f.host.livePanesForAccount(THIRD.id), { count: 0, unknown: 0, generations: {} });
 });
 
 test("managed command serialization preserves prompt text and expands only pane grants", () => {
@@ -324,7 +324,7 @@ test("the captured-turn resolver and core policy reach the final fake PTY enviro
   assert.match(f.children[0].writes[0], /'--no-daemon'/);
   assert.deepEqual(usageCalls[0][1], { ...THIRD, name: "Codex" });
   assert.equal(pane.line, "Captured usage.");
-  assert.equal(f.host.livePanesForAccount(THIRD.id).count, 1);
+  assert.equal((await f.host.livePanesForAccount(THIRD.id)).count, 1);
 });
 
 for (const platform of ["linux", "win32"]) {
@@ -346,6 +346,6 @@ for (const platform of ["linux", "win32"]) {
     await f.host.openForBot("bot-1", { label: "worker", command: "claude 'task'" });
     assert.equal(f.children[0].options.env.CLAUDE_CONFIG_DIR, undefined);
     assert.deepEqual(usageCalls[0][1], { id: "claude", generation: 0, name: "Claude" });
-    assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 1, unknown: 0, generations: { "0": 1 } });
+    assert.deepEqual(await f.host.livePanesForAccount("claude"), { count: 1, unknown: 0, generations: { "0": 1 } });
   });
 }

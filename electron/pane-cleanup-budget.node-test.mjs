@@ -26,7 +26,14 @@ function count(dir) {
   return found;
 }
 
-async function tree(t, { bystanders = 20, worktrees = 3, files = 0, scratch = 10, nested = 0, budget = SWEEP_BUDGET } = {}) {
+async function until(ready, what) {
+  for (let tries = 0; !ready(); tries++) {
+    assert.ok(tries < 1_000, `no ${what} after 10 s`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function tree(t, { bystanders = 20, worktrees = 3, files = 0, scratch = 10, nested = 0, budget = SWEEP_BUDGET, cpu } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pane-budget-"));
   const worktreeRoot = path.join(home, "worktrees");
   const tempRoot = path.join(home, "temp");
@@ -58,7 +65,7 @@ async function tree(t, { bystanders = 20, worktrees = 3, files = 0, scratch = 10
   const jobs = [];
   const warnings = [];
   const live = path.join(tempRoot, `wink-S${scratch}`);
-  const options = { home, tempRoot, worktreeRoot, budget, now: () => time, setPriority: () => {}, warn: (error) => warnings.push(error), schedule: (run, ms) => { const job = { run, ms }; jobs.push(job); return job; }, cancel: (job) => { const index = jobs.indexOf(job); if (index !== -1) jobs.splice(index, 1); } };
+  const options = { home, tempRoot, worktreeRoot, budget, cpu, now: () => time, setPriority: () => {}, warn: (error) => warnings.push(error), schedule: (run, ms) => { const job = { run, ms }; jobs.push(job); return job; }, cancel: (job) => { const index = jobs.indexOf(job); if (index !== -1) jobs.splice(index, 1); } };
   const cleanup = createPaneCleanup(options);
   cleanup.start(() => [{ id: "live", label: `S${scratch} | model | high`, cwd: home }]);
   let writer = null;
@@ -105,7 +112,12 @@ async function tree(t, { bystanders = 20, worktrees = 3, files = 0, scratch = 10
     writer = childProcess.spawn(process.execPath, ["-e", `const fs = require("fs"); setInterval(() => { for (const file of ${JSON.stringify(files)}) fs.appendFileSync(file, "x"); }, 20);`], { stdio: "ignore", windowsHide: true });
     return new Promise((resolve) => setTimeout(resolve, 200));
   };
-  return { home, worktreeRoot, tempRoot, cleanup, jobs, targets, rows, live, warnings, roots, events, write, close };
+  // Folders no row owns stay out of a pass while they are written to.
+  const written = () => {
+    const at = new Date(Date.now() + 9 * DAY_MS);
+    for (const name of fs.readdirSync(tempRoot)) fs.utimesSync(path.join(tempRoot, name), at, at);
+  };
+  return { home, worktreeRoot, tempRoot, cleanup, jobs, targets, rows, live, warnings, roots, events, write, close, written };
 }
 
 async function calls(t) {
@@ -218,6 +230,7 @@ test("a tree past the folder budget is swept in one pass and not walked again", 
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, ".orbit", "cleanup-sweep.json"), "utf8")).done, true);
 
   const later = await f.close(4, 7);
+  f.written();
   const promises = await import("node:fs/promises");
   let reads = 0;
   for (const method of ["lstat", "readdir"]) {
@@ -274,5 +287,67 @@ test("a sweep stopped by its budget goes on from its cursor in short slices unti
   assert.deepEqual(f.rows.filter((row) => fs.existsSync(row)), []);
   assert.deepEqual(f.targets.filter((target) => fs.existsSync(target)), f.targets);
   assert.equal(f.jobs.at(-1).ms, 6 * 60 * 60_000);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a re-pointed link re-reads only the links that resolve through it", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = await tree(t, { bystanders: 20, worktrees: 0, scratch: 3 });
+  await f.cleanup.sweep();
+  const later = await f.close(4, 7);
+  const moved = path.join(f.worktreeRoot, "by-0", "d0", "link-0");
+  const heard = [];
+  const watcher = fs.watch(path.dirname(moved), (type, name) => heard.push(name));
+  fs.unlinkSync(moved);
+  fs.symlinkSync(path.join(f.home, "shared", "node_modules", "pkg-1"), moved, kind);
+  await until(() => heard.length, "re-point event");
+  watcher.close();
+  const promises = await import("node:fs/promises");
+  const original = promises.default.readlink;
+  let reads = 0;
+  t.mock.method(promises.default, "readlink", (...args) => { reads++; return original(...args); });
+  await f.cleanup.sweep();
+  assert.deepEqual(later.filter((row) => fs.existsSync(row)), []);
+  assert.ok(reads < 20, `${reads} links read again for one re-pointed link among ${f.roots().links}`);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a check settles while other folders keep changing", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = await tree(t, { bystanders: 2, worktrees: 0, scratch: 3 });
+  await f.cleanup.sweep();
+  const busy = path.join(f.worktreeRoot, "by-0");
+  const writer = childProcess.spawn(process.execPath, ["-e", `const fs = require("fs"); let next = 0; setInterval(() => fs.mkdirSync(${JSON.stringify(busy)} + "/n" + next++), 20);`], { stdio: "ignore", windowsHide: true });
+  t.after(() => writer.kill());
+  await until(() => fs.existsSync(path.join(busy, "n1")), "writer folder");
+  const later = await f.close(4, 7);
+  f.written();
+  await f.cleanup.sweep();
+  assert.deepEqual(later.filter((row) => fs.existsSync(row)), []);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a resting link index is dropped once watching it costs more than building it, and the next pass builds it again", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  let spent = 0;
+  let weighed = 0;
+  const f = await tree(t, { bystanders: 2, worktrees: 0, scratch: 3, cpu: () => { weighed++; return spent; } });
+  const promises = await import("node:fs/promises");
+  const readdir = promises.default.readdir;
+  const building = t.mock.method(promises.default, "readdir", (...args) => { spent++; return readdir(...args); });
+  await f.cleanup.sweep();
+  building.mock.restore();
+  const builds = () => f.events().filter((line) => line.kind === "links").at(-1).builds;
+  assert.equal(builds(), 1);
+  const pass = async (from, watching) => {
+    spent += watching;
+    const seen = weighed;
+    fs.mkdirSync(path.join(f.worktreeRoot, "by-0", `n${from}`));
+    await until(() => weighed > seen, "watch cost check");
+    const later = await f.close(from, from + 1);
+    f.written();
+    await f.cleanup.sweep();
+    assert.deepEqual(later.filter((row) => fs.existsSync(row)), []);
+    return builds();
+  };
+  assert.equal(await pass(4, 1), 0);
+  assert.equal(await pass(5, 1_000_000), 1);
   assert.deepEqual(f.warnings, []);
 });

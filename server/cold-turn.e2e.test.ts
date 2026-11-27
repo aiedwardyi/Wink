@@ -109,7 +109,7 @@ it("prepares a composer focus with no resume cursor on a chat Map is still loadi
   await waitFor(() => entries().slice(from).some((entry) => entry.landed === bot.threadId), "the load to land");
 }, 60_000);
 
-it("steers a send into a turn on a chat Map is still loading without reading it whole, and its quick ack lands", async () => {
+it("steers a send into a turn on a chat Map is still loading without reading it whole, with no line beside it", async () => {
   const bot = (await api("POST", "/api/bots")).body.bot;
   await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: "steer", model: "claude-fake" } });
   expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "hello there" })).status).toBe(202);
@@ -123,5 +123,5 @@ it("steers a send into a turn on a chat Map is still loading without reading it 
   await waitFor(() => entries().slice(from).some((entry) => entry.settled === bot.threadId), "the turn to settle");
   expect(wholeReads(bot.threadId, from)).toEqual([]);
   const shown = (await api("GET", "/api/bots?messages=200")).body.bots.find((row: any) => row.id === bot.id);
-  expect(shown.messages.some((row: any) => row.quick?.askId === sent.message.id)).toBe(true);
+  expect(shown.messages.some((row: any) => row.quick?.askId === sent.message.id)).toBe(false);
 }, 60_000);

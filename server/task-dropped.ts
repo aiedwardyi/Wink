@@ -10,7 +10,7 @@ import type { TaskAsk } from "./task-asks.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 
 const DROPPED_DIR = join(DATA_DIR, "task-state-dropped");
-const KEEP_MS = 90 * 24 * 60 * 60 * 1000;
+export const DROPPED_KEEP_MS = 90 * 24 * 60 * 60 * 1000;
 const lineSchema = z.object({ at: z.number() });
 
 // normalize's generic redactor keeps prose passwords, and the input and seen asks never went through it
@@ -42,7 +42,7 @@ export function logDroppedAsks(saved: TaskResumePacket, ...held: (readonly TaskA
 function fresh(line: string, now: number): boolean {
   try {
     const parsed = lineSchema.safeParse(JSON.parse(line));
-    return parsed.success && now - parsed.data.at <= KEEP_MS;
+    return parsed.success && now - parsed.data.at <= DROPPED_KEEP_MS;
   } catch {
     return false;
   }

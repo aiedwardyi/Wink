@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 export const ASK_STATUSES = ["open", "building", "waiting-for-user", "done", "declined"] as const;
@@ -11,13 +13,16 @@ export const ASKS_LIST = "[Wink asks list";
 export const TASK_ASKS_PROMPT =
   "Add each ask the user makes to update_task_state asks in the same turn, counting a yes to something you proposed; open means not started yet. Close it as done or declined as soon as it settles; never drop one. Keep three lists for asks and work only: the plan is the to-do for now, asks marked building are the sprint, and the asks list holds every open ask; never start a separate list file, and keep your other records. Build any summary, status or release from the asks list, not from memory. Never leave work waiting for the user's review without showing it to them. Wink lists every open ask in a fresh session and on a status question, otherwise the asks the user's words name, and merges a repeat into the ask it matches. Park an ask with until when it waits on a date. An ask with no ref and no change in 3 days needs your verdict: build it (helper or time), park it or close it yourself, and ask the user about at most 3 at a time.";
 
+/** a sha-256 of an ask's full words */
+export const askKeySchema = z.string().regex(/^[0-9a-f]{64}$/);
+
 export const taskAskSchema = z.object({
   id: z.string().regex(/^A\d{1,6}$/),
   ask: z.string().min(1).max(ASK_LIMITS.ask),
   status: z.enum(ASK_STATUSES),
   ref: z.string().min(1).max(ASK_LIMITS.ref).optional(),
-  /** the bot's own ask_user card left unanswered; Wink adds these, not the bot */
-  kind: z.literal("question").optional(),
+  /** question: the bot's own ask_user card left unanswered; promise: its own "I'll do X" a turn left undone. Wink adds these, not the bot */
+  kind: z.enum(["question", "promise"]).optional(),
   choices: z.string().min(1).max(ASK_LIMITS.ref).optional(),
   due: z.number().int().nonnegative().optional(),
   /** the wake Wink set for due, so moving or closing the ask cancels it */
@@ -26,6 +31,8 @@ export const taskAskSchema = z.object({
   until: z.number().int().nonnegative().optional(),
   /** when a list past MAX_STATUS_ASKS_BYTES last showed it */
   shown: z.number().int().nonnegative().optional(),
+  /** Wink filed it from a turn's words: the full words' identity, so a repeat matches past the clip; unchecked while open */
+  key: askKeySchema.optional(),
   at: z.number().int().nonnegative(),
   changedAt: z.number().int().nonnegative(),
 }).strict();
@@ -53,10 +60,14 @@ const STATUS_TURN = /\b(summar(y|ies|i[sz]e)|recap|status|stand-?up|morning|brie
 export const isStatusTurn = (text: string): boolean => STATUS_TURN.test(text);
 export const isOpenAsk = (ask: TaskAsk): boolean => ask.status !== "done" && ask.status !== "declined";
 const isQuestion = (ask: TaskAsk) => ask.kind === "question";
+const isPromise = (ask: TaskAsk) => ask.kind === "promise";
+// what Wink filed from a turn's words is unchecked: only an engine that looked closes it, by ID
+const CHECK = "check the transcript, files and running processes first, then close each by ID or set it building with the job's ref through update_task_state; never start one twice.";
+const QUESTION_MARK = /[?？]$/;
 const isParked = (ask: TaskAsk, now: number) => isOpenAsk(ask) && ask.until !== undefined && ask.until > now;
 // a skipped question waits for a natural pause, so it never nags an ordinary turn
 const needsVerdict = (ask: TaskAsk, now: number) =>
-  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !ask.ref && now - Math.max(ask.changedAt, ask.until ?? 0) >= ASK_VERDICT_MS;
+  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !isPromise(ask) && ask.key === undefined && !ask.ref && now - Math.max(ask.changedAt, ask.until ?? 0) >= ASK_VERDICT_MS;
 const words = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -67,7 +78,7 @@ const untilTime = (text: string) => {
 };
 
 // only closed asks fall off, oldest first; an open ask is never dropped or refused
-function trimClosed(asks: TaskAsk[]): TaskAsk[] {
+export function trimClosed(asks: TaskAsk[]): TaskAsk[] {
   const trimmed: TaskAsk[] = [];
   for (let closed = asks.findIndex((ask) => !isOpenAsk(ask)); asks.length > ASK_LIMITS.kept && closed >= 0; closed = asks.findIndex((ask) => !isOpenAsk(ask))) {
     trimmed.push(...asks.splice(closed, 1));
@@ -138,6 +149,37 @@ export function addQuestionAsk(book: AskBook | undefined, question: string, choi
   return { asks, lastAskId };
 }
 
+// an exact repeat of the same kind over the full words before the clip: case, spacing, apostrophe style and closing
+// punctuation aside, so "the icon and layout" is new work beside a done "the icon", and a path keeps its case: src/Header.ts is not src/header.ts
+const keyOf = (text: string) => createHash("sha256").update(text.replace(/[‘’]/g, "'").replace(/[\s.!?]+$/, "").trim().split(/\s+/)
+  .map((word) => /[\\/]|[\p{L}\p{N}_-]\.[\p{L}\p{N}]/u.test(word) ? word : word.toLowerCase()).join(" ")).digest("hex");
+
+/** Files what a turn may have left open, unchecked, each with its own id: a promise as kind promise with any running line as its ref, never its status, and the user's question as their ask. It only adds: a filed ask, open, done or declined, takes nothing but an exact repeat of its full words. Null when nothing changes. */
+export function fileLeftovers(book: AskBook | undefined, left: readonly { ask: string; promise?: true; note?: string }[], now: number): SavedAsks | null {
+  const asks = (book?.asks ?? []).map((item) => ({ ...item }));
+  const first = lastAskIdOf(book);
+  let lastAskId = first;
+  // an ask filed without a key (an engine's own, or older) matches on its text; a clipped one proves no repeat
+  const keys = asks.map((filed) => filed.key ?? (/…\??$/.test(filed.ask) ? undefined : keyOf(filed.ask)));
+  for (const item of left) {
+    // a long question keeps its "?" so a later turn still reads it as one
+    const mark = item.promise ? undefined : QUESTION_MARK.exec(item.ask.trim())?.[0];
+    const ask = mark ? `${clip(item.ask.trim().slice(0, -1), ASK_LIMITS.ask - 1)}${mark}` : clip(item.ask, ASK_LIMITS.ask);
+    const key = keyOf(item.ask);
+    if (!ask || asks.some((filed, index) => isPromise(filed) === Boolean(item.promise) && !isQuestion(filed) && keys[index] === key)) continue;
+    lastAskId += 1;
+    // shown 0: no turn showed it yet, so the next one does, resumed or not
+    const filed: TaskAsk = { id: `A${lastAskId}`, ask, status: "open", shown: 0, key, at: now, changedAt: now };
+    if (item.promise) filed.kind = "promise";
+    if (item.note) filed.ref = clip(item.note, ASK_LIMITS.ref);
+    asks.push(filed);
+    keys.push(key);
+  }
+  if (lastAskId === first) return null;
+  trimClosed(asks);
+  return { asks, lastAskId };
+}
+
 /** A card answered after its question was filed: one filed for this card goes, an older one closes done. Null when none matches. */
 export function answerQuestionAsk(existing: readonly TaskAsk[] | undefined, question: string, cardAt: number, now: number): TaskAsk[] | null {
   const ask = words(clip(question, ASK_LIMITS.ask));
@@ -154,9 +196,19 @@ function day(at: number): string {
   return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-const askLine = (ask: TaskAsk, now: number) => isParked(ask, now)
+// a promise, or anything Wink filed from a turn, is unchecked on every list until an engine settles it by ID
+const unchecked = (ask: TaskAsk) => ask.status === "open" && (isPromise(ask) || ask.key !== undefined || (ask.shown === 0 && !isQuestion(ask)));
+// past the first few, unchecked promises ride as their IDs on one line; each keeps its row, and a status question lists them all
+const MAX_LISTED_PROMISES = 3;
+export const MORE_PROMISES = "more unchecked promises, each open by ID; a status question lists them:";
+const rows = (asks: readonly TaskAsk[], line: (ask: TaskAsk) => string, all: boolean) => {
+  const batched = all ? [] : asks.filter((ask) => isPromise(ask) && unchecked(ask)).slice(MAX_LISTED_PROMISES);
+  const lines = asks.filter((ask) => !batched.includes(ask)).map(line);
+  return batched.length ? [...lines, `- +${batched.length} ${MORE_PROMISES} ${batched.map((ask) => ask.id).join(", ")}`] : lines;
+};
+const askLine = (ask: TaskAsk, now: number, carried = false) => isParked(ask, now)
   ? `- ${ask.id} parked back ${day(ask.until!)}: ${ask.ask}`
-  : `- ${ask.id} ${ask.status}${isQuestion(ask) ? " question" : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
+  : `- ${ask.id} ${ask.status}${ask.kind ? ` ${ask.kind}` : ""}${carried || unchecked(ask) ? " unchecked" : ""}${needsVerdict(ask, now) ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
 
 /** Open asks, needing a verdict first and then oldest, then parked ones by return day; past MAX_STATUS_ASKS_BYTES the least recently shown come first and the rest wait. */
 function listed(asks: readonly TaskAsk[] | undefined, now: number) {
@@ -195,9 +247,11 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, sta
   const waiting = ordered.length + parked.length - shown.length;
   const rotated = !waiting ? "" : verdictOnly ? ` ${waiting} more show on a status question.` : ` ${waiting} more wait for the next turn, least recently shown first.`;
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
+  const promises = shown.some(isPromise) ? ` A promise is your own "I'll" Wink read from a turn, maybe on another engine.` : "";
+  const check = shown.some(unchecked) ? ` An unchecked row may be done or running already: ${CHECK}` : "";
   return [
-    `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}]`,
-    ...shown.map(line),
+    `${ASKS_LIST} - ${ordered.length} open${flagged}.${rotated}${statusTurn ? " Build any summary or status from this list." : ""}${questions}${promises}${check}]`,
+    ...rows(shown, line, statusTurn),
   ].join("\n");
 }
 
@@ -224,6 +278,14 @@ function named(asks: readonly TaskAsk[], text: string): TaskAsk[] {
     .map(({ ask }) => ask);
 }
 
+function leftBlock(asks: readonly TaskAsk[], now: number): string {
+  if (!asks.length) return "";
+  return [
+    `[Wink asks the last turn may have left open, unchecked - ${asks.length}: ${CHECK}]`,
+    ...rows(asks, (ask) => askLine(ask, now, true), false),
+  ].join("\n");
+}
+
 // another chat's ids mean nothing here, so its asks show without them
 function elsewhereBlock(asks: readonly TaskAsk[], now: number): string {
   if (!asks.length) return "";
@@ -241,11 +303,12 @@ export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, tex
   const own = asks ?? [];
   if (status) return [asksBlock(asks, now, true), elsewhereBlock(elsewhere.filter(isOpenAsk), now)].filter(Boolean).join("\n");
   const block = own.some((ask) => needsVerdict(ask, now)) ? asksBlock(asks, now, false, true) : "";
-  const mine = new Set(own.filter((ask) => !needsVerdict(ask, now)));
+  const left = own.filter((ask) => isOpenAsk(ask) && ask.shown === 0 && !needsVerdict(ask, now));
+  const mine = new Set(own.filter((ask) => !needsVerdict(ask, now) && !left.includes(ask)));
   const render = (picked: readonly TaskAsk[]) => {
     const hits = picked.filter((ask) => mine.has(ask));
     return [
-      hits.length ? [`[Wink asks the user's message names - ${hits.length} of ${own.filter(isOpenAsk).length} open; a status question lists them all.]`, ...hits.map((ask) => askLine(ask, now))].join("\n") : "",
+      hits.length ? [`[Wink asks the user's message names - ${hits.length} of ${own.filter(isOpenAsk).length} open; a status question lists them all.${hits.some(unchecked) ? " An unchecked row may be done already: check first, close it by ID, never start one twice." : ""}]`, ...hits.map((ask) => askLine(ask, now))].join("\n") : "",
       elsewhereBlock(picked.filter((ask) => !mine.has(ask)), now),
     ].filter(Boolean).join("\n");
   };
@@ -261,5 +324,5 @@ export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, tex
       break;
     }
   }
-  return [block, hits].filter(Boolean).join("\n");
+  return [block, leftBlock(left, now), hits].filter(Boolean).join("\n");
 }

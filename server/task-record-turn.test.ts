@@ -9,6 +9,7 @@ import * as mail from "./mail.ts";
 import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { roomEchoesSinceLastUserTurn } from "./one-mind.ts";
+import { GuestSessions } from "./rooms/guest-sessions.ts";
 import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { Store } from "./store.ts";
@@ -75,7 +76,7 @@ function summarizedChat() {
       latestCompactionId: ready.compactionId ?? null, sessionPrompt: undefined, nativeAt,
       currentTurnEpoch: () => 0, epoch: 1,
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,
-      opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null }) }, modelContextWindow: 200_000,
+      opts: {}, cfg: {}, reactions: {}, guestSessions: new GuestSessions(), threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null }) }, modelContextWindow: 200_000,
       taskRecord: undefined, durableTaskRecordText: RECORD, commsDepth: 0, codexHistory: false,
       closes: { notes: () => [] },
     });

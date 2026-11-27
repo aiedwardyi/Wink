@@ -551,6 +551,51 @@ describe("Import Memory overflow", () => {
   });
 });
 
+describe("a line Dreaming moved", () => {
+  it.each(["alone", "with a later refresh landing mid-build"])("is found by the first question while a 2 MiB archive rebuilds, %s", async (variant) => {
+    const botId = `bot-${randomUUID()}`;
+    flag(botId);
+    try {
+      const note = "- Cerulean macaw delivery went to Windermere (noted 2026-10-01)";
+      const old = Array.from({ length: 15_000 }, (_, n) => `- Filler pebble${n} meadow${n} quartz${n} lagoon${n} saffron${n} tundra${n} orchid${n}\n  - from MEMORY.md:9 on 2026-10-02: a newer note says all of it`);
+      const archive = `# Dreamed notes\n\n## 2026-10-02 (run old)\n${old.join("\n")}\n`;
+      writeMemoryFile(botId, `# Memory\n\n${FILLER}\n${note}\n`);
+      sideFile(botId, "dreamed.md", archive);
+      expect(statSync(join(workspaceDir(botId), "memory", "dreamed.md")).size).toBeGreaterThan(2 * 1024 * 1024);
+      const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+      await lookup.refresh(botId);
+      writeMemoryFile(botId, `# Memory\n\n${FILLER}\n`);
+      sideFile(botId, "dreamed.md", `${archive}\n## 2026-11-26 (run night)\n${note}\n  - from MEMORY.md:123 on 2026-11-26: every date it names is past\n`);
+      void lookup.refresh(botId, true);
+      if (variant !== "alone") void lookup.refresh(botId);
+      const question = "where did the cerulean macaw delivery go?";
+      expect(ask(lookup, botId, question, undefined, "t0").join("\n")).not.toContain("Windermere");
+      await lookup.ready(botId);
+      expect(ask(lookup, botId, question).join("\n")).toContain("Windermere");
+      expect(lookup.ready(botId)).toBeUndefined();
+    } finally {
+      unflag();
+    }
+  }, 60_000);
+});
+
+describe("archived notes that share a label", () => {
+  it("are each found, not only the newest", async () => {
+    const botId = `bot-${randomUUID()}`;
+    flag(botId);
+    try {
+      writeMemoryFile(botId, `# Memory\n\n${FILLER}\n`);
+      sideFile(botId, "dreamed.md", "# Dreamed notes\n\n## 2026-11-26 (run night)\n- Dentist: root canal booked 2026-10-02\n  - from MEMORY.md:3 on 2026-11-26: every date it names is past\n- Dentist: cleaning booked 2026-11-02\n  - from MEMORY.md:4 on 2026-11-26: every date it names is past\n");
+      const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
+      await lookup.refresh(botId);
+      expect(ask(lookup, botId, "when was the root canal booked?").join("\n")).toContain("root canal booked 2026-10-02");
+      expect(ask(lookup, botId, "when was the cleaning booked?", undefined, "t2").join("\n")).toContain("cleaning booked 2026-11-02");
+    } finally {
+      unflag();
+    }
+  });
+});
+
 describe("send path wiring", () => {
   const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const section = (from: string, to: string) => {
@@ -610,6 +655,19 @@ describe("send path wiring", () => {
     expect(at("room-1")).toBe("hello");
     expect(at("routine-1")).toBe("hello");
     expect(take).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits out a build a Dreaming move owes before the turn's recall, and nothing else", () => {
+    const wait = "  const recallBuild = memoryLookup.ready(bot.id);\n  if (recallBuild) await recallBuild;\n";
+    expect(source.split(wait)).toHaveLength(2);
+    expect(source.indexOf(wait)).toBeLessThan(source.indexOf("  const recallNotes ="));
+    const between = source.slice(source.indexOf(wait) + wait.length, source.indexOf("  const recallNotes ="));
+    expect(between).not.toContain("memoryLookup.ready(");
+    expect(source).toContain('void memoryLookup.refresh(botId, true);');
+  });
+
+  it("holds the first turn after a restart for the startup build", () => {
+    expect(section("const memoryLookup = withBoardRecall(createMemoryLookup(", "\nconst memoryHealthCheck")).toContain("for (const bot of store.bots) void memoryLookup.refresh(bot.id, true);");
   });
 
   it("reads parked asks from the owner's chats only", () => {

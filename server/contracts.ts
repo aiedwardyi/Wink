@@ -169,7 +169,8 @@ export type RuntimeEvent = RuntimeEventBase &
     // `usageLimit` marks the expected one: the account spent its
     // subscription window. `resetsAt` is epoch ms, null when unreported.
     // `signedOut` marks a confirmed sign-out of this account (Claude and Codex only).
-    | { type: "runtime.error"; message: string; setup?: boolean; signIn?: boolean; signedOut?: boolean; folder?: string; usageLimit?: { resetsAt: number | null; model?: boolean } }
+    // `paymentDue` marks a subscription the CLI refuses until it is paid (Claude only).
+    | { type: "runtime.error"; message: string; setup?: boolean; signIn?: boolean; signedOut?: boolean; paymentDue?: boolean; folder?: string; usageLimit?: { resetsAt: number | null; model?: boolean } }
   );
 
 /** One subscription usage window (a 5-hour session, a week) as the provider
@@ -182,6 +183,8 @@ export interface RateLimitWindow {
   usedPercent: number;
   resetsAt: number | null;
   windowMinutes?: number;
+  /** Spent in its most used pool while another pool of the same window still has room (Antigravity). */
+  otherPoolLeft?: boolean;
 }
 
 export type RuntimeEventListener = (event: RuntimeEvent) => void;
@@ -210,7 +213,7 @@ export interface SendTurnInput {
   resumeFallback?: { text: string };
   /** Prefix also carried in text for Codex app-servers without native injection. */
   nativeReplayPrefix?: string;
-  /** A team room ask: its native session ends with the turn. */
+  /** A room turn: its native session ends with the turn. */
   hosted?: true;
   /** Prior turns for transcript-replay providers (API-backed drivers). */
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
@@ -279,7 +282,7 @@ export type PrepareTurn = Pick<SendTurnInput, "threadId" | "model" | "effort" | 
   captured: import("./drivers/warm-pool.ts").Captured;
 };
 
-/** The focused bot's thread and settings; Claude re-opens that thread's closed session only while they still match it.
+/** The focused bot's thread and settings; Claude re-opens that thread's closed session on them.
  *  `fresh` is the spawn shape of a thread whose next turn starts a new session; Claude starts it ahead of Send. */
 export type PrepareFocus = Pick<SendTurnInput, "threadId" | "model" | "effort" | "approval"> & {
   fresh?: Pick<SendTurnInput, "integrations" | "cwd" | "leanStartup">;

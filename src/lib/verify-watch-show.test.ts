@@ -529,13 +529,14 @@ it("rests only a moment on a thing before moving on", () => {
   expect(longest).toBeLessThanOrEqual(500);
 });
 
-it("aims a page-level check at the page only when its result exists", () => {
-  const failed = mark(0, "result", { ev: { tile: "desktop", checker: "PAGE_ERRORS", result: "issue", where: "/index.html:9" } });
-  const show = replay(frame(0), failed, ...crew(["LINKS"], 12), end(90, [issue("a", "desktop")]));
-  const cursor = show.cursors.get("desktop:PAGE_ERRORS")!;
-  expect(cursor.to.x).toBeGreaterThan(0);
-  expect(cursor.to.x).toBeLessThan(1280);
-  expect(replay(frame(0), ...crew(["LINKS"], 12), end(90)).cursors.has("desktop:PAGE_ERRORS")).toBe(false);
+it("puts no cursor on a check with no box, even a failed one", () => {
+  const failed = mark(0, "result", { ev: { tile: "desktop", checker: "PAGE_ERRORS", result: "issue", where: "/api/terminal/pane-counts" } });
+  const fit = mark(0, "result", { ev: { tile: "desktop", checker: "FIT", result: "ok", where: "page" } });
+  const show = replay(frame(0), failed, fit, ...crew(["TEXT_A"], 12), end(90, [issue("a", "desktop")]));
+  expect(new Set(swarm(show).map(c => c.checker))).toEqual(new Set(["TEXT_A"]));
+  const bare = replay(frame(0), failed, fit, end(90));
+  toClock(bare, 1000);
+  expect(bare.cursors.size).toBe(0);
 });
 
 it("takes a cursor off the page when nothing of its own is in view", () => {
@@ -594,7 +595,7 @@ it("gives no spare cursor to a check with no box or a few boxes", () => {
   const page = mark(0, "result", { ev: { tile: "desktop", checker: "PAGE_ERRORS", result: "ok", where: "/index.html" } });
   const flat = replay(frame(0), page, ...boxes("LINKS", 3), end(90));
   toClock(flat, 1000);
-  expect(swarm(flat)).toHaveLength(2);
+  expect(swarm(flat).map(c => c.checker)).toEqual(["LINKS"]);
   const rich = replay(frame(0), page, ...boxes("LINKS", 12), end(90));
   toClock(rich, 1000);
   for (const c of swarm(rich).filter(c => c.extra)) expect(c.checker).toBe("LINKS");

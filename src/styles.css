@@ -212,6 +212,12 @@
   justify-content: flex-end;
 }
 
+/* Some skins fill your own bubble with the accent, so text drawn on it takes the bubble's ink. */
+[data-orbit-message="user"] [data-orbit-message-content] :is(a, [data-fold-toggle], [data-file-row] *) {
+  color: inherit;
+  text-decoration-color: currentColor;
+}
+
 /* Rows are display:contents wrappers, so their children carry the containment.
    The newest row remembers its size too, or settling it drops to 80px for a frame and clamps the scroll. */
 [data-orbit-transcript] :is([data-settled], [data-mid], [data-run]) > * {
@@ -4837,7 +4843,7 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-caret, .animate-msg-in, .animate-pop-in, .animate-panel-in, .animate-fade-in { animation: none; }
+  .animate-caret, .animate-msg-in, .animate-pop-in, .animate-panel-in, .animate-fade-in, .animate-step-in { animation: none; }
   .thinking-sheen { display: none; }
   .orbit-ring { display: none; }
   .turn-mascot-in, .turn-mascot-out { animation: none; }

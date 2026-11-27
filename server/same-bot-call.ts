@@ -16,7 +16,8 @@ export function sameBotSetup(botName: string, locale = "en", voice: LiveVoice = 
     systemInstruction: { parts: [{ text: [...rules, LIVE_ACCENTS[voice]].filter(Boolean).join("\n\n") }] },
     inputAudioTranscription: { languageCodes: [app, app === "ko" ? "en" : "ko"] },
     outputAudioTranscription: {},
-    realtimeInputConfig: { automaticActivityDetection: LIVE_VAD },
+    // Only the client stops a read: Google's own cut lets the voice's echo through as his words and drops the rest.
+    realtimeInputConfig: { automaticActivityDetection: LIVE_VAD, activityHandling: "NO_INTERRUPTION" },
     contextWindowCompression: { triggerTokens: LIVE_COMPRESSION.triggerTokens, slidingWindow: { targetTokens: LIVE_COMPRESSION.targetTokens } },
     sessionResumption: {},
   };

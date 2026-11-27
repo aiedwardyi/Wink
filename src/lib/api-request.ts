@@ -37,8 +37,10 @@ export async function responseBody(res: Response): Promise<any> {
   }
 }
 
-export async function request(path: string, init?: RequestInit): Promise<any> {
+/** onResponse runs once the headers are in, while the body may still be arriving. */
+export async function request(path: string, init?: RequestInit, onResponse?: () => void): Promise<any> {
   const res = await fetchResponse(path, init);
+  onResponse?.();
   const body = await responseBody(res);
   if (!res.ok) {
     if (res.status === 401 && body?.code === SIGNED_OUT) void leaveSignedOut();

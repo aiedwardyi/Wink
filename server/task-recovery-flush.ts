@@ -5,6 +5,7 @@ import {
   stampTaskResumePacket,
 } from "./task-state-fold.ts";
 import type { TaskResumePacket } from "./task-state.ts";
+import { lineWords } from "./replies.ts";
 
 export const RECOVERY_FLUSH_REASONS = ["crash", "shutdown", "stop"] as const;
 
@@ -121,7 +122,7 @@ export function lastUserInstruction(
  *  Pass the packet from before this send: recording a send moves instructionId to it. */
 export function unsettledRequest(
   packet: { instructionId?: string; settledInstructionId?: string } | null | undefined,
-  messages: ReadonlyArray<{ id: string; role: string; kind?: string; text?: string; steered?: boolean }>,
+  messages: ReadonlyArray<{ id: string; role: string; kind?: string; text?: string; steered?: boolean; guest?: boolean }>,
   skipIds?: ReadonlySet<string>,
 ): string {
   // a settled packet reads no lines: a long chat's path is not copied for it
@@ -134,7 +135,7 @@ export function unsettledRequest(
   const settled = lines.findIndex((line) => line.id === packet.settledInstructionId);
   let start = settled < 0 ? index : settled + 1;
   while (start < index && lines[start]!.steered) start++;
-  return lines.slice(start).map((line) => line.text!.trim()).join(" | ");
+  return lines.slice(start).map((line) => lineWords(line, line.text!.trim())).join(" | ");
 }
 
 /** Decide whether a turn.completed belongs to the live turn or to a Stop/crash

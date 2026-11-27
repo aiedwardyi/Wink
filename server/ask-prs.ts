@@ -14,10 +14,11 @@ const GITHUB_REMOTE = /github\.com[:/]([\w.-]+\/[\w.-]+)/i;
 const SHA = /\b[0-9a-f]{7,40}\b/gi;
 const NOT_REPO = /not a git repository/i;
 const REASON_MAX = 120;
-const viewSchema = z.object({ state: z.enum(["OPEN", "MERGED", "CLOSED"]) });
+const viewSchema = z.object({ state: z.enum(["OPEN", "MERGED", "CLOSED"]), mergedAt: z.string().nullish() });
 
 type Pr = { repo?: string; number: number };
-type Check = { at: number; state: "merged" | "open" | "missing" | "failed"; reason?: string };
+type Check = { at: number; state: "merged" | "open" | "missing" | "failed"; reason?: string; mergedAt?: number };
+export type MergedPr = Pr & { mergedAt?: number };
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
 const clip = (text: string) => {
@@ -122,8 +123,10 @@ export function createAskPrs(deps: AskPrsDeps) {
   async function check(key: string, number: number, repo: string | undefined, dir: string | undefined, botId: string): Promise<void> {
     let result: Check;
     try {
-      const raw: unknown = JSON.parse(await gh(dir ?? process.cwd(), ["pr", "view", String(number), ...repo ? ["--repo", repo] : [], "--json", "state"]));
-      result = { at: now(), state: viewSchema.parse(raw).state === "MERGED" ? "merged" : "open" };
+      const view = viewSchema.parse(JSON.parse(await gh(dir ?? process.cwd(), ["pr", "view", String(number), ...repo ? ["--repo", repo] : [], "--json", "state,mergedAt"])));
+      const mergedAt = Date.parse(view.mergedAt ?? "");
+      result = { at: now(), state: view.state === "MERGED" ? "merged" : "open" };
+      if (Number.isFinite(mergedAt)) result.mergedAt = mergedAt;
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
       result = NOT_FOUND.test(text) ? { at: now(), state: "missing" } : { at: now(), state: "failed", reason: clip(redactSecretsInText(text)) };
@@ -200,6 +203,18 @@ export function createAskPrs(deps: AskPrsDeps) {
     stepNote(botId: string, threadId: string, asks: readonly TaskAsk[] | undefined, full = false): string {
       const kept = verdicts(botId, threadId, asks, false).filter((verdict) => verdict.merged && stepLeft(verdict.ask.ref));
       return once(told, threadId, kept.map(({ ask }) => closedAskLine(ask)).join("\n"), full);
+    },
+    /** Each PR the ask's ref names with when it merged, whatever the ask's status: undefined while one is unchecked, null once one is open, gone or failed. start begins the checks still owed. */
+    merged(botId: string, threadId: string, ask: TaskAsk, start = false): MergedPr[] | null | undefined {
+      const dir = deps.repoDir(botId, threadId);
+      const each = refPrs(ask.ref).map((pr) => ({ pr, last: placed(botId, dir, pr, start) }));
+      if (!each.length || each.some(({ last }) => last && last.state !== "merged")) return null;
+      if (each.some(({ last }) => !last)) return undefined;
+      return each.map(({ pr, last }) => {
+        const item: MergedPr = { ...pr };
+        if (last?.mergedAt) item.mergedAt = last.mergedAt;
+        return item;
+      });
     },
     /** Building asks whose PRs could not be checked, and why. No I/O. */
     failed,
