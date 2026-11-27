@@ -6,7 +6,7 @@ import { z } from "zod";
 
 import { DREAMED_FILE, dreamedPath, fixedEntry, markPutBack, markUndone } from "./dream-archive.ts";
 import type { DreamJudges } from "./dream-judge.ts";
-import { applyFix, checkWrong, newestOwned, ownedIds, ownerRows, ownerTyped, savedNotes, undoFix, type FixDone, type FixItem, type JudgeLog, type OwnerRow, type SavedNotes, type StoredRow } from "./dream-wrong.ts";
+import { applyFix, checkWrong, fixedLine, lineMarks, newestOwned, ownedIds, ownerRows, ownerTyped, savedNotes, undoFix, type FixDone, type FixItem, type JudgeLog, type OwnerRow, type SavedNotes, type StoredRow } from "./dream-wrong.ts";
 import { closedAskLine, refPrs, stepLeft, withClosed, type MergedPr } from "./ask-prs.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { cleanerSkip, runIdOf, sha8 } from "./memory-clean.ts";
@@ -49,7 +49,7 @@ const fixItemSchema = z.object({
   why: z.literal("wrong"),
   listOnly: z.boolean(),
   evidence: z.object({ thread: z.string(), message: z.string(), at: z.number(), quote: z.string() }),
-  done: z.object({ at: z.number(), line: z.number(), cr: z.boolean(), nth: z.number(), count: z.number(), heading: z.string(), id: z.string(), undoneAt: z.number().optional(), view: z.array(z.string()).optional(), putBack: z.object({ at: z.number(), message: z.string() }).optional() }).optional(),
+  done: z.object({ at: z.number(), line: z.number(), cr: z.boolean(), nth: z.number(), count: z.number(), heading: z.string(), id: z.string(), undoneAt: z.number().optional(), view: z.array(z.string()).optional(), putBack: z.object({ at: z.number(), message: z.string() }).optional(), lines: z.string().optional(), prev: z.string().optional(), retired: z.number().optional() }).optional(),
   seen: z.object({ at: z.number(), sha: z.string(), ids: z.string().optional() }).optional(),
   outdated: z.number().optional(),
 });
@@ -247,12 +247,12 @@ export function createDreamLive(deps: DreamLiveDeps) {
   // stale once the owner's messages are not the exact set the judges saw or one waits to send, whatever it says; a fix with no record of that is stale too
   const fresh = (item: FixItem, now: ReturnType<typeof owned>) => !!item.seen?.ids && item.seen.ids === now.ids && !now.waiting && now.threads.includes(item.evidence.thread);
 
-  // the last plan's fixes stay listed until their line ages out, OK'd or not; a waiting one goes once its note changed or the owner wrote or sent anything after it was judged
+  // the last plan's fixes stay listed until their line ages out, an OK'd one counted from its OK; a waiting one goes once its note changed or the owner wrote or sent anything after it was judged
   function carried(botId: string, at: number, found: DryFixes): FixItem[] {
     const raw = memoryFileRaw(botId).split("\n").map((line) => line.replace(/\r$/, ""));
     const last = plans(botId)[0]?.fixes?.items ?? [];
     const now = last.some((item) => !item.done) ? owned(botId) : undefined;
-    const kept = last.filter((item) => item.evidence.at > at - RUN_KEEP_MS && (item.done || (!!now && fresh(item, now) && raw.some((line) => `note:${sha8(line)}` === item.target) && !found.items.some((each) => each.target === item.target))));
+    const kept = last.filter((item) => (item.done?.at ?? item.evidence.at) > at - RUN_KEEP_MS && (item.done || (!!now && fresh(item, now) && raw.some((line) => `note:${sha8(line)}` === item.target) && !found.items.some((each) => each.target === item.target))));
     return [...kept, ...found.items.filter((item) => !kept.some((each) => each.target === item.target))];
   }
 
@@ -285,19 +285,20 @@ export function createDreamLive(deps: DreamLiveDeps) {
     return !!own?.whole && sha8(own.text) === item.seen?.sha && fresh(item, owned(botId));
   }
 
+  const writePlan = (botId: string, plan: DreamPlan) => writeFileAtomic(join(botDir(botId), plan.runId, "plan.json"), `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+
   // the plan says what changed before MEMORY.md does, so a line that changed always has its Undo; a save that fails takes the plan back
-  function stage(botId: string, plan: DreamPlan, item: FixItem, raw: string, next: FixDone, text: string) {
-    const write = () => writeFileAtomic(join(botDir(botId), plan.runId, "plan.json"), `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
-    const before = item.done;
-    item.done = next;
-    write();
+  function stage(botId: string, plan: DreamPlan, changes: readonly (readonly [FixItem, FixDone])[], raw: string, text: string) {
+    const before = changes.map(([item]) => item.done);
+    for (const [item, next] of changes) item.done = next;
+    writePlan(botId, plan);
     let saved = false;
     try {
       saved = !saveMemoryFile(botId, text, rawRevision(raw)).conflict;
     } finally {
       if (!saved) {
-        item.done = before;
-        write();
+        changes.forEach(([item], at) => (item.done = before[at]));
+        writePlan(botId, plan);
       }
     }
     return saved;
@@ -328,26 +329,45 @@ export function createDreamLive(deps: DreamLiveDeps) {
     return rows.find((row) => inView(row, item, item.done!.at) && !view.has(viewKey(row)))?.id;
   }
 
-  /** Puts an OK'd fix's old bytes back once an owner line typed before the OK reaches this PC, as if it had landed first; true when MEMORY.md changed. */
+  /** Puts OK'd fixes' old bytes back once an owner line typed before an OK reaches this PC, as if it had landed first; true when MEMORY.md changed. */
   function settle(botId: string): boolean {
     const newest = plans(botId)[0];
-    const done = newest?.fixes?.items.filter((item) => item.done?.view && item.done.undoneAt === undefined) ?? [];
-    if (!newest || !done.length) return false;
+    const active = newest?.fixes?.items.filter((item) => item.done?.lines !== undefined && item.done.view && item.done.undoneAt === undefined && item.done.retired === undefined) ?? [];
+    if (!newest || !active.length) return false;
     const { rows } = owned(botId);
+    const at = now();
+    const later = new Set(active.flatMap((item) => item.done!.prev ?? []));
     let changed = false;
-    for (const item of done) {
-      const message = unseen(item, rows);
-      if (message === undefined) continue;
+    let retired = false;
+    for (const last of active.filter((item) => !later.has(item.done!.id))) {
+      // the note's OKs oldest first: each changed the line the one before it wrote
+      const chain = [last];
+      for (let prev = last.done!.prev; prev !== undefined; ) {
+        const item = active.find((each) => each.done!.id === prev);
+        if (!item) break;
+        chain.unshift(item);
+        prev = item.done!.prev;
+      }
       const raw = memoryFileRaw(botId);
-      // the fixed line was edited or moved since: MEMORY.md stays as the owner left it
-      const back = undoFix(raw, item);
-      if ("error" in back) continue;
-      const at = now();
-      const { id } = item.done!;
-      if (!stage(botId, newest, item, raw, { ...item.done!, undoneAt: at, putBack: { at, message } }, back.text)) continue;
-      markArchive(botId, (text) => markPutBack(text, id, at));
+      const line = fixedLine(raw, last);
+      if (line === undefined) {
+        // the owner changed that line since: MEMORY.md stays as they left it, now and later
+        for (const item of chain) item.done = { ...item.done!, retired: at };
+        retired = true;
+        continue;
+      }
+      // the oldest OK a line it did not see takes back: the note goes back to what it was before that one
+      const messages = chain.map((item) => unseen(item, rows));
+      const first = messages.findIndex((message) => message !== undefined);
+      if (first < 0) continue;
+      const lines = raw.split("\n");
+      lines[line] = chain[first]!.text + (chain[first]!.done!.cr ? "\r" : "");
+      const back = chain.slice(first).map((item, index) => [item, { ...item.done!, undoneAt: at, putBack: { at, message: messages[first + index] ?? messages[first]! } }] as const);
+      if (!stage(botId, newest, back, raw, lines.join("\n"))) continue;
+      for (const [, done] of back) markArchive(botId, (text) => markPutBack(text, done.id, at));
       changed = true;
     }
+    if (retired) writePlan(botId, newest);
     return changed;
   }
 
@@ -360,7 +380,6 @@ export function createDreamLive(deps: DreamLiveDeps) {
     if (!item) return { ok: false, error: "no-item" };
     const raw = memoryFileRaw(botId);
     const at = now();
-    const write = () => writeFileAtomic(join(botDir(botId), runId, "plan.json"), `${JSON.stringify(newest, null, 2)}\n`, { mode: 0o600 });
     if (!undo) {
       if (item.listOnly) return { ok: false, error: "list-only" };
       // once undone an item stays undone: a late OK from another window never puts the fix back
@@ -368,7 +387,7 @@ export function createDreamLive(deps: DreamLiveDeps) {
       if (item.outdated !== undefined) return { ok: false, error: "outdated" };
       if (!stands(botId, item)) {
         item.outdated = at;
-        write();
+        writePlan(botId, newest);
         return { ok: false, error: "outdated" };
       }
       const swapped = applyFix(raw, item);
@@ -376,10 +395,14 @@ export function createDreamLive(deps: DreamLiveDeps) {
       const { text, ...placed } = swapped;
       const id = sha8(`${runId}\0${target}\0${at}`);
       const view = owned(botId).rows.filter((row) => inView(row, item, at)).map(viewKey);
+      const done: FixDone = { at, id, ...placed, view, lines: lineMarks(text) };
+      // the line an earlier OK wrote: the two settle together
+      const prev = newest.fixes!.items.find((each) => each !== item && each.done?.undoneAt === undefined && each.done?.retired === undefined && fixedLine(raw, each) === placed.line)?.done!.id;
+      if (prev) done.prev = prev;
       const unarchive = appendArchive(dreamedPath(botId), fixedEntry(id, item, placed.line, at));
       let saved = false;
       try {
-        saved = stage(botId, newest, item, raw, { at, id, ...placed, view }, text);
+        saved = stage(botId, newest, [[item, done]], raw, text);
       } finally {
         if (!saved) unarchive();
       }
@@ -389,7 +412,7 @@ export function createDreamLive(deps: DreamLiveDeps) {
       const back = undoFix(raw, item);
       if ("error" in back) return { ok: false, error: back.error };
       const { id } = item.done;
-      if (!stage(botId, newest, item, raw, { ...item.done, undoneAt: at }, back.text)) return { ok: false, error: "busy" };
+      if (!stage(botId, newest, [[item, { ...item.done, undoneAt: at }]], raw, back.text)) return { ok: false, error: "busy" };
       markArchive(botId, (text) => markUndone(text, id, at));
     }
     return { ok: true, revision: readMemoryFile(botId).revision };
@@ -427,3 +450,36 @@ export function createDreamLive(deps: DreamLiveDeps) {
 }
 
 export type DreamLive = ReturnType<typeof createDreamLive>;
+
+/** Put-back off the send path: an import queues it for the loop's next turn, and a turn starting on that bot runs it before it reads its notes. starting: a turn start holds that bot's. */
+export function createSettleQueue(settle: (botId: string) => void, starting: (botId: string) => boolean) {
+  const pending = new Set<string>();
+  let queued = false;
+  const drain = () => {
+    queued = false;
+    for (const botId of pending) {
+      if (starting(botId)) continue;
+      pending.delete(botId);
+      settle(botId);
+    }
+  };
+  const schedule = () => {
+    if (queued) return;
+    queued = true;
+    setImmediate(drain);
+  };
+  return {
+    queue(botId: string) {
+      pending.add(botId);
+      schedule();
+    },
+    /** Runs the bot's queued put-back now: its turn reads its notes next. */
+    flush(botId: string) {
+      if (pending.delete(botId)) settle(botId);
+    },
+    /** A turn start ended: a put-back it held runs on the loop's next turn. */
+    released(botId: string) {
+      if (pending.has(botId)) schedule();
+    },
+  };
+}

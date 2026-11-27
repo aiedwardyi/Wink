@@ -345,7 +345,7 @@ import {
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
-import { createDreamLive } from "./dream-live.ts";
+import { createDreamLive, createSettleQueue } from "./dream-live.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
 import { goalRoute } from "./goal-route.ts";
@@ -2246,6 +2246,7 @@ function threadSyncHost(folder: string): ThreadSyncHost {
       const follow = !botHasActiveTurn(botId, store.bot(botId)?.threadId);
       store.adoptSyncedTask(botId, file.task, file.messages, file.activeLeafId, follow);
       if (!follow) pendingSyncFollows.add(botId);
+      fixSettles.queue(botId);
     },
     remove: (botId, threadId) => void store.removeSyncedTask(botId, threadId),
     conflicted: (threadId) => {
@@ -2361,7 +2362,7 @@ function initializeThreadSyncV2() {
     imported: (botId) => {
       if (botHasActiveTurn(botId)) pendingSyncFollows.add(botId);
       else store.followNewestTask(botId, sideThreadIds());
-      settleFixes(botId);
+      fixSettles.queue(botId);
     },
     maintenance: () => {
       const pending = syncProfiles();
@@ -3240,6 +3241,7 @@ function settleFixes(botId: string): void {
   broadcast({ kind: "memory.changed", botId });
   void memoryLookup.refresh(botId, true);
 }
+const fixSettles = createSettleQueue(settleFixes, (botId) => turnStartClaims.has(botId));
 // the same switch as Auto Notes: it edits the same file
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
@@ -5436,6 +5438,7 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
     if (opts?.reservation && !dispatchingReservations.has(opts.reservation)) release(opts.reservation);
     takeStartingHold(botId)();
     turnStartClaims.delete(botId);
+    fixSettles.released(botId);
     // Preparation can fail before a provider turn exists, so no
     // turn.completed event will arrive to wake the next queued send.
     queueMicrotask(() => continueQueuedDrainIfIdle(store, botId, () => {
@@ -5817,6 +5820,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     store.settleTaskPacket(threadId);
     return startedTurn(userMessage, { dispatchFailed: true, error: detail });
   }
+  // a put-back an import queued lands before this turn reads its notes
+  fixSettles.flush(bot.id);
   // a line Dreaming just moved out of MEMORY.md is searchable before this turn's recall
   const recallBuild = memoryLookup.ready(bot.id);
   if (recallBuild) await recallBuild;

@@ -2,13 +2,15 @@ import { dreamedPath } from "./dream-archive.ts";
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import ts from "typescript";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAskPrs } from "./ask-prs.ts";
 import { sha8 } from "./memory-clean.ts";
 import type { Message } from "./store.ts";
 import { SAFETY_MEMORY } from "./testing/dream-safety.ts";
-import { createDreamLive, landings, type DreamPlan } from "./dream-live.ts";
+import { createDreamLive, createSettleQueue, landings, type DreamPlan } from "./dream-live.ts";
+import { pullThread, uploadThread, type ThreadSyncHost } from "./thread-sync.ts";
 import type { NoteGenerator } from "./memory-pass.ts";
 import { createMemorySleep, planTidy, SLEEP_GAP_MS, SLEEP_IDLE_MS, type MemorySleep } from "./memory-sleep.ts";
 import { isOpenAsk, type TaskAsk } from "./task-asks.ts";
@@ -1075,6 +1077,77 @@ describe("dreaming, dry", () => {
       expect(Buffer.compare(Buffer.from(memoryFileRaw(bot)), Buffer.from(other))).toBe(0);
     });
 
+    it("puts back only the line the OK wrote, never the same words the owner wrote under another project's heading", async () => {
+      const projects = `${SAFETY_MEMORY}## North project\n### Schedule\n${OLD}\n\n## South project\n### Schedule\n- Bring the keys.\n`.replace(/\n/g, "\r\n");
+      writeMemoryFile(bot, projects);
+      generator = flags([{ note: `L${projects.split("\r\n").indexOf(OLD) + 1}`, quote: "It lasts till march", fix: NEW }]);
+      await quiet();
+      expect(approve(false).ok).toBe(true);
+      const edited = projects.replace(OLD, OLD.replace("January", "July")).replace("- Bring the keys.", NEW);
+      writeMemoryFile(bot, edited);
+      landsLate("t2", Date.now());
+      expect(start().dream.settle(bot)).toBe(false);
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(memoryFileRaw(bot)).toBe(edited);
+      expect(history()).not.toMatch(/put back/);
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)!.done).toMatchObject({ retired: expect.any(Number) });
+    });
+
+    it("never puts back a line the owner changed, even once they write the fixed value there again", async () => {
+      await quiet();
+      expect(approve(false).ok).toBe(true);
+      const fixed = memoryFileRaw(bot);
+      writeMemoryFile(bot, fixed.replace(NEW, NEW.replace("March", "July")));
+      landsLate("t2", Date.now());
+      expect(start().dream.settle(bot)).toBe(false);
+      writeMemoryFile(bot, fixed);
+      expect(start().dream.settle(bot)).toBe(false);
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(memoryFileRaw(bot)).toBe(fixed);
+      expect(plans()[0]!.fixes!.items[0]!.done!.undoneAt).toBeUndefined();
+    });
+
+    it("keeps an OK'd fix's put-back for the whole keep counted from its OK, however old its evidence", async () => {
+      const [old, next] = [OLD, NEW].map((text) => text.replace("2026-11-20", "2026-11-01"));
+      const early = raw.replace(OLD, old!);
+      writeMemoryFile(bot, early);
+      typed.set("t1", [said("m1", NOW - 13 * DAY, M1)]);
+      generator = flags([{ note: line(OLD), quote: "It lasts till march", fix: next! }]);
+      await quiet();
+      expect(start().dream.fix(bot, plans()[0]!.runId, `note:${sha8(old!)}`, false).ok).toBe(true);
+      const okAt = Date.now();
+      vi.advanceTimersByTime(2 * DAY);
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(plans()[0]!.at).toBeGreaterThan(okAt + DAY);
+      landsLate("t2", okAt);
+      expect(start().dream.settle(bot)).toBe(true);
+      expect(Buffer.compare(Buffer.from(memoryFileRaw(bot)), Buffer.from(early))).toBe(0);
+    });
+
+    it("puts the original bytes back in one settlement when withdrawals for two OKs on one note land together", async () => {
+      const MAY = NEW.replace("March", "May");
+      await quiet();
+      expect(approve(false).ok).toBe(true);
+      const firstOk = Date.now();
+      typed.set("t1", [...typed.get("t1")!, said("may", Date.now() + 1000, "The main account plan ends in May now.")]);
+      generator = flags([{ note: line(OLD), quote: "plan ends in May now", fix: MAY }]);
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      const { runId } = plans()[0]!;
+      expect(start().dream.fix(bot, runId, `note:${sha8(NEW)}`, false).ok).toBe(true);
+      const secondOk = Date.now();
+      expect(memoryFileRaw(bot)).toBe(raw.replace(OLD, MAY));
+      typed.set("t2", [said("withdraw-march", firstOk - 30_000, "Disregard March and keep January."), said("withdraw-may", secondOk - 1, "Disregard May too. Keep January.")]);
+      vi.advanceTimersByTime(60_000);
+      expect(start().dream.settle(bot)).toBe(true);
+      expect(Buffer.compare(Buffer.from(memoryFileRaw(bot)), Buffer.from(raw))).toBe(0);
+      expect(plans()[0]!.fixes!.items.filter((item) => item.done).map((item) => [item.text, item.done!.putBack?.message])).toEqual(expect.arrayContaining([[OLD, "withdraw-march"], [NEW, expect.any(String)]]));
+      expect(start().dream.settle(bot)).toBe(false);
+    });
+
     it("judges nothing and drops a waiting fix while an owner send waits", async () => {
       waiting = true;
       await quiet();
@@ -1187,6 +1260,34 @@ describe("dreaming, dry", () => {
   });
 });
 
+describe("createSettleQueue", () => {
+  it("runs a queued put-back on the loop's next turn, and holds one for a starting turn until it runs it or ends", async () => {
+    const ran: string[] = [];
+    const starting = new Set<string>();
+    const queue = createSettleQueue((botId) => ran.push(botId), (botId) => starting.has(botId));
+    const tick = () => new Promise((resolve) => setImmediate(resolve));
+    queue.queue("a");
+    queue.queue("a");
+    expect(ran).toEqual([]);
+    await tick();
+    expect(ran).toEqual(["a"]);
+    starting.add("b");
+    queue.queue("b");
+    await tick();
+    expect(ran).toEqual(["a"]);
+    queue.flush("b");
+    queue.flush("b");
+    expect(ran).toEqual(["a", "b"]);
+    starting.add("c");
+    queue.queue("c");
+    await tick();
+    starting.delete("c");
+    queue.released("c");
+    await tick();
+    expect(ran).toEqual(["a", "b", "c"]);
+  });
+});
+
 describe("dreaming's wiring", () => {
   const index = readFileSync(join(import.meta.dirname, "index.ts"), "utf8");
   const call = index.slice(index.indexOf("createDreamLive({"), index.indexOf("// the same switch as Auto Notes"));
@@ -1208,11 +1309,38 @@ describe("dreaming's wiring", () => {
     expect(call).not.toContain("incoming");
   });
 
-  it("puts an OK'd fix back after each chat import and at startup, and refreshes recall when it does", () => {
+  it("queues an OK'd fix's put-back after each chat import, runs it past dispatch before the turn reads its notes, and at startup", () => {
     const imported = index.slice(index.indexOf("    imported: (botId) => {"), index.indexOf("    maintenance: () => {"));
-    expect(imported).toContain("settleFixes(botId);");
+    expect(imported).toContain("fixSettles.queue(botId);");
+    expect(imported).not.toContain("settleFixes(");
+    expect(index).toContain("const fixSettles = createSettleQueue(settleFixes, (botId) => turnStartClaims.has(botId));");
+    const claimed = index.slice(index.indexOf("async function startClaimedTurn("));
+    const [dispatch, flush, recall] = ['"turn.dispatch"', "fixSettles.flush(bot.id);", "memoryLookup.ready(bot.id)"].map((text) => claimed.indexOf(text));
+    expect(dispatch).toBeGreaterThan(0);
+    expect(flush).toBeGreaterThan(dispatch);
+    expect(recall).toBeGreaterThan(flush);
+    expect(index).toMatch(/turnStartClaims\.delete\(botId\);\s*fixSettles\.released\(botId\);/);
     expect(index).toMatch(/function settleFixes\(botId: string\): void \{\s*if \(!dreamLive\.settle\(botId\)\) return;\s*broadcast\(\{ kind: "memory\.changed", botId \}\);\s*void memoryLookup\.refresh\(botId, true\);/);
     expect(index).toMatch(/startupTiming\.afterPaint\("dreamFixes", async \(\) => \{\s*for \(const bot of store\.bots\) settleFixes\(bot\.id\);/);
+  });
+
+  it("queues the put-back when the older chat-sync importer adopts the owner's chat", async () => {
+    const adopt = index.slice(index.indexOf("    adopt: (botId, file) => {"), index.indexOf("    remove: (botId, threadId) =>"));
+    const settled: string[] = [];
+    const adopted = vi.fn();
+    const javascript = ts.transpileModule(`function host(scope) { with (scope) { return { ${adopt} }; } }`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None } }).outputText;
+    // SAFETY: the section is the legacy host's adopt, compiled with the names it reads
+    const host = new Function(`${javascript}\nreturn host;`)()({ store: { adoptSyncedTask: adopted, bot: () => ({ threadId: "t9" }) }, botHasActiveTurn: () => false, pendingSyncFollows: new Set(), fixSettles: createSettleQueue((botId) => settled.push(botId), () => false) }) as Pick<ThreadSyncHost, "adopt">;
+    const folder = temps.make(join(tmpdir(), "dream-sync-"));
+    // SAFETY: the importer reads only id, at, role, kind and text of this row
+    const message = { id: "withdraw", at: NOW, role: "user", kind: "text", text: "Disregard March and keep January." } as Message;
+    const base = { folder, running: () => false, saveLedger: () => {}, conflicted: () => {}, remove: () => {}, adopt: () => {}, ledger: {} };
+    expect(uploadThread({ ...base, dataDir: temps.make(join(tmpdir(), "dream-peer-")), deviceId: "peer", local: () => ({ title: "Billing", createdAt: NOW - 100, activeLeafId: message.id, messages: [message] }) }, "bot-sync", "t9")).toBe("written");
+    expect(pullThread({ ...base, ledger: {}, dataDir: temps.make(join(tmpdir(), "dream-here-")), deviceId: "here", local: () => null, adopt: host.adopt }, "bot", "bot-sync", "t9")).toBe("imported");
+    expect(adopted).toHaveBeenCalledOnce();
+    expect(settled).toEqual([]);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toEqual(["bot"]);
   });
 
   it("writes no packet in dry mode", () => {

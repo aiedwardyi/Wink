@@ -44,7 +44,8 @@ export type FixItem = {
   /** when an OK found the owner wrote or sent since, or its own line changed; it never takes an OK again */
   outdated?: number;
 };
-export type FixDone = { at: number; line: number; cr: boolean; nth: number; count: number; heading: string; id: string; undoneAt?: number; view?: string[]; putBack?: { at: number; message: string } };
+/** lines: each line's sha8 as the OK left MEMORY.md; prev: the OK whose line this one changed; retired: when the owner had changed that line, so it is never put back */
+export type FixDone = { at: number; line: number; cr: boolean; nth: number; count: number; heading: string; id: string; undoneAt?: number; view?: string[]; putBack?: { at: number; message: string }; lines?: string; prev?: string; retired?: number };
 export type JudgeLog = { input: number; output: number; ms: number };
 type Pair = { note: NoteLine; row: OwnerRow; sentence: string; turning: number; score: number };
 export type StoredRow = UserMark & { thread: string };
@@ -443,4 +444,38 @@ export function undoFix(raw: string, item: Pick<FixItem, "text" | "by" | "done">
   if (same.length !== item.done.count || at === undefined || headingAbove(lines, at) !== item.done.heading) return { error: "conflict" };
   lines[at] = item.text + (item.done.cr ? "\r" : "");
   return { text: lines.join("\n") };
+}
+
+/** Where line `at` of `from` sits in `to`: only a line every longest common run of lines keeps, in one place. */
+export function follow(from: readonly string[], to: readonly string[], at: number): number | undefined {
+  let head = 0;
+  while (head < from.length && head < to.length && from[head] === to[head]) head++;
+  if (at < head) return at;
+  let tail = 0;
+  while (tail < from.length - head && tail < to.length - head && from[from.length - 1 - tail] === to[to.length - 1 - tail]) tail++;
+  if (at >= from.length - tail) return at - from.length + to.length;
+  const a = from.slice(head, from.length - tail);
+  const b = to.slice(head, to.length - tail);
+  const [n, m, k, w] = [a.length, b.length, at - head, b.length + 1];
+  // pre: the longest common run of a[0, i) and b[0, j); post: of a[i, n) and b[j, m)
+  const pre = new Int32Array((n + 1) * w);
+  const post = new Int32Array((n + 2) * w);
+  for (let i = 1; i <= n; i++) for (let j = 1; j <= m; j++) pre[i * w + j] = a[i - 1] === b[j - 1] ? pre[(i - 1) * w + j - 1]! + 1 : Math.max(pre[(i - 1) * w + j]!, pre[i * w + j - 1]!);
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) post[i * w + j] = a[i] === b[j] ? post[(i + 1) * w + j + 1]! + 1 : Math.max(post[(i + 1) * w + j]!, post[i * w + j + 1]!);
+  const best = pre[n * w + m]!;
+  // a longest run that leaves the line out: it was changed, or which copy is ours is unclear
+  for (let j = 0; j <= m; j++) if (pre[k * w + j]! + post[(k + 1) * w + j]! === best) return undefined;
+  const kept: number[] = [];
+  for (let j = 0; j < m; j++) if (a[k] === b[j] && pre[k * w + j]! + 1 + post[(k + 1) * w + j + 1]! === best) kept.push(j);
+  return kept.length === 1 ? head + kept[0]! : undefined;
+}
+
+export const lineMarks = (raw: string) => raw.split("\n").map(sha8).join(" ");
+
+/** The line an OK wrote, where it sits in raw now; none once it no longer holds those bytes or which line it is grew unclear. */
+export function fixedLine(raw: string, item: Pick<FixItem, "by" | "done">): number | undefined {
+  if (!item.done?.lines) return undefined;
+  const lines = raw.split("\n");
+  const at = follow(item.done.lines.split(" "), lines.map(sha8), item.done.line);
+  return at !== undefined && lines[at] === item.by + (item.done.cr ? "\r" : "") ? at : undefined;
 }

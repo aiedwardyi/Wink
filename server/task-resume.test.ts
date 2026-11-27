@@ -173,6 +173,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     },
     turnStartClaims: claims,
     takeStartingHold: () => () => {},
+    fixSettles: { released: () => {} },
     queueMicrotask,
     continueQueuedDrainIfIdle,
     drainQueuedSends: () => drainQueuedSends(),
