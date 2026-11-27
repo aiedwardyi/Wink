@@ -72,7 +72,7 @@ export interface AskUserDeps<B extends Sender> {
 
 export interface AskUserResult {
   status: number;
-  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean } | { notice: string };
+  body: { error: string } | { messageId: string } | { held: true } | { closed: boolean; settled?: Exclude<AskState["state"], "waiting"> } | { notice: string };
 }
 
 export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: AskUserRequest): AskUserResult {
@@ -85,17 +85,22 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
   if (!question) return { status: 400, body: { error: "question required" } };
   if (request.close) {
     let closed = deps.cancelHeld(from.id, request.fromThreadId, question);
+    let settled: Exclude<AskState["state"], "waiting"> | undefined;
     const path = deps.activePath(request.fromThreadId);
     const states = askStates(path);
     for (const [message, state] of states) {
-      if (state.state !== "waiting" || message.card!.subtitle.trim() !== question) continue;
+      if (message.card!.subtitle.trim() !== question) continue;
       if (owner.group ? message.from?.botId !== from.id : Boolean(message.from)) continue;
+      if (state.state !== "waiting") {
+        settled = state.state;
+        continue;
+      }
       const card = { ...message.card!, answered: ANSWERED_IN_CHAT };
       const by = chatAnswer(path, states, message);
       if (by) card.answeredBy = by.id;
       closed = Boolean(deps.patchMessage(request.fromThreadId, message.id, { card })) || closed;
     }
-    return { status: 200, body: { closed } };
+    return { status: 200, body: closed || !settled ? { closed } : { closed, settled } };
   }
   const choices = askUserChoices(request.choices);
   const notice = request.fact && (() => {

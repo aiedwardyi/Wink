@@ -118,7 +118,7 @@ describe("open chat while replies stream", () => {
     const a = bot("a", true);
     const host = await mount([a], [], createElement(ChatView, { bot: a }));
     const counts = await streamInto("thread-a");
-    expect(host.querySelector("[data-live-step]")?.textContent).toContain("word word");
+    expect(host.querySelector('[data-mid="stream:thread-a:u-a"]')?.textContent).toContain("word word");
     expect(counts.composer).toBeLessThanOrEqual(4);
     expect(counts.picker).toBeLessThanOrEqual(4);
   });

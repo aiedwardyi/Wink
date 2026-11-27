@@ -1027,7 +1027,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices, ...(args.close === true && { close: true }), fact: args.fact });
     try {
       const result = await api("/api/internal/ask-user", { method: "POST", body });
-      if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : "No matching open question." };
+      if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : result.settled === "answered" ? "Already closed; the user answered it." : result.settled === "dismissed" ? "Already closed; the user dismissed it." : result.settled ? "Already closed." : "No matching open question." };
       if (typeof result.notice === "string") return { text: result.notice };
       return { text: "Asked. Their answer will arrive as a new message." };
     } catch (e) {

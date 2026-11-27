@@ -38,9 +38,11 @@ const KO_QUESTION = /^(뭐|무엇|어디|언제|왜|어떻게|얼마|몇|누가|
 // Greetings, pings and asks aimed at the helper itself: a sentence of only these words orders nothing.
 const HELLO = /\b(hi+|hello+|hey+|yo+|sup|wh?at'?s ?up|wassup|howdy|ping|test(ing)?|sidekick|side ?bot)\b|안녕|하이|헬로|테스트|사이드킥|사이드 ?봇/i;
 const CASUAL_WORD =
-  "hi+|hello+|hey+|heya|hiya|yo+|sup|wh?at'?s ?up|wassup|howdy|ping|test(s|ing)?|\\d+|sidekick|side ?bot|helper|main|one|if|(you|u|ya)('?re|'?r| are| r)?|youre|ur|are|r|is|the|a|there|here|still|alive|awake|asleep|sleeping|i think|say|((do|dont|don'?t|do not) )?(respond|reply|answer)|let me know|with|sentence|last|time|again|please|pls|yeah|yea|ya|ok|okay|and|so|lol|lmao|ha(ha)+\\w*|" +
+  "hi+|hello+|hey+|heya|hiya|yo+|sup|wh?at'?s ?up|wassup|howdy|ping|test(s|ing)?|\\d+|sidekick|side ?bot|helper|main|one|if|(you|u|ya)('?re|'?r)?|youre|ur|are|r|is|the|a|there|here|still|alive|awake|asleep|sleeping|i think|say|((do|dont|don'?t|do not) )?(respond|reply|answer)|let me know|with|sentence|last|time|again|please|pls|yeah|yea|ok|okay|and|so|lol|lmao|ha(ha)+\\w*|" +
   "안녕(하세요)?|하이|헬로|ㅎㅇ|테스트(중)?|사이드킥(이면|이라면|이야)?|사이드 ?봇(이면|이라면|이야)?|거기|아직|있어(요)?|인사(해|해줘|해주세요)|대?답(해|해줘|해주세요)|ㅋ+|ㅎ+";
-const CASUAL = new RegExp(`^((${CASUAL_WORD})(?=$|[\\s,.!?~])[\\s,.!?~]*)+$`, "i");
+// Each word is taken atomically (lookahead + backreference), so a run of words that could split several ways never backtracks.
+const wordRun = (words: string) => new RegExp(`^(?:(?=((?:${words})(?=$|[\\s,.!?~])))\\1[\\s,.!?~]*)+$`, "i");
+const CASUAL = wordRun(CASUAL_WORD);
 // A pick or a number answers the bot's question: "both", "squash both", "2", "the second one".
 const PICK = /^((\w+ )?both|all( of (them|it))?|everything|neither|none|(the )?(first|second|third|fourth|last)( one| option)?|option [a-z0-9]|#?\d+)[\s.!]*$/i;
 const KO_PICK = /^(둘 ?다|전부|모두|(첫|두|세|네) ?번째(꺼|것)?|\d+ ?번(째)?)[\s.!~]*$/;
@@ -76,6 +78,17 @@ const ASKS_WORK = /^(can|could|would|will)\s+(u|you|ya)\b/i;
 const asksSomething = (sentence: string) =>
   !(ASKS_WORK.test(sentence) && !INFO_Q.test(sentence)) &&
   (ENDS_Q.test(sentence) || QUESTION_START.test(sentence) || INFO_Q.test(sentence) || DO_Q.test(sentence) || KO_QUESTION.test(sentence) || TAG_Q.test(sentence));
+
+// A nudge asks to be answered and says nothing else: "sidekick answer me", "answer me??", "hello?", "you there?". "ok" or "lol" alone is no nudge, and "don't answer" refuses.
+const NUDGE = wordRun(`${CASUAL_WORD}|me|my|question|q|now|already|someone|anyone|anybody|come on|답 ?좀|빨리`);
+const NUDGE_SIGNAL = /\?|\b(answer|reply|respond|sidekick|side ?bot|helper|hi+|hello+|hey+|yo+|ping|there|anyone|anybody|someone)\b|사이드킥|사이드 ?봇|대?답|안녕|거기/i;
+const NUDGE_NOT = /\b(dont|don'?t|do not|never|no|stop)\b/i;
+
+/** Only asks for an answer: the helper answers the person's question still waiting above it, if any. */
+export const isNudge = (raw: string) => {
+  const text = raw.trim();
+  return Boolean(text) && NUDGE.test(text) && NUDGE_SIGNAL.test(text) && !NUDGE_NOT.test(text);
+};
 
 /** An order or a decision for the bot, whose meaning only the bot may read. */
 export const isOrder = (raw: string) => parts(raw).some(orders);

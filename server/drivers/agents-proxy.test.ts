@@ -233,7 +233,7 @@ beforeAll(async () => {
         }
         if (lastAskUserBody.close) {
           res.writeHead(200, { "content-type": "application/json" });
-          return res.end(JSON.stringify({ closed: true }));
+          return res.end(JSON.stringify(["answered", "dismissed"].includes(lastAskUserBody.question) ? { closed: false, settled: lastAskUserBody.question } : lastAskUserBody.question === "unknown" ? { closed: false } : { closed: true }));
         }
         res.writeHead(201, { "content-type": "application/json" });
         res.end(JSON.stringify({ messageId: "msg-ask" }));
@@ -519,6 +519,15 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.isError).toBe(false);
     expect(res.result.content[0].text).toBe("Closed as answered in chat.");
     expect(lastAskUserBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", question: "Ship it?", close: true });
+  });
+
+  it("tells a close on an already answered card apart from one never asked", async () => {
+    const settled = await callTool("ask_user", { question: "answered", close: true });
+    expect(settled.result).toMatchObject({ isError: false, content: [{ text: "Already closed; the user answered it." }] });
+    const dismissed = await callTool("ask_user", { question: "dismissed", close: true });
+    expect(dismissed.result.content[0].text).toBe("Already closed; the user dismissed it.");
+    const unknown = await callTool("ask_user", { question: "unknown", close: true });
+    expect(unknown.result.content[0].text).toBe("No matching open question.");
   });
 
   it("forwards a fact mark so the Forum may answer first", async () => {

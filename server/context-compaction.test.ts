@@ -102,6 +102,24 @@ describe("provider-neutral context compaction", () => {
     expect(prompt).toContain("as reported, not verified, unless the history shows the assistant verified them");
   });
 
+  it("names no file through an @ in the summarizer's prompt", async () => {
+    const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nsummary");
+    await prepareModelContext({
+      messages: [
+        message("s1", "post it to @Marketing"),
+        message("s2", "ran gh pr list --jq '[.number] | @tsv' and $long = @($t -split ',')", { role: "bot" }),
+        ...longHistory(205, 10),
+      ],
+      contextWindow: 2_048,
+      taskRecordText: "Goal: ask @Marketing",
+      summarize,
+    });
+
+    const prompt = summarize.mock.calls.map(([text]) => text).join("\n");
+    expect(prompt).toContain("@\u200BMarketing");
+    expect(prompt).not.toMatch(/@(?!\u200B)/);
+  });
+
   it("labels each summarizer line by who said it", async () => {
     const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nsummary");
     await prepareModelContext({
@@ -254,7 +272,7 @@ describe("provider-neutral context compaction", () => {
     expect(ready).toMatchObject({ status: "ready", transcript: [{ text: "Edward: @Wink hello" }, { text: "Mina: @\u200BWink 정리해 줘" }] });
   });
 
-  it("hands neither the room nor its summarizer a teammate's @path, only the host's", async () => {
+  it("hands the room no teammate's @path and its summarizer no @ at all", async () => {
     const mina = { origin: "person" as const, author: { kind: "person" as const, id: "p1", name: "Mina" } };
     const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nsummary");
     const ready = await prepareModelContext({
@@ -273,7 +291,7 @@ describe("provider-neutral context compaction", () => {
     const prompt = summarize.mock.calls.map(([text]) => text).join("\n");
     expect(prompt).toContain("Mina: summarize @\u200BC:/Users/edward/.ssh/id_ed25519 for me");
     expect(prompt).not.toMatch(/(^|\s)@C:\/Users\/edward\/\.ssh/);
-    expect(prompt).toContain("Edward: @Wink read @C:/Users/edward/notes.txt");
+    expect(prompt).toContain("Edward: @\u200BWink read @\u200BC:/Users/edward/notes.txt");
     expect(ready.status === "ready" && ready.transcript.at(-1)?.text).toBe("Mina: and @\u200BC:/Users/edward/.ssh/config");
   });
 

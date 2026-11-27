@@ -35,7 +35,7 @@ const engine = (driverKind: string, queueing: boolean): InstanceInfo => ({
   instanceId: "inst", driverKind, displayName: "Engine", models: { default: "m", options: [] }, snapshot: { state: "available" }, capabilities: { queueing },
 });
 const history = (count: number): Message[] => Array.from({ length: count }, (_, i) => ({
-  id: `h${i}`, parentId: i ? `h${i - 1}` : undefined, at: T0 - 600_000 + i * 900, role: (count - i) % 2 ? "user" : "bot", kind: "text", text: `earlier ${i}`,
+  id: `h${i}`, parentId: i ? `h${i - 1}` : undefined, at: T0 - 600_000 + i * 900, role: i % 2 ? "bot" : "user", kind: "text", text: `earlier ${i}`,
 }));
 
 let store: ReturnType<typeof useStore>;
@@ -116,11 +116,8 @@ function chat(earlier: Message[]) {
   const landed: Message[] = [];
   let leaf = earlier.at(-1)?.id;
   let seen: string[] = [];
-  let liveName: string | undefined;
-  // the running turn's newest text sits in the live step line, which replaces itself
-  const order = () => [...host.querySelectorAll("[data-mid], [data-live-step], .thinking-shimmer")]
-    .map((el) => el.classList.contains("thinking-shimmer") ? "thinking" : !el.hasAttribute("data-live-step") ? names[el.getAttribute("data-mid") ?? ""]
-      : liveName = names[landed.findLast((row) => row.role === "bot" && el.textContent?.includes(row.text ?? "\u0000"))?.id ?? ""])
+  const order = () => [...host.querySelectorAll("[data-mid], .thinking-shimmer")]
+    .map((el) => el.classList.contains("thinking-shimmer") ? "thinking" : names[el.getAttribute("data-mid") ?? ""])
     .filter(Boolean);
   return {
     landed,
@@ -143,7 +140,7 @@ function chat(earlier: Message[]) {
       if (thinking >= 0) expect(thinking, `drawn under the turn at +${offset}: ${rows}`).toBe(rows.length - 1);
       const now = rows.filter((row) => row !== "thinking");
       expect(now.slice(0, seen.length), `moved at +${offset}`).toEqual(seen);
-      seen = now.filter((row) => row !== liveName);
+      seen = now;
       return now;
     },
   };
@@ -245,8 +242,7 @@ describe("ChatView send order", () => {
     await c.at(11164, () => c.land({ id: "r2", text: "답장 2", at: T0 + 11164 }));
     await c.at(11500, () => c.land({ ...steered("row-s3", "s3", "한 번 더 테스트", 9500, 11500), queueId: "q3" }));
     const final = await c.at(13000, () => c.land({ id: "r3", text: "답장 3", at: T0 + 13000 }));
-    // with history the turn has a start, so R2 is an earlier step of it and R3 its live line
-    expect(final).toEqual([...lead, "L1", "Q0", "L2", "R1", "Q1", "Q2", "L3", ...size ? [] : ["R2"], "R3"]);
+    expect(final).toEqual([...lead, "L1", "Q0", "L2", "R1", "Q1", "Q2", "L3", "R2", "R3"]);
     expect(host.textContent).not.toContain("Sends next");
 
     await unmount?.();
@@ -424,8 +420,7 @@ describe("ChatView send order", () => {
       { id: "u1", sendId: "s1", role: "user", text: "typed while busy", at: at(6000), actedAt: at(1000), ...(steered ? { steered } : {}) },
       { id: "b2", role: "bot", text: "reply to typed", at: at(8000) },
     ].map((row, i, rows) => ({ kind: "text", parentId: i ? rows[i - 1]!.id : null, ...row }) as Message);
-    live.current = { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} };
-    await mount(driverKind, steered, stored, [], {}, false, { busy: false, activity: undefined });
+    await mount(driverKind, steered, stored);
     const c = chat(stored);
     for (const row of stored) c.name(row.text!, row.id);
     expect(c.order().filter((row) => row !== "thinking")).toEqual(stored.map((row) => row.text));

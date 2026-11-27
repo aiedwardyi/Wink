@@ -600,39 +600,6 @@ describe("paged transcripts", () => {
     expect(scroller.scrollTop).toBe(500);
   });
 
-  it("keeps a running turn's progress out of the mounted tail when its prompt is above it", async () => {
-    const thread: Message[] = [{ id: "prompt", parentId: null, at: 1, role: "user", kind: "text", text: "running prompt;" }];
-    for (let i = 0; i < 130; i++) thread.push({ id: `t${i}`, parentId: thread.at(-1)!.id, at: 1, role: "bot", kind: "text", text: `progress ${i};` });
-    pagedServer("thread-a", thread, { bots: [{ ...bot(thread, false), busy: true } as Bot], groups: [] });
-    live.current = { streaming: {}, reasoning: {}, signal: { "thread-a": "started" }, gen: {}, turn: {} };
-    try {
-      const host = await mount("chat");
-      await vi.waitFor(() => expect(host.textContent).toContain("progress 129;"));
-      expect(host.querySelector('[data-mid="prompt"]')).toBeNull();
-      const bubbles = [...host.querySelectorAll("[data-mid]")].map((row) => row.getAttribute("data-mid")).filter((id) => id?.startsWith("t"));
-      expect(bubbles).toEqual([]);
-    } finally {
-      live.current = { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} };
-    }
-  });
-
-  it("keeps an older window's answers while a turn runs", async () => {
-    const thread: Message[] = Array.from({ length: 600 }, (_, i) => i % 2
-      ? { id: `a${i}`, parentId: `q${i - 1}`, at: 1, role: "bot", kind: "text", text: `answer ${i};` }
-      : { id: `q${i}`, parentId: i ? `a${i - 1}` : null, at: 1, role: "user", kind: "text", text: `ask ${i};` });
-    thread.push({ id: "prompt", parentId: "a599", at: 1, role: "user", kind: "text", text: "running prompt;" });
-    pagedServer("thread-a", thread, { bots: [{ ...bot(thread, false), busy: true } as Bot], groups: [] });
-    const host = await mount("chat");
-    await vi.waitFor(() => expect(host.textContent).toContain("running prompt;"));
-    await act(async () => store.dispatch({ type: "focusMessage", threadId: "thread-a", messageId: "q100" }));
-    await vi.waitFor(() => expect(host.querySelector('[data-mid="q100"]')).not.toBeNull());
-    const ids = [...host.querySelectorAll("[data-mid]")].map((row) => row.getAttribute("data-mid"));
-    expect(host.querySelector('[data-mid="prompt"]')).toBeNull();
-    const start = thread.findIndex((row) => row.id === ids[0]);
-    expect(ids).toEqual(thread.slice(start, start + ids.length).map((row) => row.id));
-    expect(ids.at(-1)).toMatch(/^a/);
-  });
-
   it("pages back to a search hit older than every loaded page", async () => {
     const thread = rows(0, 600);
     pagedServer("thread-a", thread, { bots: [bot(thread.slice(-200), true)], groups: [] });
@@ -1448,9 +1415,7 @@ describe("open window and jump pill", () => {
     expect(host.querySelector("[data-term-status]")?.textContent).not.toContain("/new-default");
   });
 
-  // a chat's live text sits in the step line above a standalone mascot; a room's reply still docks it
-  it.each(["chat", "room"] as const)("keeps the working timer on every skin while a %s reply streams", async (view) => {
-    const mascot = view === "chat" ? ".turn-presence [data-turn-mascot]" : "[data-turn-mascot].turn-mascot-docked";
+  it.each(["chat", "room"] as const)("keeps the working timer on every skin when a %s reply docks", async (view) => {
     applySkin("terminal");
     const threadId = view === "chat" ? "thread-a" : "thread-g";
     const thread = [{ ...say("prompt", null, "user", "fixture prompt;"), at: Date.now() - 125_000 }];
@@ -1461,10 +1426,10 @@ describe("open window and jump pill", () => {
         ? { bots: [{ ...member, messages: thread }], groups: [] }
         : { bots: [member], groups: [{ ...room(thread, false), memberIds: [member.id], busyBotId: member.id }] });
       const host = await mount(view);
-      await vi.waitFor(() => expect(host.querySelector(mascot)).not.toBeNull());
-      expect(host.querySelector(mascot)?.textContent).toMatch(/\(2m \d+s\)/);
+      await vi.waitFor(() => expect(host.querySelector("[data-turn-mascot].turn-mascot-docked")).not.toBeNull());
+      expect(host.querySelector("[data-turn-mascot].turn-mascot-docked")?.textContent).toMatch(/\(2m \d+s\)/);
       await act(async () => applySkin("precision"));
-      expect(host.querySelector(mascot)?.textContent).toMatch(/\(2m \d+s\)/);
+      expect(host.querySelector("[data-turn-mascot].turn-mascot-docked")?.textContent).toMatch(/\(2m \d+s\)/);
     } finally {
       live.current = { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} };
     }

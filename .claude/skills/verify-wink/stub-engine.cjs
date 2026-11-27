@@ -76,9 +76,6 @@ if (engine === "antigravity" && flag("-p") === "/usage" && existsSync(usageFile)
   process.exit(0);
 }
 
-// Optional multi-step script in the scratch root for realistic live-step runs with no test markers in chat.
-const stepsFile = process.env.USERPROFILE ? join(dirname(process.env.USERPROFILE), "stub-steps-script.json") : "";
-
 if (engine === "claude") {
   if (args[0] === "auth") {
     console.log(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty" }));
@@ -90,6 +87,8 @@ if (engine === "claude") {
   else {
     const session = randomUUID();
     let initialized = false;
+    // the real CLI answers a line written mid-reply after that reply, so a steer never cuts a [hold] turn short
+    let pendingUntil = 0;
     lines((message) => {
       if (message.type === "control_request") {
         out({ type: "control_response", response: { subtype: "success", request_id: message.request_id } });
@@ -100,57 +99,10 @@ if (engine === "claude") {
         initialized = true;
         out({ type: "system", subtype: "init", session_id: session, model });
       }
-      out({ type: "system", subtype: "status", status: "requesting" });
+      const queued = Math.max(0, pendingUntil - Date.now());
+      if (queued) setTimeout(() => out({ type: "system", subtype: "status", status: "requesting" }), queued);
+      else out({ type: "system", subtype: "status", status: "requesting" });
       const { text, delay } = reply(model, message.message?.content);
-      if (stepsFile && existsSync(stepsFile)) {
-        const script = JSON.parse(readFileSync(stepsFile, "utf8"));
-        const streamText = (body, durationMs) => new Promise((done) => {
-          const chunks = body.match(/\S+\s*|\s+/g) ?? [body];
-          const stepMs = Math.max(12, Math.floor((durationMs ?? 320) / Math.max(1, chunks.length)));
-          chunks.forEach((chunk, i) => {
-            setTimeout(() => {
-              out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: chunk } } });
-              if (i === chunks.length - 1) setTimeout(done, 40);
-            }, stepMs * i);
-          });
-        });
-        const pause = (ms) => new Promise((done) => setTimeout(done, ms));
-        (async () => {
-          for (const step of script.steps ?? []) {
-            if (step.beforeMs) await pause(step.beforeMs);
-            await streamText(step.text, step.streamMs ?? 360);
-            const toolId = step.tool ? randomUUID() : null;
-            out({
-              type: "assistant",
-              message: {
-                id: randomUUID(),
-                stop_reason: step.tool ? "tool_use" : "end_turn",
-                content: [
-                  { type: "text", text: step.text },
-                  ...(step.tool ? [{ type: "tool_use", id: toolId, name: step.tool.name, input: step.tool.input ?? {} }] : []),
-                ],
-              },
-            });
-            if (step.tool) {
-              await pause(step.tool.durationMs ?? 900);
-              out({
-                type: "user",
-                message: {
-                  role: "user",
-                  content: [{ type: "tool_result", tool_use_id: toolId, content: [{ type: "text", text: step.tool.result ?? "ok" }] }],
-                },
-              });
-            }
-            if (step.afterMs) await pause(step.afterMs);
-          }
-          const final = script.final ?? { text };
-          if (final.beforeMs) await pause(final.beforeMs);
-          await streamText(final.text, final.streamMs ?? 450);
-          out({ type: "assistant", message: { id: randomUUID(), stop_reason: "end_turn", content: [{ type: "text", text: final.text }] } });
-          out({ type: "result", subtype: "success", is_error: false, stop_reason: "end_turn", total_cost_usd: 0, usage: { input_tokens: 420, output_tokens: 180 } });
-        })();
-        return;
-      }
       // An expired login fails the first send only, as if Sign in fixed it before Retry.
       const expiredOnce = process.env.WINK_STUB_LOG && `${process.env.WINK_STUB_LOG}.expired`;
       if (text.includes("re: [expired]") && expiredOnce && !existsSync(expiredOnce)) {
@@ -176,12 +128,13 @@ if (engine === "claude") {
         return;
       }
       const half = Math.ceil(text.length / 2);
-      setTimeout(() => out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: text.slice(0, half) } } }), delay / 2);
+      pendingUntil = Date.now() + queued + delay + 1;
+      setTimeout(() => out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: text.slice(0, half) } } }), queued + delay / 2);
       setTimeout(() => {
         out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: text.slice(half) } } });
         out({ type: "assistant", message: { id: randomUUID(), content: [{ type: "text", text }] } });
         out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 } });
-      }, delay);
+      }, queued + delay);
     });
   }
 }

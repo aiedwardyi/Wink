@@ -36,8 +36,7 @@ import {
 import { EngineSetup, needsCli, needsSignIn, setupErrorAction } from "./EngineSetup";
 import { AccountSignInCard, SignedInCard, SignInCard } from "./SignInCard";
 import { BotAvatar } from "./Avatar";
-import { MessageBoundary, TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
-import { ChatMarkdown } from "./ChatMarkdown";
+import { TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { isTerminalSkin, isTerminalToolSkin, useSkin } from "@/lib/skins";
 import { logLine } from "@/lib/terminal-skin";
@@ -91,8 +90,8 @@ import { usePresence } from "@/lib/use-presence";
 import { useFindCurrentId, useSearchFindSeed } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
-import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isCommsNotice, isServerLine, isStepText, itemMatchesFind, liveTurnSteps, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
-import { chatTranscriptRows, messageVisible, windowRowVisible } from "@/lib/chat-transcript";
+import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
+import { chatTranscriptRows, messageVisible } from "@/lib/chat-transcript";
 import { isShownMessage } from "@/lib/shown-message";
 import { importOfferId } from "@/lib/import-links";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
@@ -563,53 +562,28 @@ function sameRun(a: RunItem, b: RunItem): boolean {
   return true;
 }
 
-/** A folded run of tool steps or progress steps. Grouping rebuilds the run each pass, so it compares the steps. */
-const ChatRun = memo(function ChatRun({ run, forceOpen, terminal, showActivities, findCurrent, baseDir, threadId }: {
+/** A folded run of tool steps. Grouping rebuilds the run each pass, so it compares the steps. */
+const ChatRun = memo(function ChatRun({ run, forceOpen, terminal, showActivities, findCurrent }: {
   run: RunItem;
   forceOpen: boolean;
   terminal: boolean;
   showActivities: boolean;
   findCurrent: string | null;
-  baseDir?: string | null;
-  threadId?: string;
 }) {
-  const hasSteps = run.messages.some(isStepText);
   return (
     <ActivityRun messages={run.messages} forceOpen={forceOpen}>
       {run.messages
-        .filter((step) => shownRunStep(step, { terminal, showActivities, findId: findCurrent, notices: run.notices?.get(step.id), hasSteps }))
+        .filter((step) => shownRunStep(step, { terminal, showActivities, findId: findCurrent, notices: run.notices?.get(step.id) }))
         .map((step) => (
         <div key={step.id} className="contents" data-mid={step.id} data-find-for={run.notices?.get(step.id)?.map((notice) => notice.message.id).join(" ") || undefined}>
-          <ActivityStep message={step} notices={run.notices?.get(step.id)} baseDir={baseDir} threadId={threadId} />
+          <ActivityStep message={step} notices={run.notices?.get(step.id)} />
         </div>
       ))}
     </ActivityRun>
   );
 }, (a, b) =>
   a.forceOpen === b.forceOpen && a.terminal === b.terminal && a.showActivities === b.showActivities &&
-  a.findCurrent === b.findCurrent && a.baseDir === b.baseDir && a.threadId === b.threadId && sameRun(a.run, b.run));
-
-/** Subscribes to live tokens for the quiet step line inside TurnPresence so ChatView never re-renders per token. */
-const LiveStepBody = memo(function LiveStepBody({
-  threadId,
-  streamingRow,
-  fallbackText,
-  baseDir,
-}: {
-  threadId: string;
-  streamingRow: Message | null;
-  fallbackText: string | null;
-  baseDir?: string | null;
-}) {
-  const live = useLiveReply(streamingRow, threadId);
-  const text = live?.text ?? fallbackText ?? "";
-  if (!text.trim()) return null;
-  return (
-    <MessageBoundary fallbackText={text}>
-      <ChatMarkdown text={text} streaming={Boolean(live)} whole={live?.streamWhole} baseDir={baseDir} threadId={threadId} />
-    </MessageBoundary>
-  );
-});
+  a.findCurrent === b.findCurrent && sameRun(a.run, b.run));
 
 /** A stamped peer reply carries its own label; inference covers the rest. */
 export function stampedReplyComm(message: Message): Message["comm"] {
@@ -626,7 +600,6 @@ const MessagesList = memo(function MessagesList({
   lastBotTextId,
   canonicalLastMessageId,
   streamingMessage: streamingRow,
-  hiddenIds,
   dock,
   canRetryLast,
   engine,
@@ -651,7 +624,6 @@ const MessagesList = memo(function MessagesList({
   lastBotTextId: string | undefined;
   canonicalLastMessageId: string | undefined;
   streamingMessage: Message | null;
-  hiddenIds?: ReadonlySet<string>;
   dock: ReplyDock | null;
   canRetryLast: boolean;
   /** This bot's engine, for rendering setup help on a `setup` error. */
@@ -689,9 +661,8 @@ const MessagesList = memo(function MessagesList({
       const worker = workerAt.get(m.id);
       return worker === undefined ? m.kind === "note" : Boolean(worker);
     };
-    const visibleList = hiddenIds?.size ? messages.filter((m) => !hiddenIds.has(m.id)) : messages;
-    return groupActivityRuns(streamingMessage ? [...visibleList, streamingMessage] : visibleList, terminal, shown);
-  }, [messages, hiddenIds, streamingMessage, terminal, showToolCalls, showActivities, transcript, workerAt]);
+    return groupActivityRuns(streamingMessage ? [...messages, streamingMessage] : messages, terminal, shown);
+  }, [messages, streamingMessage, terminal, showToolCalls, showActivities, transcript, workerAt]);
   const listedRows = useMemo(
     () => chatTranscriptRows(listedItems, { showToolCalls, showActivities, transcript }),
     [listedItems, showToolCalls, showActivities, transcript],
@@ -727,7 +698,7 @@ const MessagesList = memo(function MessagesList({
     let comm: Message["comm"];
     for (const message of transcript) {
       if (message.role === "user") comm = message.from ? message.comm : undefined;
-      else if (message.kind === "text" && !message.step && isShownMessage(message) && message.text?.trim()) {
+      else if (message.kind === "text" && isShownMessage(message) && message.text?.trim()) {
         // a stamped reply labels itself; either way the ask is answered once
         if (comm && !stampedReplyComm(message)) replies.set(message.id, comm);
         comm = undefined;
@@ -746,7 +717,7 @@ const MessagesList = memo(function MessagesList({
       const message = transcript[i];
       if (message.role === "user") {
         if (!message.kind || message.kind === "text") next = message.text?.trim() || next;
-      } else if (next && message.kind === "text" && !message.step) answers.set(message.id, next);
+      } else if (next && message.kind === "text") answers.set(message.id, next);
     }
     return answers;
   }, [transcript]);
@@ -823,8 +794,6 @@ const MessagesList = memo(function MessagesList({
                   terminal={terminal}
                   showActivities={showActivities}
                   findCurrent={findCurrent}
-                  baseDir={bubble.botFolder}
-                  threadId={bot.threadId}
                 />
               )}
             </div>
@@ -1150,7 +1119,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || isTerminalToolSkin(skin);
   const renders = useCallback(
-    (index: number) => windowRowVisible(messages, index, { showToolCalls, showActivities, transcript: messages }),
+    (index: number) => messageVisible(messages[index], { showToolCalls, showActivities, transcript: messages }),
     [messages, showToolCalls, showActivities],
   );
   // `expanded`: scrollback the reader asked for, held until they follow the bottom again.
@@ -1177,7 +1146,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     setWindowTerminal(terminal);
     setTranscriptWindow({
       key: transcriptKey,
-      start: tailWindowStart(shown.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_TAIL_SIZE, (index) => windowRowVisible(shown, index, { showToolCalls, showActivities, transcript: shown })),
+      start: tailWindowStart(shown.length, compactWindow ? CHAT_PEEK_WINDOW_SIZE : TRANSCRIPT_TAIL_SIZE, (index) => messageVisible(shown[index], { showToolCalls, showActivities, transcript: shown })),
       end: null,
       size: compactWindow ? CHAT_PEEK_WINDOW_SIZE : undefined,
     });
@@ -1242,7 +1211,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const sendsNext = composerIsBusy(Boolean(bot.busy), accepted);
 
   const lastBotTextId = useMemo(
-    () => [...messages].reverse().find((m) => m.role === "bot" && m.kind === "text" && !m.step && !isVoiceLine(m) && isShownMessage(m) && m.quick?.state !== "answer")?.id,
+    () => [...messages].reverse().find((m) => m.role === "bot" && m.kind === "text" && !isVoiceLine(m) && isShownMessage(m) && m.quick?.state !== "answer")?.id,
     [messages],
   );
 
@@ -1373,30 +1342,15 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   } : null, [waiting, turn.ended, turn.replying, bot.threadId, lastMessage?.id, lastMessage?.at]);
   const liveTail = laterCount === 0 && !jump.messages;
   const listedStreaming = liveTail ? streamingMessage : null;
-  const liveWaiting = waiting && !jump.messages;
-  const [waitFloor, setWaitFloor] = useState<{ threadId: string; on: boolean; id?: string; settled: boolean }>(() => ({ threadId: bot.threadId, on: waiting, settled: false }));
-  const floorMoved = waitFloor.threadId !== bot.threadId || waitFloor.on !== waiting || (liveWaiting && waitFloor.id === undefined && listed.length > 0);
-  const floorNow = floorMoved
-    ? { threadId: bot.threadId, on: waiting, id: liveWaiting ? listed.at(-1)?.id : undefined, settled: liveWaiting && waitFloor.threadId === bot.threadId && !waitFloor.on }
-    : waitFloor;
-  if (floorMoved) setWaitFloor(floorNow);
-  const waitFloorId = liveWaiting ? floorNow.id : undefined;
-  const liveTurn = useMemo(() => {
-    const floor = waitFloorId === undefined ? undefined : { id: waitFloorId, settled: floorNow.settled };
-    // the whole transcript finds the running turn even when its prompt is above the mounted rows; its live line stays at the tail
-    const found = liveTurnSteps(messages, listedStreaming, liveWaiting, floor);
-    return liveTail ? found : { ...found, holdStream: false, fallbackText: null, stepIndex: -1 };
-  }, [liveTail, messages, listedStreaming, liveWaiting, waitFloorId, floorNow.settled]);
-  const botFolder = activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd;
 
   // Docks under reply text while it streams, and fades there at turn end.
   // A live dock after the buffer clears would sit on that reply's time.
-  let tail: Message | null = liveTurn.holdStream ? null : listedStreaming;
+  let tail: Message | null = listedStreaming;
   for (let i = listed.length - 1; liveTail && !tail && i >= 0; i--) {
-    if (!liveTurn.hiddenIds.has(listed[i].id) && messageVisible(listed[i], { showToolCalls, showActivities, transcript: messages })) tail = listed[i];
+    if (messageVisible(listed[i], { showToolCalls, showActivities, transcript: messages })) tail = listed[i];
   }
   const tailSlot = tail?.role === "bot" && tail.kind === "text" && !isVoiceLine(tail) ? replySlot(bot.threadId, tail, shown) : null;
-  const docked = useReplyDock(!liveTurn.holdStream && listedStreaming && waiting ? tailSlot : null, tailSlot, waiting);
+  const docked = useReplyDock(listedStreaming && waiting ? tailSlot : null, tailSlot, waiting);
   const dockSlot = docked?.slot;
   const dockLive = docked?.live ?? false;
   const dock = useMemo<ReplyDock | null>(() => dockSlot ? {
@@ -1457,7 +1411,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     }
     appliedFocus.current = focus.nonce;
     if (liveIndex >= 0) closeJump();
-    const listRenders = (index: number) => windowRowVisible(list, index, { showToolCalls, showActivities, transcript: list });
+    const listRenders = (index: number) => messageVisible(list[index], { showToolCalls, showActivities, transcript: list });
     // a jump page fetched for this target has no window yet; a jump closing for a live target leaves the plain tail
     const switching = list !== shown;
     const current = requestedFocus.current === focus.nonce
@@ -1594,7 +1548,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
     setWindow: setTranscriptWindow, pauseFollow: () => setBottomFollow(false),
-    renders: (rows, index) => windowRowVisible(rows, index, { showToolCalls, showActivities, transcript: rows }),
+    renders: (rows, index) => messageVisible(rows[index], { showToolCalls, showActivities, transcript: rows }),
   });
   const showLater = () => advanceLater(true, true);
 
@@ -1925,8 +1879,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             editingId={editingId}
             lastBotTextId={lastBotTextId}
             canonicalLastMessageId={lastMessage?.id}
-            streamingMessage={liveTurn.holdStream ? null : listedStreaming}
-            hiddenIds={liveTurn.hiddenIds}
+            streamingMessage={listedStreaming}
             dock={dock}
             canRetryLast={!bot.busy && Boolean(lastUserMessage)}
             engine={engine}
@@ -1983,15 +1936,6 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             wrap={Boolean(noReply)}
             onSwitch={noReply && !modelSwitch.active ? modelSwitch.open : undefined}
             since={noReply ? undefined : since}
-            liveStep={liveTurn.stepIndex >= 0 ? (
-              <LiveStepBody
-                threadId={bot.threadId}
-                streamingRow={liveTurn.holdStream ? listedStreaming : null}
-                fallbackText={liveTurn.fallbackText}
-                baseDir={botFolder}
-              />
-            ) : undefined}
-            liveStepKey={liveTurn.stepIndex >= 0 ? `step:${liveTurn.stepIndex}` : undefined}
           />
           {queued.map((m, index) => (
             <div key={m.id} className="contents" data-mid={m.id}>
