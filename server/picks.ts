@@ -119,6 +119,10 @@ export const pickKey = (key: string) => key.toLowerCase().replace(/[^\p{L}\p{N}]
 // goals and picks never replace each other, whatever their keys
 const slotOf = (entry: { kind?: string; key: string }) => `${entry.kind === "goal" ? "goal" : "pick"}\0${pickKey(entry.key)}`;
 
+// a verified tap's card: its answers replace each other and never another card's, whatever the keys
+const cardSlot = ({ thread, questionId }: { thread?: string; questionId?: string }) => `card\0${thread}\0${questionId}`;
+const cardOf = (entry: PickEntry) => (entry.tapped && entry.binding === "verified" && entry.thread && entry.questionId && entry.questionId !== entry.messageId ? cardSlot(entry) : undefined);
+
 const stems = (text: string) => new Set(pickKey(text).split(" ").filter((word) => word.length >= 3).map((word) => word.slice(0, 4)));
 
 /** Two names of one option: the same letter or number with one name's words all in the other, else the same words. */
@@ -235,17 +239,59 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     if (!pickKey(asked)) continue;
     const slot = slotOf({ kind: change.kind, key: asked });
     const card = change.kind === "pick" && change.binding && change.binding !== "unbound" && change.binding.questionId !== change.binding.messageId ? change.binding : undefined;
+    if (change.kind === "pick" && change.tapped && card) {
+      // a verified tap is the user's answer to its own card, apart from every other card whatever their keys
+      const own = cardSlot(card);
+      const picked = clip(change.picked, PICKED_MAX);
+      // one answer per tap, however many keys the note-taker files it under
+      if (!picked || entries.some((entry) => entry.thread === card.thread && entry.messageId === card.messageId)) continue;
+      const mine = entries.findLast((entry) => !entry.replacedBy && !entry.kind && cardOf(entry) === own);
+      // a new card asking a retired pick's whole question again answers it anew
+      const again = mine ? undefined : entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === slot && entry.retired && cardOf(entry) && Boolean(card.question && same(entry.key, card.question.replace(/\|/g, "/"))));
+      const answer = mine ?? again;
+      let key = answer?.key ?? asked;
+      if (mine) {
+        // only a newer tap answers the card again: a replayed older one never lands
+        if (change.at <= entryTime(mine)) continue;
+        if (slotOf(mine) !== slot) moved.set(slot, slotOf(mine));
+        // the same option tapped again renews the answer as of now
+        if (flat(mine.picked) === picked) {
+          delete mine.retired;
+          mine.at = change.at;
+          retyped = true;
+          continue;
+        }
+      } else if (!again) {
+        // a typed pick on the question beats any tap
+        if (entries.some((entry) => !entry.replacedBy && slotOf(entry) === slot && !entry.tapped)) continue;
+        for (let n = 2; entries.some((entry) => !entry.replacedBy && slotOf(entry) === slotOf({ key })); n += 1) key = `${clip(asked, KEY_MAX - ` (${n})`.length)} (${n})`;
+        if (key !== asked) moved.set(slot, slotOf({ key }));
+      }
+      const id = fresh(pickStamp(change.at));
+      if (answer) {
+        answer.replacedBy = id;
+        replaced += 1;
+      }
+      if (change.legacy) {
+        entries.push({ id: fresh(change.legacy.day), key, replacedBy: id, picked: clip(change.legacy.line, PICKED_MAX), over: [], overPictures: [], files: [], tweaks: [], extra: [] });
+        replaced += 1;
+      }
+      const entry: PickEntry = {
+        id, key, picked,
+        over: (change.over ?? []).map((option) => clip(option, PICKED_MAX).replace(/;/g, ",")).filter(Boolean),
+        overPictures: card.overPictures, said: clip(change.said, SAID_MAX), files: card.files, tweaks: [], extra: [],
+        tapped: true, thread: card.thread, messageId: card.messageId, questionId: card.questionId, binding: "verified", at: change.at,
+      };
+      if (card.picture) entry.picture = card.picture;
+      entries.push(entry);
+      picks += 1;
+      continue;
+    }
     // a later answer to the same card is that card's pick, whatever key the note-taker gave it
     const answers = card ? entries.filter((entry) => !entry.replacedBy && !entry.kind && entry.questionId === card.questionId && entry.thread === card.thread && entry.messageId !== card.messageId) : [];
-    let current = (answers.length === 1 ? answers[0] : undefined) ?? entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === (moved.get(slot) ?? slot));
+    const current = (answers.length === 1 ? answers[0] : undefined) ?? entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === (moved.get(slot) ?? slot));
     if (card && current && slotOf(current) !== slot) moved.set(slot, slotOf(current));
-    let key = current?.key ?? asked;
-    // another card's pick that shares only a shortened question or the note-taker's key stays current beside this one
-    if (change.kind === "pick" && change.tapped && card && current?.tapped && current.binding === "verified" && current.questionId && current.questionId !== card.questionId && !(card.question && same(current.key, card.question.replace(/\|/g, "/")))) {
-      current = undefined;
-      for (let n = 2; entries.some((entry) => !entry.replacedBy && slotOf(entry) === slotOf({ key })); n += 1) key = `${clip(asked, KEY_MAX - ` (${n})`.length)} (${n})`;
-      moved.set(slot, slotOf({ key }));
-    }
+    const key = current?.key ?? asked;
     if (change.kind === "goal") {
       // a replayed batch from before the current entry never lands on it
       if (current && change.at < entryTime(current)) continue;
@@ -284,10 +330,8 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const binding = change.binding === "unbound" ? "unbound" : change.binding && "verified";
     const evidence: Partial<PickBinding> = change.binding === "unbound" ? {} : change.binding ?? change;
     if (evidence.messageId && entries.some((entry) => entry.messageId === evidence.messageId && entry.thread === evidence.thread && pickKey(entry.key) === pickKey(key))) continue;
-    // a new card asking the same question again is a new answer, dated today
-    const reasked = tapped && current?.tapped && card && current.questionId !== card.questionId;
     // a tap is the user's own selected words, so only the whole text names the same option
-    if (current && (tapped ? same(current.picked, picked) : sameOption(current.picked, picked)) && !reasked) {
+    if (current && (tapped ? flat(current.picked) === picked : sameOption(current.picked, picked))) {
       // a re-pick whose question never names the pick keeps the verified picture and time
       const proven = binding !== "verified" || current.binding !== "verified" || evidence.named;
       if (proven && (overTap || (binding === "verified" && (current.binding === "unbound" || (current.binding === "verified" && !tapped && !current.tapped))))) {
@@ -416,7 +460,9 @@ export function mergeTimelines(a: string, b: string): string | null {
       const typed = Boolean(before.tapped) !== Boolean(entry.tapped) ? (before.tapped ? entry : before) : undefined;
       const bound = typed ?? (before.binding === "verified" ? before : entry.binding === "verified" ? entry : before.messageId ? before : entry);
       if (bound.messageId || bound.binding === "unbound") {
-        merged.set(key, { ...bound, source: key, replacedBy: undefined, retired, tweaks, extra: union(before.extra, entry.extra) });
+        // the same option tapped again on one PC renewed the answer's time
+        const at = bound.at !== undefined && !typed && before.at !== undefined && entry.at !== undefined ? Math.max(before.at, entry.at) : bound.at;
+        merged.set(key, { ...bound, at, source: key, replacedBy: undefined, retired, tweaks, extra: union(before.extra, entry.extra) });
         continue;
       }
       const both: PickEntry = {
@@ -445,6 +491,7 @@ export function mergeTimelines(a: string, b: string): string | null {
   }
   const ids = new Set<string>();
   const current = new Map<string, PickEntry>();
+  const answers = new Map<string, PickEntry>();
   for (const entry of entries) {
     const base = entry.id.replace(/ \(\d+\)$/, "");
     let id = base;
@@ -457,7 +504,12 @@ export function mergeTimelines(a: string, b: string): string | null {
       entry.replacedBy = before.id;
       continue;
     }
-    if (before) before.replacedBy = id;
+    // a card's newest answer replaces only that card's last one; another card's live answer under the same key stays beside it, a retired one is asked again
+    const card = cardOf(entry);
+    const answer = card ? answers.get(card) : undefined;
+    if (card) answers.set(card, entry);
+    if (answer && !answer.replacedBy) answer.replacedBy = id;
+    else if (before && !(card && before.tapped && !before.retired)) before.replacedBy = id;
     current.set(slotOf(entry), entry);
   }
   const head = [...new Set(timelines.flatMap(({ head }) => timelineHead(head).split("\n")))].join("\n");
@@ -598,12 +650,16 @@ export function currentOnly(text: string): string {
 const DATED = /(?<![\w.@])(?:tonight|today|right now|after \d{1,2}:\d{2})\b|(?<![\w.@]|\b(?:for|from) )now\b(?! on\b)|(?<![\w.@]|\bfrom )tomorrow\b/i;
 // a tweak is the user's raw words, so it dates the pick only by these
 const DATED_SAID = /(?<![\w.@])(?:tonight|expires? today|right now|after \d{1,2}:\d{2})\b/i;
-// an answer held for the user, or a ban, has no day it is done
-const WAITS = /\b(?:wait|approv|confirm|never)/i;
-// "every day after 13:30" is a standing rule, whatever time it names
-const RECURRING = /\b(?:every|each|daily|nightly|weekly|monthly|always|whenever|from now on|(?:mon|tues|wednes|thurs|fri|satur|sun)days|onwards?|going forward|starting (?:today|tomorrow|now))\b/i;
+// a standing rule or default has no day it is done, whatever day or PR starts it
+const STANDING = /\b(?:defaults?|standard|rule|policy|always|every|each|daily|nightly|weekly|monthly|whenever|forever|permanent(?:ly)?|onwards?|going forward|from (?:now|today|tomorrow)|starting|(?:mon|tues|wednes|thurs|fri|satur|sun)days)\b/i;
+// an answer held for someone, put off to a later day, or a ban stays until the user says otherwise
+const HELD = /\b(?:hold|pause|park|freeze|block|until|pending|later|next|someday|eventually|never|stop)\b|\b(?:wait|approv|confirm|sign[- ]?off|review|postpon|defer|delay|reschedul)/i;
+// a negation cancels the day its clause names, "not today", and keeps a ban from finishing when a PR merges
+const NEGATED = /\b(?:not|no|never|don['’]?t|do not)\b|n['’]t\b/i;
+const CLAUSE = /[,;!?()\u2013\u2014]|[.:](?=\s|$)|\s-\s/;
+const datesIt = (text: string, words: RegExp) => text.split(CLAUSE).some((clause) => words.test(clause) && !NEGATED.test(clause));
 
-/** Marks current picks that are finished one-offs as retired today: the chosen answer or the user's newest words date it to a day now past, or done() says the PRs its answer names merged since; null from done() is a PR still open. An answer that waits, asks for approval or confirmation, or says never stays. Null when none. */
+/** Marks current picks that are finished one-offs as retired today, only on proof: the pick's newest words (the answer or its latest confirmation, else its newest tweak) date the action to a day now past, or done() says every PR its answer names merged since. null from done() is a PR still open or unread. A standing rule or default, a hold, a postponement or a ban stays. Null when none. */
 export function retirePicks(text: string, now: number, done: (entry: PickEntry) => boolean | null = () => false): string | null {
   const timeline = parseTimeline(text);
   const today = pickStamp(now).slice(0, 10);
@@ -611,16 +667,19 @@ export function retirePicks(text: string, now: number, done: (entry: PickEntry) 
   for (const entry of timeline.entries) {
     if (entry.replacedBy || entry.kind || entry.retired) continue;
     const answer = [entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n");
-    if (RECURRING.test(`${entry.key}\n${answer}`) || WAITS.test(answer)) continue;
+    if (STANDING.test(`${entry.key}\n${answer}`) || HELD.test(answer)) continue;
     const finished = done(entry);
     if (finished === null) continue;
     // a delayed batch can append an older tweak after a newer one
     const tweak = entry.tweaks.reduce<Tweak | undefined>((newest, each) => (!newest || each.at >= newest.at ? each : newest), undefined);
-    const due = new Date(entryTime(entry));
+    const picked = entryTime(entry);
+    const due = new Date(picked);
     if (/\btomorrow\b/i.test(entry.picked)) due.setDate(due.getDate() + 1);
-    // the question and the options it beat never date the answer
-    const day = tweak ? DATED_SAID.test(tweak.said) && tweak.at.slice(0, 10) : DATED.test(entry.picked) && pickStamp(due.getTime()).slice(0, 10);
-    if (!finished && !(day && day < today)) continue;
+    // the newest words date it: a confirmation after the last tweak renews the answer's own day; the question and the options it beat never do
+    const day = tweak && tweak.at >= pickStamp(picked)
+      ? datesIt(tweak.said, DATED_SAID) && tweak.at.slice(0, 10)
+      : datesIt(entry.picked, DATED) && pickStamp(due.getTime()).slice(0, 10);
+    if (!(finished && !NEGATED.test(answer)) && !(day && day < today)) continue;
     entry.retired = today;
     retired += 1;
   }

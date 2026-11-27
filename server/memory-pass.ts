@@ -616,25 +616,23 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
         overPictures: fact.over_pictures == null ? undefined : listOf(fact.over_pictures),
       }, bound, before, sources.filter((other) => other !== bound && (quoting.includes(other) || offersOption(other, line))));
       const old = target ? NOTED.exec(target) : null;
-      if (source.tap && source.id) {
-        // a tap is the user's exact choice: a note that misses its card or answer leaves it to code, one that drops any of its words leaves code its key
-        if (!binding || binding.messageId !== source.id || binding.questionId !== source.questionId) return null;
-        if (!` ${pickKey(line)} `.includes(` ${pickKey(tapAnswer(source))} `)) {
-          cardKeys.set(binding.questionId, thing);
-          return null;
-        }
+      // a tap is the user's exact choice, saved in its own words: the note names its key and context, never its answer, and a note that misses its card leaves it to code
+      const tap = source.tap && source.id ? tapChoice(source) : undefined;
+      if (tap !== undefined) {
+        if (!binding || binding.messageId !== source.id || binding.questionId !== source.questionId || answered.has(source.id) || !tap || secretValue(tapAnswer(source))) return null;
         answered.add(source.id);
       }
       if (binding) cardKeys.set(binding.questionId, thing);
+      const picked = tap ?? line;
       seen.add(id);
       live.add(pickKey(thing));
       decided.add(squash(said));
-      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: binding?.at ?? source.at ?? 0, key: thing, picked: line, said };
+      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: binding?.at ?? source.at ?? 0, key: thing, picked, said: tap === undefined ? said : tapAnswer(source) };
       if (source.id) pick.binding = binding ?? "unbound";
       if (over.length) pick.over = over;
       if (source.tap && binding) pick.tapped = true;
       if (target) pick.legacy = { day: old?.[2] ?? day(pick.at), line: old?.[1] ?? target.replace(/^\s*[-*+]\s+/, "") };
-      const note: Note = { line: named, kind: "decision", pick };
+      const note: Note = { line: tap === undefined ? named : `${thing}: ${tap}`, kind: "decision", pick };
       if (target) note.replaces = target;
       return note;
     }
@@ -673,21 +671,29 @@ function questionKey(question: string, held: (key: string) => boolean): string {
 // what userTyping leaves of answerPrefix: the quote, or nothing once a long quote was cut
 const ANSWER_PREFIX = /^Re: (?:“[^\n]*”)?[ \t]*\n/;
 const tapAnswer = (source: UserLine) => source.text.replace(ANSWER_PREFIX, "").trim();
+// the option a card answer selects, in the card's own words when it is a bare letter or number naming one of them
+const tapChoice = (source: UserLine) => {
+  const text = tapAnswer(source);
+  const label = /^(?:option\s+)?([a-z]|\d{1,2})[.)]?$/i.exec(text)?.[1]?.toLowerCase();
+  const named = label ? (source.options ?? []).filter((option) => LABELED.exec(option.trim())?.[1]?.toLowerCase() === label) : [];
+  return named.length === 1 ? named[0]!.replace(/\s+/g, " ").trim() : text;
+};
 
 /** Card answers the note-taker did not file, each a pick in the user's words; a card on file keeps its key, so a revised answer replaces the older one. */
 function cardAnswers(sources: UserLine[], answered: Set<string>, keys: Map<string, string>, archived: string): HeldNote[] {
   const entries = parseTimeline(archived).entries;
   return sources.flatMap((source) => {
     const question = source.question?.replace(/\s+/g, " ").trim();
-    const picked = tapAnswer(source);
-    if (!source.tap || !source.id || answered.has(source.id) || !question || !picked || secretValue(question) || secretValue(picked)) return [];
+    const said = tapAnswer(source);
+    const picked = tapChoice(source);
+    if (!source.tap || !source.id || answered.has(source.id) || !question || !said || secretValue(question) || secretValue(said)) return [];
     const binding = validatePickBinding({ key: question, picked, over: [] }, source);
     if (!binding) return [];
     const held = (key: string) => [...keys].some(([id, other]) => id !== binding.questionId && pickKey(other) === pickKey(key))
       || entries.some((entry) => !entry.replacedBy && !entry.kind && entry.questionId !== binding.questionId && pickKey(entry.key) === pickKey(key));
     const key = keys.get(binding.questionId) ?? entries.findLast((entry) => !entry.kind && entry.questionId === binding.questionId)?.key ?? questionKey(question, held);
     keys.set(binding.questionId, key);
-    return [{ line: `${key}: ${picked}`, kind: "decision", pick: { kind: "pick", at: binding.at, key, picked, said: picked, binding, tapped: true } }];
+    return [{ line: `${key}: ${picked}`, kind: "decision", pick: { kind: "pick", at: binding.at, key, picked, said, binding, tapped: true } }];
   });
 }
 
@@ -945,11 +951,14 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       return done(threadId, batch.ids);
     }
     // before MEMORY.md drops a replaced decision line, so a failed write never loses it; a retry lands each pick once
-    const landed = changes.length ? applyPicks(timeline, changes) : null;
-    const retired = retirePicks(landed?.text ?? timeline, now(), (entry) => prsMerged(botId, entry.thread ?? threadId, entry));
-    if (landed || retired) {
+    const sweep = (text: string) => retirePicks(text, now(), (entry) => prsMerged(botId, entry.thread ?? threadId, entry));
+    // swept first too, so a card asking a finished pick's question again finds it retired
+    const swept = changes.length ? sweep(timeline) : null;
+    const landed = changes.length ? applyPicks(swept ?? timeline, changes) : null;
+    const next = sweep(landed?.text ?? swept ?? timeline) ?? landed?.text ?? swept;
+    if (next) {
       try {
-        writeFileAtomic(join(ensureWorkspace(botId), "memory", PICKS_FILE), retired ?? landed!.text, { mode: 0o600 });
+        writeFileAtomic(join(ensureWorkspace(botId), "memory", PICKS_FILE), next, { mode: 0o600 });
       } catch (error) {
         held.set(threadId, batch);
         log({ botId, threadId, facts: accepted.length, ms, result: "error" });

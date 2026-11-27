@@ -148,6 +148,49 @@ describe("retiring finished one-off picks", () => {
     expect(currentPicks(tweaked).map(({ picked, tweaks }) => [picked, tweaks.map(({ said }) => said)])).toEqual([["Local signing", []], ["Cloud signing", ["use the EV certificate"]]]);
   });
 
+  it("keeps a standing default, a hold and a postponement, whatever day it names or PR merged", () => {
+    const text = ["# Decision timeline", "",
+      ...entry("2026-11-24 10:00", "Which theme should new sites use?", "From today, use dark mode as the default", "- Tapped: yes"),
+      ...entry("2026-11-24 10:01", "Which sign-in flow belongs in new workspaces?", "Use the sign-in flow from PR #41 as the default", "- Tapped: yes"),
+      ...entry("2026-11-24 10:02", "What do we do about release signoff?", "Hold for signoff on PR #43", "- Tapped: yes"),
+      ...entry("2026-11-24 10:03", "Release timing", "Not now, ship next week"),
+      ...entry("2026-11-24 10:04", "Launch timing", "Ship next Friday, not today"),
+    ].join("\n");
+    expect(retirePicks(text, NOW, () => true)).toBeNull();
+  });
+
+  it("retires a one-off once its day passed or every PR its answer names merged", () => {
+    const text = ["# Decision timeline", "",
+      ...entry("2026-11-24 10:00", "When should we archive the demo?", "Tonight", "- Tapped: yes"),
+      ...entry("2026-11-24 10:01", "When do we close the beta task?", "Close the beta task after PR #41 and PR #43 merge", "- Tapped: yes"),
+      ...entry("2026-11-24 10:02", "Which test accounts?", "up.codex.today and getwinkdev subs"),
+    ].join("\n");
+    expect(currentPicks(retirePicks(text, NOW, (pick) => pick.picked.includes("PR #41"))).filter((pick) => pick.retired).map(({ picked }) => picked)).toEqual(["Tonight", "Close the beta task after PR #41 and PR #43 merge"]);
+  });
+
+  it("dates a pick confirmed again after its last tweak by the confirmation", () => {
+    const first = new Date("2026-11-25T10:00:00").getTime();
+    // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+    const bound = (messageId: string, at: number) => ({ at, messageId, questionId: "q1", thread: "t1", files: [], overPictures: [], named: true }) as never;
+    const key = "When should we run checks?";
+    const picked = "Run the checks tonight";
+    const initial = applyPicks("", [{ kind: "pick", at: first, key, picked, said: picked, tapped: true, binding: bound("a1", first) }, { kind: "tweak", at: first + 60_000, key, said: "Include the signing checks tonight" }])!.text;
+    const archived = retirePicks(initial, NOW)!;
+    expect(picksBlock(archived)).toBe("");
+    const confirmed = applyPicks(archived, [{ kind: "pick", at: NOW, key, picked, said: picked, binding: bound("a2", NOW) }])!.text;
+    expect(picksBlock(retirePicks(confirmed, NOW) ?? confirmed)).toContain(picked);
+    expect(picksBlock(retirePicks(confirmed, NOW + 86_400_000)!)).toBe("");
+  });
+
+  it("renews a tap when the user taps the same option on its card again", () => {
+    // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+    const tap = (messageId: string, at: number) => ({ kind: "pick" as const, at, key: "When should we run checks?", picked: "Tonight", said: "Tonight", tapped: true, binding: { at, messageId, questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never });
+    const archived = retirePicks(applyPicks("", [tap("a1", NOW - 2 * 86_400_000)])!.text, NOW)!;
+    const renewed = applyPicks(archived, [tap("a2", NOW)])!.text;
+    expect(currentPicks(renewed).map(({ picked, retired }) => [picked, retired])).toEqual([["Tonight", undefined]]);
+    expect(retirePicks(renewed, NOW)).toBeNull();
+  });
+
   it("never retires a recurring instruction, whatever time it names", () => {
     const text = ["# Decision timeline", "", ...entry("2026-11-20 10:00", "When should alerts go to the backup?", "Every day after 13:30", "- Tapped: yes")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();

@@ -521,17 +521,61 @@ describe("decision timeline", () => {
     });
 
     it("shows a fresh card's answer when an older card asked the same and retired", async () => {
-      const checks = () => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Checks", subtitle: "Run the checks tonight?", options: ["Yes", "No"], askUser: true } });
-      answer(checks(), "Yes");
+      const checks = () => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Checks", subtitle: "When should the checks run?", options: ["Tonight", "Next week"], askUser: true } });
+      const old = checks();
+      answer(old, "Tonight");
       reply();
       await settle();
       vi.setSystemTime(NOW + 2 * 24 * 60 * MINUTE);
       const fresh = checks();
-      answer(fresh, "Yes");
+      answer(fresh, "Tonight");
       reply();
       await settle();
-      expect(currentPicks(timeline()).filter((pick) => !pick.retired).map(({ questionId }) => questionId)).toEqual([fresh.id]);
-      expect(picksBlock(timeline())).toContain("Run the checks tonight?");
+      expect(currentPicks(timeline()).map(({ questionId }) => questionId)).toEqual([fresh.id]);
+      expect(parseTimeline(timeline()).entries.find(({ questionId }) => questionId === old.id)).toMatchObject({ retired: expect.any(String), replacedBy: expect.any(String) });
+      expect(picksBlock(timeline())).toContain("When should the checks run? (");
+    });
+
+    it("keeps a live answer when another card asks the same question", async () => {
+      const ask = (options: string[]) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Pick", subtitle: "Which option should we use?", options, askUser: true } });
+      const signing = ask(["Local signing", "Cloud signing"]);
+      answer(signing, "Local signing");
+      reply();
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      const backup = ask(["Cloud backup", "Local backup"]);
+      answer(backup, "Cloud backup");
+      reply();
+      await settle();
+      expect(picks()).toEqual([["Which option should we use?", "Local signing", signing.id], ["Which option should we use? (2)", "Cloud backup", backup.id]]);
+    });
+
+    it("saves the tapped option when the note-taker names another", async () => {
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Language", subtitle: "Which language should we use?", options: ["C++", "C#"], askUser: true } });
+      const tap = answer(card, "C#");
+      reply({ kind: "decision", key: "Language", fact: "C++", quote: "C#", message_id: tap.id, question_id: card.id });
+      await settle();
+      expect(picks()).toEqual([["Language", "C#", card.id]]);
+    });
+
+    it("replaces a tapped answer with one that differs only in case", async () => {
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Branch", subtitle: "Which branch should the Linux build target?", options: ["Use branch Release", "Use branch release"], askUser: true } });
+      answer(card, "Use branch Release");
+      reply();
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      answer(card, "Re: “Which branch should the Linux build target?”\nUse branch release");
+      reply();
+      await settle();
+      expect(picks()).toEqual([["Which branch should the Linux build target?", "Use branch release", card.id]]);
+    });
+
+    it("files one answer when the note-taker gives a tap two keys", async () => {
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Material", subtitle: "Which material should the bridge prototype use?", options: ["Balsa", "Birch"], askUser: true } });
+      const tap = answer(card, "Balsa");
+      reply(...["Prototype material", "Bridge material"].map((key) => ({ kind: "decision", key, fact: "Balsa", quote: "Balsa", message_id: tap.id, question_id: card.id })));
+      await settle();
+      expect(picks()).toEqual([["Prototype material", "Balsa", card.id]]);
     });
 
     it("saves a long tapped answer whole, with the words that hold it back", async () => {

@@ -178,6 +178,35 @@ describe("applyPicks", () => {
   });
 });
 
+describe("card answers across PCs", () => {
+  // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+  const tap = (questionId: string, messageId: string, key: string, picked: string, when: number) =>
+    pick(key, picked, picked, when, { tapped: true, binding: { at: when, messageId, questionId, thread: "t1", files: [], overPictures: [], named: true } as never });
+
+  it("keeps two cards filed under one key apart when two PCs merge", () => {
+    const desktop = applyPicks("", [tap("q1", "a1", "Signing service", "Local signing", at(25, 14, 9))])!.text;
+    const mobile = applyPicks("", [tap("q2", "a2", "Signing service", "Cloud signing", at(25, 14, 10))])!.text;
+    for (const merged of [mergeTimelines(desktop, mobile)!, mergeTimelines(mobile, desktop)!]) {
+      expect(currentPicks(merged).map(({ picked, questionId }) => [picked, questionId])).toEqual([["Local signing", "q1"], ["Cloud signing", "q2"]]);
+    }
+  });
+
+  it("keeps only a card's newest answer when PCs filed its answers under different keys", () => {
+    const sent = applyPicks("", [tap("q1", "a1", "Announcement plan", "Send the release notes", at(25, 14, 9))])!.text;
+    const held = applyPicks("", [tap("q1", "a2", "Release notes", "Hold the release notes", at(25, 14, 10))])!.text;
+    const merged = mergeTimelines(sent, held)!;
+    expect(merged).toBe(mergeTimelines(held, sent));
+    expect(currentPicks(merged).map(({ picked }) => picked)).toEqual(["Hold the release notes"]);
+    expect(picksBlock(merged)).not.toContain("Send the release notes");
+  });
+
+  it("keeps a renewed tap's time when one PC saw it", () => {
+    const first = applyPicks("", [tap("q1", "a1", "When should we run checks?", "Tonight", at(24, 10))])!.text;
+    const renewed = applyPicks(first, [tap("q1", "a2", "When should we run checks?", "Tonight", at(26, 10))])!.text;
+    for (const merged of [mergeTimelines(first, renewed)!, mergeTimelines(renewed, first)!]) expect(currentPicks(merged).map(({ at }) => at)).toEqual([at(26, 10)]);
+  });
+});
+
 describe("picksBlock", () => {
   it("reads C with its picture plus the tweaks, newest pick first", () => {
     const text = applyPicks("", [
