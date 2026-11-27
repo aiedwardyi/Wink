@@ -25,6 +25,8 @@ export type ReplyPictures = PictureTurn & {
   choice?: string;
   /** when the newest row an edit replaces took effect: the edit is newer, whatever that row's clock said */
   edits?: number;
+  /** each other card the bot closed as answered by this reply */
+  also?: ReplyPictures[];
 };
 type PickSource = Partial<ReplyPictures> & { id?: string; at?: number; thread?: string; files?: string[] };
 type PickClaim = {
@@ -144,17 +146,21 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
     for (let at = i; at >= 0; at = parent(at)) path.push(messages[at]!);
     return path.reverse();
   };
-  // a reply with no card id answers the newest card on its branch it quotes, answered before or not, else a card the bot closed for it or for a row it edits, else a card its branch closes with it: one with no buttons by any words, else by an option's whole text, as a tap sends it
-  const chatCard = (answer: Message, path: readonly Message[], replaced: readonly Message[]) => {
-    if (answer.answersCard) return undefined;
+  // a reply with no card id answers the newest card on its branch it quotes, answered before or not, else every card the bot closed for it or for a row it edits, else the card a tapped row it edits answered, else a card its branch closes with it: one with no buttons by any words, else by an option's whole text, as a tap sends it
+  const chatCards = (answer: Message, path: readonly Message[], replaced: readonly Message[]): string[] => {
     const text = answer.text ?? "";
     const quoted = text.startsWith("Re: “") ? path.findLast((row) => row !== answer && isQuestionCard(row) && text.startsWith(answerPrefix(row))) : undefined;
-    if (quoted) return quoted.id;
-    const closedFor = (ids: readonly string[]) => path.findLast((row) => row !== answer && isQuestionCard(row) && ids.includes(row.card?.answeredBy ?? ""));
-    const closed = closedFor([answer.id]) ?? closedFor(replaced.map(({ id }) => id));
-    if (closed) return closed.id;
-    for (const [card, state] of askStates(path)) if (state.state === "answered" && state.by === answer && (!card.card?.options?.length || card.card.options.includes(text.trim()))) return card.id;
-    return undefined;
+    if (quoted) return [quoted.id];
+    // newest first
+    const closedFor = (ids: readonly string[]) => path.filter((row) => row !== answer && isQuestionCard(row) && ids.includes(row.card?.answeredBy ?? "")).map(({ id }) => id).reverse();
+    const closed = closedFor([answer.id]);
+    if (closed.length) return closed;
+    const edited = closedFor(replaced.map(({ id }) => id));
+    if (edited.length) return edited;
+    const tapped = replaced.findLast((row) => row.answersCard)?.answersCard;
+    if (tapped) return [tapped];
+    for (const [card, state] of askStates(path)) if (state.state === "answered" && state.by === answer && (!card.card?.options?.length || card.card.options.includes(text.trim()))) return [card.id];
+    return [];
   };
   for (let i = messages.length - 1; i >= 0 && wanted.size; i -= 1) {
     const answer = messages[i]!;
@@ -163,26 +169,32 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
     const branch = () => (path ??= pathTo(i));
     // an edit sits on the parent of the user's rows it replaces
     const replaced = messages.slice(0, i).filter((row, j) => sentByPerson(row) && parent(j) === parent(i));
-    const cardId = answer.answersCard ?? chatCard(answer, branch(), replaced);
-    const card = cardId ? byId.get(cardId) : undefined;
-    const answered = card !== undefined && card < i && isQuestionCard(messages[card]!) ? messages[card] : undefined;
-    const { turn, previous } = botTurn(messages, answered ? card! : parent(i), parent);
-    const current = picturesIn(turn, attachments, answered) ?? { questionId: answer.id, pictures: [] };
-    const previousAnswer = messages[previous];
-    const preview = current.pictures.length > 0 && PREVIEW_REQUEST.test(previousAnswer?.text?.trim() ?? "");
-    const correction = !current.pictures.length && !current.options?.length && (!current.context || CONFIRMATION.test(current.context)) && CORRECTION.test(answer.text?.trim() ?? "");
-    const prior = previousAnswer && !answered && (preview || correction) ? picturesIn(botTurn(messages, parent(previous), parent).turn, attachments) : undefined;
-    const reply: ReplyPictures = { ...current, prior: prior && { ...prior, kind: preview ? "preview" : "correction" }, previousAnswerId: previousAnswer?.id, invalidCard: Boolean(answer.answersCard && !answered), question: answered?.card?.subtitle };
-    if (answered) {
-      reply.cardId = answered.id;
-      const text = answer.text ?? "";
-      const said = (text.startsWith(answerPrefix(answered)) ? text.slice(answerPrefix(answered).length) : text).trim();
-      const choice = cardChoice(said, answered.card?.options?.length ? answered.card.options : labeledOptions(answered.card?.subtitle));
-      if (choice !== undefined) reply.choice = choice;
-      reply.answer = choice === said ? said : ownWords(said, () => branch().slice(0, -1));
-    }
-    // each earlier edit took effect after the rows it replaced, so a later edit is newer still
-    if (replaced.length) reply.edits = replaced.reduce((after, row) => Math.max(row.actedAt ?? row.at, after + 1), -Infinity);
+    const replyTo = (cardId: string | undefined) => {
+      const card = cardId ? byId.get(cardId) : undefined;
+      const answered = card !== undefined && card < i && isQuestionCard(messages[card]!) ? messages[card] : undefined;
+      const { turn, previous } = botTurn(messages, answered ? card! : parent(i), parent);
+      const current = picturesIn(turn, attachments, answered) ?? { questionId: answer.id, pictures: [] };
+      const previousAnswer = messages[previous];
+      const preview = current.pictures.length > 0 && PREVIEW_REQUEST.test(previousAnswer?.text?.trim() ?? "");
+      const correction = !current.pictures.length && !current.options?.length && (!current.context || CONFIRMATION.test(current.context)) && CORRECTION.test(answer.text?.trim() ?? "");
+      const prior = previousAnswer && !answered && (preview || correction) ? picturesIn(botTurn(messages, parent(previous), parent).turn, attachments) : undefined;
+      const reply: ReplyPictures = { ...current, prior: prior && { ...prior, kind: preview ? "preview" : "correction" }, previousAnswerId: previousAnswer?.id, invalidCard: Boolean(answer.answersCard && !answered), question: answered?.card?.subtitle };
+      if (answered) {
+        reply.cardId = answered.id;
+        const text = answer.text ?? "";
+        const said = (text.startsWith(answerPrefix(answered)) ? text.slice(answerPrefix(answered).length) : text).trim();
+        const choice = cardChoice(said, answered.card?.options?.length ? answered.card.options : labeledOptions(answered.card?.subtitle));
+        if (choice !== undefined) reply.choice = choice;
+        reply.answer = choice === said ? said : ownWords(said, () => branch().slice(0, -1));
+      }
+      // each earlier edit took effect after the rows it replaced, so a later edit is newer still
+      if (replaced.length) reply.edits = replaced.reduce((after, row) => Math.max(row.actedAt ?? row.at, after + 1), -Infinity);
+      return reply;
+    };
+    const [cardId, ...others] = answer.answersCard ? [answer.answersCard] : chatCards(answer, branch(), replaced);
+    const reply = replyTo(cardId);
+    const also = others.map(replyTo).filter(({ cardId }) => cardId);
+    if (also.length) reply.also = also;
     found.set(answer.id, reply);
   }
   return found;

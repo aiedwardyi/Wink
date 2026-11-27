@@ -149,7 +149,8 @@ describe("every way to answer a card files it under that card", () => {
     const store = new Store(() => ({ instanceId: "claude", model: "claude-opus-5-5" }));
     const bot = store.createBot({}, { seedMessages: false });
     let notes: object[] = [];
-    const pass = createMemoryPass({ store, dataDir: DATA_DIR, generate: () => async () => JSON.stringify(notes), enabled: () => true, busy: () => false });
+    const notesPass = () => createMemoryPass({ store, dataDir: DATA_DIR, generate: () => async () => JSON.stringify(notes), enabled: () => true, busy: () => false });
+    let pass = notesPass();
     const ask = (subtitle: string, options: string[]) =>
       store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: { title: "Ask", subtitle, options, askUser: true, staysOpen: true } });
     const send = (text: string, extra: Partial<Message> = {}) => store.appendMessage(bot.threadId, { role: "user", kind: "text", text, actedAt: Date.now() - MINUTE, ...extra });
@@ -179,16 +180,21 @@ describe("every way to answer a card files it under that card", () => {
       return { replay: turnText, prompt: memorySystemPrompt(bot.id), picks: currentPicks(readMemoryTopic(bot.id, PICKS_FILE) ?? "") };
     };
     // the bot's ask_user close:true, as the agents proxy sends it
-    const close = (question: string) => postAskUser({
+    const close = (question: string, answer?: string) => postAskUser({
       bot: (id) => store.bot(id), conversation: (botId, threadId) => store.conversationForBot(botId, threadId),
       appendMessage: (threadId, row) => store.appendMessage(threadId, row), activePath: (threadId) => store.activePath(threadId),
       patchMessage: (threadId, id, patch) => store.patchMessage(threadId, id, patch), cancelHeld: () => false,
       alertThread: (_bot, threadId) => threadId, notifyQuestion: () => {}, whenSettled: (_bot, _thread, post) => post(),
-    }, askUserRequestSchema.parse({ fromBotId: bot.id, fromThreadId: bot.threadId, question, choices: [], close: true }));
+    }, askUserRequestSchema.parse({ fromBotId: bot.id, fromThreadId: bot.threadId, question, choices: [], close: true, answer }));
     const card = (id: string) => store.messagesFor(bot.threadId).find((row) => row.id === id)?.card;
     return {
       ask, send, settle, answeredBy, restarted, close, card, post: (row: Omit<Message, "id" | "at">) => store.appendMessage(bot.threadId, row),
       branch: (id: string, text: string) => store.branchMessage(bot.threadId, id, text)!,
+      // the app quits and starts again
+      reopen: () => {
+        pass.dispose();
+        pass = notesPass();
+      },
       botId: bot.id, threadId: bot.threadId,
     };
   };
@@ -260,7 +266,7 @@ describe("every way to answer a card files it under that card", () => {
       await settle();
     }
     const reply = send(words, { sendId: "send-1" });
-    expect(close(question)).toEqual({ status: 200, body: { closed: true } });
+    expect(close(question, words)).toEqual({ status: 200, body: { closed: true } });
     expect(cardOf(card.id)).toMatchObject({ answered: ANSWERED_IN_CHAT, answeredBy: reply.id });
     await settle();
     const { replay, prompt, picks } = await restarted();
@@ -282,12 +288,105 @@ describe("every way to answer a card files it under that card", () => {
     const env = ask("Which environment should the preview use?", ["Prod", "Staging"]);
     const first = send("Postgres for billing", { actedAt: Date.now() - 2 * MINUTE });
     const second = send("Use Staging for the preview", { actedAt: Date.now() - MINUTE });
-    expect(close(env.card!.subtitle)).toMatchObject({ body: { closed: true } });
-    expect(close(db.card!.subtitle)).toMatchObject({ body: { closed: true } });
+    expect(close(env.card!.subtitle, "Use Staging for the preview")).toMatchObject({ body: { closed: true } });
+    expect(close(db.card!.subtitle, "Postgres for billing")).toMatchObject({ body: { closed: true } });
     expect([cardOf(db.id)?.answeredBy, cardOf(env.id)?.answeredBy]).toEqual([first.id, second.id]);
     await settle();
     const { picks } = await restarted();
     expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres for billing", db.id], ["Use Staging for the preview", env.id]]);
+  });
+
+  it("keeps each reply on its own card when the bot closes two cards answered in chat, older first", async () => {
+    const { ask, send, settle, restarted, close, card: cardOf } = setup();
+    const db = ask("Which database should billing use?", ["SQLite", "Postgres"]);
+    const env = ask("Which environment should the preview use?", ["Prod", "Staging"]);
+    const first = send("Use Postgres for billing", { actedAt: Date.now() - 2 * MINUTE });
+    const second = send("Use Staging for the preview", { actedAt: Date.now() - MINUTE });
+    expect(close(db.card!.subtitle, "Use Postgres for billing")).toMatchObject({ body: { closed: true } });
+    expect(close(env.card!.subtitle, "Use Staging for the preview")).toMatchObject({ body: { closed: true } });
+    expect([cardOf(db.id)?.answeredBy, cardOf(env.id)?.answeredBy]).toEqual([first.id, second.id]);
+    await settle();
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Use Postgres for billing", db.id], ["Use Staging for the preview", env.id]]);
+    expect(`${prompt}\n`).toContain("- Which database should billing use? (");
+    expect(`${prompt}\n`).toMatch(/billing use\? \(\d\d-\d\d\): Use Postgres for billing\n/);
+    expect(`${prompt}\n`).toMatch(/preview use\? \(\d\d-\d\d\): Use Staging for the preview\n/);
+  });
+
+  it("files one message that answers two cards under each card", async () => {
+    const { ask, send, settle, restarted, close, card: cardOf } = setup();
+    const db = ask("Which database should billing use?", ["SQLite", "Postgres"]);
+    const env = ask("Which environment should the preview use?", ["Prod", "Staging"]);
+    const both = send("Use Postgres for billing and Staging for the preview");
+    expect(close(db.card!.subtitle, "Use Postgres for billing")).toMatchObject({ body: { closed: true } });
+    expect(close(env.card!.subtitle, "Staging for the preview")).toMatchObject({ body: { closed: true } });
+    expect([cardOf(db.id)?.answeredBy, cardOf(env.id)?.answeredBy]).toEqual([both.id, both.id]);
+    await settle();
+    const { picks } = await restarted();
+    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId]))
+      .toEqual([[both.text, env.id, both.id], [both.text, db.id, both.id]]);
+  });
+
+  it.each([
+    { name: "names no words", answer: undefined },
+    { name: "names words no message holds", answer: "Use Prod" },
+    { name: "names words two messages hold", answer: "Staging" },
+  ])("binds no message to a close that $name", async ({ answer }) => {
+    const { ask, send, settle, restarted, close, card: cardOf } = setup();
+    const question = "Which environment should the preview use?";
+    const card = ask(question, ["Prod", "Staging"]);
+    send("Staging looks fine", { actedAt: Date.now() - 2 * MINUTE });
+    send("Use Staging for the preview", { actedAt: Date.now() - MINUTE });
+    expect(close(question, answer)).toEqual({ status: 200, body: { closed: true } });
+    expect(cardOf(card.id)).toMatchObject({ answered: ANSWERED_IN_CHAT });
+    expect(cardOf(card.id)?.answeredBy).toBeUndefined();
+    await settle();
+    const { picks } = await restarted();
+    expect(picks).toEqual([]);
+  });
+
+  it("files a close the bot makes after its reply's notes pass settled", async () => {
+    const { ask, send, settle, restarted, close } = setup();
+    const question = "Which environment should the preview use?";
+    const card = ask(question, ["Prod", "Staging"]);
+    for (let i = 1; i < 8; i++) send(`Status note ${i}: the build queue is clear.`, { actedAt: Date.now() - (10 - i) * MINUTE });
+    const reply = send("Use Staging for the preview", { actedAt: Date.now() - 2 * MINUTE });
+    await settle();
+    expect(close(question, "Use Staging for the preview")).toEqual({ status: 200, body: { closed: true } });
+    // a later healthy pass on another card
+    const theme = ask("Which theme?", ["Light", "Dark"]);
+    send("Dark", { answersCard: theme.id, actedAt: Date.now() - MINUTE });
+    await settle();
+    const { replay, prompt, picks } = await restarted();
+    expect(replay).not.toContain("Use Staging for the preview");
+    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId]))
+      .toEqual([["Use Staging for the preview", card.id, reply.id], ["Dark", theme.id, expect.any(String)]]);
+    expect(`${prompt}\n`).toMatch(/preview use\? \(\d\d-\d\d\): Use Staging for the preview\n/);
+  });
+
+  it("files a close made after its reply's pass when the app restarts before the next pass", async () => {
+    const { ask, send, settle, restarted, close, reopen } = setup();
+    const question = "Which environment should the preview use?";
+    const card = ask(question, ["Prod", "Staging"]);
+    send("Use Staging for the preview");
+    await settle();
+    close(question, "Use Staging for the preview");
+    reopen();
+    await settle();
+    const { picks } = await restarted();
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Use Staging for the preview", card.id]]);
+  });
+
+  it("files a close made after its reply's pass when no other line is waiting", async () => {
+    const { ask, send, settle, restarted, close } = setup();
+    const question = "Which environment should the preview use?";
+    const card = ask(question, ["Prod", "Staging"]);
+    send("Use Staging for the preview");
+    await settle();
+    close(question, "Use Staging for the preview");
+    await settle();
+    const { picks } = await restarted();
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Use Staging for the preview", card.id]]);
   });
 
   it("files an edit of a reply the bot closed as answered in chat as the card's answer now", async () => {
@@ -295,7 +394,7 @@ describe("every way to answer a card files it under that card", () => {
     const question = "Which environment should the preview use?";
     const card = ask(question, ["Prod", "Staging"]);
     const reply = send("Use Staging for the preview", { actedAt: Date.now() - 2 * MINUTE });
-    close(question);
+    close(question, "Use Staging for the preview");
     await settle();
     branch(reply.id, "Use Prod for the preview");
     await settle();
@@ -518,6 +617,34 @@ describe("every way to answer a card files it under that card", () => {
     const { prompt, picks } = await restarted();
     expect(picks.map(({ picked, questionId, tweaks }) => [picked, questionId, tweaks.map(({ said }) => said)])).toEqual([["Light", card.id, ["Keep the header small."]]]);
     expect(prompt).toContain("Keep the header small.");
+  });
+
+  it("files each typed edit of a tapped answer as the card's answer now", async () => {
+    const { ask, send, settle, restarted, branch } = setup();
+    const card = ask("What database should billing use?", ["SQLite", "Postgres"]);
+    const tap = send("SQLite", { answersCard: card.id, actedAt: Date.now() - 3 * MINUTE });
+    await settle();
+    const mysql = branch(tap.id, "MySQL");
+    await settle();
+    branch(mysql.id, "Postgres");
+    await settle();
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", card.id]]);
+    expect(`${prompt}\n`).toContain(": Postgres\n");
+    expect(prompt).not.toContain("MySQL");
+  });
+
+  it("keeps a typed edit of a tapped answer over a later tap of another option", async () => {
+    const { ask, send, settle, restarted, branch } = setup();
+    const card = ask("What database should billing use?", ["SQLite", "Postgres"]);
+    const tap = send("SQLite", { answersCard: card.id, actedAt: Date.now() - 3 * MINUTE });
+    await settle();
+    branch(tap.id, "MySQL");
+    await settle();
+    send("Postgres", { answersCard: card.id });
+    await settle();
+    const { picks } = await restarted();
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["MySQL", card.id]]);
   });
 
   it("files an edit of a tapped answer as the card's answer now", async () => {

@@ -28,8 +28,8 @@ function harness() {
     notifyQuestion,
     whenSettled: (botId, threadId, post, question) => hold.whenSettled(botId, threadId, post, question),
   };
-  const ask = (question: string, close = false, threadId = bot.threadId) => postAskUser(deps,
-    askUserRequestSchema.parse({ fromBotId: bot.id, fromThreadId: threadId, question, choices: ["Yes", "No"], close }));
+  const ask = (question: string, close = false, threadId = bot.threadId, answer?: string) => postAskUser(deps,
+    askUserRequestSchema.parse({ fromBotId: bot.id, fromThreadId: threadId, question, choices: ["Yes", "No"], close, answer }));
   return { store, bot, hold, ask, notifyQuestion, patchMessage };
 }
 
@@ -47,26 +47,34 @@ describe("close question", () => {
     expect(h.notifyQuestion).toHaveBeenCalledTimes(1);
   });
 
-  it("records the person's newest message a close answers, never one another card claims", () => {
+  it("records the one message holding the words a close names, never one another card holds", () => {
     const h = harness();
     h.ask("Ship it?");
     const path = () => h.store.activePath(h.bot.threadId);
     const card = path().at(-1)!;
-    const typed = h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Use staging first." });
+    const typed = h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Use  staging first." });
     h.ask("Which region?");
     const region = path().at(-1)!;
-    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Yes", answersCard: region.id });
-    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: `${answerPrefix(region)}EU` });
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Use staging", answersCard: region.id });
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: `${answerPrefix(region)}Use staging, EU` });
     h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Noted." });
-    expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: true } });
+    expect(h.ask("Ship it?", true, h.bot.threadId, "Use staging")).toMatchObject({ body: { closed: true } });
     expect(path().find((m) => m.id === card.id)?.card).toMatchObject({ answered: "Answered in chat", answeredBy: typed.id });
+  });
+
+  it("records no message for a close that names no words", () => {
+    const h = harness();
+    h.ask("Ship it?");
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Use staging first." });
+    expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: true } });
+    expect(h.store.activePath(h.bot.threadId).find((m) => m.card)?.card?.answeredBy).toBeUndefined();
   });
 
   it("closes with no answering message when the person sent none since the card", () => {
     const h = harness();
     h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Before the card." });
     h.ask("Ship it?");
-    expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: true } });
+    expect(h.ask("Ship it?", true, h.bot.threadId, "Before the card.")).toMatchObject({ body: { closed: true } });
     expect(h.store.activePath(h.bot.threadId).at(-1)?.card?.answeredBy).toBeUndefined();
   });
 

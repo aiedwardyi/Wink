@@ -1660,8 +1660,6 @@ export class Store {
       text,
       parentId: source.parentId ?? null,
       replyToId: source.replyToId,
-      // an edit of a card answer still answers that card
-      answersCard: source.answersCard,
     };
     this.threads.push(threadId, full);
     t.activeLeafId = full.id;

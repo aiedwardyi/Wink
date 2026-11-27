@@ -248,8 +248,8 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
       const own = cardSlot(card);
       // the user's whole answer, never cut: its last words can hold it back
       const picked = flat(change.picked);
-      // one answer per tap, however many keys the note-taker files it under
-      if (!picked || entries.some((entry) => entry.thread === card.thread && entry.messageId === card.messageId)) continue;
+      // one answer per card a reply answers, however many keys the note-taker files it under
+      if (!picked || entries.some((entry) => entry.thread === card.thread && entry.messageId === card.messageId && entry.questionId === card.questionId)) continue;
       const pressed = entries.findLast((entry) => !entry.replacedBy && !entry.kind && entry.tapped && cardOf(entry) === own);
       // a typed pick on this card beats a press of its options; a newer typed answer to the card replaces it
       const typedPick = pressed ? undefined : entries.findLast((entry) => !entry.replacedBy && !entry.kind && !entry.tapped && questionOf(entry) === own);

@@ -24,6 +24,8 @@ export const askUserRequestSchema = z
     question: z.string().catch(""),
     choices: z.array(z.string().catch("")).catch([]),
     close: z.boolean().optional().catch(undefined),
+    // with close: the person's words that answered it, as they typed them
+    answer: z.string().optional().catch(undefined),
     // models also send the mark as "true" or 1
     fact: z.preprocess((value) => (value === "true" || value === 1 ? true : value), z.boolean()).optional().catch(undefined),
   })
@@ -87,8 +89,7 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
     let closed = deps.cancelHeld(from.id, request.fromThreadId, question);
     let settled: Exclude<AskState["state"], "waiting"> | undefined;
     const path = deps.activePath(request.fromThreadId);
-    const states = askStates(path);
-    for (const [message, state] of states) {
+    for (const [message, state] of askStates(path)) {
       if (message.card!.subtitle.trim() !== question) continue;
       if (owner.group ? message.from?.botId !== from.id : Boolean(message.from)) continue;
       if (state.state !== "waiting") {
@@ -96,7 +97,7 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
         continue;
       }
       const card = { ...message.card!, answered: ANSWERED_IN_CHAT };
-      const by = chatAnswer(path, states, message);
+      const by = request.answer === undefined ? undefined : chatAnswer(path, message, request.answer);
       if (by) card.answeredBy = by.id;
       closed = Boolean(deps.patchMessage(request.fromThreadId, message.id, { card })) || closed;
     }
@@ -134,13 +135,19 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
   return posted ? { status: 201, body: { messageId: posted.id } } : { status: 202, body: { held: true } };
 }
 
-/** The person's newest message since `card` that no other card claims by its id, its quote or the transcript: what a close:true answered. */
-function chatAnswer(path: readonly Message[], states: Map<Message, AskState>, card: Message): Message | undefined {
-  // an answered patch drops the transcript's `by`, so a card closed earlier claims its reply by id
-  const claimed = new Set([...states].flatMap(([other, state]) => other === card ? [] : [state.state === "answered" ? state.by?.id : undefined, other.card?.answeredBy]));
+const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+
+/** The one message from the person since `card` holding `words` as typed: what a close:true answered; none when no message or two hold them. */
+function chatAnswer(path: readonly Message[], card: Message, words: string): Message | undefined {
+  const said = flat(words);
+  if (!said) return undefined;
   const own = answerPrefix(card);
-  return path.slice(path.indexOf(card) + 1).findLast((row) => answersQuestion(row) && !claimed.has(row.id)
-    && (!row.answersCard || row.answersCard === card.id) && (!row.text?.startsWith("Re: “") || row.text.startsWith(own)));
+  const holding = path.slice(path.indexOf(card) + 1).filter((row) => {
+    const text = row.text ?? "";
+    return answersQuestion(row) && (!row.answersCard || row.answersCard === card.id) && (!text.startsWith("Re: “") || text.startsWith(own))
+      && flat(text.startsWith(own) ? text.slice(own.length) : text).includes(said);
+  });
+  return holding.length === 1 ? holding[0] : undefined;
 }
 
 /** Per bot and thread, the current turn's last text: where a tap on its ask_user card lands. */
