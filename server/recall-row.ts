@@ -13,8 +13,9 @@ export function clean(line: string, placeholders = false): string {
   const text = (placeholders ? line.replace(/<([a-zA-Z][\w-]*)>/g, "‹$1›") : line)
     .replace(/<\/?[a-zA-Z!][^<>]*>/g, " ")
     .replace(/<(?=[a-zA-Z/!])/g, " ")
-    .replace(/\[\/?\s*Wink (?:recall|Forum)[^\]]*\]?/gi, " ")
-    .replace(/current message:/gi, "current message -")
+    .replace(/\s+/g, " ")
+    .replace(/\[\s*\/?\s*Wink\b[^\]]*\]?/gi, " ")
+    .replace(/current\s*message\s*:/gi, "current message -")
     .replace(/\s+/g, " ")
     .replace(/^[\s|]+|[\s|]+$/g, "");
   return redactSecretsInText(text);

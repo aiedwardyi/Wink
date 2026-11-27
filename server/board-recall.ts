@@ -29,7 +29,7 @@ const fit = (text: string, bytes = RECALL_BYTES) => {
 const remedy = (fix: string) => fix.replace(/^[\s\S]*?\bFix\b[^:\n]{0,20}:\s*/, "");
 export const recallLine = (post: BoardPost) => {
   const head = `${HEADER} [${post.id}] `;
-  const fix = ` Fix: ${clean(remedy(post.fix), true)}`;
+  const fix = ` Fix: ${clean(remedy(post.fix) || post.fix, true)}`;
   const room = RECALL_BYTES - Buffer.byteLength(head, "utf8") - Math.min(Buffer.byteLength(fix, "utf8"), FIX_BYTES);
   return fit(`${head}${fit(clean(post.title, true), room)}${fix}`);
 };

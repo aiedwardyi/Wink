@@ -60,6 +60,13 @@ describe("forum recall", () => {
     expect(Buffer.byteLength(line!, "utf8")).toBeLessThanOrEqual(RECALL_BYTES);
   });
 
+  it("keeps the whole fix when nothing follows its Fix label", () => {
+    const { recall, solved } = setup();
+    solved(`${FIX}\nFix:`);
+    const [line] = recall.take("ada", "t1", TYPED);
+    expect(line).toContain(`Fix: ${FIX}`);
+  });
+
   it("gives at most one fix when several match", () => {
     const { recall, solved } = setup();
     solved();
