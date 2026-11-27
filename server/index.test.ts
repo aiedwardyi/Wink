@@ -3697,6 +3697,118 @@ describe("harness HTTP API", () => {
     }
   }, 30_000);
 
+  it("starts one room continuation for sibling key cards however many views acknowledge them", async () => {
+    const juno = (await api("POST", "/api/bots", { name: "Juno", modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" } })).body.bot;
+    const room = (await api("POST", "/api/groups", { name: "Sibling key room", memberIds: [juno.id], hosted: true })).body.group;
+    const host = "api.room-sibling.example";
+    const settings = "/api/config?secretStorage=external";
+    const headers = { authorization: `Bearer ${await harnessToken(BASE)}`, "content-type": "application/json" };
+    const prompts = join(home, "happy-prompts.ndjson");
+    const countResumes = () => existsSync(prompts)
+      ? readFileSync(prompts, "utf8").trim().split("\n").filter((row) => JSON.parse(row).text.includes("Wink credential update: the user securely provided Sibling Key.")).length
+      : 0;
+    const roomLog = () => {
+      const db = new DatabaseSync(join(home, ".orbit", "rooms.db"), { readOnly: true });
+      try {
+        return db.prepare("SELECT text FROM log WHERE room_id = ?").all(room.hosted.roomId).map((row) => row.text);
+      } finally {
+        db.close();
+      }
+    };
+    const waitForIdle = () => expect.poll(async () => {
+      const state = (await api("GET", "/api/bots?messages=0")).body;
+      return state.bots.find((row: { id: string }) => row.id === juno.id)?.busy === false &&
+        !state.groups.find((group: { id: string }) => group.id === room.id)?.working;
+    }, { timeout: 10_000 }).toBe(true);
+    try {
+      const cards: string[] = [];
+      for (const header of ["authorization", "x-api-key"]) {
+        const response = await fetch(`${BASE}/api/internal/request-credential`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ fromBotId: juno.id, fromThreadId: room.threadId, credentialId: "custom", service: { name: "Sibling Key", host, header } }),
+        });
+        expect(response.status).toBe(201);
+        cards.push(z.object({ messageId: z.string() }).parse(await response.json()).messageId);
+      }
+      const saved = { customKeys: { [host]: { name: "Sibling Key", header: "authorization", prefix: "Bearer ", key: "test-only-sibling-key" } } };
+      const roomCards = async () => (await api("GET", "/api/bots")).body.groups
+        .find((group: { id: string }) => group.id === room.id).messages.filter((row: { id: string }) => cards.includes(row.id));
+      // Two owner views each save the key, then each acknowledges its own card.
+      expect((await api("PUT", settings, saved)).status).toBe(200);
+      expect((await api("PUT", settings, saved)).status).toBe(200);
+      await expect.poll(async () => (await roomCards()).every((row: { secret: { provided?: boolean } }) => row.secret.provided), { timeout: 10_000 }).toBe(true);
+      expect(countResumes()).toBe(0);
+      const ack = (messageId: string) => api("POST", `/api/bots/${juno.id}/secret-cards/${messageId}/provided`, { threadId: room.threadId });
+      expect((await Promise.all(cards.map(ack))).map((response) => response.status)).toEqual([200, 200]);
+      await expect.poll(countResumes, { timeout: 10_000 }).toBe(1);
+      await waitForIdle();
+      expect((await ack(cards[0])).status).toBe(200);
+      await waitForIdle();
+      expect(countResumes()).toBe(1);
+      expect(roomLog()).toHaveLength(1);
+    } finally {
+      await api("PUT", settings, { customKeys: { [host]: null } });
+      await waitForIdle();
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${juno.id}`);
+    }
+  }, 30_000);
+
+  it("settles a key card on an abandoned branch without continuing it", async () => {
+    const [atlas, juno] = await Promise.all(["Atlas", "Juno"].map(async (name) => (await api("POST", "/api/bots", {
+      name,
+      modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" },
+    })).body.bot));
+    const host = "api.abandoned-branch.example";
+    const settings = "/api/config?secretStorage=external";
+    const headers = { authorization: `Bearer ${await harnessToken(BASE)}`, "content-type": "application/json" };
+    const requestCard = async (bot: { id: string; threadId: string }, name: string) => {
+      const response = await fetch(`${BASE}/api/internal/request-credential`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, credentialId: "custom", service: { name, host } }),
+      });
+      expect(response.status).toBe(201);
+      return z.object({ messageId: z.string() }).parse(await response.json()).messageId;
+    };
+    const prompts = join(home, "happy-prompts.ndjson");
+    const countResumes = (label: string) => existsSync(prompts)
+      ? readFileSync(prompts, "utf8").trim().split("\n").filter((row) => JSON.parse(row).text.includes(`Wink credential update: the user securely provided ${label}.`)).length
+      : 0;
+    const current = async (id: string) => (await api("GET", "/api/bots")).body.bots.find((row: { id: string }) => row.id === id);
+    const waitForIdle = () => expect.poll(async () => {
+      const current = (await api("GET", "/api/bots?messages=0")).body.bots;
+      return [atlas, juno].every((bot) => current.find((row: { id: string }) => row.id === bot.id)?.busy === false);
+    }, { timeout: 10_000 }).toBe(true);
+    try {
+      expect((await api("POST", `/api/bots/${juno.id}/messages`, { text: "use the service plan" })).status).toBe(202);
+      await waitForIdle();
+      const original = (await current(juno.id)).messages.find((row: { text?: string }) => row.text === "use the service plan");
+      const card = await requestCard(juno, "Abandoned Key");
+      expect((await api("POST", `/api/bots/${juno.id}/messages/${original.id}/edit`, { text: "use the plan with no service" })).status).toBe(202);
+      await waitForIdle();
+      const before = await current(juno.id);
+      const byId = new Map<string, { parentId?: string }>(before.messages.map((row: { id: string; parentId?: string }) => [row.id, row]));
+      const path: string[] = [];
+      for (let id: string | undefined = before.activeLeafId; id; id = byId.get(id)?.parentId) path.push(id);
+      expect(path).not.toContain(card);
+
+      const saving = await requestCard(atlas, "Saving Key");
+      expect((await api("PUT", settings, { customKeys: { [host]: { name: "Saving Key", header: "authorization", prefix: "Bearer ", key: "test-only-branch-key" } } })).status).toBe(200);
+      expect((await api("POST", `/api/bots/${atlas.id}/secret-cards/${saving}/provided`, { threadId: atlas.threadId })).status).toBe(200);
+      await expect.poll(() => countResumes("Saving Key"), { timeout: 10_000 }).toBe(1);
+      await expect.poll(async () => (await current(juno.id)).messages.find((row: { id: string }) => row.id === card)?.secret?.provided, { timeout: 10_000 }).toBe(true);
+      await waitForIdle();
+      expect(countResumes("Abandoned Key")).toBe(0);
+      expect((await current(juno.id)).activeLeafId).toBe(before.activeLeafId);
+    } finally {
+      await api("PUT", settings, { customKeys: { [host]: null } });
+      await waitForIdle();
+      for (const bot of [atlas, juno]) await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  }, 30_000);
+
   it("does not post a custom credential card when its host already has a key", async () => {
     const bot = (await api("POST", "/api/bots", {})).body.bot;
     const host = "api.already-saved.example";

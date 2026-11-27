@@ -8097,8 +8097,11 @@ type SecretResumeEntry = {
   threadId: string;
   messageId: string;
   label: string;
+  target: string;
   outcome: "provided" | "dismissed";
 };
+// One continuation per bot, thread and key, however many cards asked for that key.
+const secretResumeKey = ({ botId, threadId, target }: Pick<SecretResumeEntry, "botId" | "threadId" | "target">) => `${botId}:${threadId}:${target}`;
 const pendingSecretResumes = new Map<string, SecretResumeEntry>();
 
 function secretMessage(botId: string, threadId: string, messageId: string): Message | null {
@@ -8123,7 +8126,7 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
       ? `Wink credential update: the user securely provided ${entry.label}. Continue the task that paused for it. You do not receive the secret and must not ask them to paste it into chat.`
       : `Wink credential update: the user declined to provide ${entry.label}. Continue without it if possible, or briefly explain the limitation. Do not ask them to paste it into chat.`;
   if (owner.bot.busy) {
-    pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, entry);
+    pendingSecretResumes.set(secretResumeKey(entry), entry);
     return;
   }
   if (owner.group) {
@@ -8135,7 +8138,7 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
       const current = connectorThread(entry.botId, entry.threadId);
       if (!current?.group) return;
       if (current.bot.busy) {
-        pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, entry);
+        pendingSecretResumes.set(secretResumeKey(entry), entry);
         return;
       }
       await runGroupMemberTurn(
@@ -8172,18 +8175,18 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
   }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     if (isBusyRejection(error)) {
-      pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, entry);
+      pendingSecretResumes.set(secretResumeKey(entry), entry);
     } else {
       markSecretResumeFailed(entry.threadId, entry.messageId, message);
     }
   });
 }
 
-// A room card a save from elsewhere settled: only that card's own ack may start a room turn.
-const quietRoomCards = new Set<string>();
+// A room continuation a save from elsewhere settled: the first ack from one of its cards in the room starts it.
+const roomSecretResumes = new Map<string, SecretResumeEntry>();
 
-/** Settles the cards and starts at most one continuation for them. */
-function settleSecretCards(botId: string, threadId: string, messageIds: string[], outcome: SecretResumeEntry["outcome"], continues: boolean) {
+/** Settles the cards; returns their one continuation, only when a card is on the active branch. */
+function settleSecretCards(botId: string, threadId: string, messageIds: string[], outcome: SecretResumeEntry["outcome"]): SecretResumeEntry | undefined {
   const cards = messageIds.flatMap((id) => {
     const message = secretMessage(botId, threadId, id);
     return message?.secret && !message.secret.resumed ? [{ id, secret: message.secret }] : [];
@@ -8199,27 +8202,28 @@ function settleSecretCards(botId: string, threadId: string, messageIds: string[]
       },
     });
   }
-  const first = cards.find(({ secret }) => !isCallKeyCard(secret));
-  if (first && continues) dispatchSecretResume({ botId, threadId, messageId: first.id, label: first.secret.label, outcome });
+  const active = store.onActivePath(threadId, cards.map(({ id }) => id));
+  const first = cards.find(({ id, secret }) => active.has(id) && !isCallKeyCard(secret));
+  return first && { botId, threadId, messageId: first.id, label: first.secret.label, target: credentialCardTarget(first.secret), outcome };
 }
 
 function resumeSecretCard(botId: string, threadId: string, messageId: string, outcome: SecretResumeEntry["outcome"]) {
   const message = secretMessage(botId, threadId, messageId);
   if (!message?.secret) return false;
-  const key = `${threadId}:${messageId}`;
+  const target = credentialCardTarget(message.secret);
   if (message.secret.resumed) {
-    if (quietRoomCards.delete(key) && !isCallKeyCard(message.secret)) {
-      dispatchSecretResume({ botId, threadId, messageId, label: message.secret.label, outcome: "provided" });
-    }
+    const key = secretResumeKey({ botId, threadId, target });
+    const quiet = roomSecretResumes.get(key);
+    if (quiet && roomSecretResumes.delete(key)) dispatchSecretResume(quiet);
     return true;
   }
-  const target = credentialCardTarget(message.secret);
   const group = Boolean(store.groupByThread(threadId));
   const siblings = outcome === "provided"
     ? store.messagesFor(threadId).filter((row) => row.id !== messageId && row.kind === "secret" && row.secret && !row.secret.provided &&
       !row.secret.dismissed && credentialCardTarget(row.secret) === target && (!group || row.from?.botId === botId)).map((row) => row.id)
     : [];
-  settleSecretCards(botId, threadId, [messageId, ...siblings], outcome, true);
+  const entry = settleSecretCards(botId, threadId, [messageId, ...siblings], outcome);
+  if (entry) dispatchSecretResume(entry);
   return true;
 }
 
@@ -8243,10 +8247,11 @@ async function resumeSavedCredentialCards(saved: CredentialConfig) {
     settle.messageIds.push(messageId);
   }
   for (const { botId, threadId, messageIds } of settles.values()) {
-    // a settings save comes from no room: a room bot sees the key on its next turn instead
-    const room = Boolean(store.groupByThread(threadId)?.hosted);
-    settleSecretCards(botId, threadId, messageIds, "provided", !room);
-    if (room) for (const id of messageIds) quietRoomCards.add(`${threadId}:${id}`);
+    const entry = settleSecretCards(botId, threadId, messageIds, "provided");
+    if (!entry) continue;
+    // a settings save comes from no room: a room bot waits for an ack from its cards there
+    if (store.groupByThread(threadId)?.hosted) roomSecretResumes.set(secretResumeKey(entry), entry);
+    else dispatchSecretResume(entry);
   }
 }
 
