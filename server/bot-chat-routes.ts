@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { credentialIsConfigured, credentialResumeOutcome } from "../shared/credential-request.ts";
+import { credentialCardTarget, credentialIsConfigured, credentialResumeOutcome } from "../shared/credential-request.ts";
 import type { CallTag } from "../shared/live-call.ts";
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
@@ -811,7 +811,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       if (!message?.secret) return json(res, 404, { error: "no such credential request" });
       if (m[3] === "provided") {
         if (message.secret.dismissed) return json(res, 409, { error: "this credential request was dismissed" });
-        if (!credentialIsConfigured(cfg, message.secret.target)) {
+        if (!credentialIsConfigured(cfg, credentialCardTarget(message.secret))) {
           return json(res, 409, { error: `${message.secret.label} was not saved yet` });
         }
         resumeSecretCard(m[1], threadId, message.id, "provided");
@@ -822,7 +822,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         if (!outcome) {
           return json(res, 409, { error: "this credential request is not ready to resume" });
         }
-        if (outcome === "provided" && !credentialIsConfigured(cfg, message.secret.target)) {
+        if (outcome === "provided" && !credentialIsConfigured(cfg, credentialCardTarget(message.secret))) {
           return json(res, 409, { error: `${message.secret.label} is no longer configured` });
         }
         resumeSecretCard(m[1], threadId, message.id, outcome);

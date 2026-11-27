@@ -147,7 +147,7 @@ function holdChatLoad(threadId: string) {
   const pages: (() => void)[] = [];
   let holding = true;
   const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, request: TailRequest, transfer) {
-    if (request.threadId === threadId) {
+    if ("threadId" in request && request.threadId === threadId) {
       requests.push(request);
       if (holding && "after" in request) {
         pages.push(() => post.call(this, request, transfer));

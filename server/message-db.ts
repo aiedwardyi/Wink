@@ -529,6 +529,15 @@ export function optionRows(threadId: string): Message[] {
   return rows.map(rowToMessage);
 }
 
+export type OpenCredentialCard = { threadId: string; messageId: string };
+
+export function openCredentialCardsOn(handle: DatabaseSync): OpenCredentialCard[] {
+  return handle.prepare(
+    "SELECT thread_id AS threadId, id AS messageId FROM messages WHERE kind = 'secret' " +
+    "AND json_extract(json, '$.secret.provided') IS NOT 1 AND json_extract(json, '$.secret.dismissed') IS NOT 1",
+  ).all() as OpenCredentialCard[];
+}
+
 /** A thread's stored rows that record file writes, oldest first; cold-thread-worker.ts runs it on its own handle. No index: building one locks out every write for seconds on a 3 GB database. */
 export function writeRowsOn(handle: DatabaseSync, threadId: string): Message[] {
   // SAFETY: This projection selects the stored message JSON.

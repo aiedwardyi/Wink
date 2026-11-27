@@ -21,7 +21,7 @@ import { defaultModelEffort, isEffortOffered } from "../shared/model-effort.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
 import { currentModel, replacedModelLine, replacedModelMoves } from "../shared/replaced-models.ts";
 import { canDeleteWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
-import { savedKeysPrompt } from "../shared/credential-request.ts";
+import { CREDENTIAL_TARGETS, credentialCardTarget, credentialIsConfigured, customCredentialId, isCredentialTargetId, savedKeysPrompt, type CredentialConfig } from "../shared/credential-request.ts";
 import { credentialSaveResponse } from "./credential-save.ts";
 
 import { approvalKey, autoVerdict, AWAY_DESKTOP_DENY_NOTE, BACKGROUND_DENY_NOTE, UNATTENDED_DENY_NOTE, UNCHECKED_DESKTOP_DENY_NOTE } from "./auto-approve.ts";
@@ -192,7 +192,7 @@ import { receiveChatSwitch, receiveColdOpen, traceOpenBots, traceOpenSse } from 
 import { createRequestQuiet, createSignInWarm, oneEngine, warmEngines } from "./engine-warm.ts";
 import { warmPool } from "./drivers/warm-pool.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
-import { chatListPage, coldLoad, coldLoading, coldQuickAsks, warmChats } from "./cold-thread.ts";
+import { chatListPage, coldLoad, coldLoading, coldOpenCredentialCards, coldQuickAsks, warmChats } from "./cold-thread.ts";
 import {
   isEffortLevel,
   newId,
@@ -8098,20 +8098,23 @@ type SecretResumeEntry = {
   threadId: string;
   messageId: string;
   label: string;
+  target: string;
   outcome: "provided" | "dismissed";
 };
+// One continuation per bot, thread and key, however many cards asked for that key.
+const secretResumeKey = ({ botId, threadId, target }: Pick<SecretResumeEntry, "botId" | "threadId" | "target">) => `${botId}:${threadId}:${target}`;
 const pendingSecretResumes = new Map<string, SecretResumeEntry>();
 
 function secretMessage(botId: string, threadId: string, messageId: string): Message | null {
   if (!connectorThread(botId, threadId)) return null;
-  const message = store.messagesFor(threadId).find((candidate) => candidate.id === messageId);
+  const message = store.row(threadId, messageId);
   return message?.kind === "secret" && message.secret ? message : null;
 }
 
 function markSecretResumeFailed(threadId: string, messageId: string, error: string) {
-  const message = store.messagesFor(threadId).find((candidate) => candidate.id === messageId);
+  const message = store.row(threadId, messageId);
   if (!message?.secret) return;
-  store.patchMessage(threadId, message.id, {
+  store.patchRow(threadId, message.id, {
     secret: { ...message.secret, resumed: false, error: error.slice(0, 180) },
   });
 }
@@ -8124,7 +8127,7 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
       ? `Wink credential update: the user securely provided ${entry.label}. Continue the task that paused for it. You do not receive the secret and must not ask them to paste it into chat.`
       : `Wink credential update: the user declined to provide ${entry.label}. Continue without it if possible, or briefly explain the limitation. Do not ask them to paste it into chat.`;
   if (owner.bot.busy) {
-    pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, entry);
+    pendingSecretResumes.set(secretResumeKey(entry), entry);
     return;
   }
   if (owner.group) {
@@ -8136,7 +8139,7 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
       const current = connectorThread(entry.botId, entry.threadId);
       if (!current?.group) return;
       if (current.bot.busy) {
-        pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, entry);
+        pendingSecretResumes.set(secretResumeKey(entry), entry);
         return;
       }
       await runGroupMemberTurn(
@@ -8173,28 +8176,84 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
   }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     if (isBusyRejection(error)) {
-      pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, entry);
+      pendingSecretResumes.set(secretResumeKey(entry), entry);
     } else {
       markSecretResumeFailed(entry.threadId, entry.messageId, message);
     }
   });
 }
 
+// A room continuation a save from elsewhere settled: the first ack from one of its cards in the room starts it.
+const roomSecretResumes = new Map<string, SecretResumeEntry>();
+
+/** Settles the cards; returns their one continuation, only when a card is on the active branch. */
+function settleSecretCards(botId: string, threadId: string, messageIds: string[], outcome: SecretResumeEntry["outcome"]): SecretResumeEntry | undefined {
+  const cards = messageIds.flatMap((id) => {
+    const message = secretMessage(botId, threadId, id);
+    return message?.secret && !message.secret.resumed ? [{ id, secret: message.secret }] : [];
+  });
+  for (const { id, secret } of cards) {
+    store.patchRow(threadId, id, {
+      secret: {
+        ...secret,
+        provided: outcome === "provided" ? true : secret.provided,
+        dismissed: outcome === "dismissed" ? true : secret.dismissed,
+        resumed: true,
+        error: undefined,
+      },
+    });
+  }
+  const active = store.onActivePath(threadId, cards.map(({ id }) => id));
+  const first = cards.find(({ id, secret }) => active.has(id) && !isCallKeyCard(secret));
+  return first && { botId, threadId, messageId: first.id, label: first.secret.label, target: credentialCardTarget(first.secret), outcome };
+}
+
 function resumeSecretCard(botId: string, threadId: string, messageId: string, outcome: SecretResumeEntry["outcome"]) {
   const message = secretMessage(botId, threadId, messageId);
   if (!message?.secret) return false;
-  if (message.secret.resumed) return true;
-  store.patchMessage(threadId, message.id, {
-    secret: {
-      ...message.secret,
-      provided: outcome === "provided" ? true : message.secret.provided,
-      dismissed: outcome === "dismissed" ? true : message.secret.dismissed,
-      resumed: true,
-      error: undefined,
-    },
-  });
-  if (!isCallKeyCard(message.secret)) dispatchSecretResume({ botId, threadId, messageId, label: message.secret.label, outcome });
+  const target = credentialCardTarget(message.secret);
+  if (message.secret.resumed) {
+    const key = secretResumeKey({ botId, threadId, target });
+    const quiet = roomSecretResumes.get(key);
+    if (quiet && roomSecretResumes.delete(key)) dispatchSecretResume(quiet);
+    return true;
+  }
+  const group = Boolean(store.groupByThread(threadId));
+  const siblings = outcome === "provided"
+    ? store.messagesFor(threadId).filter((row) => row.id !== messageId && row.kind === "secret" && row.secret && !row.secret.provided &&
+      !row.secret.dismissed && credentialCardTarget(row.secret) === target && (!group || row.from?.botId === botId)).map((row) => row.id)
+    : [];
+  const entry = settleSecretCards(botId, threadId, [messageId, ...siblings], outcome);
+  if (entry) dispatchSecretResume(entry);
   return true;
+}
+
+async function resumeSavedCredentialCards(saved: CredentialConfig) {
+  const targets = [
+    ...Object.keys(CREDENTIAL_TARGETS).filter(isCredentialTargetId),
+    ...Object.keys(saved.customKeys ?? {}).map(customCredentialId),
+  ];
+  if (!targets.some((target) => credentialIsConfigured(saved, target))) return;
+  const settles = new Map<string, { botId: string; threadId: string; messageIds: string[] }>();
+  for (const { threadId, messageId } of await coldOpenCredentialCards()) {
+    const message = store.row(threadId, messageId);
+    const secret = message?.secret;
+    if (!secret || secret.provided || secret.dismissed) continue;
+    const target = credentialCardTarget(secret);
+    if (!credentialIsConfigured(saved, target) || !credentialIsConfigured(cfg, target)) continue;
+    const botId = store.groupByThread(threadId) ? message.from?.botId : store.botByThread(threadId)?.id;
+    if (!botId) continue;
+    const key = `${botId}:${threadId}:${target}`;
+    const settle = settles.get(key) ?? settles.set(key, { botId, threadId, messageIds: [] }).get(key)!;
+    settle.messageIds.push(messageId);
+  }
+  for (const { botId, threadId, messageIds } of settles.values()) {
+    const entry = settleSecretCards(botId, threadId, messageIds, "provided");
+    if (!entry) continue;
+    // a settings save comes from no room: a room bot waits for an ack from its cards there
+    if (store.groupByThread(threadId)?.hosted) roomSecretResumes.set(secretResumeKey(entry), entry);
+    else dispatchSecretResume(entry);
+  }
 }
 
 function drainSecretResumes() {
@@ -9907,6 +9966,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           key !== "features",
       );
       if (reloadKeys.length > 0) await reloadProviders();
+      // after the reply: the sweep reads every stored row, and other saves would get 409 meanwhile
+      void resumeSavedCredentialCards(patch).catch((error) => console.error("Credential card settlement failed", error));
       const status = configStatus();
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);

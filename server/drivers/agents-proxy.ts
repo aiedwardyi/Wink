@@ -47,7 +47,7 @@ import { pathToFileURL } from "node:url";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 
 import { FORUM_STUCK_RULE } from "../../shared/forum-rule.ts";
-import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
+import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, customCredentialId, isBrokeredCredentialId, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
 import { recordToolSchemas } from "../turn-timing.ts";
@@ -1105,7 +1105,9 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
       }),
     });
     if (r.alreadyConfigured) {
-      const next = credentialId === "openaiImageApiKey" ? "Use generate_image." : "Continue the task.";
+      const brokerId = custom ? customCredentialId(custom.service.host) : isBrokeredCredentialId(credentialId) ? credentialId : undefined;
+      const next = credentialId === "openaiImageApiKey" ? "Use generate_image."
+        : brokerId ? `Use call_api with credential_id ${brokerId}.` : "Continue the task.";
       return { text: `${r.label ?? label} is already configured. ${next}` };
     }
     if (custom) {

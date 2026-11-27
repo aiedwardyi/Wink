@@ -124,6 +124,11 @@ async function committed(): Promise<void> {
   if (ended) await ended;
 }
 
+export async function coldOpenCredentialCards() {
+  await committed();
+  return (scans ??= startReader())({ openCredentials: true });
+}
+
 /** The rows that wrote files, or null when the store must answer (loaded, no rows here, or the read failed). */
 export async function coldWriteRows(store: Pick<Store, "loaded">, threadId: string): Promise<Message[] | null> {
   await committed();

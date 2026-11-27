@@ -890,7 +890,6 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const fromThreadId = String(body.fromThreadId ?? from.threadId);
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source conversation does not belong to sender" });
-      // A custom key is always asked again: a second card for the same host replaces it.
       const custom = body.credentialId === "custom" ? parseCustomService(body.service) : undefined;
       if (custom && "error" in custom) return json(res, 400, { error: custom.error });
       if (!custom && !isCredentialTargetId(body.credentialId)) {
@@ -899,7 +898,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const service = custom?.service;
       const credentialId: CredentialId = service ? customCredentialId(service.host) : body.credentialId as CredentialTargetId;
       const target = service ? customCredentialTarget(service) : CREDENTIAL_TARGETS[body.credentialId as CredentialTargetId];
-      if (!service && credentialIsConfigured(cfg, credentialId)) {
+      if (credentialIsConfigured(cfg, credentialId)) {
         return json(res, 200, { alreadyConfigured: true, label: target.label });
       }
       const existing = store.messagesFor(fromThreadId).find((message) =>
