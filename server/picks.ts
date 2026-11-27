@@ -88,6 +88,10 @@ export type PickChange =
       binding?: PickBinding | "unbound";
       tapped?: boolean;
       legacy?: { day: string; line: string };
+      /** the note-taker's key for a card answer filed under its card's key: a tweak under it follows the answer */
+      noted?: string;
+      /** a card answer in the user's typed words, not a press of one of its options: a newer one replaces a typed pick on its card */
+      typed?: boolean;
     }
   | { kind: "tweak"; at: number; key: string; said: string }
   | { kind: "goal"; at: number; key: string; goal?: string; done?: boolean };
@@ -242,8 +246,15 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
       const picked = flat(change.picked);
       // one answer per tap, however many keys the note-taker files it under
       if (!picked || entries.some((entry) => entry.thread === card.thread && entry.messageId === card.messageId)) continue;
-      const mine = entries.findLast((entry) => !entry.replacedBy && !entry.kind && cardOf(entry) === own);
+      const pressed = entries.findLast((entry) => !entry.replacedBy && !entry.kind && cardOf(entry) === own);
+      // a typed pick on this card beats a press of its options; a newer typed answer to the card replaces it
+      const typedPick = pressed ? undefined : entries.findLast((entry) => !entry.replacedBy && !entry.kind && !entry.tapped && questionOf(entry) === own);
+      if (typedPick && !change.typed) continue;
+      const mine = pressed ?? typedPick;
       let key = mine?.key ?? asked;
+      const follow = (to: string) => {
+        if (change.noted) moved.set(slotOf({ key: clip(change.noted.replace(/\|/g, "/"), KEY_MAX) }), slotOf({ key: to }));
+      };
       if (mine) {
         // only a newer tap answers the card again: a replayed older one never lands
         if (change.at <= entryTime(mine)) continue;
@@ -252,11 +263,11 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
         if (flat(mine.picked) === picked) {
           mine.at = change.at;
           retyped = true;
+          follow(mine.key);
           continue;
         }
       } else {
-        // a typed pick on this card beats its tap; another question's pick under the same key stays beside it
-        if (entries.some((entry) => !entry.replacedBy && !entry.kind && !entry.tapped && questionOf(entry) === own)) continue;
+        // another question's pick under the same key stays beside it
         for (let n = 2; entries.some((entry) => !entry.replacedBy && slotOf(entry) === slotOf({ key })); n += 1) key = `${clip(asked, KEY_MAX - ` (${n})`.length)} (${n})`;
         if (key !== asked) moved.set(slot, slotOf({ key }));
       }
@@ -277,6 +288,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
       };
       if (card.picture) entry.picture = card.picture;
       entries.push(entry);
+      follow(key);
       picks += 1;
       continue;
     }

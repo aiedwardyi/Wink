@@ -1,4 +1,5 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { answerPrefix, askStates } from "../shared/open-question.ts";
@@ -7,10 +8,10 @@ import { prepareModelContext } from "./context-compaction.ts";
 import { createMemoryPass } from "./memory-pass.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
-import { currentPicks, PICKS_FILE } from "./picks.ts";
+import { applyPicks, currentPicks, PICKS_FILE } from "./picks.ts";
 import { removeTestData } from "./testing/test-home.ts";
 import { buildTurnContext, shouldRecycleProviderSession } from "./turn-context.ts";
-import { memorySystemPrompt, readMemoryTopic } from "./workspace.ts";
+import { memorySystemPrompt, readMemoryTopic, workspaceDir } from "./workspace.ts";
 
 const MINUTE = 60_000;
 
@@ -179,6 +180,7 @@ describe("every way to answer a card files it under that card", () => {
     return {
       ask, send, settle, answeredBy, restarted, post: (row: Omit<Message, "id" | "at">) => store.appendMessage(bot.threadId, row),
       branch: (id: string, text: string) => store.branchMessage(bot.threadId, id, text)!,
+      botId: bot.id, threadId: bot.threadId,
     };
   };
 
@@ -396,5 +398,48 @@ describe("every way to answer a card files it under that card", () => {
     const whole = words.replace(/\s+/g, " ");
     expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([[whole, card.id]]);
     expect(`${prompt}\n`).toContain(`: ${whole}\n`);
+  });
+  it("lands a same-pass follow-up keyed like the note on a revised card answer", async () => {
+    const { ask, send, settle, restarted } = setup();
+    const card = ask("Which theme?", ["Light", "Dark"]);
+    send("Dark", { answersCard: card.id, actedAt: Date.now() - 3 * MINUTE });
+    await settle();
+    const tap = send("Light", { answersCard: card.id, actedAt: Date.now() - 2 * MINUTE });
+    send("Keep the header small.");
+    await settle(
+      { kind: "decision", key: "Theme", fact: "Light", quote: "Light", message_id: tap.id, question_id: card.id },
+      { kind: "tweak", key: "Theme", fact: "Keep the header small", quote: "Keep the header small." },
+    );
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, questionId, tweaks }) => [picked, questionId, tweaks.map(({ said }) => said)])).toEqual([["Light", card.id, ["Keep the header small."]]]);
+    expect(prompt).toContain("Keep the header small.");
+  });
+
+  it("files an edit of a tapped answer as the card's answer now", async () => {
+    const { ask, send, settle, restarted, branch } = setup();
+    const card = ask("What database should billing use?", ["SQLite", "Postgres"]);
+    const tap = send("SQLite", { answersCard: card.id });
+    await settle();
+    branch(tap.id, "Postgres");
+    await settle();
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", card.id]]);
+    expect(`${prompt}\n`).toContain(": Postgres\n");
+    expect(prompt).not.toContain("SQLite");
+  });
+  it("files a newer quoted revision over a typed pick an older build saved on the card", async () => {
+    const { ask, send, settle, restarted, botId, threadId } = setup();
+    const card = ask("What database should billing use?", ["SQLite", "Postgres"]);
+    ask("Which theme should billing use?", ["Light", "Dark"]);
+    const at = Date.now() - 5 * MINUTE;
+    // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+    const legacy = applyPicks("", [{ kind: "pick", at, key: "Billing database", picked: "SQLite", said: "SQLite", binding: { at, messageId: "older-reply", questionId: card.id, thread: threadId, files: [], overPictures: [], named: true } as never }])!.text;
+    mkdirSync(join(workspaceDir(botId), "memory"), { recursive: true });
+    writeFileSync(join(workspaceDir(botId), "memory", PICKS_FILE), legacy);
+    send(`${answerPrefix(card)}Postgres`);
+    await settle();
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", card.id]]);
+    expect(prompt).not.toContain("SQLite");
   });
 });

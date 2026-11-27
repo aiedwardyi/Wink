@@ -79,8 +79,8 @@ const stateSchema = z.object({
 export type NoteGenerator = ((prompt: string, signal: AbortSignal, onUsage?: UsageObserver) => Promise<string>) & { engine?: string };
 export type Fact = z.infer<typeof factsSchema>[number];
 export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak"; pick?: PickChange };
-/** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
-export type UserLine = Partial<ReplyPictures> & { text: string; id?: string; files?: string[]; at?: number; tap?: boolean; thread?: string };
+/** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images; typedAnswer: a card answer in the user's typed words, not a press of one of its own options. */
+export type UserLine = Partial<ReplyPictures> & { text: string; id?: string; files?: string[]; at?: number; tap?: boolean; typedAnswer?: boolean; thread?: string };
 type DroppedCount = z.infer<typeof droppedSchema>;
 type Landed = z.infer<typeof landedSchema>;
 // the user's words it came from, so a restart checks it against MEMORY.md as a retry does
@@ -650,7 +650,7 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
   const kept = new Map(order.filter(({ fact }) => fact.kind === "decision").map(({ fact, index }) => [index, accept(fact)] as const));
   // a card answer filed in code is current before the tweaks, which may qualify it
   const cards = cardAnswers(sources, cardNotes, archived);
-  for (const { pick } of cards) if (pick) live.add(pickKey(pick.key));
+  for (const { pick } of cards) for (const key of [pick?.key, pick?.kind === "pick" ? pick.noted : undefined]) if (key) live.add(pickKey(key));
   for (const { fact, index } of order) if (fact.kind !== "decision") kept.set(index, accept(fact));
   const picked = (decision: boolean) => facts.flatMap((fact, index) => (fact.kind === "decision") === decision ? kept.get(index) ?? [] : []);
   return [...picked(true), ...cards, ...picked(false)];
@@ -698,6 +698,8 @@ function cardAnswers(sources: UserLine[], noted: Map<string, CardNote>, archived
     keys.set(binding.questionId, key);
     const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: binding.at, key, picked, said, binding, tapped: true };
     if (note?.over.length) pick.over = note.over;
+    if (note && pickKey(note.key) !== pickKey(key)) pick.noted = note.key;
+    if (source.typedAnswer) pick.typed = true;
     if (note?.replaces) pick.legacy = legacyPick(note.replaces, pick.at);
     const filed: HeldNote = { line: `${key}: ${picked}`, kind: "decision", pick };
     if (note?.replaces) filed.replaces = note.replaces;
@@ -1106,11 +1108,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       // a pasted tag cannot open or close a prompt block
       // a card answer is the user's own words after the question it quotes, whole
       const text = userTyping(reply?.answer ?? row.text!, true, false, reply?.answer === undefined ? undefined : reply.choice === reply.answer ? "option" : "answer").replace(CONTEXT_TAGS, " ").trim();
-      return text ? [{ id, text, at: Math.max(row.actedAt ?? row.at, (reply?.edits ?? -Infinity) + 1), tap: Boolean(row.answersCard || reply?.cardId), files: attachedImages(row.text ?? "") }] : [];
+      const pressed = Boolean(row.answersCard) && reply?.choice !== undefined && reply.choice === reply.answer;
+      return text ? [{ id, text, at: Math.max(row.actedAt ?? row.at, (reply?.edits ?? -Infinity) + 1), tap: Boolean(row.answersCard || reply?.cardId), pressed, files: attachedImages(row.text ?? "") }] : [];
     });
-    const lines = typed.sort((a, b) => a.at - b.at).map(({ id, text, at, tap, files }) => {
+    const lines = typed.sort((a, b) => a.at - b.at).map(({ id, text, at, tap, pressed, files }) => {
       const line: UserLine = { id, text, at, thread: sourceThread(threadId) };
       if (tap) line.tap = true;
+      if (tap && !pressed) line.typedAnswer = true;
       const reply = replies.get(id);
       if (reply) {
         line.questionId = reply.questionId;

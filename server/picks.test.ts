@@ -209,6 +209,13 @@ describe("card answers", () => {
     }
   });
 
+  it("lets a newer typed card answer replace an older typed pick on its card, never a press or an older answer", () => {
+    const typed = applyPicks("", [pick("Which database?", "SQLite", "SQLite", at(26, 10), { binding: { at: at(26, 10), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never })])!.text;
+    expect(currentPicks(applyPicks(typed, [{ ...tap("q1", "a2", "Which database?", "Postgres", at(26, 11)), typed: true } as PickChange])!.text).map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", "q1"]]);
+    expect(applyPicks(typed, [{ ...tap("q1", "a0", "Which database?", "Postgres", at(26, 9)), typed: true } as PickChange])).toBeNull();
+    expect(applyPicks(typed, [tap("q1", "a2", "Which database?", "Postgres", at(26, 11))])).toBeNull();
+  });
+
   it("shows a pick an older build marked retired, and keeps the line on file", () => {
     const text = "# Decision timeline\n\n## 2026-11-18 17:32 | memory audit fix timing | current\n- Picked: Fix tonight\n- Retired: 2026-11-19\n";
     expect(picksBlock(text)).toContain("memory audit fix timing (11-18): Fix tonight");
