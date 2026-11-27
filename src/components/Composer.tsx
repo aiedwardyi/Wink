@@ -26,6 +26,8 @@ import {
   type PersistedRoomHold,
 } from "@/lib/drafts";
 import { BotAvatar, RoomBotAvatar } from "./Avatar";
+import { BotModelLine } from "./BotModelLine";
+import { CallGear } from "./CallSettings";
 import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
 import {
   appendPastedText,
@@ -60,11 +62,12 @@ import {
   uploadJobs,
   type UploadDone,
 } from "@/lib/big-upload";
+import { forgetTrayMedia } from "@/lib/tray-media";
 import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { foldQuestion, PendingQuestionPanel } from "./PendingQuestion";
+import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel, useQuestionHidden } from "./PendingQuestion";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -81,17 +84,16 @@ import { holdToSendAfter, markSent, stopTooSoon } from "@/lib/send-hold";
 import { fitComposerHeight } from "@/lib/composer-dock";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
 import { dropRoomFile, holdRoomFiles, roomFile, startRoomSend, useRoomSending } from "@/lib/room-drafts";
-import { filesProblem, isRoomPicture, roomPeople, roomTeamBots, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
+import { filesProblem, isRoomPicture, roomHostSeats, roomMentionPeople, roomPeople, roomTeamBots, sendToRoom, type RoomProblem } from "@/lib/team-rooms";
 import { holdReload } from "@/lib/reload-hold";
 import { hapticTick } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { warmCallAudio } from "@/lib/live-call/warm-audio";
 import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
-import { CallSettingsHold } from "./CallSettings";
 import { useI18n } from "@/lib/i18n";
 import { useChatPreview } from "@/lib/chat-preview";
-import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
+import { chatMovedOn, openQuestions, pinnedQuestion, questionJumpId } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
 import { MOTION_LARGE_MS } from "@/lib/motion";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -223,6 +225,7 @@ export function Composer({
   call,
   onCall,
   callButton,
+  callBot,
   heldSlot,
 }: {
   bot?: Bot;
@@ -245,6 +248,8 @@ export function Composer({
   /** Starts a call from the empty box's Send spot; absent where calls can't work. */
   onCall?: () => void;
   callButton?: ReactNode;
+  /** Who a room's call button calls; a bot chat calls its own bot. */
+  callBot?: Bot;
   /** The room transcript's tail, where Ctrl+Enter holds show as 1:1 queued bubbles. */
   heldSlot?: HTMLElement | null;
 }) {
@@ -255,6 +260,7 @@ export function Composer({
   const nativeSizing = phone && window.CSS?.supports?.("field-sizing", "content") === true;
   const { capabilities } = useDesktopCapabilities();
   const rainbow = useRainbowBox();
+  const caller = bot ?? callBot;
   // Unified target: a 1:1 bot thread or a room. In a room the @ picker
   // offers members plus @everyone; explicit mentions override the room's
   // configured default responder.
@@ -273,19 +279,21 @@ export function Composer({
   // the VISIBLE branch only — an approval left on a branch you edited away
   // from must not keep blocking the composer
   const threadMessages = group ? group.messages : bot ? visibleMessages(bot) : [];
-  const approvals = pendingApprovals(threadMessages);
+  const approvals = useMemo(() => pendingApprovals(threadMessages), [threadMessages]);
   const approval = approvals[0];
   const repliedTo = (id?: string) => (id && threadMessages.find((message) => message.id === id)) || null;
   // A bot's open ask_user question pins above the composer but never locks
   // it; a pending approval shows first and the pin waits behind it.
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
-  const pinned = pinnedQuestion(chatMessages, threadMessages);
+  const pinned = useMemo(() => pinnedQuestion(chatMessages, threadMessages), [chatMessages, threadMessages]);
   const questions = pinned ? openQuestions(chatMessages) : [];
-  // the row's arrows show an older open question until a newer one arrives
+  // the row's arrows show another open question until it is answered or dismissed; a swiped-away one gives way to a newer arrival
   const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
-  const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
+  const pickHidden = useQuestionHidden(questionPick?.id ?? "");
+  const question = ((!pickHidden || questionPick?.newest === pinned?.id) && questions.find((open) => open.id === questionPick?.id)) || pinned;
   const questionIndex = question ? questions.indexOf(question) : -1;
-  const questionMovedOn = question ? chatMovedOn(chatMessages, question) : false;
+  const jumpId = question ? questionJumpId(threadMessages, question, pinned, Boolean(group ? group.hasMore : bot?.hasMore)) : null;
+  const questionMovedOn = useMemo(() => question ? chatMovedOn(chatMessages, question) : false, [chatMessages, question]);
   const questionAsker = question
     ? group
       ? (members?.find((member) => member.id === question.from?.botId)?.name ?? question.from?.name ?? t("chrome.aBot"))
@@ -363,6 +371,7 @@ export function Composer({
         dropRoomFile(id);
       // a finished file may already be in a sent message, so only unfinished uploads are cancelled
       } else if (removed?.kind === "upload") dropUpload(id, removed.uploadId);
+      forgetTrayMedia(id);
       editAttachments((prev) => prev.filter((a) => a.id !== id));
     },
     [editAttachments, peopleRoom, roomSending],
@@ -400,15 +409,21 @@ export function Composer({
       }),
     [attachments, jobs, peopleRoom],
   );
-  const uploadErrors = attachments
+  // why an upload is stuck or failed goes in the notice above the box, not only on its small chip
+  const uploadProblems = attachments
     .flatMap((a) => {
-      const error = a.kind === "upload" ? jobs.get(a.id)?.error : undefined;
-      return error && a.kind === "upload" ? [t(error, { name: a.name })] : [];
+      const job = a.kind === "upload" ? jobs.get(a.id) : undefined;
+      const key = job?.phase === "resuming" ? "composer.uploadStuck" : job?.error;
+      return key && a.kind === "upload" ? [t(key, { name: a.name })] : [];
     })
     .join(" ");
+  const shownProblems = useRef("");
   useEffect(() => {
-    if (uploadErrors) showNotice(uploadErrors);
-  }, [uploadErrors, showNotice]);
+    const last = shownProblems.current;
+    shownProblems.current = uploadProblems;
+    if (uploadProblems) showNotice(uploadProblems);
+    else if (last) setAttachmentNotice((notice) => (notice === last ? null : notice));
+  }, [uploadProblems, showNotice]);
   const repickInput = useRef<HTMLInputElement>(null);
   const repickTarget = useRef<string | null>(null);
   const repick = (file: File | undefined) => {
@@ -499,10 +514,25 @@ export function Composer({
   // IME composition: native isComposing can stay true after Hangul
   // commits, which used to make Enter insert a newline instead of send.
   const composingRef = useRef(false);
-  const requestBotPrewarm = useCallback((botId: string | undefined) => {
-    if (!botId) return;
+  const botId = bot?.id;
+  const taskFolder = bot?.tasks?.find((task) => task.threadId === threadId)?.cwd;
+  const folder = taskFolder === undefined ? bot?.cwd ?? bot?.rememberedProjectCwd : taskFolder;
+  const selection = bot?.modelSelection;
+  const prewarmKey = JSON.stringify([botId, threadId, selection?.instanceId, selection?.model, selection?.effort, folder]);
+  const prepared = useRef<string | null>(null);
+  const requestBotPrewarm = useCallback(() => {
+    if (busy) {
+      prepared.current = null;
+      return;
+    }
+    if (!botId || prepared.current === prewarmKey) return;
+    prepared.current = prewarmKey;
     void api(`/api/bots/${botId}/prewarm`, { method: "POST" }).catch(() => {});
-  }, []);
+  }, [botId, busy, prewarmKey]);
+
+  useEffect(() => {
+    if (document.activeElement === inputRef.current) requestBotPrewarm();
+  }, [requestBotPrewarm]);
 
   const compositionEndedAtRef = useRef(0);
   // what was typed before the mic went on — partials append after it
@@ -515,7 +545,7 @@ export function Composer({
     const input = inputRef.current;
     if (!input || input.disabled) return;
     if (!composerNeedsTap()) input.focus();
-    requestBotPrewarm(bot.id);
+    requestBotPrewarm();
     dispatch({ type: "composerFocused", botId: bot.id });
   }, [bot, dispatch, focusBlocked, locked, requestBotPrewarm, state.composerFocusBotId, preview]);
 
@@ -572,9 +602,10 @@ export function Composer({
 
   // ── @mention picker (tag another bot; the agent reaches it via ask_bot) ──
   const mention = mentionQueryAt(text, caret);
+  const hostName = state.config?.profile?.name;
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
-    const people = room?.people ?? (group?.hosted ? roomPeople(group) : []);
+    const people = room?.people ?? (group?.hosted ? roomMentionPeople(roomPeople(group), roomHostSeats(group)?.length ? hostName || t("teamRoom.host") : undefined) : []);
     const pool: MentionChoice[] = room
       ? [
           ...(room.bots ?? []).map((roomBot) => ({ id: roomBot.id, name: roomBot.name, owner: roomBot.owner, agent: true })),
@@ -598,7 +629,7 @@ export function Composer({
       const owner = peer.owner && people.find((person) => person.id === peer.owner);
       return owner ? { ...peer, label: t("teamRoom.botOwner", { name: peer.name, owner: owner.name }) } : peer;
     });
-  }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people, room?.bots, t]);
+  }, [mention, dismissedAt, state.bots, bot?.id, group, members, room?.people, room?.bots, hostName, t]);
   const pickerOpen = candidates.length > 0;
   useBackLayer(!preview && pickerOpen, () => setDismissedAt(mention?.start ?? null));
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -684,6 +715,8 @@ export function Composer({
         sendId: entry.draft.sendId,
         replyToId: entry.replyToId,
         threadId: entry.draft.threadId,
+        actedAt: entry.at,
+        waited: true,
         onError: () => restoreDraft(entry.draft),
       });
     } : undefined,
@@ -838,6 +871,7 @@ export function Composer({
       const pending = { text: t, replyToId: replyTo?.id, at: Date.now(), draft: sentDraft };
       commitQueued([...queuedRef.current, pending]);
       setText("");
+      for (const a of attachmentsRef.current) forgetTrayMedia(a.id);
       setAttachments([]);
       onConsumeReply?.();
       onSend?.();
@@ -854,7 +888,7 @@ export function Composer({
         onError: () => restoreDraft(sentDraft),
       });
     } else if (bot) {
-      if (busy) rememberQueuedDraft(sentDraft.sendId, { text: liveText, attachments: sentDraft.attachments });
+      rememberQueuedDraft(sentDraft.sendId, { text: liveText, attachments: sentDraft.attachments });
       dispatch({
         type: "send",
         botId: bot.id,
@@ -867,6 +901,7 @@ export function Composer({
       });
     }
     setText("");
+    for (const a of attachmentsRef.current) forgetTrayMedia(a.id);
     setAttachments([]);
     onConsumeReply?.();
     onSend?.();
@@ -912,6 +947,7 @@ export function Composer({
       });
       if (inputRef.current) inputRef.current.value = "";
       setText("");
+      for (const a of attachmentsRef.current) forgetTrayMedia(a.id);
       setAttachments([]);
       setTerminalSendPreview(null);
     } catch (cause) {
@@ -954,6 +990,8 @@ export function Composer({
       sendId: next.draft.sendId,
       replyToId: next.replyToId,
       threadId: next.draft.threadId,
+      actedAt: next.at,
+      waited: true,
       onError: () => {
         restoreDraft(next.draft);
         if (!mountedRef.current) return;
@@ -1118,7 +1156,10 @@ export function Composer({
                     <Users size={14} aria-hidden="true" />
                   </span>
                 )}
-                <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.label ?? peer.name}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-medium text-ink">{peer.label ?? peer.name}</span>
+                  {peer.bot && <BotModelLine bot={peer.bot} />}
+                </span>
                 <span className="shrink-0 text-xs text-ink-secondary">{peer.person ? t("composer.person") : peer.bot || peer.agent ? t("composer.agent") : t("composer.channel")}</span>
               </button>
             ))}
@@ -1224,10 +1265,11 @@ export function Composer({
             askerName={questionAsker}
             count={questions.length}
             index={questionIndex}
-            onStep={(step) => {
+            onJump={jumpId ? () => dispatch({ type: "focusMessage", threadId, messageId: jumpId }) : undefined}
+            onStep={(step, folded) => {
               const next = questions[questionIndex + step];
               if (!next || !pinned) return;
-              foldQuestion(next.id);
+              foldQuestion(next.id, folded);
               setQuestionPick({ id: next.id, newest: pinned.id });
             }}
             typed={text}
@@ -1291,6 +1333,7 @@ export function Composer({
           }}
         >
           {rainbow !== "off" && <RainbowRing theme={rainbow === "theme"} />}
+          {question && <HiddenQuestionDot id={question.id} count={questions.length} />}
           <input
             ref={fileInput}
             disabled={locked}
@@ -1377,17 +1420,12 @@ export function Composer({
             compositionEndedAtRef.current = Date.now();
           }}
           onBlur={() => {
+            prepared.current = null;
             composingRef.current = false;
             compositionEndedAtRef.current = 0;
           }}
-          onFocus={() => {
-            if (bot?.id) requestBotPrewarm(bot.id);
-          }}
+          onFocus={requestBotPrewarm}
           onKeyDown={(e) => {
-            if (bot?.id && e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
-              requestBotPrewarm(bot.id);
-            }
-
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !e.shiftKey && !e.altKey && undoPasteDisplay()) {
               e.preventDefault();
               return;
@@ -1484,18 +1522,21 @@ export function Composer({
           </button>
           </>
           )}
-          {(callButton || onCall) && bot && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
-            <CallSettingsHold bot={bot}><button
-              type="button"
-              onClick={onCall}
-              onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
-              onFocus={warmCallAudio}
-              aria-label={t("composer.call", { name: bot.name })}
-              title={t("composer.call", { name: bot.name })}
-              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
-            >
-              <Phone size={16} />
-            </button></CallSettingsHold>
+          {(callButton || onCall) && caller && !hasContent && !locked && !callSlot.mounted && (callButton ?? (
+            <>
+              <CallGear bot={caller} className="max-md:-my-1" />
+              <button
+                type="button"
+                onClick={onCall}
+                onPointerEnter={(event) => { if (event.pointerType === "mouse") warmCallAudio(); }}
+                onFocus={warmCallAudio}
+                aria-label={t("composer.call", { name: caller.name })}
+                title={t("composer.call", { name: caller.name })}
+                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110"
+              >
+                <Phone size={16} />
+              </button>
+            </>
           ))}
           </div>
         </div>

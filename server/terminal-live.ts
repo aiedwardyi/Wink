@@ -46,7 +46,7 @@ export function createTerminalLive(deps: TerminalLiveDeps) {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const leases = new Map<string, { botId: string; renew: () => void }>();
 
-  async function live(res: ServerResponse, access: TerminalBridgeAccess, botId: string, sessionId: string | null): Promise<void> {
+  async function live(res: ServerResponse, access: TerminalBridgeAccess, botId: string, params: URLSearchParams): Promise<void> {
     const abort = new AbortController();
     const lease = randomUUID();
     let heartbeat: NodeJS.Timeout | undefined;
@@ -61,7 +61,8 @@ export function createTerminalLive(deps: TerminalLiveDeps) {
       if (!res.writableEnded) res.end();
     };
     res.once("close", stop);
-    const qs = sessionId ? `?${new URLSearchParams({ sessionId })}` : "";
+    const sessionId = params.get("sessionId");
+    const qs = sessionId ? `?${new URLSearchParams({ sessionId })}` : params.get("main") === "1" ? "?main=1" : "";
     let upstream: Response;
     try {
       upstream = await fetchImpl(`${access.url}/v1/bots/${encodeURIComponent(botId)}/terminal/stream${qs}`, {
@@ -170,7 +171,7 @@ export function createTerminalLive(deps: TerminalLiveDeps) {
     const access = deps.access();
     if (route === "live") {
       if (!access) return json(res, 503, { error: "terminal bridge unavailable" });
-      return live(res, access, botId, url.searchParams.get("sessionId"));
+      return live(res, access, botId, url.searchParams);
     }
     const parsed = (route === "input" ? inputSchema : resizeSchema).safeParse(await readBody(req));
     if (!parsed.success) return json(res, 400, { error: route === "input" ? "sessionId, generation and data are required" : "sessionId, generation, cols and rows are required" });

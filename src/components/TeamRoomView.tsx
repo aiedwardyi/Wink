@@ -8,10 +8,11 @@ import { useI18n } from "@/lib/i18n";
 import { useOlderMessages } from "@/lib/message-pages";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { useSkin } from "@/lib/skins";
-import { hostLines, hostRoomBase, reactionNames, roomNoticeText, roomPeople, roomPictureUrl, roomTeamBots, setHostNotice, type TeamRoom } from "@/lib/team-rooms";
+import { hostLines, hostRoomBase, reactionNames, roomHostSeats, roomMentionPeople, roomNoticeText, roomPeople, roomPictureUrl, roomTeamBots, setHostNotice, type TeamRoom } from "@/lib/team-rooms";
 import { useStore } from "@/state/store";
 
 import { AppErrorBanner } from "./AppErrorBanner";
+import { roomCallBot, useCallControls } from "./CallControls";
 import { ChatScene, sceneOf } from "./ChatScene";
 import { ReconnectingCue } from "./ReconnectingCue";
 import { ShowPaneButton } from "./ShowPaneButton";
@@ -27,6 +28,8 @@ export function TeamRoomView({ group, hidden = false }: { group: TeamRoom; hidde
   const loadOlder = useOlderMessages(dispatch, group.threadId, group.messages[0]?.id, group.hasMore);
   const sidebarOnRight = useSidebarSide() === "right";
   const teamBots = roomTeamBots(group);
+  const host = state.config?.profile?.name;
+  const composerPeople = roomMentionPeople(roomPeople(group), roomHostSeats(group)?.length ? host || t("teamRoom.host") : undefined);
   const lines = useMemo(() => hostLines(group.messages, teamBots), [group.messages, teamBots]);
   const base = hostRoomBase(group.hosted.roomId);
   const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useTeamRoomReply(base, group.id, group.messages);
@@ -36,6 +39,7 @@ export function TeamRoomView({ group, hidden = false }: { group: TeamRoom; hidde
   const skin = useSkin();
   const scene = sceneOf(skin);
   const sceneSend = useRef<(() => void) | null>(null);
+  const call = useCallControls(roomCallBot(state.bots), hidden, { id: group.hosted.roomId, kind: "host", name: group.name });
   return (
     <main data-team-room="host" data-scene={scene} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       {scene && <ChatScene scene={scene} skin={skin} working={Boolean(group.busyBotId || group.botChain)} threadId={group.threadId} hidden={hidden} sendRef={sceneSend} />}
@@ -57,7 +61,7 @@ export function TeamRoomView({ group, hidden = false }: { group: TeamRoom; hidde
         empty={missing ? undefined : { name: group.name, members: [state.config?.profile?.name ?? "", ...roomPeople(group).map((person) => person.name)].filter(Boolean), picture: roomPictureUrl(base, group.picture) }}
       />
       <div className={cn("w-full shrink-0", CHAT_COLUMN_CLASS)}>
-        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={roomPeople(group)} bots={roomTeamBots(group)} replyTo={replyTo} onClearReply={clearReply} onConsumeReply={consumeReply} onRestoreReply={restoreReply} onSend={() => sceneSend.current?.()} chain={group.botChain} onStop={group.botChain ? () => dispatch({ type: "interruptGroup", groupId: group.id }) : undefined} />}
+        {missing ? <TeamRoomStatus text={t("teamRoom.unavailable")} /> : <TeamRoomComposer key={group.id} name={group.name} base={base} draftId={group.id} people={composerPeople} bots={teamBots} replyTo={replyTo} onClearReply={clearReply} onConsumeReply={consumeReply} onRestoreReply={restoreReply} onSend={() => sceneSend.current?.()} chain={group.botChain} onStop={group.botChain ? () => dispatch({ type: "interruptGroup", groupId: group.id }) : undefined} call={call} />}
       </div>
     </main>
   );

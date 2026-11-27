@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { isAbsolute, join, win32 } from "node:path";
 
+import { worktreeRoot as defaultWorktreeRoot } from "./auto-approve.ts";
 import { PACKAGED_FILES } from "./proxy-paths.ts";
+import { revertHoldRow, revertHoldText, type RevertHit } from "./revert-index.ts";
 
 // orbit-msg is installed on Windows only (electron/terminal-mailbox.mjs).
 const REPORTS_WIN32 = `A worker's final message reaches this thread as a pane note. Do not poll the
@@ -20,7 +21,7 @@ asked for.`;
 
 export function loadHarnessPlaybook(
   file: string = PACKAGED_FILES.harnessPlaybook,
-  worktreeRoot = process.env.ORBIT_WORKTREE_ROOT || join(homedir(), "orbit-wt"),
+  worktreeRoot = defaultWorktreeRoot(),
   platform: NodeJS.Platform = process.platform,
 ): string {
   let text: string;
@@ -72,8 +73,18 @@ function readCardFile(path: string): string | undefined {
   }
 }
 
-/** The card a standard launch names, when it exists and its `## Already built` section is missing or blank. */
-function cardWithoutPriorWork(command: string, cwd: string | undefined, readCard: (path: string) => string | undefined): string | undefined {
+// Loose on purpose: a build card held by mistake costs one line under ## Undo first.
+const FIX_CARD = /\b(?:fix(?:e[sd]|ing)?|bugs?|broke|broken|regression|regressed)\b/i;
+const UNDONE = /\brevert\s+(?:PR\s*#?\d+|#\d+|[0-9a-f]{7,40})\b|\bno earlier change caused this \(searched: [^)\s][^)]*\)|\bnew code: ["“][^"”]+["”] \([^)\s][^)]*\)/i;
+
+function cardSection(lines: string[], heading: string): string {
+  const at = lines.findIndex((line) => new RegExp(`^##\\s+${heading}\\s*$`, "i").test(line));
+  const end = at < 0 ? -1 : lines.findIndex((line, index) => index > at && /^#{1,2}\s/.test(line));
+  return at < 0 ? "" : lines.slice(at + 1, end < 0 ? undefined : end).join("\n").trim();
+}
+
+/** Why the card a standard launch names, when it exists, is not ready: no prior-work search, or a fix card that names no change to undo. */
+async function cardHold(command: string, cwd: string | undefined, readCard: (path: string) => string | undefined, lookFirst?: (path: string, card: string) => Promise<string | undefined>): Promise<string | undefined> {
   const named = CARD_LAUNCH.exec(command)?.[1]?.replace(/^["'`]+|["'`]+$/g, "");
   const absolute = (path: string) => isAbsolute(path) || win32.isAbsolute(path);
   // A relative card lives in the pane's cwd, never the server's.
@@ -81,27 +92,39 @@ function cardWithoutPriorWork(command: string, cwd: string | undefined, readCard
   const card = path ? readCard(path) : undefined;
   if (card === undefined) return undefined;
   const lines = card.split(/\r?\n/);
-  const at = lines.findIndex((line) => /^##\s+Already built\s*$/i.test(line));
-  const end = at < 0 ? -1 : lines.findIndex((line, index) => index > at && /^#{1,2}\s/.test(line));
-  const section = at < 0 ? "" : lines.slice(at + 1, end < 0 ? undefined : end).join("").trim();
-  return section ? undefined : path;
+  if (!cardSection(lines, "Already built")) return `Held: ${path} has no prior-work search. Fill ## Already built: search built.md, the status board and earlier cards for this feature; write 'none found (searched: <terms>)' if empty. Then send the spawn again.`;
+  if (FIX_CARD.test(cardSection(lines, "Purpose")) && !UNDONE.test(cardSection(lines, "Undo first"))) return `Held: ${path} is a fix card that names no change to undo. Fill ## Undo first: 'revert <sha or PR>' for the change that caused it, else 'no earlier change caused this (searched: <terms>)', or 'new code: "<user's words>" (<date>)' when the user asked for new code. Then send the spawn again.`;
+  return lookFirst?.(path!, card);
 }
 
 /** Provider sessions that were handed the on-demand part; a worker launch waits for it. */
-export function createPlaybookGate(body = harnessPlaybookBody(), readCard = readCardFile) {
+export interface RevertGate {
+  reverts: { hit(cwd: string, card: string): Promise<RevertHit | undefined> };
+  wouldHold?: (row: ReturnType<typeof revertHoldRow>) => void;
+  /** off: a would-hold is only logged */
+  enforce?: boolean;
+}
+
+export function createPlaybookGate(body = harnessPlaybookBody(), readCard = readCardFile, revertGate?: RevertGate) {
   const read = new Set<string>();
+  const lookFirst = (cwd: string | undefined) => async (path: string, card: string) => {
+    const hit = cwd && revertGate ? await revertGate.reverts.hit(cwd, card) : undefined;
+    if (!hit) return undefined;
+    try {
+      revertGate!.wouldHold?.(revertHoldRow(path, hit));
+    } catch {}
+    return revertGate!.enforce ? revertHoldText(path, hit) : undefined;
+  };
   return {
     read(session: string): string {
       read.add(session);
       return body;
     },
     // Never marks the session: spawns sent side by side must all be held.
-    hold(session: string, command: string, cwd?: string): string | undefined {
+    async hold(session: string, command: string, cwd?: string): Promise<string | undefined> {
       if (!body || !WORKER_COMMAND.test(command)) return undefined;
       if (!read.has(session)) return "Held: this session has not read the worker playbook. Call terminal_playbook, follow it (card, worktree or safety copy, label), then send the spawn again.";
-      const card = cardWithoutPriorWork(command, cwd, readCard);
-      if (card) return `Held: ${card} has no prior-work search. Fill ## Already built: search built.md, the status board and earlier cards for this feature; write 'none found (searched: <terms>)' if empty. Then send the spawn again.`;
-      return undefined;
+      return cardHold(command, cwd, readCard, lookFirst(cwd));
     },
   };
 }

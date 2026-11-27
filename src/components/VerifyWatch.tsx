@@ -1,26 +1,27 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, Maximize2, Minimize2, Play, RefreshCw, X } from "lucide-react";
-import { VERIFY_ROUTES, type VerifyCardData, type VerifyTile } from "../../shared/live-verify";
+import { VERIFY_ROUTES, type VerifyCardData, type VerifyIssue, type VerifyTile } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { VERIFY_ROLE as ROLE, VERIFY_TAG as TAG, verifyProblem } from "@/lib/verify-copy";
 import { frameBitmap, readReplay } from "@/lib/verify-replay";
-import { chooseVerifyTab, rerunVerify, setVerifyShowing, verifyChosenTab, verifyLiveGate } from "@/lib/verify-watch";
+import { chooseVerifyTab, rerunVerify, setVerifyShowing, verifyChosenTab, verifyLiveGate, verifyReel } from "@/lib/verify-watch";
 import { BANNER_MS, CURSOR_ARROW, VerifyWatchShow, tagSpot, type Part } from "@/lib/verify-watch-show";
 import "./VerifyWatch.css";
 
 const copy = {
-  en: { desktop: "Desktop", phone: "Phone", live: "Live", parts: { loads: "Loads", links: "Links", phone: "Phone" }, s: " s", checks: (n: number) => `${n} ${n === 1 ? "check" : "checks"}`, problems: (n: number) => `${n} ${n === 1 ? "problem" : "problems"}`, clean: "No problems", fixed: "Bot fixed it", waiting: "Waiting for another check", expired: "Replay expired", failed: "Could not load the replay", unfinished: "Could not check this page", rerun: "Rerun", retry: "Could not rerun. Try again.", close: "Close", maximize: "Maximize", restore: "Restore", again: "Watch again", watch: "Watch the check", rules: { PAGE_ERRORS: "Page errors", LINKS: "Links", FIT: "Phone fit", NAV: "Phone menu", TEXT_A: "Leftovers" } as Record<string, string> },
-  ko: { desktop: "데스크톱", phone: "휴대폰", live: "실시간", parts: { loads: "페이지 로드", links: "링크", phone: "휴대폰" }, s: "초", checks: (n: number) => `확인 ${n}개`, problems: (n: number) => `문제 ${n}개`, clean: "문제 없음", fixed: "봇이 고쳤어요", waiting: "다른 확인을 기다리는 중", expired: "다시보기가 만료됐어요", failed: "다시보기를 불러오지 못했어요", unfinished: "페이지를 확인하지 못했어요", rerun: "다시 확인", retry: "다시 확인하지 못했어요. 다시 시도하세요.", close: "닫기", maximize: "크게 보기", restore: "원래 크기", again: "다시 보기", watch: "확인 과정 보기", rules: { PAGE_ERRORS: "페이지 오류", LINKS: "링크", FIT: "휴대폰 맞춤", NAV: "휴대폰 메뉴", TEXT_A: "남은 임시 문구" } as Record<string, string> },
+  en: { desktop: "Desktop", phone: "Phone", live: "Live", parts: { loads: "Loads", links: "Links", phone: "Phone" }, s: " s", checks: (n: number) => `${n} ${n === 1 ? "check" : "checks"}`, problems: (n: number) => `${n} ${n === 1 ? "problem" : "problems"}`, clean: "No problems", fixed: "Bot fixed it", waiting: "Waiting for another check", unavailable: "Replay unavailable on this PC", failed: "Could not load the replay", unfinished: "Could not check this page", rerun: "Rerun", retry: "Could not rerun. Try again.", close: "Close", maximize: "Maximize", restore: "Restore", again: "Watch again", watch: "Watch the check", rules: { PAGE_ERRORS: "Page errors", LINKS: "Links", FIT: "Phone fit", NAV: "Phone menu", TEXT_A: "Leftovers" } as Record<string, string> },
+  ko: { desktop: "데스크톱", phone: "휴대폰", live: "실시간", parts: { loads: "페이지 로드", links: "링크", phone: "휴대폰" }, s: "초", checks: (n: number) => `확인 ${n}개`, problems: (n: number) => `문제 ${n}개`, clean: "문제 없음", fixed: "봇이 고쳤어요", waiting: "다른 확인을 기다리는 중", unavailable: "이 PC에서 다시보기를 사용할 수 없어요", failed: "다시보기를 불러오지 못했어요", unfinished: "페이지를 확인하지 못했어요", rerun: "다시 확인", retry: "다시 확인하지 못했어요. 다시 시도하세요.", close: "닫기", maximize: "크게 보기", restore: "원래 크기", again: "다시 보기", watch: "확인 과정 보기", rules: { PAGE_ERRORS: "페이지 오류", LINKS: "링크", FIT: "휴대폰 맞춤", NAV: "휴대폰 메뉴", TEXT_A: "남은 임시 문구" } as Record<string, string> },
 };
 const RULES = ["PAGE_ERRORS", "LINKS", "FIT", "NAV", "TEXT_A"];
 const RED = "#f05d5d";
 const PARTS: Part[] = ["loads", "links", "phone"];
 const ARROW = typeof Path2D === "undefined" ? null : new Path2D(CURSOR_ARROW);
 const route = (path: string, runId: string) => path.replace(":runId", encodeURIComponent(runId));
-const tileSize = (show: VerifyWatchShow) => show.head?.tiles[show.tile] ?? (show.tile === "phone" ? [392, 800] : [1280, 720]);
+const tileSize = (show: VerifyWatchShow, tile = show.tile) => show.head?.tiles[tile] ?? (tile === "phone" ? [392, 800] : [1280, 720]);
+const tileRatio = (show: VerifyWatchShow, tile: VerifyTile) => tileSize(show, tile)[1] / tileSize(show, tile)[0];
 
 function useVisibility() {
   const [visibility, setVisibility] = useState(() => document.visibilityState);
@@ -42,6 +43,7 @@ interface FrameProps {
   inline?: boolean;
   /** inside the Show pane, whose header holds Maximize and Close */
   hosted?: { maximized: boolean };
+  kept?: boolean;
   onClose(): void;
 }
 
@@ -49,7 +51,7 @@ const TAG_FONT = `10px "Cascadia Mono", ui-monospace, monospace`;
 // measureText resolves the font on first use (several ms); the tag font is monospace.
 const TAG_CHAR = 6.1;
 
-export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false, inline = false, hosted, onClose }: FrameProps) {
+export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false, inline = false, hosted, kept, onClose }: FrameProps) {
   const { locale } = useI18n();
   const c = copy[locale];
   const phone = useIsPhone();
@@ -57,6 +59,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   const gate = verifyLiveGate(!closing, hidden, visibility);
   const [show, setShow] = useState(() => new VerifyWatchShow(live, verifyChosenTab(card.runId)));
   const [maximized, setMaximized] = useState(false);
+  const [room, setRoom] = useState<number | null>(null);
   const expanded = (hosted ? hosted.maximized : maximized) && !inline && !phone;
   const [, setVersion] = useState(0);
   const [, setDecoded] = useState(0);
@@ -76,10 +79,10 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   useEffect(() => {
     if (!streaming || show.phase === "done") return;
     const abort = new AbortController();
-    const play = async (path: string) => {
-      show.beginRun();
+    const play = async (path: string, last = true) => {
+      show.beginRun(last);
       const res = await fetch(path, { cache: "no-store", signal: abort.signal });
-      if (res.status === 404) { show.expire(); return false; }
+      if (res.status === 404) { show.unavailable(); return false; }
       if (!res.ok || !res.body) { show.fail(); return false; }
       let ended = false;
       for await (const chunk of readReplay(res.body)) {
@@ -99,12 +102,9 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
         return;
       }
       for (const [i, runId] of runs.current.entries()) {
-        const previous = { head: show.head, end: show.end };
         const last = i === runs.current.length - 1;
-        if (await play(route(VERIFY_ROUTES.replay, runId))) {
-          const fixed = Boolean(previous.head?.site && previous.head.page && previous.head.site === show.head?.site && previous.head.page === show.head.page
-            && previous.end?.status === "completed" && previous.end.issues.length && show.end?.status === "completed" && !show.end.issues.length);
-          if (fixed || !last) await show.between(fixed);
+        if (await play(route(VERIFY_ROUTES.replay, runId), last)) {
+          if (show.mended || !last) await show.between(show.mended);
         }
         // a recorded blocked check is one run of the chain; a replay that would not load ends it
         else if (last || abort.signal.aborted || show.end?.status !== "blocked") return;
@@ -175,7 +175,11 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
     if (!canvas || !ctx) return;
     const tile = show.tile;
     const [w, h] = tileSize(show);
-    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const px = Math.max(w / Math.max(1, canvas.clientWidth || w), h / Math.max(1, canvas.clientHeight || h));
+    const k = Math.min(2, Math.max(1, Math.round((window.devicePixelRatio || 1) / px * 4) / 4)), cw = Math.round(w * k), ch = Math.round(h * k);
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    ctx.imageSmoothingQuality = "high";
     const stored = show.frame();
     if (stored && bitmap.current?.jpeg !== stored.jpeg) {
       const jpeg = stored.jpeg;
@@ -191,7 +195,6 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
     ctx.fillRect(0, 0, w, h);
     // The last picture stays up while the next one decodes, so a scroll stop never flashes black.
     if (bitmap.current?.tile === tile) ctx.drawImage(bitmap.current.image, 0, 0, w, h);
-    const px = Math.max(w / Math.max(1, canvas.clientWidth || w), h / Math.max(1, canvas.clientHeight || h));
     ctx.lineWidth = px;
     const reel = show.reelIssue();
     if (reel?.box) {
@@ -249,6 +252,20 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
     }
   }
 
+  // the phone inline frame fits the chat's view, so the whole replay plays on screen
+  useLayoutEffect(() => {
+    const frame = frameRef.current, stage = stageRef.current;
+    let pane = frame?.parentElement;
+    while (pane && !/auto|scroll/.test(getComputedStyle(pane).overflowY)) pane = pane.parentElement;
+    if (!inline || !frame || !stage || !pane) return;
+    const measure = () => setRoom(pane.clientHeight - (frame.offsetHeight - stage.offsetHeight));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [inline]);
+
   const tile = show.tile;
   const head = show.head;
   useLayoutEffect(() => {
@@ -262,12 +279,17 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   }, [tile, head]);
   const reel = show.reelIssue();
   const pillTop = reel?.box && reel.box[1] + (reel.scrollY ?? 0) - (show.frame()?.scrollY ?? 0) + reel.box[3] / 2 > tileSize(show)[1] / 2;
-  const caption = reel && <div className="verify-watch-caption"><b>{reel.tile === "phone" ? c.phone : c.desktop} · {reel.where}</b><span>{verifyProblem(reel, locale)}</span></div>;
+  const captionOf = (issue: VerifyIssue) => <><b>{issue.tile === "phone" ? c.phone : c.desktop} · {issue.where}</b><span>{verifyProblem(issue, locale)}</span></>;
+  const caption = reel && <div className="verify-watch-caption">{captionOf(reel)}</div>;
+  // in the chat a caption arriving mid-replay would grow the card, so the slot holds the tallest one from the start
+  const held = inline && (show.showing || show.phase === "after") ? [...verifyReel(card.issues ?? []), ...show.reels] : [];
+  // and the stage holds the tallest tile the reel will turn to, letterboxing the others
+  const stageTile = [tile, ...held.map(issue => issue.tile)].reduce((a, b) => tileRatio(show, b) > tileRatio(show, a) ? b : a);
   const issues = show.end?.issues ?? [];
   const seconds = Math.round(show.ms / 1000);
   const current = PARTS.find(part => !show.parts.has(part));
   const rules = [...RULES, ...[...show.byChecker.keys()].filter(id => !RULES.includes(id))];
-  const banner = show.phase === "between" ? show.fixed ? c.fixed : c.waiting : show.phase === "expired" ? c.expired : show.phase === "failed" ? show.end?.status === "blocked" ? c.unfinished : c.failed : show.phase === "clean" ? c.clean : null;
+  const banner = show.phase === "between" ? show.fixed ? c.fixed : c.waiting : show.phase === "unavailable" ? c.unavailable : show.phase === "failed" ? show.end?.status === "blocked" ? c.unfinished : c.failed : show.phase === "clean" ? c.clean : null;
   const rerun = async () => {
     if (rerunning) return;
     setRerunning(true); setError(false);
@@ -275,7 +297,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   };
 
   return (
-    <div ref={frameRef} className="verify-watch-frame" data-inline={inline || undefined} data-maximized={expanded || undefined}>
+    <div ref={frameRef} className="verify-watch-frame" data-inline={inline || undefined} data-maximized={expanded || undefined} data-kept={kept}>
       <div className="verify-watch-bar">
         <span className="verify-watch-dots" aria-hidden="true"><i /><i /><i /></span>
         <div role="tablist" className="verify-watch-tabs">
@@ -292,14 +314,14 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
         <span className="verify-watch-url" title={head?.page}>{head?.site ?? card.site}</span>
       </div>
       {error && <div className="verify-watch-error" role="alert">{c.retry}</div>}
-      <div ref={stageRef} className="verify-watch-stage" data-tile={tile} data-pending={awaiting() || undefined} style={{ aspectRatio: tileSize(show).join(" / ") }}>
+      <div ref={stageRef} className="verify-watch-stage" data-tile={tile} data-pending={awaiting() || undefined} style={{ aspectRatio: tileSize(show, stageTile).join(" / "), ["--verify-room" as string]: room === null ? undefined : `${room}px` }}>
         <canvas ref={canvasRef} aria-label={c.watch} />
         {(show.phase === "after" || show.phase === "done" || show.phase === "reel" || show.phase === "clean") && show.end && (
           <div className="verify-watch-pill" data-top={pillTop || undefined}>{c.checks(show.checks)} · <span data-red={issues.length > 0 || undefined}>{issues.length ? c.problems(issues.length) : c.clean}</span></div>
         )}
         {banner && <div className="verify-watch-banner" role="status">{banner}</div>}
       </div>
-      {caption}
+      {held.length ? <div className="verify-watch-captions">{held.map((issue, i) => <div key={i} className="verify-watch-caption" aria-hidden="true">{captionOf(issue)}</div>)}{caption}</div> : caption}
       <div className="verify-watch-line">
         {live && <span className="verify-watch-live">{c.live}</span>}
         {PARTS.map(part => (

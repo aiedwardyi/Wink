@@ -64,6 +64,7 @@ export const KEPT_LIMITS: Limits = {
   },
   "server/key-broker.ts": { MAX_RESPONSE_BYTES: FILE, MAX_UPLOAD_FILE_BYTES: FILE, MAX_UPLOAD_BYTES: FILE },
   "server/memory-lookup.ts": { MAX_ROWS: TOKENS, MAX_CHARS: TOKENS, MAX_CORPUS_BYTES: FILE, MAX_TERMS: TOKENS, MAX_WORD: TOKENS },
+  "server/memory-sync.ts": { MAX_EDITS: STATE, MAX_CUT_LINES: STATE },
   "server/memory-pass.ts": { MAX_PASSES: AUTO, MAX_PENDING: AUTO },
   "server/openmaus-status-capsule.ts": { MAX_CACHE_BYTES: FILE },
   "server/phone-access.ts": { MAX_BODY_BYTES: BODY },
@@ -97,7 +98,8 @@ export const KEPT_LIMITS: Limits = {
   "server/summary-build.ts": { MAX_BUILD_RUNS: AUTO },
   "server/summary-repair.ts": { MAX_REPAIR_RUNS: AUTO, MAX_REPAIR_BATCHES: AUTO },
   "server/task-asks.ts": {
-    MAX_STATUS_ASKS_BYTES: "Crash: a status turn lists every open ask; past this size the rest show as +N more open, so the turn fits the model's input. Nothing is refused or dropped.",
+    MAX_STATUS_ASKS_BYTES: "Crash: bots see every open ask, so the turn must still fit the model's input; past this size the least recently shown go first and the header counts the rest for the next turn. Nothing is refused or dropped.",
+    MAX_LISTED_PROMISES: "Runaway loop: every open row rides each later turn and asks the engine to check it, so a narrated turn's 60 \"I'll\" lines would add 60 rows to every turn. Past it the rest ride as their IDs on one line; each keeps its own row, and a status question lists them all.",
   },
   "server/team-library.ts": { MAX_CATALOG_BYTES: OUTSIDER, MAX_MANIFEST_BYTES: OUTSIDER },
   "server/thread-events.ts": { MAX_LIMIT: FILE, MAX_TAIL_BYTES: FILE },
@@ -107,6 +109,8 @@ export const KEPT_LIMITS: Limits = {
   "server/verify-app.ts": { MAX_URLS: AUTO },
   "server/verify-doc.ts": { MAX_BYTES: "Crash: the whole document zip is parsed in memory." },
   "server/verify-site.ts": { MAX_FILES: FILE, MAX_FOLDERS: FILE, MAX_FILE_BYTES: FILE, MAX_SITE_BYTES: FILE },
+  "server/web-read-net.ts": { MAX_BODY_BYTES: "Crash: a web page body is held in memory; a bigger page is read up to here, never refused." },
+  "server/web-read.ts": { MAX_HOPS: "Runaway loop: a redirect chain must end; the read stops there and says so." },
   "shared/google-id-token.ts": {
     MAX_TOKEN_CHARS: OUTSIDER,
     MAX_MAX_AGE_SEC: "Security: a provider's cache header cannot pin Google's signing keys for longer than a day.",
@@ -147,8 +151,9 @@ export const PROMPT_WORDING: Limits = {
   "server/drivers/team-report-tool.ts": { "at most eight": PROMPT },
   "server/index.ts": { "at most one short activity line": PROMPT },
   "server/live-call.ts": { "two at most": PROMPT, "in at most two short sentences": PROMPT },
-  "server/memory-pass.ts": { "At most ": PROMPT },
+  "server/memory-file.ts": { "in at most ": PROMPT },
   "server/side-chat.ts": { "at most 3 Read, Glob or Grep": PROMPT },
+  "server/task-asks.ts": { "ask the user about at most 3": PROMPT },
   "server/team-report-evidence.ts": { "(at most 8)": PROMPT },
   "server/verify-doc-text.ts": { "at most 8 words": PROMPT, "At most 12 findings": PROMPT },
   "server/verify-message.ts": { "at most twice": PROMPT },
@@ -158,10 +163,6 @@ export const PROMPT_WORDING: Limits = {
 /** Limits other cards own or a follow-up removes; delete the entry with the limit. */
 export const PENDING_LIMITS: Limits = {
   "server/bot-routes.ts": { "this workspace is limited to": "Owned by CREATE-BOT-OPEN (workspace bot cap)." },
-  "server/drivers/agents-proxy.ts": {
-    MAX_CREATED_PER_TURN: "Owned by CREATE-BOT-OPEN.",
-    "You can create at most": "Owned by CREATE-BOT-OPEN.",
-  },
   "server/index.ts": { MAX_WORKSPACE_BOTS: "Owned by CREATE-BOT-OPEN (workspace bot cap)." },
   "server/internal-routes.ts": {
     "this workspace is limited to": "Owned by CREATE-BOT-OPEN (workspace bot cap).",

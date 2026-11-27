@@ -23,7 +23,7 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
 
 import { ATTACHMENTS_DIR, sniffImageMime } from "../attachments.ts";
-import { BACKGROUND_DENY_NOTE } from "../auto-approve.ts";
+import { BACKGROUND_DENY_NOTE, guardInput } from "../auto-approve.ts";
 import { applyCredentialAllowlist, DATA_DIR } from "../config.ts";
 import { augmentedPath } from "../env-path.ts";
 import { brokerSocketPath, cliVersion, describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
@@ -31,6 +31,7 @@ import { inputDigest } from "../repeat-detector.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 import { startTurnTimer, startTurnTrace, traceHelperCall, traceRuntimeEvent, type TurnTrace, type UsageObserver } from "../turn-timing.ts";
 import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
+import { askPreallowedOps, BUILTIN_SERVERS, claudeAskRules, type BuiltinServer } from "./builtin-ops.ts";
 import { captureToolDetail } from "../tool-detail.ts";
 
 import type {
@@ -46,7 +47,7 @@ import type {
   SendTurnInput,
 } from "../contracts.ts";
 import { computerProxyEnv } from "../container-computer.ts";
-import { newEventId, newId } from "../contracts.ts";
+import { cliNotFound, newEventId, newId } from "../contracts.ts";
 import {
   classifyError,
   computeBackoff,
@@ -63,16 +64,16 @@ import {
 } from "./local-inject.ts";
 import { appendNative, finishNative } from "./native.ts";
 import { chatUsageLimit, claudeRateLimitWindows } from "./rate-limits.ts";
-import { switchEffort, type EffortRequest } from "./claude-effort.ts";
+import { switchEffort, switchIdle, type SwitchRequest } from "./claude-effort.ts";
 import { forkClaude, type ClaudeSpawn } from "./claude-fork.ts";
 import { warmPool, type Lease } from "./warm-pool.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { accountLabel, cachedSignIn } from "./auth-status.ts";
-import { isSignOut } from "./signout.ts";
+import { isPaymentDue, isSignOut } from "./signout.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
-import { FREE_ACCESS, type AccessTurn, type TurnAccess } from "./turn-access.ts";
+import { FREE_ACCESS, guestText, type AccessTurn, type TurnAccess } from "./turn-access.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
 // Never killed and one per config dir: the check can be renewing the OAuth token, and a renewal cut short signs the account out.
@@ -281,13 +282,36 @@ type AskBehavior = "allow" | "deny" | "answer";
 type AskResolutionSource = "user" | "timeout" | "system";
 
 // Ask rules outrank every allow list, the user's own settings.json included,
-// so Ask for approval reaches the broker even where Write or Bash is allowed.
+// so Ask for approval reaches the broker even where Write, Bash or a Wink tool is allowed.
 // Sandbox auto-allow is switched off too, or sandboxed Bash would skip them.
 const WRITE_TOOLS = ["Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit"];
-const ASK_SETTINGS = JSON.stringify({
-  permissions: { ask: WRITE_TOOLS },
+// The CLI's default mode runs these on the turn's own folder unasked.
+const READ_TOOLS = ["Read", "Glob", "Grep", "LSP"];
+const askSettings = (builtinAsks: string[], deny: string[] = []) => JSON.stringify({
+  permissions: { ask: [...WRITE_TOOLS, ...builtinAsks], ...(deny.length ? { deny } : {}) },
   sandbox: { autoAllowBashIfSandboxed: false },
 });
+
+/** The CLI's absolute rule form: Windows paths match as /c/Users/... */
+const rulePath = (path: string) => {
+  const drive = /^([A-Za-z]):[\\/]?(.*)$/.exec(path);
+  return drive ? `//${drive[1]!.toLowerCase()}/${drive[2]!.replace(/\\/g, "/")}` : `/${path}`;
+};
+
+/** Sign-ins, SSH keys and Wink's data stay unread on a read-only turn. A root holding the turn's folder is skipped:
+ * the folder stays readable, and the rest of that root is outside it, where reads need an approval nobody gives. */
+export function readOnlyReadDeny(cwd: string, env: Record<string, string | undefined>, account?: AccountContext): string[] {
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const roots = [DATA_DIR, join(DATA_DIR, "accounts"), join(home, ".ssh"), claudeConfigDir(env),
+    baseAccount("codex", "codex", env).home, baseAccount("grokAgent", "grokAgent", env).home, ...(account ? [account.home] : [])];
+  const inside = (root: string) => {
+    const rel = relative(root, cwd);
+    return !rel || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+  const rules = roots.filter((root) => !inside(root)).map((root) => `Read(${rulePath(root).replace(/\/+$/, "")}/**)`);
+  // Windows paths match whatever case the model writes
+  return [...new Set(process.platform === "win32" ? rules.flatMap((rule) => [rule, rule.toLowerCase()]) : rules)];
+}
 
 const ownDefaultModeSchema = z.object({ permissions: z.object({ defaultMode: z.string() }) });
 
@@ -731,6 +755,8 @@ const unescapeAttribute = (value: string) =>
   );
 
 function storeImage(path: string, storeDir: string): { block: ClaudeImageBlock; realPath: string; bytes: number } | null {
+  // a network path would make realpathSync open the share, sending the Windows login and blocking the server
+  if (/^[\\/]{2}/.test(path)) return null;
   try {
     const file = realpathSync(path);
     if (dirname(file) !== realpathSync(storeDir)) return null;
@@ -779,18 +805,17 @@ const elideImageData = (content: ClaudeUserContent) =>
 export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "Claude", supportsMultipleInstances: true },
-  // Native Windows PowerShell installer. macOS/Linux stay on npm until a
-  // later slice verifies those native one-liners.
+  // Anthropic's native installers; none needs Node.
   install: {
     command: {
-      darwin: "npm install -g @anthropic-ai/claude-code",
-      linux: "npm install -g @anthropic-ai/claude-code",
+      darwin: "curl -fsSL https://claude.ai/install.sh | bash",
+      linux: "curl -fsSL https://claude.ai/install.sh | bash",
       win32: "irm https://claude.ai/install.ps1 | iex",
     },
-    needsNode: true,
     docsUrl: "https://claude.com/claude-code",
     signInCommand: "claude auth login",
-    login: { args: ["auth", "login"] },
+    // --claudeai is the CLI's default; BROWSER=true is its own "open nothing" value, so a phone gets the link and paste prompt.
+    login: { args: ["auth", "login"], deviceArgs: ["auth", "login", "--claudeai"], deviceEnv: { BROWSER: "true" } },
     logout: ["auth", "logout"],
   },
   models: STATIC_CLAUDE_MODELS,
@@ -829,7 +854,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     // new turn, and folds a message that arrives MID-turn into the running
     // one before its next model call (verified against 2.1.221 — that fold
     // is what "steer" is). So a session is spawned once, reused while its
-    // spawn contract (args, MCP config, cwd, model) is unchanged and the
+    // spawn contract (args, MCP config, cwd; model and effort switch in place) is unchanged and the
     // harness still names this session, closed after SESSION_IDLE_MS of
     // quiet, and resumed by --resume when a matching cursor must attach
     // to a new process. An omitted cursor never reuses.
@@ -1027,7 +1052,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const writeControl = (
       s: Session,
       threadId: string,
-      msg: { type: "control_request"; request_id: string; request: { subtype: "interrupt" } | { subtype: "initialize"; appendSystemPrompt?: string } } | EffortRequest,
+      msg: { type: "control_request"; request_id: string; request: { subtype: "interrupt" } | { subtype: "initialize"; appendSystemPrompt?: string } } | SwitchRequest,
     ): Promise<boolean> => {
       if (!s.child.stdin.writable || s.child.stdin.destroyed) return Promise.resolve(false);
       return new Promise((resolve) => {
@@ -1135,11 +1160,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         "--include-partial-messages",
         ...(ownMode ? [] : ["--permission-mode", permissionMode]),
       ];
-      if (asks) args.push("--settings", ASK_SETTINGS);
+      // Ask preallows a built-in's read and chat ops by name; its side effects reach the Ask card
+      const builtinOps = asks && !turn.readOnly;
+      if (asks) args.push("--settings", askSettings(builtinOps ? BUILTIN_SERVERS.filter((server) => turn.integrations?.[server]).flatMap(claudeAskRules) : [],
+        turn.readOnly ? readOnlyReadDeny(turn.cwd ?? homedir(), turnEnvironment, input.account) : []));
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
       // Wink asks through the agents proxy's ask_user; nothing answers the CLI's own question tool.
       // `--tools ""` already removes it, so no deny entry there.
-      const disallowed = [...(config.tools?.length === 0 ? [] : ["AskUserQuestion"]), ...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : [])];
+      // a read-only turn on someone else's words: the turn's folder is the host's project, so no tool reads a file
+      const guest = guestText(turn);
+      const disallowed = [...(config.tools?.length === 0 ? [] : ["AskUserQuestion"]), ...(config.disallowedTools ?? []), ...(turn.readOnly ? WRITE_TOOLS : []), ...(guest ? READ_TOOLS : [])];
       if (disallowed.length) args.push("--disallowedTools", disallowed.join(","));
       const turnModel = input.account ? turn.model : await resolveClaudeTurnModel(turn.model, turnEnvironment);
       if (input.account && turnModel && !models.options.some((model) => model.id === turnModel)) throw new Error("Unsupported subscription model");
@@ -1158,13 +1188,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // acceptEdits run silently denies anything unlisted)
       const mcpServers: Record<string, unknown> = {};
       const allowed: string[] = [];
+      const builtinAllowed = (server: BuiltinServer) =>
+        builtinOps ? askPreallowedOps(server).map((op) => `mcp__${server}__${op}`) : [`mcp__${server}`];
       // Orbit's own servers skip ToolSearch deferral; a fresh CLI session
       // would otherwise re-fetch their schemas every time. A tool can still
       // opt out with _meta "anthropic/alwaysLoad": false (deferOptional).
       const orbitOwned = { alwaysLoad: true, timeout: 1_800_000 };
       if (turn.integrations?.composio) {
         mcpServers.composio = { ...turn.integrations.composio };
-        allowed.push("mcp__composio");
+        // Ask cards every connected-app call: a mail or chat send is a side effect
+        if (!asks) allowed.push("mcp__composio");
       }
       if (turn.integrations?.computer) {
         mcpServers.computer = {
@@ -1193,19 +1226,19 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       if (turn.integrations?.agents) {
         const agents = experimentalAgents(turn.integrations.agents);
         mcpServers.agents = { ...agents, env: { ...agents.env, OMB_WINK_TOOL_DEFER: "1" }, ...orbitOwned };
-        allowed.push("mcp__agents");
+        allowed.push(...builtinAllowed("agents"));
       }
       if (turn.integrations?.phone) {
         mcpServers.phone = { ...turn.integrations.phone, ...orbitOwned };
-        allowed.push("mcp__phone");
+        allowed.push(...builtinAllowed("phone"));
       }
       if (turn.integrations?.browser) {
         mcpServers.browser = { ...turn.integrations.browser, ...orbitOwned };
-        allowed.push("mcp__browser");
+        allowed.push(...builtinAllowed("browser"));
       }
       if (turn.integrations?.terminal) {
         mcpServers.terminal = { ...turn.integrations.terminal, ...orbitOwned };
-        allowed.push("mcp__terminal__terminal_read", "mcp__terminal__terminal_playbook");
+        allowed.push(...askPreallowedOps("terminal").map((op) => `mcp__terminal__${op}`));
       }
       // dweb network daemon (status / repo / opencode model access) via
       // server/drivers/dweb-proxy.ts — points at the configured dweb instance
@@ -1256,6 +1289,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
 
       const env = claudeEnvironment(turnModel, turnEnvironment, input.account);
+      // the CLI attaches any typed @path with no ask, so a guest's text could name any file on the PC
+      if (guest) env.CLAUDE_CODE_DISABLE_FILE_MENTIONS = "1";
       // the CLI skips its "no visible output" nudge when a turn ends on a listed tool
       if (mcpServers.agents) env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = "mcp__agents__no_reply_needed";
       else delete env.CLAUDE_CODE_TERMINAL_MCP_TOOLS;
@@ -1267,7 +1302,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // the harness sends later changes in the turn text.
       const unkeyed = new Set(["--mcp-config", "--append-system-prompt"]);
       const keyArgs = args.filter((a, i) => !unkeyed.has(a) && !unkeyed.has(args[i - 1] ?? ""));
-      const argsKey = JSON.stringify({ args: keyArgs, mcpServers, cwd, model: injected.model ?? null, base: env.ANTHROPIC_BASE_URL ?? null });
+      // injected credentials live in env, so leaving or entering them is a contract change
+      const argsKey = JSON.stringify({ args: keyArgs, mcpServers, cwd, model: injected.model ?? null, base: env.ANTHROPIC_BASE_URL ?? null, ...(injected.injected && { injected: true }), ...(guest && { noMentions: guest }) });
 
       // Reuse the live process only when it is idle, unchanged, and the
       // harness named that same session. An omitted cursor (Orbit recycled
@@ -1277,6 +1313,38 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // A matching cursor still reuses (Stop / Continuity on uncompacted
       // threads) or --resumes after a contract change.
       const live = sessions.get(threadId);
+      const idle = !prepare && live && !live.turn && !live.closing && live.child.exitCode === null &&
+        (sessionId === null ? live.systemDeferred === true : sessionId === live.sessionId);
+      let switched = false;
+      if (idle && live.argsKey !== argsKey && !injected.injected) {
+        let stopped = false;
+        // the switch's wait is this turn's: Stop ends it unsent, and a second send sees it running
+        active.set(threadId, {
+          stop: () => {
+            stopped = true;
+            active.delete(threadId);
+            killCliTree(live.child);
+            beginClose(threadId, "interrupted");
+            for (const done of live.replies.values()) done(false);
+            if (!relaunchOf) emit({ ...base(threadId, turnId), type: "turn.started" });
+            turnTimer.mark("turnDone");
+            turnTimer.finish();
+            emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "interrupted", cost: null });
+          },
+          turnId,
+          broker: live.broker,
+        });
+        switched = await switchIdle(live, argsKey, (request) => writeControl(live, threadId, request), EFFORT_REPLY_MS);
+        if (stopped) {
+          if (mcpConfigPath) {
+            try {
+              rmSync(dirname(mcpConfigPath), { recursive: true, force: true });
+            } catch {}
+          }
+          return { turnId };
+        }
+        active.delete(threadId);
+      }
       let lease: Lease | undefined;
       if (prepare) {
         const key = { engine: DRIVER_KIND, instanceId, threadId };
@@ -1292,7 +1360,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           return { turnId };
         }
         lease = reserved;
-      } else if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && (sessionId === null ? live.systemDeferred === true : sessionId === live.sessionId)) {
+      } else if (idle && (live.argsKey === argsKey || switched)) {
         if (live.idleTimer) clearTimeout(live.idleTimer);
         unprepare(live, "adopted");
         const deferred = live.systemDeferred === true;
@@ -1301,9 +1369,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         trace?.span("spawn", deferred ? "prepared" : "reused")();
         trace?.span("initialize", deferred ? "prepared" : "reused")();
         trace?.span(deferred ? "start" : "resume", deferred ? "prepared-session" : "loaded-session")();
+        const prior = lastSpawn.get(threadId);
+        if (switched && !deferred && prior) {
+          // Quick Helper forks this spawn, so it takes the switch's model and effort
+          const at = (flag: string) => args[args.indexOf(flag) + 1]!;
+          lastSpawn.set(threadId, { ...prior, args: prior.args.map((arg, i) => (prior.args[i - 1] === "--model" || prior.args[i - 1] === "--effort" ? at(prior.args[i - 1]!) : arg)) });
+        }
         if (deferred) {
           live.systemDeferred = false;
-          const prior = lastSpawn.get(threadId);
           if (prior) lastSpawn.set(threadId, { ...prior, args: [...args], cursor: live.sessionId! });
           plans.delete(threadId);
           plans.set(threadId, { ...turn, text: "", trace: undefined, transcript: undefined, resumeFallback: undefined, systemUpdate: undefined, resumeCursor: live.sessionId! });
@@ -1387,8 +1460,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             return (desktop ? backgroundAutoAttended(s) : backgroundAuto(s)) ? "auto" : "denied";
           },
           onAsk: (ask) => {
-            const eventTurnId = sessions.get(threadId)?.turn?.turnId ?? turnId;
+            const s = sessions.get(threadId);
+            const eventTurnId = s?.turn?.turnId ?? turnId;
+            // a helper keeps the origin of the turn that started it
+            const unattended = s ? (ask.background ? !backgroundAutoAttended(s) : s.auto && !s.autoAttended) : false;
             askTools.set(ask.id, typeof ask.tool === "string" ? ask.tool : undefined);
+            const approvalScope = askScope(ask.tool);
             emit({
               ...base(threadId, eventTurnId),
               type: "request.opened",
@@ -1397,9 +1474,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               tool: ask.tool,
               summary: askSummary(ask),
               inputDigest: inputDigest(ask.input ?? askArgs(ask)),
-              approvalScope: askScope(ask.tool),
+              approvalScope,
+              ...guardInput(ask.input),
               choices: Array.isArray(ask.input?.choices) ? (ask.input.choices as string[]).slice(0, 5) : undefined,
               ...(ask.background ? { background: true } : {}),
+              ...(unattended ? { unattended: true } : {}),
             });
           },
           onResolve: (resolved) => {
@@ -1737,13 +1816,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           droppedLate = true;
           return;
         }
-        // a prepared process belongs to no turn until one takes it
-        if (session.prepared) return;
-        // a subagent's output belongs to the turn that spawned it; it never opens one
+        // a prepared process belongs to no turn until one takes it; a model or effort switch's reply still lands
+        if (session.prepared && o.type !== "control_response") return;
+        // a subagent's output belongs to the turn that spawned it, and a replayed echo (set_model's) to none; neither opens one
         if (
           !session.turn &&
           !o.parent_tool_use_id &&
-          ((o.type === "system" && o.subtype === "init") || o.type === "stream_event" || o.type === "assistant" || o.type === "user")
+          ((o.type === "system" && o.subtype === "init") || o.type === "stream_event" || o.type === "assistant" || (o.type === "user" && !o.isReplay))
         ) {
           openContinuation();
         }
@@ -2026,7 +2105,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                   break;
                 }
                 // the CLI already retried; a limit gets its own row from settle
-                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: text.trim() });
+                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: text.trim(), ...(!injected.injected && isPaymentDue(text) ? { paymentDue: true } : {}) });
               }
             }
             session.turn?.trace?.reconcile(claudeUsage(o.usage));
@@ -2234,7 +2313,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const snapshot = async (opts?: { rescan?: boolean; refresh?: boolean }): Promise<ProviderSnapshot> => {
       const env = claudeEnvironment(undefined, { ...process.env, ...input.environment }, input.account);
       const version = await new Promise<string | null>((resolve) => cliVersion(config.cli, { timeout: 8000, env, ...launchPolicy }, resolve));
-      if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found`, cliMissing: true };
+      if (!version) return cliNotFound(config.cli);
       const { signedIn: authenticated, account, identity, engineSignedIn } = await authStatus(opts?.rescan || opts?.refresh);
       if (input.account) admitted = authenticated === true;
       // claudeEnvironment strips ANTHROPIC_API_KEY, so turns run on the
@@ -2260,7 +2339,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         const child = spawnCli(
           config.cli,
           [
-            "-p", "--model", "claude-haiku-5-5", "--output-format", "text",
+            "-p", "--model", "claude-haiku-5-5", "--output-format", "json",
             ...(lean ? ["--safe-mode", "--tools", "", "--strict-mcp-config"] : []),
             ...(effort ? ["--effort", effort] : []),
             ...(ephemeral ? ["--no-session-persistence"] : []),
@@ -2269,22 +2348,23 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             ...launchPolicy,
             ...(lean ? { cwd: HELPER_DIR } : {}),
             stdio: ["pipe", "pipe", "pipe"],
-            env: claudeEnvironment("claude-haiku-5-5", { ...process.env, ...input.environment }, input.account),
+            // a helper prompt carries other people's words: no typed @path may attach a file
+            env: { ...claudeEnvironment("claude-haiku-5-5", { ...process.env, ...input.environment }, input.account), CLAUDE_CODE_DISABLE_FILE_MENTIONS: "1" },
           },
         );
         helpers += 1;
         let stdout = "";
         let stderr = "";
         let settled = false;
-        const finish = (error?: Error) => {
+        const finish = (error?: Error, text = "", usage?: Parameters<UsageObserver>[0]) => {
           if (settled) return;
           settled = true;
           helpers -= 1;
-          try { onUsage?.(undefined); } catch {}
+          try { onUsage?.(usage); } catch {}
           clearTimeout(timer);
           signal?.removeEventListener("abort", onAbort);
           if (error) reject(error);
-          else resolve(stdout.trim());
+          else resolve(text.trim());
         };
         const onAbort = () => {
           killCliTree(child);
@@ -2309,8 +2389,17 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         });
         child.on("error", (error) => finish(error));
         child.on("close", (code) => {
-          if (code === 0) finish();
-          else finish(new Error(stderr.trim() || `Claude review exited ${code}`));
+          if (code !== 0) return finish(new Error(stderr.trim() || `Claude review exited ${code}`));
+          let reply: { result?: unknown; usage?: any } | undefined;
+          try {
+            reply = JSON.parse(stdout);
+          } catch {
+            return finish(new Error("Claude review returned no JSON"));
+          }
+          // with "verbose" on in the CLI's config, json mode prints every message as an array
+          if (Array.isArray(reply)) reply = reply.findLast((item) => item?.type === "result");
+          if (typeof reply?.result !== "string") return finish(new Error("Claude review returned no result"));
+          finish(undefined, reply.result, reply.usage ? { ...claudeUsage(reply.usage)!, cacheCreation: reply.usage.cache_creation_input_tokens } : undefined);
         });
         if (signal?.aborted) onAbort();
         else {
@@ -2341,7 +2430,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
     };
 
-    if (input.account) admitted = (await authStatus(true)).signedIn === true;
+    if (input.account && !input.deferAccountAuth) admitted = (await authStatus(true)).signedIn === true;
     return {
       instanceId,
       ...(input.account ? { account: input.account } : {}),
@@ -2447,12 +2536,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // a thread whose next turn starts a new session gets that session now, its system text at Send
         const plan = fresh ? { ...settings, ...fresh, text: "" } : plans.get(focus.threadId);
         if (!plan || (!fresh && !plan.resumeCursor)) return;
-        if (plan.model !== focus.model || plan.effort !== focus.effort || plan.approval !== focus.approval) return;
+        if (plan.approval !== focus.approval) return;
         preparing.add(focus.threadId);
         try {
           // let completed closes release their pool slots
           if (moved) await new Promise((resolve) => setImmediate(resolve));
-          await sendTurn(plan, undefined, undefined, true);
+          await sendTurn({ ...plan, model: focus.model, effort: focus.effort }, undefined, undefined, true);
         } finally {
           preparing.delete(focus.threadId);
         }

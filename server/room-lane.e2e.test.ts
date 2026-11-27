@@ -1,13 +1,13 @@
 // A bot busy in its 1:1 answers a room @ on a second lane. Each held turn
 // names hold:<name> and answers once the test writes that file.
 import type { ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -64,7 +64,7 @@ const settled = async (botId: string, groupId?: string) => {
 };
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "omb-room-lane-"));
+  home = createFixtureHome("omb-room-lane-");
   holds = join(home, "holds");
   prompts = join(home, "prompts.ndjson");
   dump = join(home, "dump.json");
@@ -125,7 +125,7 @@ afterAll(async () => {
     child.on("close", () => resolve());
     setTimeout(resolve, 5_000).unref?.();
   });
-  rmSync(home, { recursive: true, force: true });
+  removeTestData(home);
 });
 
 describe("room lane", () => {

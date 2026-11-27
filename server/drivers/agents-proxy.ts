@@ -32,6 +32,8 @@
 //   board_search(query, project_id?)      → the Board's posts: past blockers and their fixes
 //   board_post(kind, title, body, …)      → leave a stuck, fix, tip or handoff post on the Board
 //   hand_off()                            → a busy bot's room reply: run the asked work once it is free
+//   import_memory(decline?)               → a new chat: save the user's pasted other-AI answer to Import Memory
+//   web_read(url, own_tool_failed?)       → read a public page as text before saying it can't be read
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -44,11 +46,13 @@ import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 
+import { FORUM_STUCK_RULE } from "../../shared/forum-rule.ts";
 import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
 import { recordToolSchemas } from "../turn-timing.ts";
 import { createToolCatalog, deferOptional } from "./tool-catalog.ts";
+import { WEB_READ_TOOL, webRead } from "./web-read-tool.ts";
 
 const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
@@ -60,10 +64,8 @@ const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
 // Routine inspection and delegation waits stay callable without proactive prompt guidance.
 const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines", "search_my_chats"]);
 // A room turn asked by someone without "Can make bots work": no saved keys, connected apps, bot asks, Board posts or Agentic Mode.
-export const READ_ONLY_TOOLS = new Set(["list_bots", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed"]);
+export const READ_ONLY_TOOLS = new Set(["list_bots", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed", "web_read"]);
 const READ_ONLY = process.env.OMB_READ_ONLY_TURN === "1";
-const MAX_CREATED_PER_TURN = 4;
-let createdThisTurn = 0;
 // In-flight verify_site calls by JSON-RPC id, so notifications/cancelled can abort exactly one.
 const verifyCalls = new Map<unknown, AbortController>();
 
@@ -253,7 +255,7 @@ export const BOARD_TOOLS = [
   },
   {
     name: "board_post",
-    description: "Post to the Board: stuck, fix, tip or handoff. parent_id replies (a fix solves it); helped: its fix worked for you.",
+    description: `Post to the Board: stuck, fix, tip or handoff. parent_id replies (a fix solves it); helped: its fix worked for you. ${FORUM_STUCK_RULE}`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -263,11 +265,19 @@ export const BOARD_TOOLS = [
   },
 ];
 
+const IMPORT_MEMORY_TOOL = {
+  name: "import_memory",
+  description: "Saves the user's latest message, the answer they pasted from their other AI, to Import Memory, which all their bots read. Wink reads the message itself and leaves out password, key and code lines, so call it even when the paste has one. Tell the user the returned result. decline: true when they say no to importing, so no bot offers again.",
+  inputSchema: { type: "object", properties: { decline: { type: "boolean" } }, additionalProperties: false },
+};
+
 const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
+  ...(process.env.OMB_IMPORT_MEMORY === "1" ? [IMPORT_MEMORY_TOOL] : []),
   ...(process.env.OMB_OWNER_CHATS === "1" ? [SEARCH_MY_CHATS_TOOL] : []),
   ...(process.env.OMB_HAND_OFF === "1" ? [HAND_OFF_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
+  WEB_READ_TOOL,
   ...BOARD_TOOLS,
   {
     name: "list_bots",
@@ -335,16 +345,16 @@ const TOOLS = [
         },
         asks: {
           type: "array",
-          description: "The user's asks. Add each new ask without an id in the turn the user makes it; send its id with a new status to update it. Close with done or declined, never drop one. Asks you leave out stay as they are.",
+          description: "The user's asks. Add each new ask without an id in the turn the user makes it; one that matches an open ask merges into it. Send its id with a new status to update it. Close with done or declined, never drop one; park one with until to bring it back on that date. Asks you leave out stay as they are.",
           items: {
             type: "object",
             additionalProperties: false,
             properties: {
               id: { type: "string", minLength: 1, maxLength: 12, pattern: "\\S", description: "Wink's id for the ask, like A3. Omit to add a new one." },
               ask: { type: "string", minLength: 1, maxLength: 80, pattern: "\\S", description: "The ask in a few words, at most 80 characters. Needed to add one." },
-              status: { type: "string", enum: ["open", "building", "waiting-for-user", "done", "declined"] },
+              status: { type: "string", enum: ["open", "building", "waiting-for-user", "parked", "done", "declined"] },
               ref: { type: "string", maxLength: 80, pattern: "^$|\\S", description: "The PR, card or pane it points to, at most 80 characters. Empty string clears it." },
-              due: { type: "string", maxLength: 40, pattern: "^$|\\S", description: "When you promise a time, set due: RFC3339 with offset, like 2026-11-17T07:30:00+09:00. Wink wakes you once then if the ask is still open. Empty string clears it." },
+              until: { type: "string", maxLength: 40, pattern: "\\S", description: "Needed with parked: the date it comes back as open, like 2026-12-01." },
             },
             required: ["status"],
           },
@@ -407,7 +417,7 @@ const TOOLS = [
   {
     name: "create_bot",
     description:
-      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. The new bot runs on model and effort if given, else yours, copies your approval and connected-app settings, and can then receive work through delegate_bot. Create only the smallest useful team (maximum four per turn). If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids — do not leave them only in the new bot's 1:1.",
+      "Create a specialist bot in your section. Only a section's Chief of Staff may use this. The new bot runs on model and effort if given, else yours, copies your approval and connected-app settings, and can then receive work through delegate_bot. Create only the smallest useful team. If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids — do not leave them only in the new bot's 1:1.",
     inputSchema: {
       type: "object",
       properties: {
@@ -423,7 +433,7 @@ const TOOLS = [
   {
     name: "create_channel",
     description:
-      "Create a shared channel (room) with existing bots. Use this when the user asks to start a two-bot channel, a group chat, or a room. Never scan ports, environment variables, or localhost APIs — call this tool. Include the other bot(s) in member_ids; you are added automatically if omitted. After create_bot, call this so the user talks in the room rather than only in the new bot's 1:1. ask_bot remains the way to talk to a peer this turn.",
+      "Create a shared channel (room) with existing bots. Use this when the user asks to start a two-bot channel, a group chat, or a room. Never scan ports, environment variables, or localhost APIs — call this tool. Include the other bot(s) in member_ids; you are added automatically if omitted. After create_bot, call this so the user talks in the room rather than only in the new bot's 1:1. ask_bot remains the way to talk to a peer this turn. Every member answers a plain message unless you set answers.",
     inputSchema: {
       type: "object",
       properties: {
@@ -434,6 +444,10 @@ const TOOLS = [
           description: "Bot ids to include (from list_bots or create_bot). You are added automatically if omitted.",
         },
         bulletin: { type: "string", description: "Optional shared instructions for everyone in the room." },
+        answers: {
+          type: "string",
+          description: 'Who answers a message that @mentions no one: "everyone" (default), "mentions" (only who is @mentioned), or one member bot id.',
+        },
       },
       required: ["name", "member_ids"],
     },
@@ -461,6 +475,7 @@ const TOOLS = [
       properties: {
         question: { type: "string", description: "One short question, 1-2 lines on a phone. Background goes in your message, not here. When closing, repeat the exact question." },
         close: { type: "boolean", description: "Close your matching open question as answered in chat. Use when the user answered it in their own words; no new card or alert." },
+        fact: { type: "boolean", description: "Missing information, not a decision, preference or sign-off: the Forum may answer first." },
         choices: {
           type: "array",
           items: { type: "string" },
@@ -473,7 +488,7 @@ const TOOLS = [
   {
     name: "show_image",
     description:
-      "Show a local image file (PNG, JPEG, GIF, or WebP, up to 10 MiB) to the user in this chat. Use it whenever you create or find an image the user should see, instead of ending with a file path. Returns the image's URL.",
+      "Show a local image file (PNG, JPEG, GIF, or WebP, up to 10 MiB) in this chat; in a team room everyone there sees it. Use it whenever you create or find an image the user should see, instead of ending with a file path. Returns the image's URL.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -653,6 +668,20 @@ const TOOLS = [
     },
   },
   {
+    name: "pin_goal",
+    description: "Pin a goal or spec the user set, in their words, so it stays in every turn and survives summaries. Same name updates it; done: true once finished or dropped.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        name: { type: "string", pattern: "\\S", description: "A few words, like Glasses v1." },
+        goal: { type: "string", pattern: "\\S", description: "Needed unless done." },
+        done: { type: "boolean" },
+      },
+      required: ["name"],
+    },
+  },
+  {
     name: "no_reply_needed",
     description: "Call once on a turn woken by an automated message (pane note, worker report, peer note) when the user needs nothing from it. After it returns, stop: no text, no more tool calls.",
     inputSchema: { type: "object", additionalProperties: false, properties: {} },
@@ -669,6 +698,19 @@ const TOOLS = [
         room: { type: "string", description: "Room name; omit in that room." },
       },
       required: ["sessionId", "title"],
+    },
+  },
+  {
+    name: "post_to_group",
+    description: "Post one text message as yourself in an existing group room you belong to. Call only when the owner directly asks you to post there.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        group: { type: "string", description: "The existing group's exact name." },
+        text: { type: "string", description: "The text to post." },
+      },
+      required: ["group", "text"],
     },
   },
 ];
@@ -695,7 +737,6 @@ interface TaskStateAsk {
   ask?: string;
   status: string;
   ref?: string;
-  due?: string;
 }
 
 interface TaskStateToolArgs {
@@ -783,6 +824,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   if (name === VERIFY_SITE_TOOL.name) {
     const r = await api(VERIFY_ROUTES.tool, { method: "POST", body: JSON.stringify({ entry: args.entry }), signal });
     return { text: String(r.text ?? ""), ...(r.status === "blocked" ? { isError: true } : {}) };
+  }
+  if (name === WEB_READ_TOOL.name) {
+    return await webRead(args, api, (toBotId, message) =>
+      api("/api/internal/ask-bot", { method: "POST", body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, toBotId, message, depth: DEPTH, reader: true }) }), READ_ONLY);
   }
   if (name === "report_issue") {
     const r = await api("/api/internal/team-report", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
@@ -914,9 +959,6 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     if (!botName || !role || !instructions) {
       return { text: "create_bot needs name, role, and instructions.", isError: true };
     }
-    if (createdThisTurn >= MAX_CREATED_PER_TURN) {
-      return { text: `You can create at most ${MAX_CREATED_PER_TURN} bots in one turn. Use the team you have before adding more.`, isError: true };
-    }
     const r = await api(`/api/internal/create-bot`, {
       method: "POST",
       body: JSON.stringify({
@@ -929,7 +971,6 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
         effort: typeof args.effort === "string" && args.effort.trim() ? args.effort.trim() : undefined,
       }),
     });
-    createdThisTurn += 1;
     return {
       text: `Created @${r.name ?? botName} in ${r.section ?? "General"} [id: ${r.id}]. If the user asked for a shared channel or two-bot room, call create_channel next with this bot in member_ids. Assign work with ask_bot if you must report back this turn, otherwise delegate_bot.`,
     };
@@ -961,6 +1002,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
       memberIds,
     };
     if (typeof args.bulletin === "string") body.bulletin = args.bulletin;
+    if (args.answers !== undefined) body.answers = args.answers;
     const r = await api("/api/internal/create-channel", { method: "POST", body: JSON.stringify(body) });
     const members = Array.isArray(r.memberIds) ? (r.memberIds as string[]).join(", ") : memberIds.join(", ");
     return {
@@ -982,10 +1024,11 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     if (!question) return { text: "ask_user needs a question.", isError: true };
     if (!THREAD_ID) return { text: "Couldn't ask: no active thread.", isError: true };
     // the harness trims, dedupes and caps the choices
-    const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices, ...(args.close === true && { close: true }) });
+    const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices, ...(args.close === true && { close: true }), fact: args.fact });
     try {
       const result = await api("/api/internal/ask-user", { method: "POST", body });
-      if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : "No matching open question." };
+      if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : result.settled === "answered" ? "Already closed; the user answered it." : result.settled === "dismissed" ? "Already closed; the user dismissed it." : result.settled ? "Already closed." : "No matching open question." };
+      if (typeof result.notice === "string") return { text: result.notice };
       return { text: "Asked. Their answer will arrive as a new message." };
     } catch (e) {
       return { text: `Couldn't ask: ${e instanceof Error ? e.message : String(e)}`, isError: true };
@@ -1180,14 +1223,26 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     const r = await api(name === "board_search" ? "/api/internal/board-search" : "/api/internal/board-post", { method: "POST", body: JSON.stringify(args) });
     return { text: String(r.text ?? "") };
   }
+  if (name === IMPORT_MEMORY_TOOL.name) {
+    const r = await api("/api/internal/import-memory", { method: "POST", body: JSON.stringify({ decline: args.decline === true }) });
+    return { text: String(r.text ?? "") };
+  }
   if (name === HAND_OFF_TOOL.name) {
     const r = await api("/api/internal/hand-off", { method: "POST", body: "{}" });
     return { text: String(r.text ?? "") };
   }
   if (name === "no_reply_needed") return { text: "ok" };
+  if (name === "pin_goal") {
+    const r = await api("/api/internal/goal", { method: "POST", body: JSON.stringify({ name: args.name, goal: args.goal, done: args.done }) });
+    return r.error ? { text: `Couldn't pin the goal: ${r.error}`, isError: true } : { text: String(r.text) };
+  }
   if (name === "link_room_fix") {
     const r = await api("/api/internal/room-fix", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
     return { text: String(r.text ?? "Linked.") };
+  }
+  if (name === "post_to_group") {
+    const r = await api("/api/internal/post-to-group", { method: "POST", body: JSON.stringify(args) });
+    return { text: String(r.text ?? "") };
   }
   return { text: `Unknown tool: ${name}`, isError: true };
 }

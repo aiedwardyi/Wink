@@ -9,7 +9,7 @@ import { ModelPickerControl } from "./ModelPicker";
 import { DockedPresence, TurnPresence } from "./TurnPresence";
 
 const selection = { instanceId: "gemini", model: "gemini-3.8-flash-high", effort: "high" as const };
-const next = { instanceId: "codex", model: "gpt-6.1-sol", effort: "high", mode: "pinned" as const };
+const next = { instanceId: "codex", model: "gpt-6.2-sol", effort: "high", mode: "pinned" as const };
 const text = 'Check this\n\n<attached-image path="/tmp/photo.png" />\n\n<attached-file path="/tmp/notes.txt" name="notes.txt" size="42" />\n\n<pasted-text index="3">\nkeep this\n</pasted-text>';
 const instances: InstanceInfo[] = [selection, next].map((pick) => ({
   instanceId: pick.instanceId, driverKind: pick.instanceId === "codex" ? "codex" : "antigravityAgent", displayName: pick.instanceId,
@@ -58,7 +58,7 @@ async function open() {
 }
 
 async function save(different = true) {
-  if (different) await act(async () => document.querySelector<HTMLButtonElement>('[data-model-cell="gpt-6.1-sol"]')!.click());
+  if (different) await act(async () => document.querySelector<HTMLButtonElement>('[data-model-cell="gpt-6.2-sol"]')!.click());
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".model-cross-footer button")][0]!.click());
 }
 

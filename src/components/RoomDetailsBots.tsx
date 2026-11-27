@@ -8,6 +8,7 @@ import { roomPeople, roomTeamBots } from "@/lib/team-rooms";
 import { api, useStore, type Bot, type Group } from "@/state/store";
 
 import { BotAvatar } from "./Avatar";
+import { BotModelLine } from "./BotModelLine";
 import { DETAILS_BOX, DETAILS_ROW } from "./BotDetailsRows";
 import { BotPickerList } from "./BotPickerList";
 import { NewBotRow, type NewRow } from "./GroupWizard";
@@ -72,7 +73,10 @@ export function RoomDetailsBots({ group }: { group: Group }) {
         {inRoom.map((b) => (
           <li key={b.id} data-room-bot={b.id} className={`${DETAILS_ROW} flex items-center gap-3 py-2.5`}>
             <BotAvatar bot={b} state="happy" size={28} />
-            <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{b.name}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[14px] text-ink">{b.name}</span>
+              <BotModelLine bot={b} />
+            </span>
             <button
               type="button"
               onClick={() => setMember(b.id, false)}

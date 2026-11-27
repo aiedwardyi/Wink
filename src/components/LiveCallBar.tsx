@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { Volume2 } from "lucide-react";
 
 import { useStore, visibleMessages, type Bot } from "@/state/store";
+import { useJoinedRoom } from "@/lib/joined-rooms";
+import { hostLines, isTeamRoom, joinedLines, roomTeamBots, type RoomLine } from "@/lib/team-rooms";
 import { fetchResponse, responseBody } from "@/lib/api-request";
 import { endCall, startCall, useOnCall } from "@/lib/call";
+import { lazyView } from "@/lib/stale-build";
+import { PRIMARY_BUTTON } from "@/lib/button-style";
 import { cn } from "@/lib/cn";
 import { useI18n, type LocaleId } from "@/lib/i18n";
-import { dropCall, onQueueCancelled, useActiveCall, type ActiveCall } from "@/lib/live-call/active";
+import { dropCall, onQueueCancelled, switchAnswer, useActiveCall, type ActiveCall } from "@/lib/live-call/active";
 import { CallAudio } from "@/lib/live-call/audio";
 import { LiveCall, MIC_BLOCKED, MIC_BUSY, MIC_MISSING, VOICE_OUT, type CallState, type CallStatus, type Posted } from "@/lib/live-call/controller";
 import { GeminiLive } from "@/lib/live-call/gemini";
@@ -17,8 +22,9 @@ import { CallIntro, seenIntro } from "./CallIntro";
 import { Fold } from "./Fold";
 
 const PRIVACY_SEEN = "wink.liveCall.privacyNote";
+const ROOM_PRIVACY_SEEN = "wink.liveCall.roomPrivacyNote";
 
-export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "hushed" | "micSilent" | "soundInput", string>> = {
+export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" | "notSent" | "noReply" | "mute" | "unmute" | "end" | "noSound" | "privacy" | "captions" | "you" | "micBlocked" | "micMissing" | "micBusy" | "voiceOut" | "openSettings" | "openCall" | "micSilent" | "soundInput" | "roomPrivacy" | "postRoom" | "postFailed" | "keyChat", string>> = {
   en: {
     starting: "Connecting…",
     needsKey: "Add a Gemini key in the chat to call.",
@@ -26,6 +32,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     speaking: "Speaking",
     working: "Working",
     paused: "Tap to resume",
+    noSound: "Tap to hear {bot}",
     ended: "Call ended",
     failed: "Call failed",
     send: "Ask {bot} to do this?",
@@ -45,9 +52,12 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     voiceOut: "Out of voice for today. Keep typing, I'm still here.",
     openSettings: "Open settings",
     openCall: "Back to the call with {bot}",
-    hushed: "Quiet · tap to talk",
     micSilent: "Can't hear your mic. Check your sound input.",
     soundInput: "sound input",
+    roomPrivacy: "This call reads the room chat and sends it to Google on your Gemini key.",
+    postRoom: "Post in {room}?",
+    postFailed: "Couldn't post. Try again.",
+    keyChat: "Add a Gemini key in {bot}'s chat to call.",
   },
   ko: {
     starting: "연결 중…",
@@ -56,6 +66,7 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     speaking: "말하는 중",
     working: "작업 중",
     paused: "탭해서 통화 이어가기",
+    noSound: "{bot} 목소리 듣기",
     ended: "통화 종료",
     failed: "통화 실패",
     send: "{bot}에게 이렇게 요청할까요?",
@@ -75,9 +86,12 @@ export const WORDS: Record<LocaleId, Record<CallStatus | "send" | "yes" | "no" |
     voiceOut: "오늘 음성 통화는 여기까지입니다. 채팅으로 계속 이야기하세요.",
     openSettings: "설정 열기",
     openCall: "{bot} 통화로 돌아가기",
-    hushed: "조용히 하는 중 · 탭해서 말하기",
     micSilent: "마이크 소리가 안 들려요. 입력 장치를 확인해 주세요.",
     soundInput: "입력 장치",
+    roomPrivacy: "이 통화는 채팅방 대화를 읽고 내 Gemini 키로 Google에 전송합니다.",
+    postRoom: "{room}에 올릴까요?",
+    postFailed: "올리지 못했습니다. 다시 시도하세요.",
+    keyChat: "통화하려면 {bot} 채팅에서 Gemini 키를 추가하세요.",
   },
 };
 
@@ -100,14 +114,14 @@ export function failedText(snap: CallState, locale: LocaleId): string {
   return [error ? `${words.failed}: ${error}` : words.failed, ...(snap.notice ? [noticeText(snap.notice, locale)] : [])].join(". ");
 }
 
-async function post(path: string, body: object): Promise<Posted> {
+export async function post(path: string, body: object): Promise<Posted> {
   const res = await fetchResponse(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return { status: res.status, data: ((await responseBody(res)) ?? {}) as Record<string, any> };
 }
 
-function seenPrivacy(): boolean {
+function seenPrivacy(key = PRIVACY_SEEN): boolean {
   try {
-    return Boolean(localStorage.getItem(PRIVACY_SEEN));
+    return Boolean(localStorage.getItem(key));
   } catch {
     return false;
   }
@@ -118,13 +132,16 @@ export function clock(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-export type Live = { call: LiveCall; level: (mic: boolean) => number };
+/** What the call's bar, box and widget drive: a same-bot call has no orders or room posts, and only it can be stopped mid-reply. */
+export type CallHandle = Pick<LiveCall, "subscribe" | "state" | "resume" | "mute" | "end"> & Partial<Pick<LiveCall, "answer" | "answerPost">> & { interrupt?: () => void };
+export type Live = { call: CallHandle; level: (mic: boolean) => number };
+const SameBotSession = lazyView(() => import("./SameBotSession").then((m) => ({ default: m.SameBotSession })));
 
 // The box controls live in the composer, which remounts on a task switch; the call must not.
 const lives = new Map<string, Live>();
 const watchers = new Set<() => void>();
 
-function publish(botId: string, live: Live | undefined) {
+export function publish(botId: string, live: Live | undefined) {
   if (live) lives.set(botId, live);
   else lives.delete(botId);
   for (const fn of [...watchers]) fn();
@@ -157,7 +174,26 @@ export function LiveCallHost() {
   const active = useActiveCall();
   const { state } = useStore();
   const bot = active && (state.bots.find((candidate) => candidate.id === active.botId) ?? active.bot);
-  return active && bot ? <Session key={active.id} active={active} bot={bot} /> : null;
+  if (!active || !bot) return null;
+  return active.answer === "bot" ? <Suspense fallback={null}><SameBotSession key={active.id} active={active} bot={bot} /></Suspense> : <Session key={active.id} active={active} bot={bot} />;
+}
+
+/** A pick of who answers made during the call moves it to the other session once nothing is in flight; the true ref tells the unmount to leave the call up. */
+export function useAnswerSwitch(active: ActiveCall, call: { idle(): boolean }, audio: CallAudio, snap: CallState): RefObject<boolean> {
+  const { state } = useStore();
+  const want = active.room ? "gemini" : state.config?.liveCall?.answer ?? "gemini";
+  // A call the bot rang answers on Gemini voice whatever the setting; only a pick made during the call moves it.
+  const [placed] = useState(want);
+  const picked = useRef(false);
+  const moved = useRef(false);
+  useEffect(() => {
+    picked.current ||= want !== placed;
+    if (moved.current || !picked.current || want === (active.answer ?? "gemini") || !call.idle()) return;
+    if (!switchAnswer(active, want, { audio, muted: snap.muted })) return;
+    moved.current = true;
+    audio.handOver();
+  }, [active, audio, call, placed, snap, want]);
+  return moved;
 }
 
 function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
@@ -165,8 +201,8 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const onEnd = useCallback((note?: string) => dropCall(active, note), [active]);
-  const [live] = useState((): Live => {
-    const audio = new CallAudio(active.ctx);
+  const [live] = useState(() => {
+    const audio = active.handoff?.audio ?? new CallAudio(active.sound);
     const call = new LiveCall({
       botId: bot.id,
       botName: bot.name,
@@ -176,16 +212,19 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       post,
       opener: active.opener,
       prefs: bot.call,
+      room: active.room && { id: active.room.id, kind: active.room.kind },
     });
-    return { call, level: (mic) => audio.level(mic) };
+    if (active.handoff?.muted) call.mute(true);
+    return { call, audio, level: (mic: boolean) => audio.level(mic) };
   });
   const { call } = live;
   const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
+  const moved = useAnswerSwitch(active, call, live.audio, snap);
   const owner = useOnCall();
   const mounted = useRef(false);
   const kicked = useRef(false);
   const configured = Boolean(state.config?.gemini?.configured);
-  const [fresh, setFresh] = useState(() => !seenIntro());
+  const [fresh, setFresh] = useState(() => !active.handoff && !seenIntro());
   // A key saved mid-call shows the intro too, so the call never goes live unseen.
   const intro = (fresh && configured && !state.config?.gemini?.introSeen) || (snap.status === "needsKey" && configured);
   const introShown = usePresence(intro);
@@ -200,10 +239,8 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   useEffect(() => {
     if (!state.config || kicked.current) return;
     kicked.current = true;
-    // A rung call with no key only opens the chat, so the server keeps ringing until the blocker clears.
-    if (active.opener && !state.config.gemini?.configured) return onEnd();
     if (!intro) void call.start();
-  }, [active.opener, call, intro, onEnd, state.config]);
+  }, [call, intro, state.config]);
 
   useEffect(() => {
     mounted.current = true;
@@ -217,11 +254,12 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
       queueMicrotask(() => {
         if (mounted.current) return;
         call.end();
+        if (moved.current) return;
         endCall(bot.id);
         onEnd();
       });
     };
-  }, [bot.id, call, onEnd]);
+  }, [bot.id, call, moved, onEnd]);
 
   // The first render still reads the call it replaces as owner; only a later switch hangs this one up.
   const owned = useRef(false);
@@ -250,7 +288,35 @@ function Session({ active, bot }: { active: ActiveCall; bot: Bot }) {
   const volume = useCallVolume();
   useEffect(() => call.retune(picks ?? {}, volume), [call, picks?.voice, picks?.speed, picks?.style, picks?.language, volume]);
 
-  return introShown.mounted ? <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} /> : null;
+  return (
+    <>
+      {active.room?.kind === "host" && <HostRoomFeed call={call} roomId={active.room.id} />}
+      {active.room?.kind === "joined" && <JoinedRoomFeed call={call} roomId={active.room.id} />}
+      {introShown.mounted && <CallIntro closing={introShown.closing} onStart={() => { setFresh(false); void call.start(); }} onLater={() => onEnd()} />}
+    </>
+  );
+}
+
+// The room a call was placed from keeps reaching the voice whatever screen is open.
+function useRoomFeed(call: LiveCall, lines: readonly RoomLine[] | undefined) {
+  useEffect(() => {
+    if (lines) call.observeRoom(lines);
+  }, [call, lines]);
+}
+
+function HostRoomFeed({ call, roomId }: { call: LiveCall; roomId: string }) {
+  const { state } = useStore();
+  const group = state.groups.find((candidate) => isTeamRoom(candidate) && candidate.hosted.roomId === roomId);
+  const messages = group?.messages;
+  const teamBots = group && roomTeamBots(group);
+  useRoomFeed(call, useMemo(() => messages && hostLines(messages, teamBots), [messages, teamBots]));
+  return null;
+}
+
+function JoinedRoomFeed({ call, roomId }: { call: LiveCall; roomId: string }) {
+  const room = useJoinedRoom(roomId);
+  useRoomFeed(call, useMemo(() => room ? joinedLines(room.entries, [...(room.state?.bots ?? []), ...(room.state?.teamBots ?? [])], room.me.id) : undefined, [room]));
+  return null;
 }
 
 const TARGET = "inline-flex min-h-9 items-center justify-center rounded-full px-4 text-sm font-medium max-md:min-h-12 max-md:flex-1";
@@ -268,8 +334,28 @@ export function OrderCard({ bot, live, narrow = false }: { bot: Bot; live: Live;
           <p>{words.send.replace("{bot}", () => bot.name)}</p>
           <p className="font-medium break-words">{snap.pending?.order}</p>
         </div>
-        <button type="button" onClick={() => void call.answer(true)} className={cn(TARGET, "bg-accent text-accent-ink", narrow && "flex-1")}>{words.yes}</button>
-        <button type="button" onClick={() => void call.answer(false)} className={cn(TARGET, "bg-control text-ink", narrow && "flex-1")}>{words.no}</button>
+        <button type="button" onClick={() => void call.answer?.(true)} className={cn(TARGET, "bg-accent text-accent-ink", narrow && "flex-1")}>{words.yes}</button>
+        <button type="button" onClick={() => void call.answer?.(false)} className={cn(TARGET, "bg-control text-ink", narrow && "flex-1")}>{words.no}</button>
+      </div>
+    </div>
+  );
+}
+
+function PostCard({ live, room }: { live: Live; room: string }) {
+  const { locale } = useI18n();
+  const words = WORDS[locale] ?? WORDS.en;
+  const { call } = live;
+  const snap = useSyncExternalStore(call.subscribe, call.state, call.state);
+  return (
+    <div data-live-call-post className="mb-2 rounded-2xl border border-hairline/50 bg-card p-3 shadow-sm">
+      <div className="flex items-center gap-2 max-md:flex-wrap">
+        <div className="min-w-0 flex-1 text-sm text-ink max-md:basis-full">
+          <p>{words.postRoom.replace("{room}", () => room)}</p>
+          <p className="font-medium whitespace-pre-wrap break-words">{snap.postOffer?.text}</p>
+          {snap.postFailed && <p role="alert" className="mt-1 text-xs text-danger">{words.postFailed}</p>}
+        </div>
+        <button type="button" disabled={snap.posting} onClick={() => void call.answerPost?.(true)} className={cn(TARGET, "bg-accent text-accent-ink disabled:opacity-40")}>{words.yes}</button>
+        <button type="button" disabled={snap.posting} onClick={() => void call.answerPost?.(false)} className={cn(TARGET, "bg-control text-ink disabled:opacity-40")}>{words.no}</button>
       </div>
     </div>
   );
@@ -285,17 +371,32 @@ export function ResumeButton({ live }: { live: Live }) {
   );
 }
 
-/** The call's notes and order card in its own chat. */
+/** The phone would not play the voice: one tap in the call row lets it. */
+export function SoundPill({ bot, live }: { bot: Bot; live: Live }) {
+  const { locale } = useI18n();
+  const words = WORDS[locale] ?? WORDS.en;
+  return (
+    <button type="button" data-live-call-sound onClick={() => live.call.resume()} className={cn("flex h-8 min-w-0 shrink items-center gap-1.5 rounded-full pl-2.5 pr-3 text-[13px] font-medium max-md:h-10", PRIMARY_BUTTON)}>
+      <Volume2 size={16} aria-hidden className="shrink-0 animate-pulse motion-reduce:animate-none" />
+      <span className="min-w-0 truncate">{words.noSound.replace("{bot}", () => bot.name)}</span>
+    </button>
+  );
+}
+
+/** The call's notes and order card in its own chat or the team room it was placed from. */
 export function LiveCallBar({ bot }: { bot: Bot }) {
   const live = useLive(bot.id);
   return live ? <Bar bot={bot} live={live} /> : null;
 }
 
 function Bar({ bot, live }: { bot: Bot; live: Live }) {
+  const { dispatch } = useStore();
+  const room = useActiveCall()?.room;
   const { locale } = useI18n();
   const words = WORDS[locale] ?? WORDS.en;
   const snap = useSyncExternalStore(live.call.subscribe, live.call.state, live.call.state);
   const [privacy] = useState(() => !seenPrivacy());
+  const [roomPrivacy] = useState(() => Boolean(room) && !seenPrivacy(ROOM_PRIVACY_SEEN));
   const micBlocked = snap.status === "failed" && snap.error === MIC_BLOCKED;
   const note = snap.status === "needsKey" ? words.needsKey : micBlocked ? words.micBlocked : snap.status === "failed" ? failedText(snap, locale) : snap.notice ? noticeText(snap.notice, locale) : privacy ? words.privacy : "";
 
@@ -309,15 +410,30 @@ function Bar({ bot, live }: { bot: Bot; live: Live }) {
     }
   }, [note, words.privacy]);
 
+  useEffect(() => {
+    if (!roomPrivacy) return;
+    try {
+      localStorage.setItem(ROOM_PRIVACY_SEEN, "1");
+    } catch {
+      // shown again next time
+    }
+  }, [roomPrivacy]);
+
   return (
     <div data-live-call={snap.status} className="px-5 max-md:px-3">
+      {roomPrivacy && <p data-live-call-room-privacy className="px-1 pb-2 text-xs text-ink-secondary">{words.roomPrivacy}</p>}
+      <Fold open={Boolean(snap.postOffer)} soft keep>
+        <PostCard live={live} room={room?.name ?? ""} />
+      </Fold>
       <Fold open={Boolean(snap.pending)} soft keep>
         <OrderCard bot={bot} live={live} />
       </Fold>
-      {snap.status === "paused" && <ResumeButton live={live} />}
+      {snap.status === "paused" && !snap.noSound && <ResumeButton live={live} />}
       {note && (
         <p data-live-call-notice={snap.notice?.kind} role={snap.status === "failed" ? "alert" : snap.notice ? "status" : undefined} className="px-1 pb-2 text-xs text-ink-secondary">
-          {note}
+          {room && snap.status === "needsKey"
+            ? <button type="button" onClick={() => dispatch({ type: "select", id: bot.id })} className="text-left text-accent hover:underline">{words.keyChat.replace("{bot}", () => bot.name)}</button>
+            : note}
           {micBlocked && window.ogb?.permOpenSettings && (
             <button type="button" onClick={() => void window.ogb?.permOpenSettings("mic")} className="ml-2 font-medium text-accent hover:underline">{words.openSettings}</button>
           )}

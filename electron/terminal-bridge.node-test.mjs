@@ -823,6 +823,22 @@ function readLines(body) {
 
 const streamRequest = (access, grant, query = "", init = {}) => fetch(`${access.url}/v1/bots/bot-1/terminal/stream${query}`, { headers: { authorization: `Bearer ${grant}` }, ...init });
 
+test("a main-only stream waits for the main shell even when workers are running", async (t) => {
+  const f = liveFixture(t);
+  const access = await f.bridge.start();
+  const worker = await f.host.openForBot("bot-1", { label: "worker" });
+  const read = terminalReadGrant(access.token, "bot-1");
+  const missing = await streamRequest(access, read, "?main=1");
+  assert.equal(missing.status, 409);
+  assert.deepEqual(await missing.json(), { error: "No active terminal for this bot" });
+  const workerStream = await streamRequest(access, read);
+  assert.equal((await readLines(workerStream.body)()).sessionId, worker.sessionId);
+
+  const main = await f.host.open({ sender: f.owner }, { botId: "bot-1", cols: 80, rows: 24 });
+  const stream = await streamRequest(access, read, "?main=1");
+  assert.equal((await readLines(stream.body)()).sessionId, main.id);
+});
+
 test("streams the snapshot first, then chunks in seq order", async (t) => {
   const f = liveFixture(t);
   const { access, pane, child } = await openLive(f);

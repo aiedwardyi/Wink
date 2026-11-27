@@ -39,14 +39,14 @@ export const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "ma
 export const ENGINES = ["claudeAgent", "codex", "grokAgent", "museAgent", "antigravityAgent", "boxAgent", "other"] as const;
 export const MODELS = [
   "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
-  "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-5.6-terra", "grok-4.7", "grok-4.6",
+  "gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-5.6-terra", "grok-4.7", "grok-4.6",
   "muse-spark-1.3", "muse-spark-1.3-contributor", "gemini-4-argon", "gemini-3.8-flash",
   "custom",
 ] as const;
 
 export const SCREENS = [
   "chat", "room", "room-setup", "members", "room-instructions", "sidebar-search", "new-menu", "new-bot", "new-room", "find",
-  "model-picker", "model-dial", "model-chart", "workers", "terminal", "remote-terminal", "details", "memory", "avatar",
+  "model-picker", "model-dial", "model-chart", "model-quick", "workers", "terminal", "remote-terminal", "details", "memory", "avatar",
   "settings-account", "settings-about-you", "settings-general", "settings-advanced", "settings-connections", "settings-themes", "settings-more-themes",
   "settings-shortcuts", "settings-devices", "settings-usage", "settings-team", "settings-model-index", "settings-sync",
   "palette", "inspector", "watch", "usage-quick", "teams-library", "archived", "call", "live-call", "room-alerts",
@@ -56,7 +56,7 @@ export const SCREENS = [
 const FLAG = ["on", "off"] as const;
 /** Each setting with the values it can take. `from` may also be "default". */
 export const SETTINGS = {
-  skin: SKINS, shape: ["soft", "boxy"], pickerView: ["dial", "list", "chart", "machine"], pickerLook: ["follow", "dark", "light", "atelier"],
+  skin: SKINS, shape: ["soft", "boxy"], pickerView: ["dial", "list", "chart", "quick", "machine"], pickerLook: ["follow", "dark", "light", "atelier"],
   replyStyle: ["paragraphs", "live"], chatBox: ["off", "rainbow", "theme"], sidebarSide: ["left", "right"],
   toolCalls: FLAG, longerReplies: FLAG, autoNotes: FLAG, vibration: FLAG, language: ["en", "ko"], usageMode: ["used", "remaining"],
   terminalAlerts: FLAG, phoneNotifications: FLAG, approvals: ["auto", "ask"], syncChats: FLAG, phoneAccess: FLAG,

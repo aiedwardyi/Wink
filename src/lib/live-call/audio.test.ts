@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CallAudio } from "./audio";
+import type { CallSound } from "./warm-audio";
 
 // gemini-3.8-live recordings of Aoede, Alnilam and Erinome, played at unity gain.
 const RECORDED = { lufs: -17.2, peakDb: -1.3 };
@@ -37,7 +38,7 @@ function setup() {
     state: "suspended",
     currentTime: 1,
     destination: {},
-    createAnalyser: vi.fn().mockReturnValueOnce(voice).mockReturnValueOnce(mic),
+    createAnalyser: vi.fn().mockReturnValueOnce(voice).mockReturnValueOnce(mic).mockImplementation(analyser),
     createMediaStreamDestination: () => destination,
     createMediaStreamSource: () => ({ connect: vi.fn(), disconnect: vi.fn() }),
     createBuffer: (_channels: number, length: number, rate: number) => {
@@ -61,12 +62,37 @@ function setup() {
     resume: vi.fn(async (): Promise<void> => { ctx.state = "running"; }),
     close: vi.fn(async () => {}),
   };
-  return { audio: new CallAudio(ctx as unknown as AudioContext), ctx, output, destination, getUserMedia, micTrack, voiceTrack, voice, sources, tones, buffers };
+  return { audio: new CallAudio({ ctx, voice: output } as unknown as CallSound), ctx, output, destination, getUserMedia, micTrack, voiceTrack, voice, sources, tones, buffers };
 }
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("CallAudio", () => {
+  it("plays the voice on the element the call tap started, so a phone that wants a tap still sounds", async () => {
+    const { ctx } = setup();
+    let inTap = false;
+    // A phone's media policy: an element plays only once a play() of its own ran inside a tap.
+    class PhoneAudio {
+      srcObject: unknown = null;
+      paused = true;
+      unlocked = false;
+      play() {
+        this.unlocked ||= inTap;
+        if (!this.unlocked) return Promise.reject(Object.assign(new Error("tap first"), { name: "NotAllowedError" }));
+        this.paused = false;
+        return Promise.resolve();
+      }
+      pause() { this.paused = true; }
+    }
+    vi.stubGlobal("Audio", PhoneAudio);
+    vi.stubGlobal("AudioContext", class { constructor() { return ctx; } });
+    const { callAudio } = await import("./warm-audio");
+    inTap = true;
+    const sound = callAudio();
+    inTap = false;
+    expect(await new CallAudio(sound).capture(() => {})).toBe(true);
+  });
+
   it("opens the media output after echo-cancelled capture, without a direct speaker path", async () => {
     const { audio, ctx, output, destination, getUserMedia, voice } = setup();
     expect(gainTo(voice, ctx.destination)).toBeUndefined();

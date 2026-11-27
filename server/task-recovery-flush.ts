@@ -5,6 +5,7 @@ import {
   stampTaskResumePacket,
 } from "./task-state-fold.ts";
 import type { TaskResumePacket } from "./task-state.ts";
+import { lineWords } from "./replies.ts";
 
 export const RECOVERY_FLUSH_REASONS = ["crash", "shutdown", "stop"] as const;
 
@@ -105,10 +106,11 @@ export function shutdownStampsForClose(input: {
 
 export function lastUserInstruction(
   messages: ReadonlyArray<{ id: string; role: string; kind?: string; text?: string; at: number }>,
+  skipIds?: ReadonlySet<string>,
 ): { text: string; messageId: string; at: number } | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!;
-    if (message.role !== "user" || (message.kind !== undefined && message.kind !== "text")) continue;
+    if (message.role !== "user" || (message.kind !== undefined && message.kind !== "text") || skipIds?.has(message.id)) continue;
     const text = message.text?.trim();
     if (!text) continue;
     return { text, messageId: message.id, at: message.at };
@@ -120,18 +122,20 @@ export function lastUserInstruction(
  *  Pass the packet from before this send: recording a send moves instructionId to it. */
 export function unsettledRequest(
   packet: { instructionId?: string; settledInstructionId?: string } | null | undefined,
-  messages: ReadonlyArray<{ id: string; role: string; kind?: string; text?: string; steered?: boolean }>,
+  messages: ReadonlyArray<{ id: string; role: string; kind?: string; text?: string; steered?: boolean; guest?: boolean }>,
+  skipIds?: ReadonlySet<string>,
 ): string {
+  // a settled packet reads no lines: a long chat's path is not copied for it
   if (!packet?.instructionId || packet.instructionId === packet.settledInstructionId) return "";
   const lines = messages.filter((message) =>
-    message.role === "user" && (message.kind === undefined || message.kind === "text") && message.text?.trim());
+    message.role === "user" && (message.kind === undefined || message.kind === "text") && message.text?.trim() && !skipIds?.has(message.id));
   const index = lines.findIndex((line) => line.id === packet.instructionId);
   // Each local send records its instruction, so a later unsteered line synced in from another device.
   if (index < 0 || lines.slice(index + 1).some((line) => !line.steered)) return "";
   const settled = lines.findIndex((line) => line.id === packet.settledInstructionId);
   let start = settled < 0 ? index : settled + 1;
   while (start < index && lines[start]!.steered) start++;
-  return lines.slice(start).map((line) => line.text!.trim()).join(" | ");
+  return lines.slice(start).map((line) => lineWords(line, line.text!.trim())).join(" | ");
 }
 
 /** Decide whether a turn.completed belongs to the live turn or to a Stop/crash

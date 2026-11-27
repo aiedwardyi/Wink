@@ -76,7 +76,9 @@ describe("remote access", () => {
     const key = loadOrCreateRemoteKey(freshDir());
     expect(apiRequestAuthorized(false, `orbit_remote=${key}`, key, "/api/internal/terminal-bridge")).toBe(false);
     expect(apiRequestAuthorized(true, `orbit_remote=${key}`, key, "/api/internal/terminal-bridge")).toBe(true);
-    expect(apiRequestAuthorized(false, `orbit_remote=${key}`, key, "/api/internal/agents")).toBe(true);
+    expect(apiRequestAuthorized(false, `orbit_remote=${key}`, key, "/api/internal/agents")).toBe(false);
+    expect(apiRequestAuthorized(false, `orbit_remote=${key}`, key, "/api/internal/call-api")).toBe(false);
+    expect(apiRequestAuthorized(true, `orbit_remote=${key}`, key, "/api/internal/call-api")).toBe(true);
   });
 
   it("lets the remote cookie drive the desktop updater", () => {
@@ -249,6 +251,21 @@ describe("remote access", () => {
       expect(await run.host).toBeUndefined();
       expect(run.calls).toEqual(["tailscale status --json", "C:\\Program Files\\Tailscale\\tailscale.exe status --json"]);
       expect(run.lines).toEqual(["Remote auto: Tailscale not found, remote off"]);
+    });
+
+    it("finds the Mac app's own CLI when tailscale is not on PATH", async () => {
+      const app = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+      const outputs: Record<string, string> = { "status --json": running, "serve status --json": "{}", [SERVE]: "" };
+      const calls: string[] = [];
+      const setups: RemoteSetup[] = [];
+      const exec = async (file: string, args: string[]) => {
+        calls.push([file, ...args].join(" "));
+        if (file !== app) throw new Error("spawn tailscale ENOENT");
+        return outputs[args.join(" ")] ?? "";
+      };
+      expect(await autoRemoteHost({}, PORT, exec, () => {}, "darwin", (setup) => setups.push(setup))).toBe(HOST);
+      expect(calls.slice(0, 3)).toEqual(["tailscale status --json", `${app} status --json`, `${app} serve status --json`]);
+      expect(setups.map((setup) => setup.state)).not.toContain("missing");
     });
 
     it("skips detection when ORBIT_REMOTE_AUTO=0", async () => {

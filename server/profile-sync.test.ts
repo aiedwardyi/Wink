@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,19 +30,24 @@ import {
   parseSyncOperationText,
   readSyncAvatarAsset,
   readSyncOperations,
+  readSyncOperationsAsync,
+  readSyncOperationsFor,
   resolveSyncAvatarPath,
+  restoreSyncedAvatar,
   saveProfileSyncSettings,
   serializeSyncOperation,
   syncAvatarMatches,
   syncOperationFileName,
   syncOperationsSignature,
   syncOperationsStatus,
+  syncValueHash,
   writeSyncAvatarAsset,
   writeSyncOperation,
   type ProfileSyncOperation,
 } from "./profile-sync.ts";
 
 vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
+vi.mock("node:fs/promises", async (original) => ({ ...await original<typeof import("node:fs/promises")>() }));
 
 const roots: string[] = [];
 
@@ -63,6 +69,28 @@ function operation(input: Partial<Parameters<typeof createSyncOperation>[0]> = {
 }
 
 describe("profile sync operations", () => {
+  it("keeps the original bot publisher across delayed and out-of-order edits", () => {
+    const original = operation({ changes: { name: "Tutor", title: "", description: "", color: "blue" } });
+    const peer = operation({ operationId: "peer", deviceId: "device-b", recordedAt: original.recordedAt + 1,
+      baseCheckpoint: original.operationId, changes: { name: "Renamed Tutor", title: "", description: "", color: "green" } });
+    expect(applySyncOperations(emptyProfileSyncState(), [peer]).botOrigins).toEqual({});
+    const state = applySyncOperations(emptyProfileSyncState(), [peer, original]);
+    expect(state.botOrigins).toEqual({ "bot-1": "device-a" });
+    expect(state.bots["bot-1"]?.name).toBe("Renamed Tutor");
+  });
+
+  it("keeps a creator with a slow clock as the bot publisher", () => {
+    const other = operation({ operationId: "other", deviceId: "device-b", recordedAt: 1_700_000_000_100, entityId: "bot-2",
+      changes: { name: "Coach", title: "", description: "", color: "red" } });
+    const created = operation({ operationId: "created", recordedAt: 1_700_000_000_090, baseCheckpoint: "other",
+      changes: { name: "Tutor", title: "", description: "", color: "blue" } });
+    const peer = operation({ operationId: "peer", deviceId: "device-b", sequence: 2, recordedAt: 1_700_000_000_105, baseCheckpoint: "created",
+      changes: { name: "Renamed Tutor", title: "", description: "", color: "green" } });
+    const origins = { "bot-1": "device-a", "bot-2": "device-b" };
+    expect(applySyncOperations(emptyProfileSyncState(), [other, created]).botOrigins).toEqual(origins);
+    expect(applySyncOperations(emptyProfileSyncState(), [other, created, peer]).botOrigins).toEqual(origins);
+  });
+
   it("replays duplicate and out-of-order records idempotently", () => {
     const newer = operation({ operationId: "op-2", deviceId: "device-b", sequence: 2, recordedAt: 1_700_000_000_002, changes: { title: "Teacher" } });
     const older = operation({ operationId: "op-1", deviceId: "device-a", sequence: 1, recordedAt: 1_700_000_000_001 });
@@ -278,6 +306,42 @@ describe("profile sync operations", () => {
     expect(result.truncated).toBe(false);
   });
 
+  it("reads a long change log off the event loop with a bounded number of files open", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-bounded-"));
+    roots.push(root);
+    for (let index = 0; index < 200; index++) writeSyncOperation(root, operation({ operationId: `op-${index}`, sequence: index + 1 }));
+    const readFile = fsp.readFile;
+    let open = 0;
+    let most = 0;
+    vi.spyOn(fsp, "readFile").mockImplementation(async (...args: Parameters<typeof readFile>) => {
+      most = Math.max(most, ++open);
+      try {
+        return await readFile(...args);
+      } finally {
+        open--;
+      }
+    });
+    try {
+      const read = await readSyncOperationsAsync(root);
+      expect(read).toEqual(readSyncOperations(root));
+      expect(read.operations).toHaveLength(200);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(most).toBeLessThanOrEqual(32);
+  });
+
+  it("drops a change log read when the sync target moves during it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-moved-"));
+    roots.push(root);
+    writeSyncOperation(root, operation());
+    let target = "folder-a\nworkspace-a";
+    expect(await readSyncOperationsFor(root, () => target)).toEqual(readSyncOperations(root));
+    const moved = readSyncOperationsFor(root, () => target);
+    target = "folder-b\nworkspace-b";
+    expect(await moved).toBeNull();
+  });
+
   it("detects an arriving auto notes record without another bot edit", () => {
     const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-notes-arrival-"));
     roots.push(root);
@@ -295,35 +359,52 @@ describe("profile sync operations", () => {
     expect(applySyncOperations(emptyProfileSyncState(), read.operations).bots["bot-1"]?.memoryNotes).toBe(false);
   });
 
-  it("answers status like a full read and rereads only when the change folder moves", () => {
+  it("answers status like a full read and rereads only when the change folder moves", async () => {
     const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-status-"));
     roots.push(root);
     const full = () => {
       const read = readSyncOperations(root);
       return { operations: read.operations.length, invalidFiles: read.invalidFiles };
     };
-    const reads = vi.spyOn(fs, "readFileSync");
+    const reads = vi.spyOn(fsp, "readFile");
     try {
-      expect(syncOperationsStatus(root)).toEqual(full());
+      expect(await syncOperationsStatus(root)).toEqual(full());
       const first = writeSyncOperation(root, operation());
-      expect(syncOperationsStatus(root)).toEqual(full());
+      expect(await syncOperationsStatus(root)).toEqual(full());
       reads.mockClear();
-      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
-      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(await syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(await syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
       expect(reads).not.toHaveBeenCalled();
       const second = operation({ operationId: "op-2", sequence: 2 });
       const arrived = join(root, "changes", syncOperationFileName(second));
       writeFileSync(arrived, "{");
-      expect(syncOperationsStatus(root)).toEqual(full());
-      expect(syncOperationsStatus(root).invalidFiles).toEqual([syncOperationFileName(second)]);
+      expect(await syncOperationsStatus(root)).toEqual(full());
+      expect(reads).toHaveBeenCalled();
+      expect((await syncOperationsStatus(root)).invalidFiles).toEqual([syncOperationFileName(second)]);
       writeFileSync(arrived, serializeSyncOperation(second));
-      expect(syncOperationsStatus(root)).toEqual({ operations: 2, invalidFiles: [] });
+      expect(await syncOperationsStatus(root)).toEqual({ operations: 2, invalidFiles: [] });
       writeSyncOperation(root, { ...operation(), changes: { name: "Renamed" } });
-      expect(syncOperationsStatus(root)).toEqual(full());
+      expect(await syncOperationsStatus(root)).toEqual(full());
       unlinkSync(first);
-      expect(syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
+      expect(await syncOperationsStatus(root)).toEqual({ operations: 1, invalidFiles: [] });
     } finally {
       reads.mockRestore();
+    }
+  });
+
+  it("reads the change log once for status asks that arrive together", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-status-"));
+    roots.push(root);
+    writeSyncOperation(root, operation());
+    const syncReads = vi.spyOn(fs, "readFileSync");
+    const reads = vi.spyOn(fsp, "readFile");
+    try {
+      expect(await Promise.all([syncOperationsStatus(root), syncOperationsStatus(root), syncOperationsStatus(root)])).toEqual(Array(3).fill({ operations: 1, invalidFiles: [] }));
+      expect(reads).toHaveBeenCalledTimes(1);
+      expect(syncReads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+      syncReads.mockRestore();
     }
   });
 
@@ -420,6 +501,24 @@ describe("sync avatar assets", () => {
     expect(syncAvatarMatches(root, name, Buffer.from(bytes))).toBe(true);
     expect(syncAvatarMatches(root, name, Buffer.from([0x89, 0x50]))).toBe(false);
     expect(syncAvatarMatches(root, "assets/missing.png", bytes)).toBe(false);
+  });
+
+  it("restores a lost picture from the asset this PC last synced, never over a file", () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-avatar-restore-"));
+    roots.push(root);
+    const attachments = join(root, "attachments");
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x07]);
+    const asset = writeSyncAvatarAsset(root, bytes, "png");
+    writeSyncAvatarAsset(root, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x08]), "png");
+    const synced = { "bot:bot-1:avatarAsset": syncValueHash(asset) };
+    expect(restoreSyncedAvatar(root, {}, "bot-1", attachments, "lost.png")).toBe(false);
+    expect(restoreSyncedAvatar(root, synced, "bot-1", attachments, "lost.jpg")).toBe(false);
+    expect(restoreSyncedAvatar(root, synced, "bot-1", attachments, "../lost.png")).toBe(false);
+    expect(restoreSyncedAvatar(root, synced, "bot-1", attachments, "lost.png")).toBe(true);
+    expect(readFileSync(join(attachments, "lost.png")).equals(bytes)).toBe(true);
+    writeFileSync(join(attachments, "kept.png"), "kept");
+    expect(restoreSyncedAvatar(root, synced, "bot-1", attachments, "kept.png")).toBe(false);
+    expect(readFileSync(join(attachments, "kept.png"), "utf8")).toBe("kept");
   });
 });
 

@@ -19,7 +19,7 @@ it("never follows a joined room's task as the user chat", () => {
 it("lets the memory pass save from a joined room's task like any other task", () => {
   const settled = between("summaryBuild.onSettled(bot.id, event.threadId);", "memoryPass.onSettled(");
   const guard = source.slice(source.lastIndexOf("if (", source.indexOf(settled)), source.indexOf(settled));
-  expect(guard).toBe("if (!store.groupByThread(event.threadId)) {\n            ");
+  expect(guard).toBe("if (!store.groupByThread(event.threadId)) {\n            const summaries = () => {\n              ");
   expect(source).not.toMatch(/memoryPass[^\n]*myRoomBot/);
 });
 

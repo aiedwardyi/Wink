@@ -1,7 +1,7 @@
 // A worker note that reaches a bot while it answers another bot. The real
 // delegation, steer, takeover, wake, ask and context modules run; index.ts's
 // wiring is copied below and pinned to its source.
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ASK_BOT_TIMEOUT_MS, waitForPeerReply, type AskReply } from "./ask-bot.ts";
@@ -29,6 +29,7 @@ import { _resetSteerQueue } from "./steer-queue.ts";
 import { Store, type BotRecord, type GroupRecord, type Message } from "./store.ts";
 import { buildResumeFallback } from "./turn-context.ts";
 import { ownTurnReply } from "./turn-reply.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 // server/testing/setup.ts moves HOME to a throwaway dir; never touch the real ~/.orbit
 if (!DATA_DIR.includes("omb-test-home-")) throw new Error(`refusing to run against ${DATA_DIR}`);
@@ -62,7 +63,7 @@ describe("worker notes while a bot answers a bot", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     _resetPending();
     _resetSteerQueue();
     _resetPeerUserReplies();
@@ -140,7 +141,7 @@ describe("worker notes while a bot answers a bot", () => {
     watched.endPeerWatch?.();
     watched.reply.release();
     settlePeerUserReplies(threadId);
-    return finishDelegatedTurn(commsBus, watched, ok, reply, failureName);
+    return finishDelegatedTurn(commsBus, { ...watched, engine: watched.reply.engine }, ok, reply, failureName);
   }
 
   function watchDelegatedTurn(targetThreadId: string, watched: Watched) {
@@ -238,7 +239,7 @@ describe("worker notes while a bot answers a bot", () => {
     expect(findDelegationReceipt(taskId)).toMatchObject({ status: "done", result: answer });
     const rows = taskRows(taskId);
     const replies = rows.filter((m) => m.comm?.peer === "reply");
-    expect(replies.map((m) => m.text)).toEqual(replies.map(() => answer));
+    for (const message of replies) expect(message).toMatchObject({ text: answer, engine: "claude" });
     expect(new Set(replies.map((m) => m.comm?.mailKey)).size).toBe(replies.length);
     expect(store.messagesFor(pokkey.threadId).filter((m) => m.comm?.taskId === taskId && m.comm.peer === "reply")).toHaveLength(1);
     const keys = threads().flatMap((threadId) => store.messagesFor(threadId).map((m) => m.comm?.mailKey).filter(Boolean));
@@ -267,12 +268,12 @@ describe("worker notes while a bot answers a bot", () => {
       "  holds: hasPeerWatch,",
       "    return steerUntilTaken(adapter, threadId, text, () => peerInputJoined(threadId));",
       "  const holdNotes = hasPeerWatch(threadId) ? (messages: Message[]) => holdWorkerNotes(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined) : undefined;",
-      "  const messagesBeforeSummary = store.activePath(threadId);\n  holdNotes?.(messagesBeforeSummary);\n",
-      "  const activeMessages = summarySkipped ? messagesBeforeSummary : store.activePath(threadId);\n  holdNotes?.(activeMessages);\n",
+      "  const messagesBeforeSummary = taskRows(store.activePath(threadId));\n  holdNotes?.(messagesBeforeSummary);\n",
+      "  const activeMessages = usePlannedContext ? messagesBeforeSummary : store.activePath(threadId);\n  holdNotes?.(activeMessages);\n",
       "skipTranscript.add(message.id);\n            holdNotes?.(messages);\n            const refreshedNotes = paneNotesForTurn(messages, skipTranscript,",
       "      if (holdNotes) newestPaneNoteId = undefined;\n      // a deferred recycle's live session",
       "      store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);",
-      "  watched.reply.release();\n  settlePeerUserReplies(threadId);\n  return finishDelegatedTurn(commsBus, watched, ok, reply, failureName);",
+      "  watched.reply.release();\n  settlePeerUserReplies(threadId);\n  return finishDelegatedTurn(commsBus, { ...watched, engine: watched.reply.engine }, ok, reply, failureName);",
       "  watched.endPeerWatch = watchPeerTurn(targetThreadId, () => {",
       "    watched.answer ??= watched.reply.text() ?? \"\";",
       "watchDelegatedTurn(targetThreadId, { channelId: channel?.id, toBotId, taskId, sourceThreadId, sourceBotId, ask, reply: peerReplies.start(targetThreadId) });",
@@ -540,7 +541,7 @@ describe("worker notes while a bot answers a bot", () => {
         },
       }).then((reply) => {
         if (!reply.taskId) collected.release();
-        return reply;
+        return reply.replied && collected.engine ? { ...reply, engine: collected.engine } : reply;
       });
     }
     const adopted = async (reply: Promise<AskReply>) => {
@@ -554,7 +555,7 @@ describe("worker notes while a bot answers a bot", () => {
       say(wink.threadId, mark("Edward, DOG has one card left."), "commentary");
       say(wink.threadId, ANSWER, "final_answer");
       complete(wink.threadId);
-      expect(await reply).toEqual({ text: ANSWER, replied: true });
+      expect(await reply).toEqual({ text: ANSWER, replied: true, engine: "claude" });
       expect(peerReplies._live()).toBe(0);
     });
 
@@ -566,7 +567,7 @@ describe("worker notes while a bot answers a bot", () => {
       say(wink.threadId, ANSWER, "final_answer");
       complete(wink.threadId);
       if (adopt) expectAnswered("ask-1");
-      else expect(await reply).toEqual({ text: ANSWER, replied: true });
+      else expect(await reply).toEqual({ text: ANSWER, replied: true, engine: "claude" });
       expect(followups).toEqual([{ prompt: user.text, message: user }]);
       expect(store.messagesFor(wink.threadId).filter((message) => message.text === user.text)).toHaveLength(1);
       say(wink.threadId, "Edward, DOG has one card left.");
@@ -579,7 +580,7 @@ describe("worker notes while a bot answers a bot", () => {
       const reply = ask("ask-1");
       say(wink.threadId, ANSWER);
       complete(wink.threadId);
-      expect(await reply).toEqual({ text: ANSWER, replied: true });
+      expect(await reply).toEqual({ text: ANSWER, replied: true, engine: "claude" });
       expect(peerReplies._live()).toBe(0);
     });
 

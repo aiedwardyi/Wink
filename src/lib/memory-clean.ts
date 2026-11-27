@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchResponse } from "./api-request";
+import { watchMemoryChange } from "./memory-clean-events";
+import { forgetMemory } from "./memory-last";
 import type { Message } from "@/state/store";
 
 export type CleanFile = "MEMORY.md" | `memory/${string}.md`;
@@ -15,6 +17,24 @@ export type MemoryCleanRun = {
   moved: number;
   undoneAt: number | null;
   undoable: boolean;
+  /** dreaming's practice run: what the pass would do, nothing changed */
+  dream?: DreamRun;
+};
+export type DreamPr = { repo?: string; number: number; mergedAt: number };
+export type DreamRun = {
+  mode: "dry";
+  notes: {
+    state: "checked" | "unchanged" | "off-here" | "no-model" | "stopped" | "conflict" | "error";
+    items: { op: "move"; target: string; text: string | null; by: string | null; why: "duplicate" | "replaced" | "expired"; history: string }[];
+  };
+  asks: {
+    threads: number;
+    skipped: number;
+    unchecked: number;
+    items: { op: "close" | "ask" | "fall-out"; target: string; ask: string; prs: DreamPr[]; lands?: "stays" | "leaves-now" | "leaves-next"; closedAt?: number }[];
+  };
+  runUntil: number;
+  dropUntil: number;
 };
 export type MemoryCleanUndoResult =
   | { ok: true; revision: string; restored: number; skipped: number }
@@ -50,7 +70,9 @@ export function useMemoryClean(botId: string, messages: readonly Message[], acti
     const read = () => { void refresh(); };
     listeners.set(botId, set);
     set.add(read);
+    const unwatch = watchMemoryChange(botId, read);
     return () => {
+      unwatch();
       set.delete(read);
       if (!set.size) listeners.delete(botId);
       generation.current++;
@@ -72,6 +94,7 @@ export function useMemoryClean(botId: string, messages: readonly Message[], acti
       setRun(response.status === 200 && body.ok ? { ...run, undoneAt: Date.now(), undoable: false } : null);
       if ((response.status === 200 && body.ok) || response.status === 404 || response.status === 409) {
         pending.delete(botId);
+        forgetMemory(botId);
         listeners.get(botId)?.forEach((listener) => listener());
       }
     } catch { setRun(null); }

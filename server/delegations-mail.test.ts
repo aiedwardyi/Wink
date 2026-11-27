@@ -3,12 +3,15 @@ import { join } from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import { DATA_DIR } from "./config.ts";
 import { _loadPending, bindPeerTurn, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, findDelegationReceipt, finishDelegatedTurn, queueDelegation, recordDelegationReceipt } from "./delegations.ts";
+import { recoverHandedMail } from "./mail-index.ts";
 import { handMail, mailForTurn, settleMail } from "./mail.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { Store } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   _loadPending();
 });
 
@@ -131,7 +134,19 @@ it("releases a reply handed to a room turn after a restart", () => {
   expect(mailForTurn(store, room.threadId)).toEqual([]);
   _loadPending();
   discardOrphanedDelegations(bus);
+  recoverHandedMail(store, bootRowsNow().handed, Date.now() + 1);
   expect(mailForTurn(store, room.threadId).map((part) => part.id)).toEqual([row.id]);
+});
+
+it("leaves mail handed to a live turn of this process at boot", () => {
+  const { store, from, target } = setup();
+  const room = store.createGroup("Room", [from.id, target.id]);
+  const mailKey = `room-task:reply:${room.threadId}`;
+  store.appendMessage(room.threadId, { role: "bot", kind: "text", text: "Room reply", from: { botId: target.id, name: target.name, color: target.color }, comm: { groupId: room.id, withBotId: target.id, withName: target.name, withColor: target.color, peer: "reply", taskId: "room-task", mailKey, state: "done" } });
+  const since = Date.now();
+  handMail(store, room.threadId, "room-task", "live", "request");
+  recoverHandedMail(store, bootRowsNow().handed, since);
+  expect(mailForTurn(store, room.threadId)).toEqual([]);
 });
 
 it("keeps a delegated reply when the receipt file cannot be written", async () => {

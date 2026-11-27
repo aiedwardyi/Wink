@@ -97,6 +97,13 @@ function pickRow(host: HTMLElement, name: string): HTMLButtonElement {
   return found;
 }
 
+/** The row's name and tick order, without the model line under them. */
+function pickLabel(host: HTMLElement, name: string): string {
+  const row = pickRow(host, name).cloneNode(true) as HTMLElement;
+  row.querySelector("[data-bot-model-line]")?.remove();
+  return row.textContent ?? "";
+}
+
 function nameInputs(host: HTMLElement): HTMLInputElement[] {
   // SAFETY: the selector targets only the wizard bot name fields rendered above.
   return [...host.querySelectorAll('input[id^="group-wizard-name-"]')] as HTMLInputElement[];
@@ -393,7 +400,7 @@ describe("GroupWizard members", () => {
     // SAFETY: same picker-only fields as defaultBots.
     bots = [...defaultBots, { id: "b3", name: "Cy", hidden: false, modelSelection: { instanceId: "codex-1", model: "m" } } as Bot];
     const { host, root } = await renderWizard();
-    const order = () => ["Ada", "Bo", "Cy"].map((name) => pickRow(host, name).textContent?.match(/\d+(?:st|nd|rd|th|번째)$/)?.[0] ?? "");
+    const order = () => ["Ada", "Bo", "Cy"].map((name) => pickLabel(host, name).match(/\d+(?:st|nd|rd|th|번째)$/)?.[0] ?? "");
     const tick = (name: string) => act(async () => pickRow(host, name).click());
     try {
       await tick("Cy");
@@ -421,8 +428,8 @@ describe("GroupWizard members", () => {
     try {
       await act(async () => pickRow(host, "Bo").click());
       await act(async () => pickRow(host, "Ada").click());
-      expect(pickRow(host, "Bo").textContent).toMatch(/Bo첫 번째$/);
-      expect(pickRow(host, "Ada").textContent).toMatch(/Ada두 번째$/);
+      expect(pickLabel(host, "Bo")).toMatch(/Bo첫 번째$/);
+      expect(pickLabel(host, "Ada")).toMatch(/Ada두 번째$/);
     } finally {
       await act(async () => {
         root.unmount();
@@ -741,7 +748,7 @@ describe("GroupWizard members", () => {
     }
   });
 
-  it("offers Carbon, Argon and Hydrogen beside 3.8 tiers for an antigravity row and never blanks the model", async () => {
+  it("offers Carbon, Neon and Hydrogen beside 3.8 tiers for an antigravity row, never Argon, and never blanks the model", async () => {
     apiImpl = () => Promise.resolve({ bot: { id: `nb${++botSeq}`, name: "New bot" } });
     instances = [
       antigravity(
@@ -749,9 +756,10 @@ describe("GroupWizard members", () => {
         "Antigravity",
         [
           { id: "gemini-4-carbon-low", label: "Gemini 4 Carbon Low" },
+          { id: "gemini-4-neon-xhigh", label: "Gemini 4 Neon XHigh" },
+          { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen Medium" },
           { id: "gemini-4-argon-high", label: "Gemini 4 Argon High" },
           { id: "gemini-4-argon-low", label: "Gemini 4 Argon Low" },
-          { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen Medium" },
           { id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash High" },
           { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash Medium" },
           { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
@@ -769,8 +777,7 @@ describe("GroupWizard members", () => {
       const modelTrigger = menuTrigger(host, "Change model");
       expect((await menuOptions(modelTrigger)).map((option) => option.textContent)).toEqual([
         "Gemini 4 Carbon Low",
-        "Gemini 4 Argon High",
-        "Gemini 4 Argon Low",
+        "Gemini 4 Neon XHigh",
         "Gemini 4 Hydrogen Medium",
         "Gemini 3.8 Flash High",
         "Gemini 3.8 Flash Medium",

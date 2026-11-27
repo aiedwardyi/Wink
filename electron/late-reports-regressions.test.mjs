@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
+import { testHome } from "../server/testing/test-home.ts";
 import { deliverMailboxOutbox } from "./mailbox-outbox.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
 import { createServerRevival } from "./server-revival.mjs";
@@ -16,6 +17,7 @@ import { installOrbitMsg } from "./terminal-mailbox.mjs";
 import { Store } from "../server/store.ts";
 import { createMailboxReceipts } from "../server/mailbox-receipts.ts";
 import { closeMessageDb } from "../server/message-db.ts";
+import { bootRowsNow } from "../server/testing/boot-rows.ts";
 import { receiveMailboxPost } from "../server/mailbox-delivery.ts";
 import { mailboxGrant } from "../server/mailbox.ts";
 import { Readable } from "node:stream";
@@ -26,7 +28,7 @@ afterEach(async () => {
 });
 
 async function fixture(handler = (_req, res) => res.end("{}")) {
-  const profile = await fs.mkdtemp(path.join(os.homedir(), "late-review-"));
+  const profile = await fs.mkdtemp(path.join(testHome(), "late-review-"));
   const dir = path.join(profile, "mailbox-outbox");
   await fs.mkdir(dir);
   const server = createServer(handler);
@@ -323,7 +325,7 @@ it("benchmark cleanup skips a child that already exited by signal", async () => 
 it("thread adoption keeps local receipt keys across database restart", async () => {
   const store = new Store(() => ({ instanceId: "ghost", model: "ghost" }));
   const bot = store.createBot();
-  const receipts = createMailboxReceipts();
+  const receipts = createMailboxReceipts(Promise.resolve(bootRowsNow().receipts));
   const scope = { pane: "pane", bot: bot.id, teacher: bot.id };
   const messageId = randomUUID();
   await receipts.accept(scope, messageId, async key => ({ ok: true, id: store.appendMessage(bot.threadId, { role: "bot", kind: "note", text: "finished", mailbox: { key } }).id }));
@@ -332,7 +334,7 @@ it("thread adoption keeps local receipt keys across database restart", async () 
   store.adoptSyncedTask(bot.id, store.activeTask(bot.id), projected, projected[0].id);
   closeMessageDb();
   let writes = 0;
-  await createMailboxReceipts().accept(scope, messageId, async () => { writes++; return { ok: true }; });
+  await createMailboxReceipts(Promise.resolve(bootRowsNow().receipts)).accept(scope, messageId, async () => { writes++; return { ok: true }; });
   expect(writes).toBe(0);
 });
 
@@ -345,7 +347,7 @@ it("post-write callbacks keep the delivery thread when attention switches chats"
   const req = Readable.from([Buffer.from(JSON.stringify({ text: "finished", kind: "report", messageId: randomUUID() }))]);
   req.headers = { authorization: `Bearer ${mailboxGrant(secret, "pane", bot.id, bot.id)}`, "x-orbit-pane": "pane", "x-orbit-bot": bot.id, "x-orbit-teacher": bot.id };
   const threads = [];
-  const result = await receiveMailboxPost(req, { secret, store, receipts: createMailboxReceipts(), origin: "fixture", label: async () => null, auto: async () => false, refresh() {}, attention: async () => { store.switchTask(bot.id, other.threadId); }, reported: (_scope, _text, source) => threads.push(source.threadId), notify: source => threads.push(source.threadId), arrived: (_scope, source) => threads.push(source.threadId) });
+  const result = await receiveMailboxPost(req, { secret, store, receipts: createMailboxReceipts(Promise.resolve(bootRowsNow().receipts)), origin: "fixture", label: async () => null, auto: async () => false, refresh() {}, attention: async () => { store.switchTask(bot.id, other.threadId); }, reported: (_scope, _text, source) => threads.push(source.threadId), notify: source => threads.push(source.threadId), arrived: (_scope, source) => threads.push(source.threadId) });
   expect(result.status).toBe(200);
   expect(threads).toEqual([original, original, original]);
 });

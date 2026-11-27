@@ -1,10 +1,10 @@
 // Phone Model Index: a ranked list first, a light chart one tab away. The pinch and zoom chart stays behind full screen.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode, type CSSProperties } from "react";
 import { Maximize2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Translate } from "@/lib/i18n";
 import { chartProvider, effortRank, fitLogTicks, formatCost, linearTicks, logTicks, type ChartProvider, type ModelIndexPoint } from "@/lib/model-index";
-import { botAvatarAssetPath, type BotAvatarId } from "../../shared/bot-avatar";
+import { ProviderMark } from "./ProviderIcons";
 import { edgeFade } from "./Segmented";
 
 export const PROVIDER_NAME = {
@@ -15,24 +15,30 @@ export const PROVIDER_NAME = {
   meta: "Meta",
 } satisfies Record<Exclude<ChartProvider, "other">, string>;
 
-const AVATAR = {
-  anthropic: "icon-45",
-  openai: "icon-46",
-  google: "icon-47",
-  xai: "icon-48",
-  meta: "icon-49",
-} satisfies Record<Exclude<ChartProvider, "other">, BotAvatarId>;
+const DRIVER = {
+  anthropic: "claudeAgent",
+  openai: "codex",
+  google: "geminiAgent",
+  xai: "grokAgent",
+  meta: "museAgent",
+} satisfies Record<Exclude<ChartProvider, "other">, string>;
 
 // Best value looks only at the top of the list, so a cheap low scorer never takes it.
 const VALUE_POOL = 9;
 const CHART_HEIGHT = 380;
 const PLOT = { top: 14, right: 10, bottom: 34, left: 34 };
-const NAMED = 3;
+export const BADGE = 8;
 // Two names closer than this read as one, like "Gemini 4 Carbon Opus 5.5".
 const NAME_GAP = 10;
 
 const color = (provider: string) => `var(--mi-${chartProvider(provider)})`;
 const shortLabel = (label: string) => label.replace(/^Claude /, "");
+
+function median(values: number[]) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
 
 export interface PhoneModel {
   model: string;
@@ -64,13 +70,25 @@ export function bestValue(rows: readonly PhoneModel[]): string | undefined {
   return priced.reduce((top, row) => (row.best.score / row.best.cost! > top.best.score / top.best.cost! ? row : top)).model;
 }
 
-function Avatar({ provider, size }: { provider: ChartProvider; size: number }) {
-  const id = provider === "other" ? undefined : AVATAR[provider];
+function Avatar({ provider, size, pressed }: { provider: ChartProvider; size: number; pressed?: boolean }) {
   const radius = size > 20 ? "rounded-lg" : "rounded-[4px]";
-  return id ? (
-    <img src={botAvatarAssetPath(id)} alt="" width={size} height={size} draggable={false} className={cn("block shrink-0", radius)} style={{ width: size, height: size }} />
+  return provider !== "other" ? (
+    <span className={cn("flex shrink-0 items-center justify-center", radius)} style={{ width: size, height: size, ...(pressed && { "--color-ink": "var(--color-panel)" }) } as CSSProperties}>
+      <ProviderMark driverKind={DRIVER[provider]} size={size * 0.75} />
+    </span>
   ) : (
     <span aria-hidden className={cn("block shrink-0", radius)} style={{ width: size, height: size, background: color(provider) }} />
+  );
+}
+
+export function PhoneBadge({ provider, r }: { provider: ChartProvider; r: number }) {
+  const size = r * 1.5;
+  return provider === "other" ? (
+    <circle r={r} style={{ fill: color(provider) }} />
+  ) : (
+    <g transform={`translate(${-size / 2} ${-size / 2})`}>
+      <ProviderMark driverKind={DRIVER[provider]} size={size} />
+    </g>
   );
 }
 
@@ -137,7 +155,7 @@ export function ProviderChips({ providers, value, onChange, t }: { providers: Ch
           onClick={() => onChange(value === provider ? null : provider)}
           className={cn(chip, "pl-1.5 pr-2.5", value === provider ? on : "border-hairline text-ink")}
         >
-          <Avatar provider={provider} size={16} />
+          <Avatar provider={provider} size={16} pressed={value === provider} />
           <span aria-hidden className="size-2.5 shrink-0 rounded-full" style={{ background: color(provider) }} />
           {provider === "other" ? t("modelIndex.provider.other") : PROVIDER_NAME[provider]}
         </button>
@@ -238,42 +256,143 @@ type Spot = { x: number; y: number };
 type Box = { x: number; y: number; w: number; h: number };
 const overlaps = (a: Box, b: Box) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 
-let canvas: CanvasRenderingContext2D | null | undefined;
-function measure(text: string) {
-  canvas ??= document.createElement("canvas").getContext("2d");
-  if (!canvas) return text.length * 7;
-  canvas.font = `600 12.5px ${getComputedStyle(document.body).fontFamily}`;
-  return canvas.measureText(text).width;
+/** Liang-Barsky: does segment a-b pass through the box? */
+export function crosses(a: Spot, b: Spot, box: Box) {
+  let [t0, t1] = [0, 1];
+  const [dx, dy] = [b.x - a.x, b.y - a.y];
+  for (const [p, q] of [[-dx, a.x - box.x], [dx, box.x + box.w - a.x], [-dy, a.y - box.y], [dy, box.y + box.h - a.y]] as const) {
+    if (p === 0) {
+      if (q < 0) return false;
+      continue;
+    }
+    const r = q / p;
+    if (p < 0) t0 = Math.max(t0, r);
+    else t1 = Math.min(t1, r);
+    if (t0 > t1) return false;
+  }
+  return true;
 }
 
-/** Each name takes the first side of its dot that clears the frame, the other names and the other dots. */
-export function placeNames(named: Array<{ id: string; text: string; at: Spot }>, dots: Spot[], frame: { left: number; top: number; right: number; bottom: number }) {
+/** Nudges badges that would overlap just far enough apart; the tooltip and callout keep the exact numbers. */
+export function dodge(spots: Spot[], r = BADGE, frame?: { left: number; top: number; right: number; bottom: number }) {
+  const out = spots.map((spot) => ({ ...spot }));
+  const min = r * 2 + 4;
+  for (let pass = 0; pass < 80; pass++) {
+    let moved = false;
+    for (let i = 0; i < out.length; i++) {
+      for (let j = i + 1; j < out.length; j++) {
+        const a = out[i]!;
+        const b = out[j]!;
+        const gap = Math.hypot(b.x - a.x, b.y - a.y);
+        if (gap >= min - 0.01) continue;
+        const [ux, uy] = gap > 0.01 ? [(b.x - a.x) / gap, (b.y - a.y) / gap] : [Math.cos(j), Math.sin(j)];
+        const push = (min - gap) / 2 + 0.01;
+        [a.x, a.y, b.x, b.y] = [a.x - ux * push, a.y - uy * push, b.x + ux * push, b.y + uy * push];
+        moved = true;
+      }
+    }
+    if (frame) {
+      for (const spot of out) {
+        const x = Math.min(Math.max(spot.x, frame.left + r), frame.right - r);
+        const y = Math.min(Math.max(spot.y, frame.top + r), frame.bottom - r);
+        if (x !== spot.x || y !== spot.y) [spot.x, spot.y, moved] = [x, y, true];
+      }
+    }
+    if (!moved) break;
+  }
+  return out;
+}
+
+/** Re-renders when a web font finishes loading, so text first measured in a fallback font is placed again. */
+export function useFontLoads() {
+  const [, setLoads] = useState(0);
+  useEffect(() => {
+    // happy-dom has no FontFaceSet.
+    const fonts: FontFaceSet | undefined = document.fonts;
+    if (!fonts?.addEventListener) return;
+    const loaded = () => setLoads((n) => n + 1);
+    fonts.addEventListener("loadingdone", loaded);
+    return () => fonts.removeEventListener("loadingdone", loaded);
+  }, []);
+}
+
+let canvas: CanvasRenderingContext2D | null | undefined;
+// getComputedStyle forces a style pass, so read the font once per placement, not per name.
+function measurer() {
+  canvas ??= document.createElement("canvas").getContext("2d");
+  const ctx = canvas;
+  if (!ctx) return (text: string) => text.length * 7;
+  ctx.font = `600 12.5px ${getComputedStyle(document.body).fontFamily}`;
+  return (text: string) => ctx.measureText(text).width;
+}
+
+type Name = { x: number; y: number; anchor: "start" | "middle" | "end"; leader?: [Spot, Spot] };
+
+/** Each name takes the first spot near its badge that clears the frame, the other names and every badge; one that fits nowhere stays unnamed. */
+export function placeNames(named: Array<{ id: string; text: string; at: Spot }>, dots: Spot[], frame: { left: number; top: number; right: number; bottom: number }, taken: Box[] = [], r = BADGE) {
   const placed: Box[] = [];
-  const out = new Map<string, { x: number; y: number; anchor: "start" | "middle" | "end" }>();
+  const leaders: Array<[Spot, Spot]> = [];
+  // The badge's halo reaches 1.5px past r.
+  const pad = (dot: Spot) => ({ x: dot.x - r - 2, y: dot.y - r - 2, w: r * 2 + 4, h: r * 2 + 4 });
+  const marks = [...dots.map(pad), ...taken];
+  const out = new Map<string, Name>();
+  const measure = measurer();
   for (const { id, text, at } of named) {
     const w = measure(text);
-    const h = 14;
-    const sides = [
-      { dx: -9, dy: -8, anchor: "end" as const },
-      { dx: 9, dy: 16, anchor: "start" as const },
-      { dx: -9, dy: 4, anchor: "end" as const },
-      { dx: 9, dy: 4, anchor: "start" as const },
-      { dx: 0, dy: -12, anchor: "middle" as const },
-      { dx: 0, dy: 22, anchor: "middle" as const },
-      { dx: 9, dy: -8, anchor: "start" as const },
-      { dx: -9, dy: 16, anchor: "end" as const },
+    // Taller than the glyphs: Korean fallback fonts set a higher ascent.
+    const h = 16;
+    const near = r + 6;
+    const hug = [
+      { dx: near, dy: 4, anchor: "start" as const },
+      { dx: -near, dy: 4, anchor: "end" as const },
+      { dx: 0, dy: -near, anchor: "middle" as const },
+      { dx: 0, dy: near + 11, anchor: "middle" as const },
+      { dx: r, dy: -r, anchor: "start" as const },
+      { dx: -r, dy: -r, anchor: "end" as const },
+      { dx: r, dy: r + 11, anchor: "start" as const },
+      { dx: -r, dy: r + 11, anchor: "end" as const },
     ].map((side) => {
       const x = at.x + side.dx;
       const left = side.anchor === "end" ? x - w : side.anchor === "middle" ? x - w / 2 : x;
-      return { ...side, x, y: at.y + side.dy, box: { x: left, y: at.y + side.dy - 11, w, h } };
+      return { x, y: at.y + side.dy, anchor: side.anchor, box: { x: left, y: at.y + side.dy - 12, w, h }, far: false };
     });
-    const cost = ({ box }: (typeof sides)[number]) =>
-      (box.x < frame.left || box.x + box.w > frame.right || box.y < frame.top || box.y + box.h > frame.bottom ? 1000 : 0) +
-      placed.filter((other) => overlaps(box, { x: other.x - NAME_GAP, y: other.y - 2, w: other.w + NAME_GAP * 2, h: other.h + 4 })).length * 100 +
-      dots.filter((dot) => overlaps(box, { x: dot.x - 6, y: dot.y - 6, w: 12, h: 12 })).length;
-    const side = sides.reduce((top, next) => (cost(next) < cost(top) ? next : top));
-    placed.push(side.box);
-    out.set(id, { x: side.x, y: side.y, anchor: side.anchor });
+    // Rings are rarely needed, so build them only once every hug spot is taken.
+    function* rings() {
+      for (const reach of [24, 36, 50]) {
+        for (const deg of [0, 180, -30, 30, 150, -150, -60, 60, 120, -120, -90, 90]) {
+          const [cos, sin] = [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)];
+          const cx = at.x + cos * (reach + (w / 2) * Math.abs(cos));
+          const cy = at.y + sin * (reach + (h / 2) * Math.abs(sin));
+          yield { x: cx, y: cy + 4, anchor: "middle" as const, box: { x: cx - w / 2, y: cy - 8, w, h }, far: true };
+        }
+      }
+    }
+    const own = pad(at);
+    const leaderOf = (box: Box): [Spot, Spot] | undefined => {
+      const to = { x: Math.min(Math.max(at.x, box.x), box.x + box.w), y: Math.min(Math.max(at.y, box.y), box.y + box.h) };
+      const along = Math.hypot(to.x - at.x, to.y - at.y);
+      return along > r + 3 ? [{ x: at.x + ((to.x - at.x) / along) * (r + 2), y: at.y + ((to.y - at.y) / along) * (r + 2) }, to] : undefined;
+    };
+    const fits = ({ box, far }: { box: Box; far: boolean }) => {
+      const line = far ? leaderOf(box) : undefined;
+      return (
+        box.x >= frame.left &&
+        box.x + box.w <= frame.right &&
+        box.y >= frame.top &&
+        box.y + box.h <= frame.bottom &&
+        !placed.some((other) => overlaps(box, { x: other.x - NAME_GAP, y: other.y - 2, w: other.w + NAME_GAP * 2, h: other.h + 4 })) &&
+        !marks.some((mark) => overlaps(box, mark)) &&
+        !leaders.some(([a, b]) => crosses(a, b, box)) &&
+        !(line && [...placed, ...marks].some((other) => !overlaps(other, own) && crosses(line[0], line[1], other)))
+      );
+    };
+    let spot = hug.find(fits);
+    if (!spot) for (const ring of rings()) if (fits(ring)) { spot = ring; break; }
+    if (!spot) continue;
+    placed.push(spot.box);
+    const leader = spot.far ? leaderOf(spot.box) : undefined;
+    if (leader) leaders.push(leader);
+    out.set(id, { x: spot.x, y: spot.y, anchor: spot.anchor, leader });
   }
   return out;
 }
@@ -303,6 +422,8 @@ export function PhoneChart({
 }) {
   const [picked, setPicked] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  useFontLoads();
+  const clip = `mi-badge${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   // Each model's dot sits at its best effort that has a cost.
   const charted = rows.flatMap((row) => {
     const priced = row.efforts.filter((point) => point.cost);
@@ -332,16 +453,28 @@ export function PhoneChart({
   } = linearTicks(Math.max(0, lo - pad), Math.min(percent ? 100 : Infinity, hi + pad), 6);
   const y = (score: number) => bottom - ((score - y0) / (y1 - y0 || 1)) * (bottom - top);
 
-  const named = charted.slice(0, NAMED);
-  const spot = (row: (typeof charted)[number]) => ({ x: x(row.dot.cost!), y: y(row.dot.score) });
+  const drawn = new Map(
+    dodge(
+      charted.map((row) => ({ x: x(row.dot.cost!), y: y(row.dot.score) })),
+      BADGE,
+      { left, top, right, bottom },
+    ).map((at, i) => [charted[i]!.model, at]),
+  );
+  const spot = (row: (typeof charted)[number]) => drawn.get(row.model)!;
+  const quad = charted.length >= 3 ? { x: x(10 ** median(charted.map((row) => Math.log10(row.dot.cost!)))), y: y(median(charted.map((row) => row.dot.score))) } : undefined;
+  const bestValue = t("modelIndex.bestValue");
+  const corner = quad ? [{ x: left + 2, y: top + 2, w: bestValue.length * 7 + 10, h: 14 }] : [];
   const names = placeNames(
-    named.map((row) => ({ id: row.model, text: shortLabel(row.label), at: spot(row) })),
+    charted.map((row) => ({ id: row.model, text: shortLabel(row.label), at: spot(row) })),
     charted.map(spot),
     // Names may spill 4px into the 8px the plot bleeds into the page padding.
     { left, top, right: W + 4, bottom },
+    corner,
   );
-  const big = new Set([...named.map((row) => row.model), chosen?.model]);
-  const ordered = [...charted].sort((a, b) => Number(big.has(a.model)) - Number(big.has(b.model)) || Number(a === chosen) - Number(b === chosen));
+  const named = charted.filter((row) => names.has(row.model));
+  const line = picked ? chosen : undefined;
+  // Lower ranks first, so a better model's badge sits on top.
+  const ordered = [...charted].reverse().sort((a, b) => Number(a === chosen) - Number(b === chosen));
 
   const tap = (clientX: number, clientY: number) => {
     const frame = svgRef.current?.getBoundingClientRect();
@@ -356,7 +489,7 @@ export function PhoneChart({
     if (nearest) setPicked(nearest);
   };
 
-  const [hintStart, hintEnd] = t("modelIndex.chart.hint", { tap: "\u0000" }).split("\u0000");
+  const [hintStart, hintEnd] = t("modelIndex.chart.hint", { tap: "\u0000", count: named.length }).split("\u0000");
   return (
     <div data-mi-phone-chart className="flex flex-col">
       <div className="flex items-baseline justify-between gap-3 text-[12.5px] text-ink-secondary">
@@ -377,6 +510,20 @@ export function PhoneChart({
           <Maximize2 size={16} />
         </button>
         <svg ref={svgRef} width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block overflow-visible" role="group" aria-label={title}>
+          <defs>
+            <linearGradient id={`${clip}-best`} x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" style={{ stopColor: "var(--color-ink)", stopOpacity: 0.085 }} />
+              <stop offset="1" style={{ stopColor: "var(--color-ink)", stopOpacity: 0.02 }} />
+            </linearGradient>
+          </defs>
+          {quad && (
+            <>
+              <rect data-mi-best x={left} y={top} width={Math.max(0, quad.x - left)} height={Math.max(0, quad.y - top)} fill={`url(#${clip}-best)`} pointerEvents="none" />
+              <text x={left + 6} y={top + 12} pointerEvents="none" className="fill-ink-secondary text-[9.5px] font-semibold uppercase tracking-[0.08em]" style={{ opacity: 0.8 }}>
+                {bestValue}
+              </text>
+            </>
+          )}
           <text x={left} y={10} className="fill-ink-secondary text-[11px]">
             ↑ {title}
           </text>
@@ -402,30 +549,30 @@ export function PhoneChart({
             {t("modelIndex.axis.costLog")} →
           </text>
           <rect x={0} y={0} width={W} height={H} fill="transparent" onClick={(e) => tap(e.clientX, e.clientY)} />
-          {ordered.map((row) =>
-            row.priced.length > 1 ? (
+          {line && line.priced.length > 1 && (
+            <g data-mi-effort={line.model} pointerEvents="none">
               <polyline
-                key={`line-${row.model}`}
                 fill="none"
-                pointerEvents="none"
                 strokeLinejoin="round"
                 strokeLinecap="round"
-                strokeWidth={row === chosen ? 2.5 : 1.5}
-                strokeOpacity={row === chosen ? 1 : 0.35}
-                style={{ stroke: color(row.provider) }}
-                points={row.priced.map((point) => `${x(point.cost!).toFixed(1)},${y(point.score).toFixed(1)}`).join(" ")}
+                strokeWidth={1.25}
+                style={{ stroke: color(line.provider) }}
+                points={line.priced.map((point) => (point === line.dot ? spot(line) : { x: x(point.cost!), y: y(point.score) })).map((at) => `${at.x.toFixed(1)},${at.y.toFixed(1)}`).join(" ")}
               />
-            ) : null,
+              {line.priced.map((point) => (point === line.dot ? null : (
+                <circle key={point.key} cx={x(point.cost!)} cy={y(point.score)} r={2.5} strokeWidth={1} style={{ fill: color(line.provider), stroke: "var(--color-panel)" }} />
+              )))}
+            </g>
           )}
           {ordered.map((row) => {
             const at = spot(row);
             return (
-              <g key={`dot-${row.model}`} data-mi-dot={row.model}>
-                <circle cx={at.x} cy={at.y} r={big.has(row.model) ? 6 : 4.5} fillOpacity={big.has(row.model) ? 1 : 0.85} strokeWidth={2} style={{ fill: color(row.provider), stroke: "var(--color-panel)" }} />
+              <g key={`dot-${row.model}`} data-mi-dot={row.model} transform={`translate(${at.x.toFixed(1)} ${at.y.toFixed(1)})`}>
+                <g pointerEvents="none" opacity={line && row !== line ? 0.3 : undefined}>
+                  <PhoneBadge provider={row.provider} r={BADGE} />
+                </g>
                 <circle
-                  cx={at.x}
-                  cy={at.y}
-                  r={12}
+                  r={14}
                   fill="transparent"
                   role="button"
                   tabIndex={0}
@@ -442,22 +589,25 @@ export function PhoneChart({
               </g>
             );
           })}
-          {chosen && <circle cx={spot(chosen).x} cy={spot(chosen).y} r={11} fill="none" pointerEvents="none" strokeWidth={1.5} className="stroke-ink" />}
+          {chosen && <circle cx={spot(chosen).x} cy={spot(chosen).y} r={BADGE + 4} fill="none" pointerEvents="none" strokeWidth={1.5} className="stroke-ink" />}
           {named.map((row) => {
             const name = names.get(row.model)!;
             return (
-              <text
-                key={`name-${row.model}`}
-                data-mi-name={row.model}
-                x={name.x}
-                y={name.y}
-                textAnchor={name.anchor}
-                pointerEvents="none"
-                className="fill-ink text-[12.5px] font-semibold"
-                style={{ paintOrder: "stroke", stroke: "var(--color-panel)", strokeWidth: 4, strokeLinejoin: "round" }}
-              >
-                {shortLabel(row.label)}
-              </text>
+              <g key={`name-${row.model}`} pointerEvents="none" opacity={line && row !== line ? 0.3 : undefined}>
+                {name.leader && (
+                  <line x1={name.leader[0].x} y1={name.leader[0].y} x2={name.leader[1].x} y2={name.leader[1].y} strokeWidth={1} className="stroke-ink-secondary" strokeOpacity={0.55} />
+                )}
+                <text
+                  data-mi-name={row.model}
+                  x={name.x}
+                  y={name.y}
+                  textAnchor={name.anchor}
+                  className={cn("fill-ink text-[12.5px]", row === chosen || row.rank <= 3 ? "font-semibold" : "font-medium")}
+                  style={{ paintOrder: "stroke", stroke: "var(--color-panel)", strokeWidth: 4, strokeLinejoin: "round" }}
+                >
+                  {shortLabel(row.label)}
+                </text>
+              </g>
             );
           })}
         </svg>

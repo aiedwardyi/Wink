@@ -1,4 +1,4 @@
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -7,6 +7,7 @@ import { Store } from "../store.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, noticeText } from "./db.ts";
 import { hostedRoomView, isHostedThread, roomBotsRefusal } from "./guards.ts";
 import { closeInvitesDb } from "./invites.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 let store: Store;
 
@@ -17,7 +18,7 @@ const close = () => {
 
 beforeEach(() => {
   close();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
 });
 afterEach(close);

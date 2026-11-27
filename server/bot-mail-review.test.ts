@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-import { rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CommsCallers } from "./comms-caller.ts";
@@ -8,10 +7,13 @@ import { DATA_DIR } from "./config.ts";
 import { paneNotesForTurn, prepareModelContext, repairModelContext, repairTarget } from "./context-compaction.ts";
 import { _resetPending, discardDelegations, discardOrphanedDelegations, drainWaitingOn, findDelegationReceipt, finishDelegatedTurn, queueDelegation, recordDelegationReceipt, updateReceipt } from "./delegations.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
+import { recoverHandedMail } from "./mail-index.ts";
 import { mailForTurn, markMailRead, markPaneMailRead, settleMail, toolMailResult, unreadMail } from "./mail.ts";
 import { cancelPeerApprovalsFor, resolvePeerComms } from "./peer-approval.ts";
 import { Store, type BotRecord, type Message } from "./store.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
 import { turnRegistry } from "./turn-registry.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 let store: Store;
 let from: ReturnType<Store["createBot"]>;
@@ -21,7 +23,7 @@ const start = (turnId: string) => turnRegistry.start(turnId, { botId: from.id, t
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   _resetPending();
   _resetCommsRoots();
   store = new Store(() => ({ instanceId: "claude", model: "fake" }));
@@ -124,6 +126,7 @@ it("repairs handovers without loading transcripts that have no handed mail", () 
   store.createGroup("Room", [from.id, target.id]);
   const messagesFor = vi.spyOn(store, "messagesFor");
   discardOrphanedDelegations(bus());
+  recoverHandedMail(store, bootRowsNow().handed);
   expect(messagesFor).not.toHaveBeenCalled();
 });
 
@@ -167,8 +170,9 @@ function response() {
 }
 
 function routes(askBotAndWait = vi.fn(), resolveCommsCaller?: Parameters<typeof createInternalRoutes>[0]["resolveCommsCaller"]) {
-  return createInternalRoutes({ store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
+  return createInternalRoutes({ readOnlyTurn: () => false, store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
     MAX_WORKSPACE_BOTS: 100, checkedMemberIds: (memberIds: string[]) => ({ ok: true, memberIds }),
+    checkedGroupResponder: () => ({ kind: "everyone" }),
     createdBotSelection: (chief: BotRecord["modelSelection"]) => ({ ok: true, selection: { ...chief } }),
     connectorThread: (botId: string, threadId: string) => store.conversationForBot(botId, threadId),
     delegationWatch: new Map(), askBotAndWait, resolveCommsCaller,

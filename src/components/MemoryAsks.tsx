@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronRight, ListChecks } from "lucide-react";
 import type { Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { askCounts, botAsks, isClosed, type Ask, type AskStatus } from "@/lib/asks";
 import { Fold } from "./Fold";
+import { useShowAll } from "./MemoryGroups";
 
 const FIRST = 3;
 
@@ -34,9 +36,12 @@ export function MemoryAsks({ bot }: { bot: Bot }) {
   const { t } = useI18n();
   const [showAll, setShowAll] = useState(false);
   const [showDone, setShowDone] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
   const asks = botAsks(bot);
   const counts = askCounts(asks);
   const open = asks.filter((ask) => !isClosed(ask));
+  const openRows = useShowAll(open);
+  const doneRows = useShowAll(asks.filter(isClosed));
   return (
     <div className="mm-asks">
       <div className="mm-sec-head">
@@ -45,26 +50,28 @@ export function MemoryAsks({ bot }: { bot: Bot }) {
         <span className="mm-sec-hint">{t("bot.memoryAsksHint")}</span>
       </div>
       {asks.length ? (
-        <div className="mm-task mm-asks-box">
+        <div ref={box} className="mm-task mm-asks-box">
           {open.length ? <AskRows asks={open.slice(0, FIRST)} className="mm-asks-open" /> : <div className="mm-empty">{t("bot.memoryAsksAllDone")}</div>}
           {open.length > FIRST && (
             <>
               <Fold open={showAll}>
-                <AskRows asks={open.slice(FIRST)} className="mm-asks-open mm-asks-rest" />
+                <AskRows asks={openRows.shown.slice(FIRST)} className="mm-asks-open mm-asks-rest" />
+                {openRows.more}
               </Fold>
-              <button type="button" className="mm-asks-more" aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>
+              <button type="button" className="mm-asks-more" aria-expanded={showAll} onClick={() => { if (showAll) openRows.reset(); setShowAll(!showAll); }}>
                 {showAll ? t("chat.showLess") : t("bot.memoryAsksShowAll", { count: open.length })}
               </button>
             </>
           )}
           {counts.closed > 0 && (
             <>
-              <button type="button" className="mm-asks-done-toggle" aria-expanded={showDone} onClick={() => setShowDone(!showDone)}>
+              <button type="button" className="mm-asks-done-toggle" aria-expanded={showDone} onClick={() => { if (showDone) doneRows.reset(); setShowDone(!showDone); }}>
                 {t("bot.memoryAsksDone", { count: counts.closed })}
                 <ChevronRight size={14} aria-hidden="true" />
               </button>
-              <Fold open={showDone}>
-                <AskRows asks={asks.filter(isClosed)} className="mm-asks-closed" />
+              <Fold open={showDone} onOpened={() => revealOnOpen(box.current?.querySelector<HTMLElement>(".mm-asks-closed > *") ?? null)}>
+                <AskRows asks={doneRows.shown} className="mm-asks-closed" />
+                {doneRows.more}
               </Fold>
             </>
           )}

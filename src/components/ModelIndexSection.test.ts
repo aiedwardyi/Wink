@@ -1,6 +1,7 @@
 import "./ProfileFields.test-dom.ts";
 import { act, createElement, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider, applyLocale, localeTag, t } from "@/lib/i18n";
@@ -13,7 +14,8 @@ vi.mock("@/state/store", async (importOriginal) => ({
 }));
 
 import { ModelIndexSection } from "./ModelIndexSection";
-import { placeNames } from "./ModelIndexPhone";
+import { PhoneBadge, ProviderChips, dodge, placeNames } from "./ModelIndexPhone";
+import { ProviderMark } from "./ProviderIcons";
 
 let root: Root;
 let host: HTMLElement;
@@ -632,6 +634,7 @@ describe("full screen chart", () => {
   };
   const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
   const svg = () => host.querySelector<SVGSVGElement>("svg[role=img], [data-mi-phone-chart] svg[role=group]")!;
+  const badges = () => [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].filter((el) => el.querySelector("[data-mi-badge]"));
   afterEach(() => {
     Object.defineProperty(window, "innerWidth", { configurable: true, value: innerWidth });
     vi.useRealTimers();
@@ -794,7 +797,7 @@ describe("full screen chart", () => {
   it("opens a dot tooltip on tap and hides it on empty chart or zoom", async () => {
     await rebuild(true, { width: 780, height: 330 });
     act(() => button("Full Screen")!.click());
-    const dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => el.style.opacity === "1")!;
+    const dot = badges().find((el) => el.style.opacity === "1")!;
     const [clientX, clientY] = dot.style.transform.match(/-?[\d.]+/g)!.map(Number);
     const hit = svg().querySelector('rect[fill="transparent"]')!;
     const tap = (x: number, y: number) => act(() => void hit.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: x, clientY: y })));
@@ -831,7 +834,7 @@ describe("full screen chart", () => {
     touch("touchmove", [[50, 100], [250, 100]]);
     touch("touchend", []);
     expect(svg().getAttribute("data-mi-zoom")).toBe("2");
-    const dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => el.style.opacity === "1")!;
+    const dot = badges().find((el) => el.style.opacity === "1")!;
     const [x, y] = dot.style.transform.match(/-?[\d.]+/g)!.map(Number);
     touch("touchstart", [[x!, y!]]);
     touch("touchmove", [[x! + 3, y!]]);
@@ -843,7 +846,7 @@ describe("full screen chart", () => {
   it("opens a dot tooltip after staggered pinch lifts without resetting zoom", async () => {
     await rebuild(true, { width: 780, height: 330 });
     act(() => button("Full Screen")!.click());
-    const dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => {
+    const dot = badges().find((el) => {
       const x = Number(el.style.transform.match(/-?[\d.]+/)?.[0]);
       return el.style.opacity === "1" && x > 200 && x < 500;
     })!;
@@ -915,7 +918,7 @@ describe("full screen chart", () => {
         await rebuild(false, { width: 780, height: 330 });
         // happy-dom has no layout, so give the hit rect the box it has in a browser.
         hit().getBoundingClientRect = () => ({ left: Number(hit().getAttribute("x")), top: Number(hit().getAttribute("y")) }) as DOMRect;
-        dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => el.style.opacity === "1")!;
+        dot = badges().find((el) => el.style.opacity === "1")!;
         old = spot(dot);
         wheel(-300, [old[0] + 20, old[1]], 1000);
         act(() => vi.advanceTimersByTime(40));
@@ -945,6 +948,58 @@ describe("full screen chart", () => {
       expect(wheel(-300, [100, 100], 1000).defaultPrevented).toBe(false);
       expect(svg().getAttribute("data-mi-zoom")).toBeNull();
     });
+  });
+});
+
+describe("model index provider marks", () => {
+  const providers = { anthropic: "claudeAgent", openai: "codex", google: "geminiAgent", xai: "grokAgent", meta: "museAgent" } as const;
+  const glyph = (element: Element) => [...element.querySelectorAll("path, rect")].map((part) => [part.tagName, part.getAttribute("d"), part.getAttribute("width")]);
+
+  it("uses the picker mark without a circle for each chart badge and phone chip", async () => {
+    for (const [provider, driverKind] of Object.entries(providers) as Array<[keyof typeof providers, string]>) {
+      const expected = document.createElement("div");
+      expected.innerHTML = renderToStaticMarkup(createElement(ProviderMark, { driverKind, size: 12 }));
+      await act(async () => root.render(createElement("svg", null, createElement(PhoneBadge, { provider: provider as keyof typeof providers, r: 8 }))));
+      expect(host.querySelector("image, circle")).toBeNull();
+      expect(glyph(host)).toEqual(glyph(expected));
+      await act(async () => root.render(createElement(ProviderChips, { providers: [provider as keyof typeof providers], value: null, onChange: () => undefined, t })));
+      expect(host.querySelector("img")).toBeNull();
+      expect(glyph(host)).toEqual(glyph(expected));
+    }
+    await act(async () => root.render(createElement("svg", null, createElement(PhoneBadge, { provider: "other", r: 8 }))));
+    expect(host.querySelector("svg svg, image")).toBeNull();
+    expect(host.querySelector('circle[style*="--mi-other"]')).not.toBeNull();
+  });
+
+  it("contrasts ink marks with pressed chip backgrounds", async () => {
+    for (const provider of ["openai", "xai", "meta"] as const) {
+      await act(async () => root.render(createElement(ProviderChips, { providers: [provider], value: provider, onChange: () => undefined, t })));
+      const chip = host.querySelector<HTMLButtonElement>('[aria-pressed="true"]')!;
+      const mark = chip.querySelector("svg")!;
+      expect(chip.className).toContain("bg-ink");
+      expect(mark.parentElement!.style.getPropertyValue("--color-ink")).toBe("var(--color-panel)");
+    }
+  });
+
+  it("renders marks in desktop and phone charts and the phone list", async () => {
+    const desktop = host.querySelector("[data-mi-badge]")!;
+    expect(desktop.querySelector("svg")).not.toBeNull();
+    expect(desktop.querySelector("image")).toBeNull();
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width") }) as MediaQueryList);
+    try {
+      await mount();
+      const row = host.querySelector("[data-mi-row]")!;
+      expect(row.querySelector("img[src*='icon-']")).toBeNull();
+      expect(row.querySelector("svg")).not.toBeNull();
+      pick("Chart", "Chart");
+      const dot = host.querySelector("[data-mi-dot]")!;
+      expect(dot.querySelector("svg")).not.toBeNull();
+      expect(dot.querySelector("image")).toBeNull();
+      expect(dot.querySelectorAll("circle")).toHaveLength(1);
+      expect(dot.querySelector("circle")!.getAttribute("fill")).toBe("transparent");
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 
@@ -1011,19 +1066,24 @@ describe("phone model index", () => {
     expect(rows().some((row) => !anthropic.has(row.dataset.miRow!))).toBe(true);
   });
 
-  it("names only the top 3 on the chart and shows a tapped dot's callout", async () => {
+  it("names more than the top 3, draws no effort line until a dot is tapped, then shows its callout and efforts", async () => {
     await rebuild();
     pick("Chart", "Chart");
     const chart = host.querySelector("[data-mi-phone-chart]")!;
     const names = [...chart.querySelectorAll("text[data-mi-name]")].map((el) => el.getAttribute("data-mi-name"));
-    expect(names).toHaveLength(3);
-    expect(chart.querySelectorAll("[data-mi-line], line[stroke-dasharray]")).toHaveLength(0);
-    const dots = [...chart.querySelectorAll<SVGElement>('[data-mi-dot] [role="button"]')];
-    const fifth = dots.find((dot) => !names.includes(dot.closest("[data-mi-dot]")!.getAttribute("data-mi-dot")))!;
-    const model = fifth.closest("[data-mi-dot]")!.getAttribute("data-mi-dot")!;
-    act(() => void fifth.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(names.length).toBeGreaterThan(3);
+    expect(chart.textContent).toContain(`${names.length} named.`);
+    expect(chart.querySelectorAll("[data-mi-effort], [data-mi-line], line[stroke-dasharray]")).toHaveLength(0);
+    const efforts = (model: string) => MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "intelligence" && entry.model === model && entry.cost);
+    const first = chart.querySelector('[aria-pressed="true"]')!.closest("[data-mi-dot]")!.getAttribute("data-mi-dot");
+    const model = [...intelligence().keys()].find((id) => id !== first && efforts(id).length > 1)!;
+    const dot = chart.querySelector<SVGElement>(`[data-mi-dot="${model}"] [role="button"]`)!;
+    act(() => void dot.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(chart.querySelector("[data-mi-callout]")!.textContent).toContain(intelligence().get(model));
-    expect(fifth.getAttribute("aria-pressed")).toBe("true");
+    expect(dot.getAttribute("aria-pressed")).toBe("true");
+    const numbers = (text: string | null) => (text ?? "").match(/-?[\d.]+/g)!.map(Number);
+    expect(numbers(chart.querySelector(`[data-mi-effort="${model}"] polyline`)!.getAttribute("points"))).toHaveLength(efforts(model).length * 2);
+    expect(chart.querySelectorAll(`[data-mi-effort="${model}"] circle`)).toHaveLength(efforts(model).length - 1);
   });
 
   it("titles the phone Cost list with the input / output prices it shows", async () => {
@@ -1068,5 +1128,152 @@ describe("phone model index", () => {
     });
     const apart = Math.max(b!.left - a!.right, a!.left - b!.right) >= 10 || Math.max(b!.top - a!.bottom, a!.top - b!.bottom) >= 2;
     expect(apart).toBe(true);
+  });
+});
+
+describe("chart layout", () => {
+  type Box = { x: number; y: number; w: number; h: number };
+  type Disc = { x: number; y: number; r: number };
+  // The charts' own estimate when there is no canvas to measure with.
+  const width = (text: string, px: number) => text.length * (px > 12 ? 7 : 6);
+  const numbers = (text: string | null) => (text ?? "").match(/-?[\d.]+/g)!.map(Number);
+  const hits = (a: Box, b: Box) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  const covers = (box: Box, disc: Disc) =>
+    Math.hypot(Math.max(box.x, Math.min(disc.x, box.x + box.w)) - disc.x, Math.max(box.y, Math.min(disc.y, box.y + box.h)) - disc.y) < disc.r;
+  const shown = (el: Element) => !/opacity:\s*0(?![.\d])/.test(el.getAttribute("style") ?? "") && el.getAttribute("opacity") !== "0";
+  const radius = (el: Element) =>
+    Math.max(
+      0,
+      ...[...el.querySelectorAll("circle, path")]
+        .filter((part) => part.getAttribute("fill") !== "transparent" && [part, ...part.parentElement?.closest("[data-mi-paint]") ? [part.parentElement.closest("[data-mi-paint]")!] : []].every(shown))
+        .map((part) => (part.tagName === "path" ? 4.3 : Number(part.getAttribute("r")))),
+    );
+  const render = async (phone: boolean, size: number) => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private cb: (entries: unknown[]) => void) {}
+        observe = () => this.cb([{ contentRect: { width: size, height: 600 } }]);
+        disconnect = () => undefined;
+      },
+    );
+    // SAFETY: isPhone only reads .matches
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: phone && query.includes("max-width") }) as MediaQueryList);
+    await mount();
+    if (phone) pick(t("modelIndex.viewLabel"), t("modelIndex.view.chart"));
+  };
+  type Line = { a: { x: number; y: number }; b: { x: number; y: number }; own?: Box };
+  // Liang-Barsky, as the chart uses.
+  const cuts = ({ a, b }: Line, box: Box) => {
+    let [t0, t1] = [0, 1];
+    const [dx, dy] = [b.x - a.x, b.y - a.y];
+    for (const [p, q] of [[-dx, a.x - box.x], [dx, box.x + box.w - a.x], [-dy, a.y - box.y], [dy, box.y + box.h - a.y]] as const) {
+      if (p === 0) {
+        if (q < 0) return false;
+        continue;
+      }
+      if (p < 0) t0 = Math.max(t0, q / p);
+      else t1 = Math.min(t1, q / p);
+      if (t0 > t1) return false;
+    }
+    return true;
+  };
+  const clash = (labels: Box[], marks: Disc[], lines: Line[] = []) => [
+    ...labels.flatMap((a, i) => labels.slice(i + 1).filter((b) => hits(a, b)).map(() => "label/label")),
+    ...labels.flatMap((box) => marks.filter((disc) => covers(box, disc)).map(() => "label/marker")),
+    ...marks.flatMap((a, i) => marks.slice(i + 1).filter((b) => Math.hypot(a.x - b.x, a.y - b.y) < a.r + b.r - 0.5).map(() => "marker/marker")),
+    ...lines.flatMap((line) => labels.filter((box) => box !== line.own && cuts(line, box)).map(() => "line/label")),
+  ];
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("overlaps no name with another name or a marker on the phone chart at 390", async () => {
+    await render(true, 358);
+    const chart = host.querySelector("[data-mi-phone-chart] svg[role=group]")!;
+    const labels = [...chart.querySelectorAll("text[data-mi-name]")].map((el) => {
+      const [x, y, w] = [Number(el.getAttribute("x")), Number(el.getAttribute("y")), width(el.textContent!, 12.5)];
+      const anchor = el.getAttribute("text-anchor");
+      return { x: anchor === "end" ? x - w : anchor === "middle" ? x - w / 2 : x, y: y - 10, w, h: 13 };
+    });
+    const marks = [...chart.querySelectorAll("[data-mi-dot]")].map((el) => {
+      const circle = el.querySelector("circle[cx]");
+      const [x, y] = circle ? [Number(circle.getAttribute("cx")), Number(circle.getAttribute("cy"))] : numbers(el.getAttribute("transform"));
+      return { x: x!, y: y!, r: radius(el) };
+    });
+    const efforts = [...chart.querySelectorAll("polyline")].filter((el) => el.getAttribute("stroke-opacity") !== "0").flatMap((el) => {
+      const at = numbers(el.getAttribute("points"));
+      return Array.from({ length: at.length / 2 - 1 }, (_, i) => ({ a: { x: at[i * 2]!, y: at[i * 2 + 1]! }, b: { x: at[i * 2 + 2]!, y: at[i * 2 + 3]! } }));
+    });
+    const leaders = [...chart.querySelectorAll("text[data-mi-name]")].flatMap((el, i) => {
+      const line = el.parentElement?.querySelector("line");
+      if (!line) return [];
+      const [x1, y1, x2, y2] = ["x1", "y1", "x2", "y2"].map((name) => Number(line.getAttribute(name)));
+      return [{ a: { x: x1!, y: y1! }, b: { x: x2!, y: y2! }, own: labels[i] }];
+    });
+    expect(labels.length).toBeGreaterThanOrEqual(3);
+    expect(clash(labels, marks, [...efforts, ...leaders])).toEqual([]);
+  });
+
+  it("drops a desktop pick the next benchmark does not plot instead of dimming every model", async () => {
+    await render(false, 594);
+    const chart = () => host.querySelector("svg[role=img]")!;
+    const names = () => [...chart().querySelectorAll("text[data-mi-label]")].map((el) => el.textContent);
+    let checked = false;
+    for (let i = 0; !checked && i < chart().querySelectorAll("[data-mi-point]").length; i++) {
+      await mount();
+      const point = [...chart().querySelectorAll<SVGGElement>("[data-mi-point]")].filter((el) => el.querySelector("[data-mi-badge]"))[i];
+      if (!point) break;
+      const [x, y] = numbers(point.style.transform);
+      act(() => chart().querySelector("rect[fill=transparent]")!.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: x, clientY: y })));
+      const name = chart().querySelector('[data-mi-focus=""] text[data-mi-label]')?.textContent;
+      if (!name) continue;
+      pick("Benchmark", "Design");
+      if (names().includes(name)) continue;
+      expect(chart().querySelectorAll('[data-mi-focus="dim"]')).toHaveLength(0);
+      checked = true;
+    }
+    expect(checked).toBe(true);
+  });
+
+  it("drops a phone pick the next benchmark does not plot instead of lining another model", async () => {
+    await render(true, 358);
+    const chart = () => host.querySelector("[data-mi-phone-chart] svg[role=group]")!;
+    const design = new Set(MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "design").map((entry) => entry.model));
+    const efforts = (model: string) => MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "intelligence" && entry.model === model && entry.cost).length;
+    const gone = [...chart().querySelectorAll("[data-mi-dot] [role=button]")].find((el) => {
+      const model = MODEL_INDEX_ENTRIES.find((entry) => entry.index === "intelligence" && el.getAttribute("aria-label")?.startsWith(`${entry.label} `))?.model;
+      return model && !design.has(model) && efforts(model) > 1;
+    });
+    expect(gone).toBeDefined();
+    act(() => gone!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(chart().querySelector("[data-mi-effort]")).not.toBeNull();
+    pick("Benchmark", "Design");
+    expect(chart().querySelector("[data-mi-effort]")).toBeNull();
+  });
+
+  it("keeps badges apart after pulling them inside the frame", () => {
+    const [a, b] = dodge([{ x: -50, y: 50 }, { x: -10, y: 50 }], 8, { left: 0, top: 0, right: 100, bottom: 100 });
+    expect(Math.hypot(a!.x - b!.x, a!.y - b!.y)).toBeGreaterThanOrEqual(19.9);
+  });
+
+  it("overlaps no name with another name or a marker on the desktop chart at 1440", async () => {
+    await render(false, 594);
+    const chart = host.querySelector("svg[role=img]")!;
+    const labels = [...chart.querySelectorAll<SVGTextElement>("text[data-mi-label]")].filter(shown).map((el) => {
+      const [x, y] = numbers(el.style.transform);
+      return { x: x!, y: y! - 8, w: width(el.textContent!, 10.5), h: 10 };
+    });
+    const marks = [...chart.querySelectorAll<SVGGElement>("[data-mi-point]")]
+      .filter(shown)
+      .map((el) => {
+        const [x, y] = numbers(el.style.transform);
+        const [dx = 0, dy = 0] = el.querySelector(":scope > g[transform]") ? numbers(el.querySelector(":scope > g[transform]")!.getAttribute("transform")) : [];
+        return { x: x! + dx, y: y! + dy, r: radius(el) };
+      })
+      .filter((disc) => disc.r > 0);
+    expect(labels.length).toBeGreaterThanOrEqual(3);
+    expect(clash(labels, marks)).toEqual([]);
   });
 });

@@ -139,16 +139,17 @@ it("pauses hidden views without losing the user's manual selection", async () =>
   expect(host.querySelector(".map-follow")?.getAttribute("aria-pressed")).toBe("false");
 });
 
-it("asks for Git rows only once the tree and the code have landed", async () => {
+it("asks for the last Git rows at once and reads them again only once the tree and the code have landed", async () => {
   const held: Record<string, (body: object) => void> = {};
+  const kind = (url: Parameters<typeof fetch>[0]) => String(url).includes("cached=1") ? "last" : /\/(repo|file|flow)\?/.exec(String(url))![1];
   vi.mocked(fetch).mockImplementation(url => {
-    const kind = /\/(repo|file|flow)\?/.exec(String(url))![1];
-    return kind === "flow" ? Promise.resolve(Response.json({ commits: [] })) : new Promise(done => { held[kind] = body => done(Response.json(body)); });
+    const asked = kind(url);
+    return asked === "flow" || asked === "last" ? Promise.resolve(Response.json(asked === "last" ? null : { commits: [] })) : new Promise(done => { held[asked] = body => done(Response.json(body)); });
   });
-  const asked = () => vi.mocked(fetch).mock.calls.map(([url]) => /\/(repo|file|flow)\?/.exec(String(url))![1]);
+  const asked = () => vi.mocked(fetch).mock.calls.map(([url]) => kind(url));
   await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
   await emit();
-  expect(asked().toSorted()).toEqual(["file", "repo"]);
+  expect(asked().toSorted()).toEqual(["file", "last", "last", "repo"]);
   await act(async () => held.repo(repo));
   expect(asked()).not.toContain("flow");
   await act(async () => held.file({ lines: [{ kind: "add", text: "const edited = true;", line: 1 }] }));
@@ -170,6 +171,21 @@ it("waits for the renewed snapshot before requesting an unchanged selected file"
   await emit();
   expect(reads()).toHaveLength(1);
   expect(host.textContent).toContain("renewed diff");
+});
+
+it("asks a kept Map's Git rows again only once its stream is back, since the server answers them only for an open stream", async () => {
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : String(url).includes("/flow?") ? Response.json({ commits: [] }) : Response.json({ lines: [] }));
+  const flows = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/flow?")).length;
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  await act(async () => {});
+  const asked = flows();
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", active: false })));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot", active: true })));
+  expect(flows()).toBe(asked);
+  expect(host.querySelector(".map-flow-rows")).not.toBeNull();
+  await emit([workers[0]]);
+  expect(flows()).toBe(asked + 2);
 });
 
 it("draws the repo as a tree in place of the squares and the changed-files list, every file of a small repo shown", async () => {
@@ -928,4 +944,55 @@ it("puts a second drag line between the tree and the Git rows, hidden when no Gi
   const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
   expect(css).toContain(".map-pane > .map-split[data-rows]:not(:has(+ .map-flow-rows)) { display: none; }");
   expect(css).toMatch(/\.map-pane > \.map-flow-rows \{[^}]*max-height: var\(--map-rows, 170px\);/);
+});
+
+it("draws a three-dot grip in the middle of both drag lines", async () => {
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : String(url).includes("/flow?") ? Response.json({ commits: [] }) : Response.json({ lines: [] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([workers[0]]);
+  await act(async () => {});
+  expect(host.querySelectorAll(".map-pane > .map-split")).toHaveLength(2);
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
+  expect(css).toMatch(/\.map-split::after \{[^}]*left: 50%; top: 50%; width: 22px; height: 4px;[^}]*var\(--color-ink-secondary\) 1\.5px[^}]*8px 4px repeat-x; pointer-events: none;/);
+});
+
+it("lets the Git rows take the free room when no code view follows them", async () => {
+  vi.mocked(fetch).mockImplementation(async url => String(url).includes("/repo?") ? Response.json(repo) : String(url).includes("/flow?") ? Response.json({ branch: "b", commits: [{ sha: "abcdef1234", subject: "edit" }], total: 1, pushed: 0, pr: null }) : Response.json({ lines: [] }));
+  await act(async () => root.render(createElement(MapPane, { botId: "bot" })));
+  await emit([{ ...workers[0], files: [] }]);
+  await act(async () => {});
+  const pane = host.querySelector(".map-pane")!;
+  expect(pane.lastElementChild?.className).toBe("map-flow-rows");
+  expect(pane.querySelector(".map-code")).toBeNull();
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
+  expect(css).toMatch(/\.map-pane > \.map-flow-rows:last-child \{[^}]*flex: 1 1 0; min-height: 0; max-height: none;/);
+});
+
+it("keeps a loaded Map through wide, narrow and wide again with no size-only fetch or blank code", async () => {
+  let narrow = false;
+  const flips = new Set<() => void>();
+  vi.stubGlobal("matchMedia", (query: string) => ({ get matches() { return query.includes("max-width") && narrow; }, addEventListener: (_: string, fn: () => void) => flips.add(fn), removeEventListener: (_: string, fn: () => void) => flips.delete(fn) }));
+  const { ShowPane } = await import("./ShowPane");
+  await act(async () => root.render(createElement(ShowPane, { map: true, botId: "bot", hidden: false })));
+  for (let i = 0; i < 100 && !stream; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  await emit([workers[0]]);
+  const code = () => document.querySelector(".map-code")?.textContent ?? "";
+  for (let i = 0; i < 100 && !code().includes("const edited"); i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(code()).toContain("const edited = true;");
+  const streams = vi.mocked(EventSource).mock.calls.length;
+  const calls = vi.mocked(fetch).mock.calls.length;
+  const seen = [];
+  for (const next of [true, false]) {
+    await act(async () => { narrow = next; flips.forEach(flip => flip()); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+    seen.push({ code: code(), streams: vi.mocked(EventSource).mock.calls.length - streams, fetches: vi.mocked(fetch).mock.calls.length - calls });
+  }
+  expect(seen).toEqual([{ code: "1+const edited = true;", streams: 0, fetches: 0 }, { code: "1+const edited = true;", streams: 0, fetches: 0 }]);
+});
+
+it("draws unchanged code lines at full color like the added ones", () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MapPane.css"), "utf8");
+  const faded = [...css.matchAll(/([^{}]*)\{([^{}]*)\}/g)].filter(([, selector, body]) => /data-kind="context"/.test(selector) && /(?:^|[;\s])opacity:/.test(body));
+  expect(faded.map(([, selector]) => selector.trim())).toEqual([]);
+  expect(css).toMatch(/\.map-code-row\[data-kind="remove"\] code \{ opacity: \.7; \}/);
 });

@@ -107,12 +107,12 @@ it("puts a square per check in the checks box and the details in each stop's tip
   expect(host.querySelector(".map-flow-rows > .map-flow-tip")).not.toBeNull();
 });
 
-it("opens the PR, its checks and its files from their own stops, and nothing from Coding, Commit, Push or the row", async () => {
+it("opens the PR, its checks and its Conversation from their own stops, and nothing from Coding, Commit, Push or the row", async () => {
   const url = "https://github.com/o/r/pull/1529";
   flows.b = flow({ pr: null });
   await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA")], all: true });
   const [open, bare] = [...host.querySelectorAll<HTMLElement>(".map-flow-row")];
-  expect(Object.fromEntries([...open.querySelectorAll<HTMLElement>("[data-k]")].map(stop => [stop.dataset.k, stop.getAttribute("href")]))).toEqual({ code: null, commit: null, push: null, pr: url, checks: `${url}/checks`, review: `${url}/files`, merge: url });
+  expect(Object.fromEntries([...open.querySelectorAll<HTMLElement>("[data-k]")].map(stop => [stop.dataset.k, stop.getAttribute("href")]))).toEqual({ code: null, commit: null, push: null, pr: url, checks: `${url}/checks`, review: url, merge: url });
   expect(host.querySelectorAll(".map-flow-rows a[href]:not([target='_blank'])")).toHaveLength(0);
   expect(open.tagName).toBe("DIV");
   expect(Object.fromEntries([...open.querySelectorAll<HTMLElement>("[data-k]")].map(stop => [stop.dataset.k, stop.getAttribute("tabindex")]))).toEqual({ code: "0", commit: "0", push: "0", pr: null, checks: null, review: null, merge: null });
@@ -186,6 +186,14 @@ it("shows the row's details on keyboard focus", async () => {
   expect(host.querySelector(".map-flow-tip")).toBeNull();
 });
 
+it("opens the Review stop at the latest review on the Conversation tab and leaves the PR stop on the PR", async () => {
+  const url = "https://github.com/o/r/pull/1529";
+  flows.a = flow({ pr: pr({ reviewUrl: `${url}#pullrequestreview-5933092064` }) });
+  await render();
+  const href = (key: string) => host.querySelector(`.map-flow-row [data-k="${key}"]`)?.getAttribute("href");
+  expect([href("pr"), href("review")]).toEqual([url, `${url}#pullrequestreview-5933092064`]);
+});
+
 it("counts the files another worker is also editing, hidden at 0", async () => {
   flows.b = flow({ pr: null });
   const a = { ...edited("src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"), id: "a", nick: "ALPHA" };
@@ -247,4 +255,63 @@ it("puts one row per worker in its color, failing CI first, in Korean too", asyn
   expect(rows[0].style.getPropertyValue("--flow-line")).toMatch(/^light-dark\(/);
   expect(new Set(rows.map(row => row.style.getPropertyValue("--flow-line"))).size).toBe(3);
   expect(rows[0].querySelector('[data-k="pr"]')?.getAttribute("href")).toBe("https://github.com/o/r/pull/1529");
+});
+
+it("paints a checkout's last rows before the tree and the code, then swaps in only what changed", async () => {
+  const last = flow({ pr: pr({ checks: [{ name: "typecheck", state: "pending" }] }) });
+  flows.a = flow({ pr: pr({ checks: [{ name: "typecheck", state: "pass" }] }) });
+  vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => { const at = new URL(String(url), "http://x"); return Response.json(at.searchParams.get("cached") ? last : flows[at.searchParams.get("worker")!]); });
+  await render({ open: true, active: false });
+  expect(calls()).toEqual(["/api/bots/bot/map/flow?worker=a&cached=1"]);
+  expect(stops()).toContain("checks:run");
+  const row = host.querySelector(".map-flow-row");
+  await render({ open: true, active: true });
+  expect(calls()).toEqual(["/api/bots/bot/map/flow?worker=a&cached=1", "/api/bots/bot/map/flow?worker=a"]);
+  expect(stops()).toContain("checks:ok");
+  expect(host.querySelector(".map-flow-row")).toBe(row);
+});
+
+it.each([["last", { open: true, active: false }], ["read", { open: false, active: true }]] as const)("paints every worker's %s row in one go, after the slowest answer", async (_kind, gate) => {
+  // measured on 8 real checkouts: rows answered from 1.07 s to 3.6 s
+  const late = new Map([["a", 1_070], ["b", 2_000], ["c", 3_605]]);
+  flows.b = flow({ pr: null });
+  flows.c = flow({ pr: null, pushed: 1 });
+  vi.mocked(fetch).mockImplementation((url: string | URL | Request) => { const id = new URL(String(url), "http://x").searchParams.get("worker")!; return new Promise(done => setTimeout(() => done(Response.json(flows[id])), late.get(id))); });
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA"), worker("c", "GAMMA")], all: true, ...gate });
+  const seen = new Set<number>();
+  for (let ms = 0; ms < 4_000; ms += 100) { await tick(100); seen.add(host.querySelectorAll(".map-flow-row").length); }
+  expect([...seen]).toEqual([0, 3]);
+  expect(calls()).toHaveLength(3);
+});
+
+it("paints the rows that read when one fails, and nothing from a chat switched away mid-read", async () => {
+  let hold: () => void = () => {};
+  vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => { const id = new URL(String(url), "http://x").searchParams.get("worker"); if (id === "c") await new Promise<void>(done => { hold = done; }); return id === "b" ? Response.json({ error: "Could not read git" }, { status: 503 }) : Response.json(flows.a); });
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA")], all: true });
+  expect([...host.querySelectorAll(".map-flow-row > b")].map(nick => nick.textContent)).toEqual(["ALPHA"]);
+  await render({ base: "/api/bots/other/map", workers: [worker("c", "GAMMA")], worker: "c" });
+  await render({ base: "/api/bots/other/map", workers: [worker("d", "DELTA", false)], worker: "d" });
+  await act(async () => hold());
+  expect(host.querySelector(".map-flow-row")).toBeNull();
+});
+
+it("holds the other checkouts' last rows until the read when one checkout has none", async () => {
+  vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => { const at = new URL(String(url), "http://x"); return Response.json(at.searchParams.get("cached") && at.searchParams.get("worker") === "b" ? null : flows[at.searchParams.get("worker")!]); });
+  flows.b = flow({ pr: null });
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA")], all: true, open: true, active: false });
+  expect(host.querySelector(".map-flow-row")).toBeNull();
+  await render({ workers: [worker("a", "ALPHA"), worker("b", "BETA")], all: true, open: true, active: true });
+  expect(host.querySelectorAll(".map-flow-row")).toHaveLength(2);
+});
+
+it("waits for the read when a checkout has no last rows, and a late cached answer never covers it", async () => {
+  let late: (value: Response) => void = () => {};
+  vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => { const at = new URL(String(url), "http://x"); return at.searchParams.get("cached") ? new Promise<Response>(done => { late = done; }) : Response.json(flows.a); });
+  await render({ open: true, active: false });
+  expect(host.querySelector(".map-flow-row")).toBeNull();
+  flows.a = flow({ pr: pr({ state: "merged" }) });
+  await render({ open: true, active: true });
+  expect(stops()).toContain("merge:merged");
+  await act(async () => late(Response.json(flow())));
+  expect(stops()).toContain("merge:merged");
 });

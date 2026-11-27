@@ -9,8 +9,7 @@ import { inScope, type FileScope } from "./attachments.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ThreadId } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
-import { parseAt } from "./self-wake.ts";
-import { ASK_LIMITS, ASK_STATUSES, isOpenAsk, lastAskIdOf, taskAskSchema } from "./task-asks.ts";
+import { ASK_LIMITS, ASK_UPDATE_STATUSES, askKeySchema, isOpenAsk, lastAskIdOf, taskAskSchema, type TaskAsk } from "./task-asks.ts";
 
 export const TASK_STATE_DIR = join(DATA_DIR, "task-state");
 export const TASK_STATE_MAX_BYTES = 16_384;
@@ -113,7 +112,7 @@ function taskStatePath(threadId: ThreadId, dir: string): string {
   return join(dir, `${checked.data}.json`);
 }
 
-function normalize(packet: TaskResumePacket): TaskResumePacket {
+export function normalize(packet: TaskResumePacket): TaskResumePacket {
   const normalized: TaskResumePacket = {
     v: 1,
     threadId: clean(packet.threadId, LIMITS.id),
@@ -170,11 +169,13 @@ function normalize(packet: TaskResumePacket): TaskResumePacket {
     const choices = item.choices ? clean(item.choices, ASK_LIMITS.ref) : "";
     if (!ask) return [];
     const at = Math.max(0, Math.trunc(item.at));
-    return [{
+    const kept: TaskAsk = {
       id: item.id, ask, status: item.status, ...(ref ? { ref } : {}), ...(item.kind ? { kind: item.kind } : {}), ...(choices ? { choices } : {}),
-      ...(item.due === undefined ? {} : { due: Math.max(0, Math.trunc(item.due)) }), ...(item.wake ? { wake: item.wake } : {}),
+      ...(item.until !== undefined ? { until: Math.max(0, Math.trunc(item.until)) } : {}), ...(item.shown !== undefined ? { shown: Math.max(0, Math.trunc(item.shown)) } : {}),
       at, changedAt: Math.max(0, Math.trunc(item.changedAt)),
-    }];
+    };
+    if (item.key) kept.key = item.key;
+    return [kept];
   });
   if (asks?.length) normalized.asks = asks;
   const lastAskId = lastAskIdOf(packet);
@@ -182,7 +183,7 @@ function normalize(packet: TaskResumePacket): TaskResumePacket {
   return taskResumePacketSchema.parse(normalized);
 }
 
-function serializeBounded(packet: TaskResumePacket): string {
+export function serializeBounded(packet: TaskResumePacket): string {
   const bounded = structuredClone(packet);
   const pruneOrder = ["completed", "evidence", "artifacts", "plan", "blockers"] as const;
   const budgeted = () => Buffer.byteLength(JSON.stringify({ ...bounded, asks: bounded.asks?.filter((ask) => !isOpenAsk(ask)) }, null, 2), "utf8");
@@ -211,12 +212,79 @@ function serializeBounded(packet: TaskResumePacket): string {
 const MARK_BYTES = 65;
 const stagedPath = (path: string): string => `${path}.staged`;
 
+// an older build reads a packet with an ask kind or field it does not know as no packet at all, so promise kinds and the keys of
+// filed asks live beside it, by id and creation time: a number marks a promise, an object a filed ask
+const marksPath = (path: string): string => path.replace(/\.json$/, ".promises.json");
+const marksSchema = z.record(z.string(), z.union([
+  z.number().transform((at) => ({ at, promise: true as const, key: undefined })),
+  z.object({ at: z.number(), key: askKeySchema, promise: z.literal(true).optional() }).strict(),
+]));
+type PromiseMarks = z.output<typeof marksSchema>;
+const markOf = (ask: TaskAsk): z.input<typeof marksSchema>[string] => {
+  if (!ask.key) return ask.at;
+  return ask.kind === "promise" ? { at: ask.at, key: ask.key, promise: true } : { at: ask.at, key: ask.key };
+};
+const marksOf = (asks: readonly TaskAsk[] | undefined) => Object.fromEntries((asks ?? []).filter((ask) => ask.kind === "promise" || ask.key).map((ask) => [ask.id, markOf(ask)]));
+
+function readMarks(path: string): PromiseMarks {
+  try {
+    const parsed = marksSchema.safeParse(JSON.parse(fileText(marksPath(path)) ?? "{}"));
+    return parsed.success ? parsed.data : {};
+  } catch {
+    return {};
+  }
+}
+
+function marked(packet: TaskResumePacket, marks: PromiseMarks): TaskResumePacket {
+  const mark = (ask: TaskAsk) => marks[ask.id]?.at === ask.at ? marks[ask.id] : undefined;
+  if (!packet.asks?.some(mark)) return packet;
+  return { ...packet, asks: packet.asks.map((ask) => {
+    const found = mark(ask);
+    if (!found) return ask;
+    const filed = { ...ask };
+    if (found.promise && !filed.kind) filed.kind = "promise";
+    if (found.key) filed.key = found.key;
+    return filed;
+  }) };
+}
+
+const rawMark = (mark: PromiseMarks[string]): z.input<typeof marksSchema>[string] =>
+  !mark.key ? mark.at : mark.promise ? { at: mark.at, key: mark.key, promise: true } : { at: mark.at, key: mark.key };
+
+/** Before the packet, beside the marks the saved packet still reads, so a failed or cut write loses none of them;
+ * a mark whose ask never landed matches no ask's creation time, and the next commit drops it. */
+function writeMarks(path: string, saved: TaskResumePacket): void {
+  const kept = Object.entries(readMarks(path)).map(([id, mark]) => [id, rawMark(mark)]);
+  setMarks(path, { ...Object.fromEntries(kept), ...marksOf(saved.asks) });
+}
+
+/** Once a packet is on disk: only its own asks' marks. */
+function pruneMarks(path: string, packet: TaskResumePacket): void {
+  const kept = Object.entries(readMarks(path)).filter(([id, mark]) => packet.asks?.some((ask) => ask.id === id && ask.at === mark.at));
+  setMarks(path, Object.fromEntries(kept.map(([id, mark]) => [id, rawMark(mark)])));
+}
+
+function setMarks(path: string, marks: z.input<typeof marksSchema>): void {
+  const text = Object.keys(marks).length ? JSON.stringify(marks) : "";
+  if ((fileText(marksPath(path)) ?? "") === text) return;
+  if (text) writeFileAtomic(marksPath(path), text, { mode: 0o600 });
+  else rmSync(marksPath(path), { force: true });
+}
+
 function sealed(packet: TaskResumePacket, dir: string): { path: string; serialized: string; saved: TaskResumePacket } {
   const normalized = normalize(packet);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = taskStatePath(normalized.threadId, dir);
-  const serialized = serializeBounded(normalized);
-  return { path, serialized, saved: taskResumePacketSchema.parse(JSON.parse(serialized)) };
+  const marks = marksOf(normalized.asks);
+  const asks = normalized.asks?.map((ask) => {
+    if (ask.kind !== "promise" && !ask.key) return ask;
+    const plain = { ...ask };
+    if (plain.kind === "promise") delete plain.kind;
+    delete plain.key;
+    return plain;
+  });
+  const serialized = serializeBounded(asks ? { ...normalized, asks } : normalized);
+  return { path, serialized, saved: marked(taskResumePacketSchema.parse(JSON.parse(serialized)), marksSchema.parse(marks)) };
 }
 
 function fileText(path: string, maxBytes = TASK_STATE_READ_MAX_BYTES): string | null {
@@ -266,8 +334,10 @@ export function writeTaskResumePacket(
   options: TaskStateOptions = {},
 ): TaskResumePacket {
   const { path, serialized, saved } = sealed(packet, options.dir ?? TASK_STATE_DIR);
+  writeMarks(path, saved);
   writeFileAtomic(path, serialized, { mode: 0o600 });
   dropStaged(path);
+  pruneMarks(path, saved);
   return saved;
 }
 
@@ -278,6 +348,7 @@ export function stageTaskResumePacket(
   options: TaskStateOptions = {},
 ): TaskResumePacket {
   const { path, serialized, saved } = sealed(packet, options.dir ?? TASK_STATE_DIR);
+  writeMarks(path, saved);
   writeFileSync(stagedPath(path), savedMark(path) + serialized, { mode: 0o600 });
   return saved;
 }
@@ -285,12 +356,14 @@ export function stageTaskResumePacket(
 export function settleTaskResumePacket(
   threadId: ThreadId,
   options: TaskStateOptions = {},
-): void {
+): TaskResumePacket | null {
   const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
-  if (!existsSync(stagedPath(path))) return;
+  if (!existsSync(stagedPath(path))) return null;
   const staged = stagedRecord(path, threadId);
   if (staged) writeFileAtomic(path, staged.raw, { mode: 0o600 });
   dropStaged(path);
+  if (staged) pruneMarks(path, staged.packet);
+  return staged ? marked(staged.packet, readMarks(path)) : null;
 }
 
 export function readTaskResumePacket(
@@ -298,7 +371,8 @@ export function readTaskResumePacket(
   options: TaskStateOptions = {},
 ): TaskResumePacket | null {
   const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
-  return stagedRecord(path, threadId)?.packet ?? recordOf(fileText(path), threadId);
+  const packet = stagedRecord(path, threadId)?.packet ?? recordOf(fileText(path), threadId);
+  return packet && marked(packet, readMarks(path));
 }
 
 export function deleteTaskResumePacket(
@@ -308,6 +382,7 @@ export function deleteTaskResumePacket(
   const path = taskStatePath(threadId, options.dir ?? TASK_STATE_DIR);
   const staged = existsSync(stagedPath(path));
   rmSync(stagedPath(path), { force: true });
+  rmSync(marksPath(path), { force: true });
   if (!existsSync(path)) return staged;
   const status = lstatSync(path);
   if (!status.isFile() || status.isSymbolicLink()) return staged;
@@ -363,11 +438,9 @@ export function taskStateUpdateSchema(clipped: string[]) {
   const asks = z.array(z.object({
     id: z.string().trim().min(1).max(12).optional(),
     ask: z.string().trim().min(1).optional(),
-    status: z.enum(ASK_STATUSES),
+    status: z.enum(ASK_UPDATE_STATUSES),
     ref: z.string().refine((value) => value === "" || /\S/.test(value)).trim().optional(),
-    due: z.string().trim()
-      .refine((value) => value === "" || Number.isFinite(parseAt(value)), "use RFC3339 with an offset, like 2026-11-17T07:30:00+09:00, or an empty string to clear it")
-      .transform((value) => value === "" ? null : parseAt(value)).optional(),
+    until: z.string().trim().min(1).max(40).optional(),
   }).strict()).transform((items) =>
     items.map((item, index) => ({
       ...item,

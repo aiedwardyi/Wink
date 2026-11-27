@@ -5,20 +5,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, useStore, type Bot, type Group, type InstanceInfo, type Message } from "@/state/store";
 
+import { REVEALED_EVENT, STOP_FOLLOW_EVENT } from "@/lib/bottom-follow";
 import { setFindCurrent } from "@/lib/chat-find";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 
 import { DRAWER_BUTTON_RIGHT } from "@/lib/drawer-button";
 import { PHONE_HEADER_MENU_RESERVE_PX } from "@/lib/phone-header";
 import { SIDEBAR_SIDE_KEY } from "@/lib/sidebar-preferences";
+import { closeShow, useWorkersThread } from "@/lib/show-pane";
 import { ChatView, clearLivePaneCache } from "./ChatView";
 import { GroupView } from "./GroupView";
+import { ShowPane } from "./ShowPane";
 import type { TurnStreamState } from "@/lib/turn-stage";
 
 const live = vi.hoisted(() => ({ current: { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} } as TurnStreamState }));
 vi.mock("@/state/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/store")>(),
-  useStreaming: () => live.current,
+  useStreamSelect: <T>(select: (stream: TurnStreamState) => T) => select(live.current),
 }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 // These scenarios page from a tail one whole window long; the short switch tail has its own suite.
@@ -28,6 +31,19 @@ vi.mock("@/lib/transcript-window", async (importOriginal) => {
 });
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+function WorkersPane() {
+  const thread = useWorkersThread();
+  return thread ? createElement(ShowPane, { workers: true, source: { threadId: thread, messages: [] }, hidden: false }) : null;
+}
+
+const paneLabel = (host: HTMLElement) => host.querySelector("[data-show-pane-button]")?.getAttribute("aria-label");
+const workerList = () => document.body.querySelector("[data-side-panel] [data-worker-list]");
+const paneList = () => vi.waitFor(() => {
+  const list = workerList();
+  if (!list) throw new Error("no workers list in the side pane");
+  return list;
+});
 
 class FakeEventSource {
   onmessage: ((event: { data: string; lastEventId: string }) => void) | null = null;
@@ -177,8 +193,8 @@ describe("ChatView worker rows", () => {
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
-    await act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot, onOpenTerminalPane }))));
-    return { host, unmount: async () => { await act(async () => root.unmount()); host.remove(); } };
+    await act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot, onOpenTerminalPane }), createElement(WorkersPane))));
+    return { host, unmount: async () => { await act(async () => { root.unmount(); closeShow(); }); host.remove(); } };
   };
   const rows = (host: HTMLElement) => Array.from(host.querySelectorAll<HTMLElement>("[data-worker-run] > button"));
   const states = (host: HTMLElement) => Array.from(host.querySelectorAll("[data-worker-run] [data-worker-state]")).map((el) => el.getAttribute("data-worker-state"));
@@ -297,7 +313,7 @@ describe("ChatView worker rows", () => {
       const shown = host.querySelector("[data-orbit-worker]")?.textContent ?? "";
       expect(shown).toBe("Ran in C:\\repoFailedfirst try brokeFinishedAll green.");
       for (const machine of ["Session", "Label", "branch=", "sha=", "dirty=", done]) expect(shown).not.toContain(machine);
-      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      expect(paneLabel(host)).toBe("Show and media");
     } finally {
       await unmount();
     }
@@ -341,7 +357,7 @@ describe("ChatView worker rows", () => {
     const { host, unmount } = await mountChat(current);
     try {
       expect(states(host)).toEqual(["ended", "ended", "done", "failed"]);
-      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      expect(paneLabel(host)).toBe("Show and media");
     } finally {
       await unmount();
     }
@@ -371,14 +387,14 @@ describe("ChatView worker rows", () => {
         exit({ id: panes[2]!.sessionId, exitCode: 0 });
       });
       expect(states(host)).toEqual(["ended", "ended", "done"]);
-      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      expect(paneLabel(host)).toBe("Show and media");
     } finally {
       await unmount();
     }
     expect(offExit).toHaveBeenCalledOnce();
   });
 
-  it("shows a strip for live runs that opens the list, urgent first", async () => {
+  it("badges the pane button for live runs and opens the list, urgent first", async () => {
     stubDom();
     const [a, b, c, d] = ["aaaaaaaa-1", "bbbbbbbb-1", "cccccccc-1", "dddddddd-1"];
     // SAFETY: botA is a full Bot fixture; only messages is replaced, with valid Messages.
@@ -395,42 +411,36 @@ describe("ChatView worker rows", () => {
     const { host, unmount } = await mountChat(current);
     try {
       expect(states(host)).toEqual(["working", "waiting", "done", "failed"]);
-      const strip = host.querySelector<HTMLButtonElement>("[data-worker-strip]")!;
-      expect(strip.closest("[class*='@container/chathead']")).not.toBeNull();
-      expect(host.querySelector("[data-orbit-composer]")?.closest("[class*='z-[2]']")?.querySelector("[data-worker-strip]") ?? null).toBeNull();
-      expect(strip.getAttribute("aria-label")).toBe("1 working, 1 waiting, 0 failed, 0 done. Show workers");
-      const desktop = strip.querySelector("[data-worker-chip-desktop]")!;
-      expect(desktop.textContent).toBe("2 workers");
-      expect(desktop.querySelector(".bg-warning")).not.toBeNull();
-      expect(desktop.querySelectorAll(".lucide-bot")).toHaveLength(1);
-      await act(async () => { strip.click(); });
-      const list = document.body.querySelector("[data-worker-list]")!;
-      expect(list.getAttribute("role")).toBe("dialog");
+      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      const button = host.querySelector<HTMLButtonElement>("[data-show-pane-button]")!;
+      expect(button.closest("[class*='@container/chathead']")).not.toBeNull();
+      expect(button.getAttribute("aria-label")).toBe("1 working, 1 waiting, 0 failed, 0 done. Show workers");
+      const badge = button.querySelector("[data-worker-badge]")!;
+      expect(badge.textContent).toBe("2");
+      expect(badge.classList.contains("bg-warning")).toBe(true);
+      await act(async () => { button.click(); });
+      const list = await paneList();
       expect(list.querySelector("h2")?.textContent).toBe("A's workers");
       expect(Array.from(list.querySelectorAll("li")).map((li) => li.textContent)).toEqual([
         "GUIDEOpus 5.5 · HighWaiting", "BUILDGPT-6 Astra · HighWorking",
       ]);
       await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
+      expect(workerList()).toBeNull();
     } finally {
       await unmount();
     }
   });
 
-  it("labels all workers and shows the compact count", async () => {
+  it("counts all working workers on the pane button", async () => {
     stubDom();
     // SAFETY: botA is a full Bot fixture; only messages is replaced, with valid Messages.
     const current = { ...botA, messages: [userMsg("ua", "go"), ...Array.from({ length: 7 }, (_, i) => launch(`${i}0000000-1`, `W${i} | Opus 5.5 | high`, i + 1))] } as Bot;
     const { host, unmount } = await mountChat(current);
     try {
-      const strip = host.querySelector("[data-worker-strip]")!;
-      const desktop = strip.querySelector("[data-worker-chip-desktop]")!;
-      expect(desktop.querySelectorAll(".lucide-bot")).toHaveLength(1);
-      expect(desktop.textContent).toBe("7 workers");
-      const phone = strip.querySelector("[data-worker-chip-phone]")!;
-      expect(phone.querySelectorAll(".lucide-bot")).toHaveLength(1);
-      expect(phone.textContent).toBe("7");
-      expect(strip.getAttribute("aria-label")).toBe("7 working, 0 waiting, 0 failed, 0 done. Show workers");
+      const badge = host.querySelector("[data-show-pane-button] [data-worker-badge]")!;
+      expect(badge.textContent).toBe("7");
+      expect(badge.classList.contains("bg-accent")).toBe(true);
+      expect(paneLabel(host)).toBe("7 working, 0 waiting, 0 failed, 0 done. Show workers");
     } finally {
       await unmount();
     }
@@ -455,18 +465,15 @@ describe("ChatView worker rows", () => {
     const onOpen = vi.fn();
     const { host, unmount } = await mountChat(current, onOpen);
     try {
-      await vi.waitFor(() => expect(host.querySelector("[data-worker-chip-desktop] .bg-success")).not.toBeNull());
-      const chip = host.querySelector<HTMLButtonElement>("[data-worker-strip]")!;
-      expect(chip.closest("[class*='@container/chathead']")).not.toBeNull();
-      expect(host.querySelector("[data-orbit-composer]")?.closest("[class*='z-[2]']")?.querySelector("[data-worker-strip]") ?? null).toBeNull();
-      expect(chip.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("1 worker");
-      await act(async () => chip.click());
-      const entry = document.body.querySelector<HTMLButtonElement>("[data-worker-list] li button")!;
+      await vi.waitFor(() => expect(paneLabel(host)).toBe("0 working, 0 waiting, 0 failed, 1 done. Show workers"));
+      expect(host.querySelector("[data-worker-badge]")).toBeNull();
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-show-pane-button]")!.click());
+      const entry = (await paneList()).querySelector<HTMLButtonElement>("li button")!;
       expect(entry.textContent).toContain("COPY");
       expect(entry.textContent).not.toContain("WORK");
       await act(async () => entry.click());
       expect(onOpen).toHaveBeenCalledWith(liveDone);
-      expect(document.body.querySelector("[data-worker-list]:not([data-closing])")).toBeNull();
+      expect(workerList()).toBeNull();
     } finally {
       await unmount();
     }
@@ -512,7 +519,7 @@ describe("ChatView worker rows", () => {
       try {
         await settle();
         expect(states(host)).toEqual(["working", "ended", "working"]);
-        expect(host.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("2 workers");
+        expect(host.querySelector("[data-worker-badge]")?.textContent).toBe("2");
         expect(calls).toEqual([`GET ${terminalPath}`]);
       } finally {
         await unmount();
@@ -530,7 +537,7 @@ describe("ChatView worker rows", () => {
       try {
         await settle();
         expect(states(host)).toEqual(["ended", "done", "failed"]);
-        expect(host.querySelector("[data-worker-strip]")).toBeNull();
+        expect(paneLabel(host)).toBe("Show and media");
       } finally {
         await unmount();
       }
@@ -614,7 +621,8 @@ describe("ChatView worker rows", () => {
       try {
         await settle();
         expect(states(host)).toEqual(["ended", "ended", "ended"]);
-        expect(host.querySelector("[data-worker-strip]")).toBeNull();
+        expect(paneLabel(host)).toBe("Show and media");
+        expect(host.querySelector("[data-worker-badge]")).toBeNull();
         expect(calls).toHaveLength(1);
       } finally {
         await unmount();
@@ -633,7 +641,7 @@ describe("ChatView worker rows", () => {
         await settle();
         expect(calls).toEqual([`GET ${terminalPath}`]);
         expect(states(host)).toEqual(["working", "working", "working"]);
-        expect(host.querySelector("[data-worker-strip]")).not.toBeNull();
+        expect(paneLabel(host)).toBe("3 working, 0 waiting, 0 failed, 0 done. Show workers");
       } finally {
         await unmount();
       }
@@ -757,22 +765,21 @@ describe("ChatView worker rows", () => {
     document.body.append(host);
     const root = createRoot(host);
     try {
-      await act(async () => root.render(createElement(StoreProvider, null, createElement(GroupView, { group }))));
+      await act(async () => root.render(createElement(StoreProvider, null, createElement(GroupView, { group }), createElement(WorkersPane))));
       expect(rows(host).map((b) => b.textContent)).toEqual(["REVIEWGPT-6.1 Sol · HighWorking", "CHECKOpus 5.5 · HighDone"]);
       expect(host.textContent).not.toContain("Green.");
-      const chip = host.querySelector("[data-worker-strip]");
-      const bell = host.querySelector("[data-room-bell]")!;
-      if (!chip) throw new Error("chip missing");
-      expect(chip.closest("[class*='@container/chathead']")).not.toBeNull();
-      expect(chip.compareDocumentPosition(bell) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
-      expect(chip?.getAttribute("aria-label")).toBe("1 working, 0 waiting, 0 failed, 0 done. Show workers");
-      await act(async () => chip?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-      const list = document.querySelector("[data-worker-list]");
+      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      const button = host.querySelector("[data-show-pane-button]")!;
+      expect(button.closest("[class*='@container/chathead']")).not.toBeNull();
+      expect(button.querySelector("[data-worker-badge]")?.textContent).toBe("1");
+      expect(button.getAttribute("aria-label")).toBe("1 working, 0 waiting, 0 failed, 0 done. Show workers");
+      await act(async () => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      const list = await paneList();
       expect(list).not.toBeNull();
       expect(list?.querySelectorAll("li")).toHaveLength(1);
       expect(list?.querySelector("button")).toBeNull();
     } finally {
-      await act(async () => root.unmount());
+      await act(async () => { root.unmount(); closeShow(); });
       host.remove();
     }
   });
@@ -917,6 +924,105 @@ describe("ChatView transcript window", () => {
       expect(host.textContent).toContain("row 250;");
     } finally {
       await unmount();
+    }
+  });
+});
+
+describe("a box opening in a row", () => {
+  it.each(["chat", "room"] as const)("stops the %s following its newest row, so what grows under it no longer pins the bottom", async (kind) => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    const observed: { resize: ResizeObserverCallback; targets: Element[] }[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      targets: Element[] = [];
+      constructor(resize: ResizeObserverCallback) { observed.push({ resize, targets: this.targets }); }
+      observe(target: Element) { this.targets.push(target); }
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const group: Group = { id: "g", threadId: "thread-g", name: "Room", memberIds: ["a", "b"], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 1, setupCompletedAt: 1, hasMore: false, messages: [userMsg("ug", "hello room")] };
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, kind === "chat" ? createElement(ChatView, { bot: botB }) : createElement(GroupView, { group }))));
+      const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+      let height = TRANSCRIPT_PX;
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => VIEWPORT_PX });
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => height });
+      scroller.scrollTo = ((opts?: ScrollToOptions) => {
+        scroller.scrollTop = Math.max(0, Math.min(opts?.top ?? 0, height - VIEWPORT_PX));
+      }) as typeof scroller.scrollTo;
+      const grow = () => act(async () => {
+        height += 500;
+        for (const { resize, targets } of observed) if (targets.includes(scroller.firstElementChild!)) resize([], {} as ResizeObserver);
+      });
+      await grow();
+      expect(scroller.scrollTop).toBe(height - VIEWPORT_PX);
+      const top = scroller.scrollTop;
+      await act(async () => { scroller.querySelector("[data-mid]")!.dispatchEvent(new Event(STOP_FOLLOW_EVENT, { bubbles: true })); });
+      await grow();
+      expect(scroller.scrollTop).toBe(top);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+  it.each(["chat", "room"] as const)("keeps the %s off its newest row when the box lands at the bottom, until the reader scrolls there", async (kind) => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    const observed: { resize: ResizeObserverCallback; targets: Element[] }[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      targets: Element[] = [];
+      constructor(resize: ResizeObserverCallback) { observed.push({ resize, targets: this.targets }); }
+      observe(target: Element) { this.targets.push(target); }
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const group: Group = { id: "g", threadId: "thread-g", name: "Room", memberIds: ["a", "b"], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 1, setupCompletedAt: 1, hasMore: false, messages: [userMsg("ug", "hello room")] };
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, kind === "chat" ? createElement(ChatView, { bot: botB }) : createElement(GroupView, { group }))));
+      const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+      let height = TRANSCRIPT_PX;
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => VIEWPORT_PX });
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => height });
+      scroller.scrollTo = ((opts?: ScrollToOptions) => {
+        scroller.scrollTop = Math.max(0, Math.min(opts?.top ?? 0, height - VIEWPORT_PX));
+      }) as typeof scroller.scrollTo;
+      const grow = () => act(async () => {
+        height += 500;
+        for (const { resize, targets } of observed) if (targets.includes(scroller.firstElementChild!)) resize([], {} as ResizeObserver);
+      });
+      const scrollTo = (top: number) => act(async () => {
+        scroller.scrollTop = top;
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      await grow();
+      await act(async () => { scroller.querySelector("[data-mid]")!.dispatchEvent(new Event(STOP_FOLLOW_EVENT, { bubbles: true })); });
+      await grow();
+      await scrollTo(height - VIEWPORT_PX);
+      const landed = scroller.scrollTop;
+      await act(async () => {
+        const row = scroller.querySelector("[data-mid]")!;
+        for (const [type, clientY] of [["touchstart", 330], ["touchmove", 200], ["touchend", 200]] as const) {
+          row.dispatchEvent(Object.defineProperty(new Event(type, { bubbles: true }), "touches", { value: [{ clientX: 130, clientY }] }));
+        }
+        row.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, bubbles: true }));
+      });
+      await grow();
+      expect(scroller.scrollTop).toBe(landed);
+      await act(async () => { scroller.dispatchEvent(new Event(REVEALED_EVENT)); });
+      await grow();
+      expect(scroller.scrollTop).toBe(landed);
+      await scrollTo(height - VIEWPORT_PX);
+      await grow();
+      expect(scroller.scrollTop).toBe(height - VIEWPORT_PX);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
     }
   });
 });
@@ -1358,7 +1464,7 @@ describe("ChatView queued sends", () => {
     send = dispatch;
     useEffect(() => {
       dispatch({ type: "instances", instances: [instance(queueing)] });
-      dispatch({ type: "pendingQueued", threadId: "thread-a", queueId: "q1", text: "waiting B", at: 2 });
+      dispatch({ type: "pendingQueued", threadId: "thread-a", queueId: "q1", text: "waiting B", at: 2, waited: true });
     }, [dispatch, queueing]);
     return createElement(ChatView, { bot });
   }
@@ -1424,7 +1530,7 @@ describe("ChatView queued sends", () => {
     }
   });
 
-  it("puts a send a steering engine queued below the thinking row", async () => {
+  it("puts a send that waits for a steering engine's turn below the thinking row", async () => {
     const { host, root, order, row } = await mount(true);
     try {
       expect(order()).toEqual(["ua", "thinking", "q1"]);
@@ -1475,6 +1581,61 @@ describe("docked reply mascot", () => {
     reasoning: {},
     signal: { [thread]: "started" },
     turn: streaming ? { [thread]: `0:${tail}` } : {},
+  });
+
+  it.each(["direct", "room"])("does not scan older %s history on each streamed text update", async (kind) => {
+    localStorage.setItem("omb-reply-style", "live");
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const counts: number[] = [];
+    for (const size of [240, 960]) {
+      let oldReads = 0;
+      const tail = userMsg("latest", "Question");
+      const messages = Array.from({ length: size }, (_, i) => userMsg(`old-${i}`, "Previous question"));
+      messages.push(tail);
+      for (let i = 0; i < size - 200; i++) {
+        const message = messages[i]!;
+        Object.defineProperty(messages, i, { get() { oldReads++; return message; } });
+      }
+      const bot = { ...botA, messages: kind === "direct" ? messages : botA.messages };
+      const group: Group = {
+        id: "g", threadId: "thread-g", name: "Room", memberIds: [bot.id], defaultResponder: { kind: "everyone" },
+        bulletin: "", unread: false, createdAt: 1, setupCompletedAt: 1, busyBotId: bot.id, messages,
+      };
+      const view = kind === "direct" ? bot : group;
+      function Chat() {
+        const { dispatch } = useStore();
+        useEffect(() => {
+          dispatch({ type: "hydrate", bots: [bot], groups: kind === "room" ? [group] : [], sidebarOrder: { sectionOrder: [], itemOrder: {} } });
+        }, [dispatch]);
+        return kind === "direct" ? createElement(ChatView, { bot: { ...bot } }) : createElement(GroupView, { group: { ...group } });
+      }
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      const render = (text: string) => {
+        live.current = { ...working(view.threadId, text, tail.id), reveal: { [view.threadId]: { whole: text.length } } };
+        return act(async () => root.render(createElement(StoreProvider, null, createElement(Chat))));
+      };
+      try {
+        await render("First chunk");
+        oldReads = 0;
+        await render("First chunk, second chunk");
+        expect(host.querySelector(`[data-mid="stream:${view.threadId}:${tail.id}"]`)?.textContent).toContain("second chunk");
+        counts.push(oldReads);
+      } finally {
+        await act(async () => root.unmount());
+        host.remove();
+      }
+    }
+    expect(counts[0]).toBeLessThan(10);
+    expect(counts[1]).toBe(counts[0]);
   });
 
   it("renders the mascot standalone before any text, then docks it in the live reply's action strip", async () => {

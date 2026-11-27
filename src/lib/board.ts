@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { request } from "./api-request";
 
@@ -36,8 +36,12 @@ export interface BoardPost {
   author?: BoardAuthor;
 }
 
-/** The user's own answers carry this author id. */
+/** The user's Forum replies carry this author id. */
 export const BOARD_USER = "user";
+/** Mirrors ownReply in server/board.ts: only replies typed in the Forum's box can be deleted. */
+export const isOwnReply = (post: BoardPost) => post.author_bot_id === BOARD_USER && post.source_ref.startsWith("reply:");
+/** Mirrors removable in server/board.ts: a top-level post can be deleted, with its whole thread. */
+export const isRemovable = (post: BoardPost) => post.parent_id === null;
 
 /** The sidebar selection for the Forum. It never matches a bot, group or room id. */
 export const FORUM_SELECTION = "forum:board";
@@ -88,30 +92,115 @@ export function sortBoardThreads<T extends { post: BoardPost; replies: readonly 
   return [...threads].sort((a, b) => score(b) - score(a) || b.post.created_at - a.post.created_at);
 }
 
-export const replyToBoard = (parentId: string, body: string): Promise<{ post: BoardPost }> =>
-  request("/api/board/reply", { method: "POST", body: JSON.stringify({ parent_id: parentId, body }) });
+/** clientId stays the same for a retry of the same reply, so a reply saved before its answer was lost is not posted twice. */
+export const replyToBoard = (parentId: string, body: string, clientId: string): Promise<{ post: BoardPost }> =>
+  request("/api/board/reply", { method: "POST", body: JSON.stringify({ parent_id: parentId, body, client_id: clientId }) });
 
-export function useBoardPosts(): { posts: BoardPost[] | null; failed: boolean } {
-  const [posts, setPosts] = useState<BoardPost[] | null>(null);
+export const deleteFromBoard = (id: string): Promise<{ id: string }> =>
+  request("/api/board/delete", { method: "POST", body: JSON.stringify({ id }) });
+
+/** What the Forum showed, kept while it is closed: a chat visit returns to the same posts, sort, filter and open post. */
+export interface ForumKept {
+  posts: BoardPost[] | null;
+  sort: BoardSort;
+  flair: BoardKind | null;
+  openId: string | null;
+}
+export const forumKept: ForumKept = { posts: null, sort: "hot", flair: null, openId: null };
+
+export interface BoardPostsView {
+  posts: BoardPost[] | null;
+  failed: boolean;
+  saved: (post: BoardPost) => void;
+  removed: (post: BoardPost) => void;
+  retry: () => Promise<void>;
+}
+
+export function useBoardPosts(): BoardPostsView {
+  const [posts, setPosts] = useState(() => forumKept.posts);
   const [failed, setFailed] = useState(false);
+  // only the newest load lands: an older one finishing late would drop posts the newer one has
+  const asked = useRef(0);
+  // a reply saved here stays until a load asked after the save lands, since one asked before may not carry it
+  const mine = useRef(new Map<string, { post: BoardPost; seq: number }>());
+  // once a load carried a post the loads decide, so a late or retried answer never brings back a delete
+  const listed = useRef(new Set<string>());
+  // a deleted post stays gone, even from a load asked before the delete or with the live link down
+  const gone = useRef(new Map<string, string | null>());
+  // replies under a deleted reply move up to its parent, as the server moves them
+  const lift = useCallback((post: BoardPost) => {
+    let parent = post.parent_id;
+    while (parent && gone.current.has(parent)) parent = gone.current.get(parent)!;
+    return parent === post.parent_id ? post : { ...post, parent_id: parent };
+  }, []);
+  // a deleted top-level post takes its whole thread
+  const prune = useCallback((list: BoardPost[]) => {
+    const byId = new Map(list.map((post) => [post.id, post]));
+    const cut = (post: BoardPost) => {
+      const seen = new Set<string>();
+      for (let id: string | null = post.id; id && !seen.has(id); id = gone.current.has(id) ? gone.current.get(id)! : byId.get(id)?.parent_id ?? null) {
+        if (gone.current.has(id) && (id === post.id || gone.current.get(id) === null)) return true;
+        seen.add(id);
+      }
+      return false;
+    };
+    return list.filter((post) => !cut(post)).map(lift);
+  }, [lift]);
+  // a reply saved here shows only under a post still on screen, so a thread deleted since, here or on another PC, stays gone
+  const attach = useCallback((list: BoardPost[]) => {
+    const out = list.filter((post) => !mine.current.has(post.id));
+    const ids = new Set(out.map((post) => post.id));
+    const held = [...mine.current.values()].map((entry) => entry.post);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const post of held) {
+        const parent = lift(post).parent_id;
+        if (ids.has(post.id) || !parent || !ids.has(parent)) continue;
+        out.push(post);
+        ids.add(post.id);
+        grew = true;
+      }
+    }
+    return out;
+  }, [lift]);
+  const reload = useRef((): Promise<void> => Promise.resolve());
   useEffect(() => {
     let live = true;
     const load = () => {
-      request("/api/board").then(
+      const seq = ++asked.current;
+      return request("/api/board").then(
         (body: { posts?: BoardPost[] }) => {
-          if (!live) return;
-          setPosts(Array.isArray(body?.posts) ? body.posts : []);
+          if (!live || seq !== asked.current) return;
+          const list = Array.isArray(body?.posts) ? body.posts : [];
+          for (const [id, held] of mine.current) if (held.seq < seq) mine.current.delete(id);
+          for (const post of list) {
+            mine.current.delete(post.id);
+            listed.current.add(post.id);
+          }
+          setPosts((forumKept.posts = prune(attach(list))));
           setFailed(false);
         },
-        () => live && setFailed(true),
+        () => { if (live && seq === asked.current) setFailed(true); },
       );
     };
+    reload.current = load;
     load();
     window.addEventListener(BOARD_CHANGED_EVENT, load);
     return () => {
       live = false;
       window.removeEventListener(BOARD_CHANGED_EVENT, load);
     };
-  }, []);
-  return { posts, failed };
+  }, [prune, attach]);
+  const saved = useCallback((post: BoardPost) => {
+    if (listed.current.has(post.id)) return;
+    mine.current.set(post.id, { post, seq: asked.current });
+    setPosts((now) => (forumKept.posts = prune(attach(now ?? []))));
+  }, [prune, attach]);
+  const removed = useCallback((post: BoardPost) => {
+    gone.current.set(post.id, post.parent_id);
+    mine.current.delete(post.id);
+    setPosts((now) => (forumKept.posts = prune(now ?? [])));
+  }, [prune]);
+  const retry = useCallback(() => reload.current(), []);
+  return { posts, failed, saved, removed, retry };
 }

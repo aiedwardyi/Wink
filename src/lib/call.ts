@@ -19,6 +19,18 @@ function notify() {
   for (const fn of [...watchers]) fn();
 }
 
+const turnWatchers = new Set<(threadId: string) => void>();
+
+/** Told when a turn ends on any thread, shown or not. */
+export function watchTurns(fn: (threadId: string) => void): () => void {
+  turnWatchers.add(fn);
+  return () => { turnWatchers.delete(fn); };
+}
+
+export function turnCompleted(threadId: string) {
+  for (const fn of turnWatchers) fn(threadId);
+}
+
 /** The bot or room on a call, or null. Safe to read outside React. */
 export function currentCall(): string | null {
   return current;

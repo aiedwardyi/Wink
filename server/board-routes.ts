@@ -4,10 +4,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { z } from "zod";
 
-import { BOARD_KINDS, BOARD_USER, boardLine, ROOM_REF, type Board } from "./board.ts";
+import { BOARD_KINDS, BOARD_USER, boardLine, ownReply, removable, REPLY_REF, ROOM_REF, SEARCH_SHOWN, type Board } from "./board.ts";
 import { json, readBody } from "./http-helpers.ts";
 
-export const BOARD_ROUTES = { search: "/api/internal/board-search", post: "/api/internal/board-post", list: "/api/board", reply: "/api/board/reply" } as const;
+export const BOARD_ROUTES = { search: "/api/internal/board-search", post: "/api/internal/board-post", list: "/api/board", reply: "/api/board/reply", remove: "/api/board/delete" } as const;
 
 const searchSchema = z.object({ query: z.string().trim().min(1).max(200), project_id: z.string().trim().max(160).optional() }).strict();
 const postSchema = z.object({
@@ -17,7 +17,8 @@ const postSchema = z.object({
   parent_id: z.string().trim().min(1).max(64).optional(),
   helped: z.boolean().optional(),
 }).strict();
-const replySchema = z.object({ parent_id: z.string().trim().min(1).max(64), body: z.string().trim().min(1).max(4000) }).strict();
+const replySchema = z.object({ parent_id: z.string().trim().min(1).max(64), body: z.string().trim().min(1).max(4000), client_id: z.string().regex(/^[\w-]{8,64}$/).optional() }).strict();
+const removeSchema = z.object({ id: z.string().trim().min(1).max(64) }).strict();
 
 export interface BoardRouteDeps {
   board: Board;
@@ -39,8 +40,13 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       if (!from) return json(res, 403, { error: "unknown sender" });
       const body = searchSchema.safeParse(await readBody(req));
       if (!body.success) return json(res, 400, { error: "board_search needs a query" });
-      const posts = deps.board.search({ query: body.data.query, projectId: body.data.project_id || deps.projectOf(from.threadId) });
-      return json(res, 200, { count: posts.length, text: posts.length ? posts.map((post) => boardLine(post)).join("\n\n") : "No Board posts match." });
+      const room = deps.roomTurn(from);
+      const found = deps.board.search({ query: body.data.query, projectId: body.data.project_id || deps.projectOf(from.threadId), ...(room ? { roomThread: from.threadId } : {}), limit: Infinity });
+      const posts = found.slice(0, SEARCH_SHOWN);
+      const more = found.length - posts.length;
+      const lines = [...posts.map((post) => boardLine(post)), ...(more ? [`+${more} more match${more === 1 ? "" : "es"}, search more specifically.`] : [])];
+      // count is the posts shown, total every match
+      return json(res, 200, { count: posts.length, total: found.length, text: posts.length ? lines.join("\n\n") : "No Board posts match." });
     },
     async post(req: IncomingMessage, res: ServerResponse) {
       const from = source(req);
@@ -52,7 +58,7 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
       const { kind, title, body: text, parent_id, helped } = body.data;
       const parent = parent_id ? deps.board.get(parent_id) : undefined;
       if (parent_id && !parent) return json(res, 404, { error: `no Board post ${parent_id}` });
-      const event = createHash("sha256").update(JSON.stringify([kind, title, text, parent_id ?? ""])).digest("hex").slice(0, 16);
+      const event = (n: number) => createHash("sha256").update(JSON.stringify([kind, title, text, parent_id ?? "", ...(n ? [n] : [])])).digest("hex").slice(0, 16);
       const post = deps.board.post({
         author_bot_id: from.botId,
         kind,
@@ -62,7 +68,7 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
         project_id: parent?.project_id ?? deps.projectOf(from.threadId),
         error_sig: parent?.error_sig,
         fix: kind === "fix" ? text : undefined,
-        source_ref: `${room ? ROOM_REF : "tool:"}${from.threadId}:${event}`,
+        source_ref: deps.board.next((n) => `${room ? ROOM_REF : "tool:"}${from.threadId}:${event(n)}`),
       });
       if (helped && parent && parent.author_bot_id !== from.botId) deps.board.helped([parent.id], from.botId);
       return json(res, 200, { id: post.id, text: `Posted to the Board as ${post.id}.` });
@@ -83,9 +89,19 @@ export function createBoardRoutes(deps: BoardRouteDeps) {
         body: body.data.body,
         parent_id: parent.id,
         project_id: parent.project_id,
-        source_ref: `reply:${randomUUID()}`,
+        source_ref: `${REPLY_REF}${body.data.client_id ?? randomUUID()}`,
       });
       return json(res, 200, { post });
+    },
+    /** The user deletes a top-level post with its whole thread, or only what they typed in the Forum's reply box; a bot has no route here. */
+    async remove(req: IncomingMessage, res: ServerResponse) {
+      const body = removeSchema.safeParse(await readBody(req));
+      if (!body.success) return json(res, 400, { error: "a delete needs id" });
+      const post = deps.board.get(body.data.id);
+      if (!post) return json(res, 404, { error: `no Board post ${body.data.id}` });
+      if (!removable(post) && !ownReply(post)) return json(res, 403, { error: "only a top-level post or your own reply can be deleted" });
+      deps.board.remove(post.id);
+      return json(res, 200, { id: post.id });
     },
   };
 }

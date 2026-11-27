@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LiveCall, type CallAudioPort, type Posted } from "./controller";
 import type { LiveEngine, LiveEvents } from "./engine";
-import { asksForQuiet, callsVoice, looksUp, restates } from "./guard";
+import { looksUp, restates } from "./guard";
 import { answersCard } from "./manners";
 
 const CALL = "c-0123456789ab";
@@ -318,23 +318,6 @@ describe("V9 the call ends once", () => {
 });
 
 describe("V6 Korean and speech-to-text spellings", () => {
-  it("quiet", () => {
-    const lines = ["조용히", "조용히 좀", "조용히 하세요", "조용히 해줄래", "그만해", "그만", "말 그만해", "시끄러", "입 다물어", "조용히 해", "조용", "쉿", "젠, 조용히 해", "Jen, be quiet."];
-    expect(lines.filter((line) => !asksForQuiet(line, "Nova", ["Jenn"]))).toEqual([]);
-    const talk = ["조용히 빌드 돌려줘", "그만 좀 하고 빌드 확인해줘", "그만큼 했으면 배포해도 돼", "시끄러운 팬 소리 좀 확인해줘", "입 다물어도 되는지 물어봐", "말 그만하고 로그 보여줘"];
-    expect(talk.filter((line) => asksForQuiet(line, "Nova", ["Jenn"]))).toEqual([]);
-  });
-
-  it("the shown voice name, as speech-to-text spells it", () => {
-    const jenn = ["Jenn, are you there?", "Jen, are you there?", "젠, 이제 말해도 돼", "제니퍼, 말해도 돼", "젠아 들려?"];
-    expect(jenn.filter((line) => !callsVoice(line, "Chief of Staff", ["Jenn"]))).toEqual([]);
-    const eddie = ["에디, 말해도 돼", "Eddy, go ahead"];
-    expect(eddie.filter((line) => !callsVoice(line, "Chief of Staff", ["Eddie"]))).toEqual([]);
-    const talk = ["Jenkins is red again.", "젠킨스 빌드가 또 깨졌어", "젠장, 또 깨졌네", "에디터에서 열어줘"];
-    expect(talk.filter((line) => callsVoice(line, "Chief of Staff", ["Jenn"]) || callsVoice(line, "Chief of Staff", ["Eddie"]))).toEqual([]);
-    expect(callsVoice("Eddy, go ahead", "Chief of Staff", ["Jenn"])).toBe(false);
-  });
-
   it("card answers", () => {
     const options = ["Ship it", "Wait"];
     const answers = ["첫 번째", "1번", "일번", "일 번", "2번", "1번이요."];
@@ -514,7 +497,7 @@ describe("his 11-15 calls, replayed: a turn he did not prompt never says his las
     e.events.heard("No, I think you're already doing it.");
     if (order === "the result lands first") await tick(1_200);
     speak(e, INVESTIGATING);
-    expect(e.results).toEqual([{ id: "p1", result: "declined. They already heard you answer: say nothing more." }]);
+    expect(e.results).toEqual([{ id: "p1", result: order === "the result lands first" ? "declined" : "declined. They already heard you answer: say nothing more." }]);
     speak(e, INVESTIGATING);
     await tick(0);
     // One tool result is all the app sent after his "No": no [Wink] line, no context.

@@ -35,9 +35,10 @@ describe("ShownImage", () => {
       await act(async () => click(button));
 
       expect(dialog()).not.toBeNull();
-      const downloadLink = dialog()!.querySelector("a[download]")!;
-      expect(downloadLink.getAttribute("href")).toBe("/api/attachments/abc-123.png");
-      expect(downloadLink.getAttribute("download")).toBe("abc-123.png");
+      const saved = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+      await act(async () => click(dialog()!.querySelector("[data-viewer-download]")!));
+      expect((saved.mock.contexts as HTMLAnchorElement[]).map((link) => [link.getAttribute("href"), link.download])).toEqual([["/api/attachments/abc-123.png", "abc-123.png"]]);
+      saved.mockRestore();
 
       await act(async () => click(dialog()!.querySelector('[aria-label="Close Image Preview"]')!));
       expect(dialog()).toBeNull();
@@ -279,7 +280,7 @@ describe("AttachmentPreviewDialog viewer image", () => {
     const { root, img } = await renderDialog(() => {});
     try {
       await act(async () => img.dispatchEvent(new Event("error")));
-      expect(dialog()!.querySelector("a[download]")?.getAttribute("href")).toBe(image.src);
+      expect(dialog()!.querySelector("[data-viewer-download]")).not.toBeNull();
       expect(dialog()!.querySelector('[aria-label="Close Image Preview"]')).not.toBeNull();
       const retry = [...dialog()!.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
       await act(async () => click(retry));

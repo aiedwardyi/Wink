@@ -34,6 +34,10 @@ interface SteerItem {
   syncUntil?: number;
   call?: CallTag;
   answersCard?: string;
+  actedAt?: number;
+  waited?: boolean;
+  sendSeq?: number;
+  sentAfterId?: string | null;
 }
 
 /** A lane's hand-off: needs the bot free, never drains onto a lane. A string is the teammate's settled ask, rechecked as it starts. */
@@ -91,6 +95,11 @@ const savedQueueSchema = z.array(z.object({
     syncUntil: z.number().finite().nonnegative().optional(),
     call: z.object({ id: z.string(), voice: z.literal(true).optional(), order: z.literal(true).optional(), ask: z.literal(true).optional() }).optional(),
     answersCard: z.string().optional(),
+    actedAt: z.number().finite().nonnegative().optional(),
+    // a send saved before waited was recorded drew where it landed
+    waited: z.boolean().default(true),
+    sendSeq: z.number().int().positive().optional(),
+    sentAfterId: z.string().nullable().optional(),
   })),
 }));
 
@@ -111,6 +120,9 @@ function saveQueueAfterAppend(): void {
     console.warn(`[queue] Could not save queue cleanup: ${error}`.replace(/\s+/g, " "));
   }
 }
+
+/** Decided when the send was held (an older save loads as waited), never re-derived here. */
+const waits = (item: Pick<SteerItem, "waited">) => item.waited || undefined;
 
 export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" | "messagesFor" | "onChange">, drain?: () => void, enabled?: () => boolean): void {
   if (drain) syncHold.initialize(drain, enabled);
@@ -135,8 +147,9 @@ export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" |
     for (const item of entry.items) queueSeq = Math.max(queueSeq, item.seq);
     if (!store.bot(entry.botId) || !store.taskByThread(entry.botId, entry.threadId)) continue;
     const messages = store.messagesFor(entry.threadId);
-    const items = entry.items.filter((item) => !messages.some((message) =>
-      (item.sendId && message.sendId === item.sendId) || (message.queueId === item.messageId && message.quick?.state !== "handoff")));
+    // a requeued row still waits for its item until the fold clears the flag
+    const items = entry.items.filter((item) => !messages.some((message) => !(message.queued && message.queueId === item.messageId) &&
+      ((item.sendId && message.sendId === item.sendId) || (message.queueId === item.messageId && message.quick?.state !== "handoff"))));
     if (items.length) queues.set(entryKey(entry.botId, entry.threadId), { ...entry, items });
   }
   if (pending.length) saveQueuedSends();
@@ -237,7 +250,7 @@ export function queueSteeredMessage(
   botId: string,
   threadId: string,
   text: string,
-  options: { prompt?: string; replyToId?: string; sendId?: string; after?: boolean; syncUntil?: number; call?: CallTag; answersCard?: string } = {},
+  options: { prompt?: string; replyToId?: string; sendId?: string; after?: boolean; syncUntil?: number; call?: CallTag; answersCard?: string; actedAt?: number; waited?: boolean; sendSeq?: number; sentAfterId?: string | null } = {},
 ): QueuedSteer {
   if (options.sendId && cancelledSendIds.has(options.sendId)) {
     return { id: options.sendId, skipped: true, cancelled: true };
@@ -257,6 +270,10 @@ export function queueSteeredMessage(
     syncUntil: options.syncUntil,
     call: options.call,
     answersCard: options.answersCard,
+    actedAt: options.actedAt,
+    waited: Boolean(options.waited || options.after),
+    sendSeq: options.sendSeq,
+    sentAfterId: options.sentAfterId,
   };
   queues.set(key, { ...entry, items: [...entry.items, item] });
   try {
@@ -335,8 +352,8 @@ export function queuedRoomBotIds(groupId: string, threadId: string): string[] {
     .map((entry) => entry.botId);
 }
 
-// a queued quick handoff's ask row, or a requeued call row, already shows this line
-const showsQueued = (message: Message, queueId: string) => message.queueId === queueId && (message.quick?.state === "handoff" || Boolean(message.call?.order || message.call?.ask));
+// a queued quick handoff's ask row, or a requeued call or promised order row, already shows this line
+const showsQueued = (message: Message, queueId: string) => message.queueId === queueId && (message.quick?.state === "handoff" || message.queued === true || Boolean(message.call?.order || message.call?.ask));
 
 function isRoomItem(item: QueueItem): item is RoomItem {
   return item.kind === "room";
@@ -405,6 +422,10 @@ export function drainSteeredMessages(
           queueId: item.messageId,
           call: item.call,
           answersCard: item.answersCard,
+          actedAt: item.actedAt,
+          waited: waits(item),
+          sendSeq: item.sendSeq,
+          sentAfterId: item.sentAfterId,
         });
       } catch (error) {
         queues.set(key, entry);
@@ -462,7 +483,7 @@ export function takeQueuedSteers(
   threadId: string,
   since: number,
   steering = false,
-): Array<{ id: string; text: string; prompt: string; replyToId?: string; sendId?: string; call?: CallTag; answersCard?: string }> {
+): Array<{ id: string; text: string; prompt: string; replyToId?: string; sendId?: string; call?: CallTag; answersCard?: string; actedAt?: number; waited?: boolean; sendSeq?: number; sentAfterId?: string | null }> {
   const key = entryKey(botId, threadId);
   const entry = queues.get(key);
   if (!entry || entry.botId !== botId) return [];
@@ -475,7 +496,7 @@ export function takeQueuedSteers(
   else queues.delete(key);
   return steerItems
     .filter((item) => !item.after && !promoting.has(item.messageId) && !isSendCancelled(item.sendId))
-    .map((item) => ({ id: item.messageId, text: item.text, prompt: item.prompt, replyToId: item.replyToId, sendId: item.sendId, call: item.call, answersCard: item.answersCard }));
+    .map((item) => ({ id: item.messageId, text: item.text, prompt: item.prompt, replyToId: item.replyToId, sendId: item.sendId, call: item.call, answersCard: item.answersCard, actedAt: item.actedAt, waited: waits(item), sendSeq: item.sendSeq, sentAfterId: item.sentAfterId }));
 }
 
 /** Persist this thread's waiting sends as steered user lines and return
@@ -494,7 +515,7 @@ export function foldQueuedSends(
   try {
     const prompts = takeQueuedSteers(botId, threadId, since, steering).map((item) => {
       const ask = store.messagesFor(threadId).find((message) => showsQueued(message, item.id));
-      const row = (ask && store.patchMessage(threadId, ask.id, { quick: undefined, steered: true })) || store.appendMessage(threadId, {
+      const row = (ask && store.patchMessage(threadId, ask.id, { quick: undefined, queued: undefined, steered: true })) || store.appendMessage(threadId, {
         role: "user",
         kind: "text",
         text: item.text,
@@ -504,6 +525,10 @@ export function foldQueuedSends(
         steered: true,
         call: item.call,
         answersCard: item.answersCard,
+        actedAt: item.actedAt,
+        waited: waits(item),
+        sendSeq: item.sendSeq,
+        sentAfterId: item.sentAfterId,
       });
       rows?.push(row);
       appended.add(item.id);
@@ -525,15 +550,15 @@ export function queuedSteeredMessage(
   botId: string,
   threadId: string,
   sendId: string,
-): { id: string; text: string; replyToId?: string; reason?: "sync" } | null {
+): { id: string; text: string; replyToId?: string; reason?: "sync"; actedAt?: number; waited?: boolean; sendSeq?: number; sentAfterId?: string | null } | null {
   const entry = queues.get(entryKey(botId, threadId));
   if (!entry || entry.botId !== botId) return null;
   const item = entry.items.find((candidate): candidate is SteerItem => !isRoomItem(candidate) && candidate.sendId === sendId);
-  return item ? { id: item.messageId, text: item.text, replyToId: item.replyToId, ...(item.syncUntil !== undefined ? { reason: "sync" as const } : {}) } : null;
+  return item ? { id: item.messageId, text: item.text, replyToId: item.replyToId, ...(item.syncUntil !== undefined ? { reason: "sync" as const } : {}), ...(item.actedAt !== undefined ? { actedAt: item.actedAt } : {}), ...(item.waited ? { waited: true } : {}), ...(item.sendSeq !== undefined ? { sendSeq: item.sendSeq } : {}), ...(item.sentAfterId !== undefined ? { sentAfterId: item.sentAfterId } : {}) } : null;
 }
 
 /** Every thread's waiting sends, as the window that sent them shows them. */
-export function waitingSends(): Record<string, Array<{ queueId: string; text: string; sendId?: string; replyToId?: string; reason?: "sync" }>> {
+export function waitingSends(): Record<string, Array<{ queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync"; waited?: boolean; sendSeq?: number; sentAfterId?: string | null }>> {
   const waiting: Record<string, Array<SteerItem & { threadId: string }>> = {};
   for (const entry of queues.values()) {
     for (const item of entry.items) {
@@ -549,6 +574,10 @@ export function waitingSends(): Record<string, Array<{ queueId: string; text: st
       sendId: item.sendId,
       replyToId: item.replyToId,
       ...(item.syncUntil !== undefined ? { reason: "sync" as const } : {}),
+      ...(item.actedAt !== undefined ? { at: item.actedAt } : {}),
+      ...(waits(item) ? { waited: true } : {}),
+      ...(item.sendSeq !== undefined ? { sendSeq: item.sendSeq } : {}),
+      ...(item.sentAfterId !== undefined ? { sentAfterId: item.sentAfterId } : {}),
     })),
   ]));
 }

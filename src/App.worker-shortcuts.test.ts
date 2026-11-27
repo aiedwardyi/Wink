@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import App from "./App";
-import { lastViewedPanes } from "./components/TerminalWorkspace";
+import { lastViewedPanes } from "@/lib/terminal-panes";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- The DOM harness has no canvas.
@@ -127,8 +127,13 @@ it.each([[true, false], [false, false], [false, true]])("matches the mounted men
 it("keeps the remembered worker after opening Main and switching away and back", async () => {
   const f = await mount();
   try {
-    await act(async () => f.host.querySelector<HTMLButtonElement>("[data-worker-strip]")!.click());
-    await act(async () => f.host.querySelector<HTMLButtonElement>("[data-worker-terminal]")!.click());
+    await act(async () => f.host.querySelector<HTMLButtonElement>("main [data-show-pane-button]")!.click());
+    const terminalRow = await vi.waitFor(() => {
+      const row = document.querySelector<HTMLButtonElement>("[data-side-panel] [data-worker-terminal]");
+      if (!row) throw new Error("no terminal row in the side pane");
+      return row;
+    });
+    await act(async () => terminalRow.click());
     await vi.waitFor(() => expect(f.terminal()?.querySelector("header [data-worker-strip]")).toBeTruthy());
     const rows = await f.list();
     await act(async () => rows.find((row) => row.title.startsWith("WORK-2 "))!.click());
@@ -137,5 +142,64 @@ it("keeps the remembered worker after opening Main and switching away and back",
     await f.press("Digit1", { ctrlKey: true });
     await vi.waitFor(() => expect(f.terminal()?.querySelector("header [data-worker-strip]")).toBeTruthy());
     expect(f.terminal()?.querySelector("header h1")?.textContent).toContain("WORK-2");
+  } finally { await f.unmount(); }
+});
+
+const openChat = async (f: Awaited<ReturnType<typeof mount>>, id: string, phone: boolean) => {
+  if (phone) await act(async () => f.host.querySelector<HTMLButtonElement>("[data-phone-menu]")!.click());
+  await act(async () => f.host.querySelector<HTMLElement>(`[data-sidebar-row-id="${id}"] [role="button"]`)!.click());
+};
+const hostWithMain = (f: Awaited<ReturnType<typeof mount>>) => f.roster.mockImplementation(async (path: string) => {
+  const sessionId = new URL(path, "http://localhost").searchParams.get("sessionId") ?? "main";
+  if (sessionId !== "main" && !f.panes.some((pane) => pane.sessionId === sessionId)) return new Response(JSON.stringify({ error: "Unknown terminal" }), { status: 404 });
+  return new Response(JSON.stringify({ sessionId, generation: 1, screenText: "ready", panes: [{ sessionId: "main", label: null, main: true }, ...f.panes] }));
+});
+const startOn = async (f: Awaited<ReturnType<typeof mount>>, start: "worker" | "main" | "chat") => {
+  if (start === "chat") return;
+  await act(async () => f.host.querySelector<HTMLButtonElement>("main [data-show-pane-button]")!.click());
+  const row = await vi.waitFor(() => {
+    const rows = [...document.querySelectorAll<HTMLButtonElement>("[data-side-panel] li button, [data-side-panel] [data-worker-terminal]")];
+    const found = rows.find((item) => start === "main" ? item.hasAttribute("data-worker-terminal") : item.textContent?.includes("WORK-2"));
+    if (!found) throw new Error(`no ${start} row in the side pane`);
+    return found;
+  });
+  await act(async () => row.click());
+  await vi.waitFor(() => expect(f.terminal()?.querySelector("header h1")?.textContent).toBe(`Terminal / ${start === "main" ? "Scout" : "WORK-2"}`));
+};
+
+it.each([
+  [false, "worker"], [false, "main"], [false, "chat"],
+  [true, "worker"], [true, "main"], [true, "chat"],
+] as const)("returns to the same view after another chat with desktop=%s from %s", async (desktop, start) => {
+  const phone = !desktop;
+  const f = await mount(desktop, undefined, 41_000, phone);
+  hostWithMain(f);
+  try {
+    await startOn(f, start);
+    await openChat(f, "b2", phone);
+    await vi.waitFor(() => expect(f.host.querySelector("[data-sidebar-row-id=\"b2\"]")).toBeTruthy());
+    expect(f.terminal()).toBeNull();
+    await openChat(f, "b1", phone);
+    if (start === "chat") {
+      await act(async () => {});
+      expect(f.terminal()).toBeNull();
+    } else await vi.waitFor(() => expect(f.terminal()?.querySelector("header h1")?.textContent).toBe(`Terminal / ${start === "main" ? "Scout" : "WORK-2"}`));
+  } finally { await f.unmount(); }
+});
+
+it.each([false, true])("opens the chat, or Main on desktop, when the picked worker closed while away with desktop=%s", async (desktop) => {
+  const phone = !desktop;
+  const f = await mount(desktop, undefined, 41_000, phone);
+  hostWithMain(f);
+  try {
+    await startOn(f, "worker");
+    await openChat(f, "b2", phone);
+    f.panes.splice(1, 1);
+    await openChat(f, "b1", phone);
+    if (desktop) await vi.waitFor(() => expect(f.terminal()?.querySelector("header h1")?.textContent).toBe("Terminal / Scout"));
+    else {
+      await vi.waitFor(() => expect(f.host.querySelector('.orbit-terminal-overlay[data-open="false"]')).toBeTruthy());
+      expect(f.terminal()).toBeNull();
+    }
   } finally { await f.unmount(); }
 });

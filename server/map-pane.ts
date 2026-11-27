@@ -1,16 +1,19 @@
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { basename, isAbsolute, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { MapSnapshot, MapWorker } from "../shared/map-pane.ts";
 import { json } from "./http-helpers.ts";
 import { latestMapFile, mapFileDiff, mapFiles, mapFork, mapGit, mapHead, mapRepoFiles, mapTrunkFork, mapWalkFiles } from "./map-git.ts";
 import type { Store } from "./store.ts";
+import { DATA_DIR } from "./config.ts";
 import { terminalSnapshotResponse, type TerminalBridgeAccess } from "./terminal-snapshot.ts";
-import { parsePaneNote } from "../shared/pane-note.ts";
+import { paneLines, paneReason } from "../shared/pane-note.ts";
 import { z } from "zod";
 import { watchMapPanes } from "./map-events.ts";
 import { createMapFlow, type MapGh } from "./map-pr.ts";
 import { mapBotSelf, mapGitRefs } from "./map-bot-self.ts";
+import { coldLoad, coldPaneReason, coldSendIds, coldWriteRows } from "./cold-thread.ts";
+import { storedHead } from "./message-db.ts";
 
 const paneSchema = z.object({ sessionId: z.string(), cwd: z.string(), label: z.string().nullable().optional(), baseHead: z.string().nullable().optional(), host: z.string().nullable().optional(), main: z.boolean().optional(), exited: z.boolean().optional() });
 
@@ -42,9 +45,11 @@ interface WatchedPane {
 
 export interface MapPaneDeps {
   panes(botId: string): Promise<MapPaneRecord[]>;
-  reason?(botId: string, pane: MapPaneRecord, editedAt: number): string | undefined;
+  reason?(botId: string, pane: MapPaneRecord, editedAt: number): Promise<string | undefined> | string | undefined;
   subscribe(botId: string, listener: () => void, disconnected?: () => void): () => void;
   gh?: MapGh;
+  /** Where the last Git rows per checkout are kept across restarts. */
+  flows?: string;
 }
 
 // The bot's own row lasts while a file it wrote is still unshipped there: uncommitted, unpushed or on an unmerged branch.
@@ -60,7 +65,7 @@ export function createMapPane(deps: MapPaneDeps) {
   // The workers each bot's Map last saw, so a reopen paints before git has read them again.
   const known = new Map<string, Map<string, WatchedPane>>();
   const lists = new Map<string, string[]>();
-  const flows = createMapFlow(deps.gh);
+  const flows = createMapFlow(deps.gh, deps.flows);
 
   function live(res: ServerResponse, botId: string) {
     const panes = new Map<string, WatchedPane>();
@@ -109,8 +114,10 @@ export function createMapPane(deps: MapPaneDeps) {
         if (closed || !record.watcher) return;
         const latest = record.path && files.some(file => file.path === record.path)
           ? { path: record.path, at: Date.now() } : await latestMapFile(record.root, files);
+        const reason = await deps.reason?.(botId, record.pane, latest.at);
+        if (closed || !record.watcher) return;
         record.fork = fork;
-        record.worker = { ...record.worker, files, more: more || undefined, error: undefined, editedAt: latest.at, path: latest.path, reason: deps.reason?.(botId, record.pane, latest.at) };
+        record.worker = { ...record.worker, files, more: more || undefined, error: undefined, editedAt: latest.at, path: latest.path, reason };
         record.path = undefined;
         if (!quiet) send();
       } catch {
@@ -150,8 +157,10 @@ export function createMapPane(deps: MapPaneDeps) {
           if (!existing) { fresh.push(pane); continue; }
           // Only the watcher re-reads git: a chat event can change no more than the reason line and the bot's own files.
           if (pane.self?.join("\0") !== existing.pane.self?.join("\0")) { existing.pane = pane; changed = true; }
-          const reason = deps.reason?.(botId, existing.pane, existing.worker.editedAt);
-          if (reason !== existing.worker.reason) { existing.worker = { ...existing.worker, reason }; changed = true; }
+          const { editedAt } = existing.worker;
+          const reason = await deps.reason?.(botId, existing.pane, editedAt);
+          // a refresh during the read moved the edit time and set its own reason
+          if (existing.worker.editedAt === editedAt && reason !== existing.worker.reason) { existing.worker = { ...existing.worker, reason }; changed = true; }
         }
         const last = known.get(botId);
         if (!panes.size && fresh.length && last && fresh.every(pane => last.has(pane.sessionId))) write({ workers: fresh.map(pane => last.get(pane.sessionId)!).filter(shown).map(record => record.worker) });
@@ -231,6 +240,7 @@ export function createMapPane(deps: MapPaneDeps) {
     }
     if (route === "flow") {
       if (!record?.base) return json(res, 404, { error: "No such worker" });
+      if (url.searchParams.get("cached") === "1") return json(res, 200, await flows.last(record.root, record.fork ?? record.base));
       try { return json(res, 200, await flows.flow(record.root, record.fork ?? record.base)); }
       catch { return json(res, 503, { error: "Could not read git" }); }
     }
@@ -245,28 +255,36 @@ export function createMapPane(deps: MapPaneDeps) {
   return { handle };
 }
 
+// A chat nobody has loaded yet: Map reads only its rows that wrote files and its notes since the edit off the server thread, then loads it a page per turn (the Wink chat has 237k rows).
+const botWrites = async (store: Pick<Store, "adopt" | "loaded" | "messagesFor">, threadId: string) => {
+  if (store.loaded(threadId) || storedHead(threadId) === undefined) return store.messagesFor(threadId);
+  // beside the scans this frame waits on, so a send during the load below dedupes without it
+  coldSendIds(store, threadId);
+  const rows = await coldWriteRows(store, threadId);
+  void coldLoad(store, threadId);
+  return rows ?? store.messagesFor(threadId);
+};
+
 export function createWorkerMap(store: Store, access: () => TerminalBridgeAccess | null) {
   return createMapPane({
+    flows: join(DATA_DIR, "map-flows.json"),
     panes: async botId => {
       const bot = store.bot(botId);
       const task = bot && store.taskByThread(bot.id, bot.threadId);
-      // The engine runs in the task's pinned folder: a new bot folder applies from its next task.
-      const self = bot ? mapBotSelf(store.messagesFor(bot.threadId), bot.name, task && task.cwd !== undefined ? task.cwd : bot.cwd ?? bot.lastProjectCwd) : [];
       const bridge = access();
-      if (!bridge) return self;
-      const snapshot = await terminalSnapshotResponse(bridge, botId, null, undefined, { panesOnly: true });
-      if (snapshot.status === 404) return self;
+      const [self, snapshot] = await Promise.all([
+        // The engine runs in the task's pinned folder: a new bot folder applies from its next task.
+        bot ? botWrites(store, bot.threadId).then(rows => mapBotSelf(rows, bot.name, task && task.cwd !== undefined ? task.cwd : bot.cwd ?? bot.lastProjectCwd)) : [],
+        bridge && terminalSnapshotResponse(bridge, botId, null, undefined, { panesOnly: true }),
+      ]);
+      if (!snapshot || snapshot.status === 404) return self;
       if (snapshot.status !== 200) throw new Error("Worker panes unavailable");
       return [...paneSchema.array().parse(snapshot.body.panes ?? []), ...self];
     },
-    reason: (botId, pane, editedAt) => {
-      const messages = store.messagesFor(store.bot(botId)?.threadId ?? "");
-      for (const message of messages.toReversed()) {
-        if (message.kind !== "note" || !message.text || message.at < editedAt) continue;
-        const note = parsePaneNote(message.text);
-        if (note.pane8 && pane.sessionId.startsWith(note.pane8) && !note.alert) return note.body.trim().split("\n")[0].slice(0, 240) || undefined;
-      }
-      return undefined;
+    reason: async (botId, pane, editedAt) => {
+      const threadId = store.bot(botId)?.threadId ?? "";
+      const cold = await coldPaneReason(store, threadId, pane.sessionId, editedAt);
+      return cold === null ? paneReason(paneLines(store.messagesFor(threadId).toReversed(), editedAt, pane.sessionId), pane.sessionId, editedAt) : cold;
     },
     subscribe: (botId, listener, disconnected) => {
       const stopPanes = watchMapPanes(access(), botId, listener, disconnected);

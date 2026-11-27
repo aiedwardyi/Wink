@@ -1,22 +1,31 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type WheelEvent } from "react";
 import { createPortal } from "react-dom";
-import { Download, ExternalLink, FileText, Folder, Globe, Image as ImageIcon, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
+import { Download, ExternalLink, Folder, Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
 import type { VerifyCardData } from "../../shared/live-verify";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { mediaFile, type MediaSource } from "@/lib/show-media";
-import { lastShown, linkedFileSrc, linkedFolder, saveFile, showCheck, showItem, showMap, showMedia, showName, takeFolder, usePanePulse, watchFolder, type FolderListing, type ShowItem } from "@/lib/show-pane";
+import { openOutside, saveFile } from "@/lib/open-file";
+import { closeTab, linkedFileSrc, linkedFolder, PANE_TOOLS, showItem, showName, tabKey, takeFolder, usePanePulse, usePaneTabs, watchFolder, type FolderListing, type PaneEntry, type ShowItem } from "@/lib/show-pane";
+import { hapticTick } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
-import { closePane, closeVerifyWatch, openVerifyWatch, verifyCardAction } from "@/lib/verify-watch";
+import { useSettingsSwipe } from "@/lib/use-settings-swipe";
+import { canWatch, closePane, closeVerifyWatch, openPaneTool } from "@/lib/verify-watch";
+import { edgeFade } from "./Segmented";
+import { FILE_ICON, PaneEdge, PaneTabs, PaneToolList, PaneToolMenu, TOOL_ICON, TOOL_LABEL, usePaneWidth, type TabView, type ToolRow } from "./PaneTabs";
 import { MediaFiles, ShowMedia } from "./ShowMedia";
+import { TimelinePane } from "./TimelinePane";
 import { VerifyDocWatchFrame } from "./VerifyDocWatch";
 import { VerifyWatchFrame } from "./VerifyWatch";
+import { ShowPaneButton } from "./ShowPaneButton";
+import { listedFor, useSharedWorkers, WorkerPage } from "./WorkerRows";
 import "./VerifyWatch.css";
 import "./ShowPane.css";
 
 const ShowPdf = lazy(() => import("./ShowPdf"));
 const MapPane = lazy(() => import("./MapPane").then(module => ({ default: module.MapPane })));
-const ICON = { image: ImageIcon, pdf: FileText, page: Globe, text: FileText, folder: Folder };
+// Matches Segmented's fade: the open tab keeps clear of it.
+const TAB_FADE = 24;
 // Past this a text file is a log to open in an editor, not something to read in the pane.
 const TEXT_MAX = 1_000_000;
 
@@ -28,6 +37,12 @@ interface ShowPaneProps {
   /** the Check tab is open */
   check?: boolean;
   map?: boolean;
+  /** the Workers tab is open */
+  workers?: boolean;
+  timeline?: boolean;
+  /** the pane is open with no tab: it shows the tool list */
+  tools?: boolean;
+  profileName?: string;
   botId?: string;
   /** the chat's last check, which the Check tab opens */
   card?: VerifyCardData;
@@ -36,72 +51,164 @@ interface ShowPaneProps {
   closing?: boolean;
 }
 
-/** The right slot's one pane: a bot's file, the checker and the chat's media, a tab each. A phone gets it as a full-screen sheet. */
-export function ShowPane({ item, watch, media = false, check = false, map = false, botId, card, source, hidden, closing = false }: ShowPaneProps) {
+/** The right slot's one pane: the chat's workers, a bot's file, the checker and the chat's media, a tab each. A phone gets it as a full-screen sheet. */
+export function ShowPane({ item, watch, media = false, check = false, map = false, workers = false, timeline = false, tools = false, profileName, botId, card, source, hidden, closing = false }: ShowPaneProps) {
   const { t } = useI18n();
   const phone = useIsPhone();
   const [maximized, setMaximized] = useState(false);
   const expanded = maximized && !phone;
-  const again = source && lastShown(source.threadId);
   const pulses = usePanePulse();
   const [pulsed, setPulsed] = useState(pulses);
-  const tab = map ? "map" : media && source ? "media" : watch && (check || !item) ? "check" : "show";
-  // A phone watches a doc check live; only a site check waits for the end.
-  const action = card && verifyCardAction(card, phone && !card.doc);
-  const checkable = Boolean(watch) || action === "live" || action === "watch";
-  const openCheck = () => {
-    if (watch) showCheck(watch.threadId);
-    else if (card && source) openVerifyWatch({ threadId: source.threadId, owner: card.owner, live: action === "live" });
+  const crew = useSharedWorkers(source?.threadId);
+  const hasWorkers = Boolean(crew && (crew.onOpenTerminal || listedFor(crew).length > 0));
+  const tab = tools ? "tools" : workers && source ? "workers" : map ? "map" : timeline ? "timeline" : media && source ? "media" : watch && (check || !item) ? "check" : item ? "show" : "tools";
+  const checkable = Boolean(watch) || canWatch(card, phone);
+  const threadId = source?.threadId ?? item?.threadId ?? watch?.threadId;
+  const opened = usePaneTabs(threadId);
+  const activeEntry: PaneEntry | null = tab === "show" ? item! : tab === "tools" ? null : tab;
+  const active = activeEntry && tabKey(activeEntry);
+  // Today's rules for when a tool is there: Workers with helpers, Check with a check, Map and Timeline in a bot chat.
+  const there = (entry: PaneEntry) => entry === "workers" ? Boolean(source && (hasWorkers || tab === "workers")) : entry === "media" ? Boolean(source) : entry === "check" ? checkable : entry === "map" || entry === "timeline" ? Boolean(source && botId) : true;
+  const shown = opened.filter(there);
+  if (activeEntry && !shown.some((entry) => tabKey(entry) === active)) shown.push(activeEntry);
+  const views: TabView[] = shown.map((entry) => typeof entry === "string"
+    ? { key: entry, entry, name: t(TOOL_LABEL[entry]), icon: TOOL_ICON[entry] }
+    : { key: tabKey(entry), entry, name: showName(entry.path.replace(/[\\/]+$/, "")), icon: FILE_ICON[entry.kind] });
+  // A tool this chat kind never has is left out; one it can have but has nothing for yet is dim, so the list keeps one shape.
+  const rows: ToolRow[] = PANE_TOOLS.flatMap((tool): ToolRow[] =>
+    tool === "workers" ? (source && !source.roomId ? [{ tool, off: hasWorkers ? undefined : t("show.toolOff.workers") }] : [])
+    : tool === "check" ? [{ tool, off: checkable ? undefined : t("show.toolOff.check") }]
+    : tool === "media" ? (source ? [{ tool }] : [])
+    : source && botId ? [{ tool }] : []);
+  const open = (entry: PaneEntry) => {
+    if (!threadId) return;
+    if (typeof entry === "string") openPaneTool(entry, threadId, card, phone);
+    else showItem(entry);
   };
+  const close = (view: TabView, index: number) => {
+    if (!threadId) return;
+    const next = (views[index + 1] ?? views[index - 1])?.entry ?? null;
+    closeTab(threadId, view.key, next === "check" ? null : next);
+    if (view.key === "check") closeVerifyWatch();
+    // The checker opens from its card, which the store does not hold.
+    if (next === "check" && view.key === active) openPaneTool("check", threadId, card, phone);
+  };
+  // Each tab opened while the pane is up stays mounted behind the open one, so going back to it never reloads.
+  const [kept, setKept] = useState<{ threadId?: string; entries: readonly PaneEntry[] }>({ entries: [] });
+  let keep = kept.threadId === threadId ? kept.entries.filter((entry) => tabKey(entry) === active || opened.some((tab) => tabKey(tab) === tabKey(entry))) : [];
+  if (activeEntry && !keep.some((entry) => tabKey(entry) === active)) keep = [...keep, activeEntry];
+  if (kept.threadId !== threadId || keep.map(tabKey).join("\n") !== kept.entries.map(tabKey).join("\n")) setKept({ threadId, entries: keep });
+  const hides = (entry: PaneEntry) => tabKey(entry) !== active || undefined;
+  const [said, setSaid] = useState("");
+  const [paneWidth, setPaneWidth] = usePaneWidth();
+  const order = views.map((view) => view.key).join("\n");
   const ref = useRef<HTMLElement>(null);
+  const strip = useRef<HTMLDivElement>(null);
+  const placed = useRef(false);
+  const aim = useRef<number | null>(null);
+  const [fade, setFade] = useState<string>();
   const dock = useRef<number | undefined>(undefined);
   // The sidebar unfolds as this closes; its open width keeps the content from reflowing mid-exit.
   if (!closing) dock.current = undefined;
   else dock.current ??= ref.current?.getBoundingClientRect().width;
+
+  // The row scrolls when its tabs do not fit: the open tab glides to the middle, clear of the edge fade, and the edge with more tabs fades.
+  useLayoutEffect(() => {
+    const row = strip.current;
+    if (!row) return;
+    const place = () => {
+      const on = row.querySelector<HTMLElement>('[aria-selected="true"]');
+      if (on && row.scrollWidth > row.clientWidth) {
+        const box = row.getBoundingClientRect();
+        const pick = on.getBoundingClientRect();
+        if (pick.left < box.left + TAB_FADE || pick.right > box.right - TAB_FADE) {
+          const glide = placed.current && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+          row.scrollBy({ left: (pick.left + pick.right - box.left - box.right) / 2, behavior: glide ? "smooth" : "instant" });
+        }
+      }
+      placed.current = true;
+      setFade(edgeFade(row, TAB_FADE));
+    };
+    place();
+    const settle = () => { aim.current = null; };
+    row.addEventListener("scrollend", settle);
+    const observer = window.ResizeObserver ? new ResizeObserver(place) : undefined;
+    observer?.observe(row);
+    for (const button of row.querySelectorAll("button")) observer?.observe(button);
+    return () => { observer?.disconnect(); row.removeEventListener("scrollend", settle); };
+  }, [tab, order]);
+
+  // A mouse wheel only turns up and down, so over the row it moves the row sideways; a trackpad's own sideways swipe is left alone.
+  const wheel = (event: WheelEvent<HTMLDivElement>) => {
+    const row = event.currentTarget;
+    if (event.deltaX) return;
+    const from = aim.current ?? row.scrollLeft;
+    const to = Math.max(0, Math.min(row.scrollWidth - row.clientWidth, from + event.deltaY));
+    if (to === from) return;
+    aim.current = to;
+    row.scrollTo({ left: to, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+  };
+
+  // A phone sheet goes off to the right like Bot Details; the tab row, the Timeline canvas and the Media thumb keep their own drags.
+  useSettingsSwipe(ref, phone && !closing, false, () => {
+    hapticTick();
+    // the swipe already settled offscreen; do not replay the entrance
+    if (ref.current) ref.current.style.animation = "none";
+    closePane();
+  });
 
   useEffect(() => {
     if (closing) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (expanded) { event.preventDefault(); setMaximized(false); }
-      else closePane();
+      else { event.preventDefault(); closePane(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [closing, expanded]);
 
   const pane = (
-    <aside ref={ref} style={dock.current ? { "--dock": `${dock.current}px` } as CSSProperties : undefined} className={cn("verify-watch show-pane max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in", pulses !== pulsed && "arrival-glow")} onAnimationEnd={(event) => { if (event.animationName === "arrival-glow-once") setPulsed(pulses); }} data-verify-watch data-side-panel="" data-tab={tab} data-wide={tab !== "check" ? "" : undefined} data-closing={closing || undefined} inert={closing || undefined}>
+    <aside ref={ref} style={{ "--pane-width": paneWidth ? `${paneWidth}px` : undefined, "--dock": dock.current ? `${dock.current}px` : undefined } as CSSProperties} className={cn("verify-watch show-pane max-md:animate-panel-in md:animate-panel-slide md:*:animate-fade-in", pulses !== pulsed && "arrival-glow")} onAnimationEnd={(event) => { if (event.animationName === "arrival-glow-once") setPulsed(pulses); }} data-verify-watch data-side-panel="" data-tab={tab} data-wide="" data-closing={closing || undefined} inert={closing || undefined}>
+      {!phone && !expanded && !closing && <PaneEdge pane={ref} width={paneWidth} onWidth={setPaneWidth} />}
       <div className="show-pane-head">
-        <div role="tablist" className="show-pane-tabs">
-          <button type="button" role="tab" aria-selected={tab === "show"} disabled={tab !== "show" && !again} onClick={() => tab !== "show" && again && showItem(again)}>{t("show.tab")}</button>
-          {source && <button type="button" role="tab" aria-selected={tab === "media"} onClick={() => showMedia(source.threadId)}>{t("show.media")}</button>}
-          {checkable && <button type="button" role="tab" aria-selected={tab === "check"} onClick={openCheck}>{t("show.check")}</button>}
-          {source && botId && <button type="button" role="tab" aria-selected={tab === "map"} onClick={() => showMap(source.threadId)}>{t("show.map")}</button>}
-        </div>
+        {threadId && views.length > 0 && <div ref={strip} role="tablist" data-no-swipe className="show-pane-tabs" onScroll={(event) => setFade(edgeFade(event.currentTarget, TAB_FADE))} onWheel={wheel} style={{ maskImage: fade, WebkitMaskImage: fade }}>
+          <PaneTabs row={strip} threadId={threadId} tabs={views} active={active} onOpen={open} onClose={close} onSay={setSaid} />
+        </div>}
+        {threadId && <PaneToolMenu rows={rows} onPick={open} />}
+        <span className="sr-only" aria-live="polite">{said}</span>
         <span className="verify-watch-grow" />
-        {!phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={t(expanded ? "show.restore" : "show.maximize")} title={t(expanded ? "show.restore" : "show.maximize")}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
-        <button type="button" className="verify-watch-icon" onClick={closePane} aria-label={t("show.close")} title={t("show.close")}><X size={15} /></button>
+        {!phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={t(expanded ? "show.restore" : "show.maximize")} title={t(expanded ? "show.restore" : "show.maximize")}>{expanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</button>}
+        {!phone && (source?.threadId || item?.threadId || watch?.threadId) ? <ShowPaneButton threadId={(source?.threadId || item?.threadId || watch?.threadId)!} workers={crew} inPane /> : <button type="button" className="verify-watch-icon" onClick={closePane} aria-label={t("show.close")} title={t("show.close")}><X size={18} /></button>}
       </div>
-      {item && (item.kind === "folder"
-        ? <ShowFolder key={`${item.threadId}:${item.path}`} item={item} maximized={expanded} />
-        : <ShowFrame key={`${item.threadId}:${item.src ?? item.path}`} item={item} maximized={expanded} />)}
+      {keep.map((entry) => typeof entry === "string" ? null : entry.kind === "folder"
+        ? <ShowFolder key={`${entry.threadId}:${entry.path}`} item={entry} maximized={expanded} kept={hides(entry)} />
+        : <ShowFrame key={`${entry.threadId}:${entry.src ?? entry.path}`} item={entry} maximized={expanded} kept={hides(entry)} />)}
       {watch && (watch.card.doc
-        ? <VerifyDocWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />
-        : <VerifyWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden} closing={closing} hosted={{ maximized: expanded }} onClose={closeVerifyWatch} />)}
-      {tab === "media" && source && <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} />}
-      {tab === "map" && botId && <Suspense fallback={null}><MapPane key={botId} botId={botId} maximized={expanded} active={!hidden && !closing} /></Suspense>}
+        ? <VerifyDocWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden || Boolean(hides("check"))} closing={closing} hosted={{ maximized: expanded }} kept={hides("check")} onClose={closeVerifyWatch} />
+        : <VerifyWatchFrame key={`${watch.card.runId}:${watch.live}`} {...watch} hidden={hidden || Boolean(hides("check"))} closing={closing} hosted={{ maximized: expanded }} kept={hides("check")} onClose={closeVerifyWatch} />)}
+      {tab === "tools" && <PaneToolList rows={rows} onPick={open} />}
+      {keep.includes("media") && source && <ShowMedia key={`${source.threadId}:${source.roomId}`} source={source} maximized={expanded} kept={hides("media")} />}
+      {keep.includes("workers") && <WorkerPage source={crew} maximized={expanded} kept={hides("workers")} onClose={closePane} />}
+      {keep.includes("map") && botId && <Suspense fallback={null}><MapPane key={botId} botId={botId} maximized={expanded} active={tab === "map" && !hidden && !closing} kept={hides("map")} /></Suspense>}
+      {keep.includes("timeline") && botId && source && <TimelinePane key={botId} botId={botId} threadId={source.threadId} maximized={expanded} closing={closing} profileName={profileName} kept={hides("timeline")} />}
     </aside>
   );
-  // The chat's dock is a size container, which would trap a fixed sheet under the app's own buttons.
-  return phone ? createPortal(pane, document.body) : pane;
+  // The chat's dock is a size container, which would trap a fixed sheet under the app's own buttons. One portal box moves between the dock and the body, so crossing the phone width keeps the pane mounted.
+  const [box] = useState(() => Object.assign(document.createElement("div"), { style: "display: contents" }));
+  const place = useCallback((slot: HTMLDivElement | null) => {
+    if (!slot) return;
+    (phone ? document.body : slot).append(box);
+    return () => box.remove();
+  }, [phone, box]);
+  return <><div ref={place} className="contents" />{createPortal(pane, box)}</>;
 }
 
-function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) {
+function ShowFrame({ item, maximized, kept }: { item: ShowItem; maximized: boolean; kept?: boolean }) {
   const { t } = useI18n();
   const src = item.src ?? linkedFileSrc(item.threadId, item.path);
   const name = showName(item.path);
-  const Icon = ICON[item.kind];
+  const Icon = FILE_ICON[item.kind];
   const [loads, setLoads] = useState(0);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -140,15 +247,11 @@ function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) 
     return () => { alive = false; };
   }, [item.kind, src, loads]);
 
-  const open = () => {
-    const openFile = item.src ? undefined : window.ogb?.openFile;
-    if (openFile) void openFile(item.path).catch(() => {});
-    else window.open(src, "_blank", "noopener,noreferrer");
-  };
+  const open = () => openOutside(src, item.src ? undefined : item.path);
   const reload = () => { setReady(false); setFailed(false); setPageSrc(undefined); setLoads(loads + 1); };
 
   return (
-    <div className="verify-watch-frame show-frame" data-kind={item.kind} data-maximized={maximized || undefined}>
+    <div className="verify-watch-frame show-frame" data-kind={item.kind} data-maximized={maximized || undefined} data-kept={kept}>
       <div className="verify-watch-bar show-frame-bar">
         <Icon size={14} aria-hidden="true" className="show-frame-icon" />
         <span className="show-frame-name" title={item.path}>{name}</span>
@@ -172,7 +275,7 @@ function ShowFrame({ item, maximized }: { item: ShowItem; maximized: boolean }) 
 }
 
 /** A linked folder through the Media list: pictures step with the arrows, a page or PDF shows here, the rest download. */
-function ShowFolder({ item, maximized }: { item: ShowItem; maximized: boolean }) {
+function ShowFolder({ item, maximized, kept }: { item: ShowItem; maximized: boolean; kept?: boolean }) {
   const { t } = useI18n();
   const [listing, setListing] = useState<FolderListing | null>(() => takeFolder(item.threadId, item.path));
   const [failed, setFailed] = useState(false);
@@ -198,7 +301,7 @@ function ShowFolder({ item, maximized }: { item: ShowItem; maximized: boolean })
   const files = useMemo(() => listing?.files.map((file) => mediaFile(item.threadId, { kind: "l", name: file.name, ref: file.path, size: file.size }, file.modified)) ?? null, [item.threadId, listing]);
 
   return (
-    <div className="verify-watch-frame show-frame show-media" data-kind="folder" data-maximized={maximized || undefined} aria-busy={!files && !failed || undefined}>
+    <div className="verify-watch-frame show-frame show-media" data-kind="folder" data-maximized={maximized || undefined} data-kept={kept} aria-busy={!files && !failed || undefined}>
       <div className="verify-watch-bar show-frame-bar">
         <Folder size={14} aria-hidden="true" className="show-frame-icon" />
         <span className="show-frame-name" title={item.path}>{name}</span>

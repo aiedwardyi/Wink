@@ -3,7 +3,7 @@
 // (~/.grok/auth.json), NOT the xAI API key (that driver is drivers/grok.ts).
 // The generic protocol runtime lives in acp/core.ts; this file is only the
 // per-harness quirks. Verified against grok 1.0.0.
-import { lstatSync, readFileSync, rmSync, statSync, writeFileSync, type Stats } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, type Stats } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -11,10 +11,11 @@ import { z } from "zod";
 
 import type { ModelCatalog } from "../../contracts.ts";
 import { writeFileAtomic } from "../../atomic.ts";
+import { DATA_DIR } from "../../config.ts";
 import { grokAgentsAllowState, saveGrokAgentsAllowState } from "../../grok-agents-allow-state.ts";
 import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
-import { FREE_ACCESS, routedAccess } from "../turn-access.ts";
+import { FREE_ACCESS, guestText, routedAccess } from "../turn-access.ts";
 import { accountLabel, storedAccount, storedSignIn } from "../auth-status.ts";
 import { createCliText, type CliTextRun } from "../cli-text.ts";
 
@@ -39,7 +40,7 @@ function grokHome(env: Record<string, string | undefined>): string {
 
 /** Probed at the same home the config is read from: on the real homedir a set
  *  GROK_HOME/HOME reads as signed in and the inline sign-in card never renders. */
-export function grokIsAuthenticated(env: Record<string, string | undefined>): boolean {
+export function grokIsAuthenticated(env: Record<string, string | undefined>): boolean | undefined {
   return storedSignIn(join(grokHome(env), "auth.json"), (text) => {
     const parsed = grokAuthSchema.safeParse(JSON.parse(text));
     return parsed.success && Object.values(parsed.data).some((entry) => Boolean(entry.key?.trim() || entry.refresh_token?.trim()));
@@ -553,6 +554,23 @@ function removeGrokTextSession({ cwd, stdout, env }: CliTextRun): void {
 }
 
 const GROK_COMPACTION_UPDATES = new Set(["auto_compact_started", "compaction_checkpoint", "auto_compact_completed"]);
+// The only built-in tools a guest's turn gets: Wink's tools (MCP, through search_tool / use_tool),
+// a todo list and web search. No file reader, shell (cat, rg and git show run unasked in every
+// mode), image viewer, subagent or workflow. grok 1.0.92 `agent stdio` ignores --tools,
+// --disallowed-tools and --permission-mode plan; an agent profile's `tools` list holds there, on
+// session/new and session/load alike, and comes from the launch, not the saved session.
+const GROK_GUEST_TOOLS = ["search_tool", "use_tool", "todo_write", "web_search"];
+const GROK_GUEST_PROFILE = `---\nname: wink-room-guest\ndescription: A Wink room guest's read-only turn\ntools:\n${GROK_GUEST_TOOLS.map((tool) => `  - ${tool}\n`).join("")}---\n`;
+const grokGuestProfile = (): string => {
+  const path = join(DATA_DIR, "grok-guest-agent.md");
+  let now: string | null = null;
+  try { now = readFileSync(path, "utf8"); } catch { /* first guest turn */ }
+  if (now !== GROK_GUEST_PROFILE) {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileAtomic(path, GROK_GUEST_PROFILE);
+  }
+  return path;
+};
 
 export const grokSupport: AcpSupport = {
   driverKind: "grokAgent",
@@ -609,6 +627,8 @@ export const grokSupport: AcpSupport = {
     // Only a Wink setting overrides; otherwise the user's own grok config decides.
     ...(turn.readOnly ? ["--permission-mode", "plan"] : config.fullAuto ? ["--permission-mode", "bypassPermissions"] : turn.approval === "ask" ? ["--permission-mode", "default"] : []),
     "agent",
+    // someone else's words get no tool that reads this PC's files (an agent flag: after `agent`)
+    ...(guestText(turn) ? ["--agent-profile", grokGuestProfile()] : []),
     ...(turn.model ? ["-m", turn.model] : []),
     // long form on purpose: `--effort` is documented as an alias, and an
     // alias is the part a CLI is free to rename

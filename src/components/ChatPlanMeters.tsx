@@ -10,7 +10,7 @@ import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore, type InstanceInfo } from "@/state/store";
 import { engineName, windowFacts } from "./UsageDesk";
 import { UsageQuickView } from "./UsageQuickView";
-import { barSlots, LOW_USED, WindowBar } from "./UsageBars";
+import { barSlots, WindowBar } from "./UsageBars";
 import "./UsageDesk.css";
 import { trackScreen } from "@/lib/usage-stats";
 
@@ -42,6 +42,10 @@ export function meterTarget(board: UsageBoard | null, instances: InstanceInfo[],
   const account = engine.accounts.find((each) => each.id === id);
   return account ? { engine, account } : null;
 }
+
+// An account the bar names a state for instead of its last reading.
+const offKey = (target: MeterTarget | null | undefined) => target?.account.signIn === "signed-out" ? "usage.chat.signedOut"
+  : target?.account.signIn === "payment-due" ? "usage.chat.paymentDue" : null;
 
 const liveWindows = (windows: UsageBoardWindow[], now: number) => windows.filter((window) => !windowExpired(window.resetsAt, now));
 
@@ -102,7 +106,7 @@ function BoardMeter({ windows, instanceId, identity = instanceId, hidden, now, o
   const board = useUsageBoard();
   const target = meterTarget(board.board, state.instances, instanceId);
   const at = now ?? Date.now();
-  if (meterWindows(target, windows, at).length === 0 && target?.account.signIn !== "signed-out") return null;
+  if (meterWindows(target, windows, at).length === 0 && !offKey(target)) return null;
   return <MeterLine windows={windows} now={now} onOpen={onOpenUsage} identity={identity} hidden={hidden} target={target} board={board} />;
 }
 
@@ -114,26 +118,23 @@ function MeterLine({ windows, now, onOpen, identity = "", hidden, target, board 
   const tick = useVisibleClock();
   const clock = now ?? tick;
   const button = useRef<HTMLButtonElement>(null);
-  const signedOut = target?.account.signIn === "signed-out";
+  const off = offKey(target);
   const shown = meterWindows(target ?? null, windows, clock);
-  const slots = barSlots(target?.engine.engine ?? "", { windows: shown }, t);
-  // Plenty left is noise over the message box; the line, and Alt+U's quick view on it, come back once a window runs low.
-  const low = slots.some((slot) => slot.window.usedPercent >= LOW_USED);
-  const quick = Boolean(!hidden && target && board?.board && (low || signedOut));
+  const quick = Boolean(!hidden && target && board?.board && (shown.length > 0 || off));
   const [open, setOpen] = useQuickToggle(quick, identity);
-  if (!signedOut && !low) return null;
+  if (shown.length === 0 && !off) return null;
   return (
     <div className="px-5 pb-1">
       <button ref={button} type="button" data-usage-meter="" onClick={quick ? () => { if (!open) trackScreen("usage-quick"); setOpen(!open); } : onOpen}
         aria-expanded={quick ? open : undefined} aria-haspopup={quick ? "dialog" : undefined}
         aria-label={quick && target ? t("usage.chat.openAria", { name: engineName(target.engine.engine) }) : t("usage.limits.openAria")} className="usage-chat-button w-full cursor-pointer text-left">
-        {signedOut && target ? <span className="flex min-w-0 items-center gap-2 px-4 text-[12px]">
+        {off && target ? <span className="flex min-w-0 items-center gap-2 px-4 text-[12px]">
           <span data-meter-name="" className="min-w-0 truncate text-ink-secondary">{target.engine.accounts.length > 1 ? target.account.name : engineName(target.engine.engine)}</span>
-          <span data-meter-signed-out="" className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-warning">
-            <span aria-hidden="true" className="size-1.5 rounded-full bg-warning" />{t("usage.chat.signedOut")}
+          <span data-meter-off="" className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-warning">
+            <span aria-hidden="true" className="size-1.5 rounded-full bg-warning" />{t(off)}
           </span>
         </span> : <span className="usage-chat-windows" data-windows={shown.length}>
-          {slots.map((slot) => <WindowBar key={`${target?.account.id ?? "today"}:${slot.key}`} slot={slot} now={clock} t={t} chat />)}
+          {barSlots(target?.engine.engine ?? "", { windows: shown }, t).map((slot) => <WindowBar key={`${target?.account.id ?? "today"}:${slot.key}`} slot={slot} now={clock} t={t} chat />)}
         </span>}
       </button>
       <Presence open={Boolean(open && target && board?.board)}>

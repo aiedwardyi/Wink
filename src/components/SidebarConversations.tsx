@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Crown, Loader2, Pin, Trash2, Users, X } from "lucide-react";
 import { roomConversationPreview } from "@/lib/conversation-preview";
-import { api, terminalAttentionForBot, useStore, formatTime, previewMessages, shownModelSelection, type Bot, type Group, type TerminalAttention } from "@/state/store";
+import { api, terminalAttentionForBot, useStore, formatTime, previewMessages, type Bot, type Group, type TerminalAttention } from "@/state/store";
 import { BotAvatar } from "./Avatar";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { RoomPicture } from "./RoomPicture";
@@ -10,7 +10,7 @@ import { hostRoomBase, isTeamRoom, roomPictureUrl } from "@/lib/team-rooms";
 import { stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
-import { modelChipText, modelFamilyAccent } from "@/lib/model-chip";
+import { useBotModel } from "./BotModelLine";
 import { focusComposerOnActivation } from "@/lib/focus-composer";
 import { isShownMessage } from "@/lib/shown-message";
 import { RenameTitle } from "./RenameTitle";
@@ -27,9 +27,9 @@ import { sidebarWorkerStatus } from "@/lib/worker-status";
 import { turnElsewhere } from "@/lib/turn-stage";
 import { terminalAttentionCopy } from "@/lib/notify";
 
-export function compactSidebarModelLabel(label: string): string {
-  return label.replace(/\s+Contributor$/i, " Cont.");
-}
+export { compactSidebarModelLabel } from "./BotModelLine";
+
+export const COUNT_BADGE = "pointer-events-none absolute -right-1 -top-1 z-10 flex h-3.5 min-w-3.5 items-center justify-center rounded-[min(4px,var(--radius-lg))] px-[3px] text-[9px] font-semibold leading-none tabular-nums ring-[1.5px]";
 
 export function UnreadCountBadge({ count, selected }: { count: number; selected: boolean }) {
   const { t } = useI18n();
@@ -40,10 +40,7 @@ export function UnreadCountBadge({ count, selected }: { count: number; selected:
       data-sidebar-unread-count={count}
       role="img"
       aria-label={t("chrome.unreadReplies", { count })}
-      className={cn(
-        "pointer-events-none absolute -right-1 -top-1 z-10 flex h-3.5 min-w-3.5 items-center justify-center rounded-[min(4px,var(--radius-lg))] bg-accent px-[3px] text-[9px] font-semibold leading-none tabular-nums text-accent-ink ring-[1.5px]",
-        selected ? "ring-raised" : "ring-panel",
-      )}
+      className={cn(COUNT_BADGE, "bg-accent", selected ? "ring-raised" : "ring-panel")}
     >
       {shown}
     </span>
@@ -318,12 +315,9 @@ function BotListItem({
   // the visible branch, so a version switch changes the row with the chat
   const visible = previewMessages(bot);
   const last = visible.filter(isShownMessage).at(-1);
-  const shownModel = bot.modelSelection && shownModelSelection(bot);
-  const engine = state.instances.find((instance) => instance.instanceId === shownModel?.instanceId);
-  const modelLabel = engine && shownModel
-    ? modelChipText({ instance: engine, model: shownModel.model, effort: shownModel.effort }, t)
-    : null;
-  const expandedModelLabel = modelLabel ? compactSidebarModelLabel(modelLabel) : null;
+  const model = useBotModel(bot);
+  const modelLabel = model?.label ?? null;
+  const expandedModelLabel = model?.text ?? null;
   const terminalAttention = terminalAttentionForBot(state.terminalAttention, bot.id);
   const terminalCopy = terminalAttention ? terminalAttentionCopy(terminalAttention.reason, locale) : null;
   const paneLabels = state.terminalPanes[bot.id];
@@ -365,7 +359,7 @@ function BotListItem({
           // decorative; busy/unread/motion are the real signals).
           animated={Boolean(bot.busy) || Boolean(bot.unread) || (mascotMotion?.kind ?? "none") !== "none"}
         />
-        {shownModel && (
+        {model && (
           <span
             data-sidebar-model-dot
             aria-hidden="true"
@@ -374,7 +368,7 @@ function BotListItem({
               "bottom-0.5 left-0.5",
               selected ? "ring-2 ring-raised" : "ring-2 ring-panel",
             )}
-            style={{ backgroundColor: modelFamilyAccent(engine?.driverKind) }}
+            style={{ backgroundColor: model.accent }}
           />
         )}
         {keepGoing && (
@@ -574,16 +568,13 @@ function BotListItem({
             drag?.onMove?.(event.key === "ArrowUp" ? -1 : 1);
             return;
           }
-          if (event.key === "Enter") {
+          if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             select();
             focusComposerOnActivation({
               activatedElement: event.currentTarget,
               settingsOpen: state.settingsOpen || state.appSettingsOpen,
             });
-          } else if (event.key === " ") {
-            event.preventDefault();
-            select();
           }
         }}
         onContextMenu={onContextMenu}

@@ -18,7 +18,7 @@ vi.mock("@/lib/live-call/volume", async (importOriginal) => {
 import { applyLocale } from "@/lib/i18n";
 import { setCallVolume } from "@/lib/live-call/volume";
 import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
-import { CallSettings, CallSettingsHold, VoiceChatSettings } from "./CallSettings";
+import { CallSettings, CallSettingsHold } from "./CallSettings";
 import { MENU_CLASS } from "./MessageMenu";
 
 const ada = { id: "bot-1", name: "Ada", color: "iris", messages: [] } as unknown as Bot;
@@ -166,6 +166,28 @@ it("fades the voice grid while more voices sit below, and drops the fade at the 
   expect(grid.hasAttribute("data-cut")).toBe(false);
 });
 
+it("puts the Captions switch on the Style row, after the pills", async () => {
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const pills = host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Style"]')!;
+  const row = pills.parentElement!;
+  const captions = row.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Captions"]');
+  expect(captions).not.toBeNull();
+  expect(host.querySelectorAll('[role="switch"]')).toHaveLength(1);
+  expect(pills.compareDocumentPosition(captions!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(row.firstElementChild!.textContent).toBe("Style");
+  expect(captions!.parentElement!.parentElement).toBe(row);
+  expect(captions!.parentElement!.textContent).toBe("Captions");
+});
+
+it("tightens the Style row gaps and pill padding below 380px so it fits a 360 phone", async () => {
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const pills = host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Style"]')!;
+  const row = pills.parentElement!;
+  expect(row.className).toContain("max-[379px]:gap-2");
+  expect(row.lastElementChild!.className).toContain("max-[379px]:gap-1.5");
+  for (const pill of pills.querySelectorAll("[role=radio]")) expect(pill.className).toContain("max-[379px]:px-1.5");
+});
+
 it("patches the bot with the whole merged call object", async () => {
   store.bots = [tuned];
   const host = await render(createElement(CallSettings, { bot: tuned }));
@@ -258,15 +280,18 @@ it("Speed changes the sample while it plays and the next one", async () => {
   expect(clips[1]!.playbackRate).toBe(1.3);
 });
 
-it("Style changes the sample's level while it plays, as on a call", async () => {
+it("Style changes the sample's pace while it plays, never its level, as on a call", async () => {
   const { host, clip, moved } = await playJenn();
   await moved(() => act(async () => radio(host, "Lively").click()));
-  expect(clip.volume).toBeCloseTo(0.7 * 1.12);
+  expect(clip.playbackRate).toBe(1.1);
+  expect(clip.volume).toBeCloseTo(0.7);
   await moved(() => act(async () => radio(host, "Calm").click()));
-  expect(clip.volume).toBeCloseTo(0.7 * 0.6);
+  expect(clip.playbackRate).toBe(0.88);
+  expect(clip.volume).toBeCloseTo(0.7);
   expect(clip.paused).toBe(false);
   await act(async () => button(host, "Play Eddie")!.click());
-  expect(clips[1]!.volume).toBeCloseTo(0.7 * 0.6);
+  expect(clips[1]!.playbackRate).toBe(0.88);
+  expect(clips[1]!.volume).toBeCloseTo(0.7);
 });
 
 it("resets the preview button when the clip will not play, and stops on unmount", async () => {
@@ -304,17 +329,44 @@ it("labels the panel in Korean", async () => {
   expect(host.querySelector('[role="radiogroup"][aria-label="목소리"]')).not.toBeNull();
 });
 
-it("shows the voice and speed in the Bot details row and opens the panel there", async () => {
-  store.bots = [tuned];
-  const host = await render(createElement(VoiceChatSettings, { bot: tuned }));
-  expect(host.querySelector("h3")!.textContent).toBe("Voice chat");
-  const row = host.querySelector<HTMLButtonElement>("[data-call-voice-row]")!;
-  expect(row.textContent).toBe("Puck 1.2x");
-  expect(button(host, "Language")!.textContent).toBe("Auto-detect");
-  expect(host.querySelector("[data-call-settings]")).toBeNull();
-  await act(async () => row.click());
-  expect(row.getAttribute("aria-expanded")).toBe("true");
-  const panel = host.querySelector("[data-call-settings]")!;
-  expect(panel.querySelector('input[aria-label="Speed"]')).not.toBeNull();
-  expect(panel.querySelectorAll('button[aria-label="Language"]')).toHaveLength(0);
+it("an older answer pick that lands late never undoes the newer one", async () => {
+  type Config = { liveCall: { voice: string; answer: string } };
+  store.config = { liveCall: { voice: "Aoede" } };
+  const landed: Array<(config: Config) => void> = [];
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => landed.push((config) => resolve(Response.json(config))))));
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const radios = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="Answered by"] [role="radio"]')];
+  await act(async () => radios[0]!.click());
+  await act(async () => radios[1]!.click());
+  await act(async () => landed[0]!({ liveCall: { voice: "Kore", answer: "bot" } }));
+  expect(store.dispatch).not.toHaveBeenCalledWith({ type: "configStatus", config: { liveCall: { voice: "Kore", answer: "bot" } } });
+  await act(async () => landed[1]!({ liveCall: { voice: "Kore", answer: "gemini" } }));
+  expect(store.dispatch).toHaveBeenLastCalledWith({ type: "configStatus", config: { liveCall: { voice: "Kore", answer: "gemini" } } });
+});
+
+it("a call placed while the answer pick is still saving already uses it, and a failed save puts it back", async () => {
+  const answers: Array<(response: Response) => void> = [];
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => answers.push(resolve))));
+  store.config = { liveCall: { voice: "Aoede" } };
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const radios = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="Answered by"] [role="radio"]')];
+  await act(async () => radios[0]!.click());
+  expect(store.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "configStatus", config: { liveCall: { voice: "Aoede", answer: "bot" } } });
+  await act(async () => answers[0]!(Response.json({ error: "no" }, { status: 500 })));
+  expect(store.dispatch).toHaveBeenLastCalledWith({ type: "configStatus", config: { liveCall: { voice: "Aoede" } } });
+});
+
+it("picks who answers calls for the whole app, Gemini voice until he flips it", async () => {
+  const fetch = vi.fn(async (_path: string, _init?: RequestInit) => Response.json({ liveCall: { voice: "Aoede", answer: "bot" } }));
+  vi.stubGlobal("fetch", fetch);
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const group = host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Answered by"]')!;
+  const radios = [...group.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+  expect(radios.map((radio) => [radio.textContent, radio.getAttribute("aria-checked")])).toEqual([["Same bot", "false"], ["Gemini voice", "true"]]);
+  await act(async () => radios[0]!.click());
+  const [path, init] = fetch.mock.calls[0]!;
+  expect(path).toBe("/api/config");
+  expect(init).toMatchObject({ method: "PATCH" });
+  expect(JSON.parse(String(init!.body))).toEqual({ liveCall: { answer: "bot" } });
+  await vi.waitFor(() => expect(store.dispatch).toHaveBeenCalledWith({ type: "configStatus", config: { liveCall: { voice: "Aoede", answer: "bot" } } }));
 });

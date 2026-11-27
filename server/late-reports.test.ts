@@ -1,16 +1,17 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { testHome } from "./testing/test-home.ts";
 import { z } from "zod";
 
 import { installOrbitMsg, orbitBinFiles } from "../electron/terminal-mailbox.mjs";
 import { deliverMailboxOutbox } from "../electron/mailbox-outbox.mjs";
 import { receiveMailboxPost } from "./mailbox-delivery.ts";
 import { createMailboxReceipts } from "./mailbox-receipts.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
 import { mailboxGrant } from "./mailbox.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { Store } from "./store.ts";
@@ -24,7 +25,7 @@ afterEach(async () => {
 });
 
 async function fixture(auto: (scope: { pane: string; bot: string; teacher: string }, text: string, identity?: MailboxIdentity) => Promise<boolean> = async () => false) {
-  const root = mkdtempSync(join(homedir(), "late-reports-"));
+  const root = mkdtempSync(join(testHome(), "late-reports-"));
   const profile = join(root, "프로필");
   mkdirSync(profile);
   const bin = (await installOrbitMsg(join(root, ".orbit", "bin"), "win32", profile))!;
@@ -32,7 +33,7 @@ async function fixture(auto: (scope: { pane: string; bot: string; teacher: strin
   const bot = store.createBot();
   const pane = randomUUID();
   const secret = "a".repeat(64);
-  let receipts = createMailboxReceipts();
+  let receipts = createMailboxReceipts(Promise.resolve(bootRowsNow().receipts));
   let pings = 0;
   let attention = 0;
   let arrived = 0;
@@ -70,7 +71,7 @@ async function fixture(auto: (scope: { pane: string; bot: string; teacher: strin
     counts: () => ({ pings, attention, arrived }),
     requests: () => requests,
     loseNextReply() { loseReply = true; },
-    rebuild() { closeMessageDb(); receipts = createMailboxReceipts(); },
+    rebuild() { closeMessageDb(); receipts = createMailboxReceipts(Promise.resolve(bootRowsNow().receipts)); },
     post: (payload: TestReport) => fetch(`${url}/api/mailbox`, { method: "POST", headers, body: JSON.stringify(payload) }),
   };
 }
@@ -118,6 +119,64 @@ function run(bin: string, env: NodeJS.ProcessEnv, form = "ps1", text = "finished
     child.stdin!.end(form === "cmd" ? `call "${file}" --report DONE LATE-REPORTS ${text}\r\nexit %errorlevel%\r\n` : undefined);
   });
 }
+
+it.skipIf(process.platform !== "win32")("links a cut local report to its full text and keeps only the newest 100", async () => {
+  const f = await fixture();
+  const text = "보고서 report line\n".repeat(1000);
+  const file = join(f.root, "report.txt");
+  writeFileSync(file, text, "utf8");
+  const reports = join(f.profile, "mailbox-reports", f.env.ORBIT_BOT!);
+  mkdirSync(reports, { recursive: true });
+  for (let i = 0; i < 100; i++) writeFileSync(join(reports, `${String(i).padStart(19, "0")}-00000000-0000-0000-0000-000000000000.txt`), "old");
+  const result = await new Promise<{ code: number | string; stderr: string }>(resolve => {
+    const child = execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(f.bin, "orbit-msg.ps1"), "--report", "DONE", "LATE-REPORTS", "--file", file], { env: f.env, cwd: f.root, windowsHide: true }, (error, _stdout, stderr) => resolve({ code: error?.code ?? 0, stderr }));
+    child.stdin!.end();
+  });
+  expect(result.code, result.stderr).toBe(0);
+  const note = f.notes()[0]!.text!;
+  const reportPath = note.split("\n").at(-1)!.replace(/^Full report: /, "");
+  expect(reportPath.toLowerCase()).toMatch(/^\w:\\/);
+  expect(realpathSync.native(join(reportPath, "..")).toLowerCase()).toBe(realpathSync.native(reports).toLowerCase());
+  expect(readFileSync(reportPath, "utf8")).toBe(text);
+  expect(readdirSync(reports)).toHaveLength(100);
+  expect(readdirSync(reports)).not.toContain("0000000000000000000-00000000-0000-0000-0000-000000000000.txt");
+}, 30_000);
+
+it.skipIf(process.platform !== "win32")("sends the plain cut note when the full report cannot be saved", async () => {
+  const f = await fixture();
+  const file = join(f.root, "blocked.txt");
+  writeFileSync(file, "x".repeat(9000));
+  writeFileSync(join(f.profile, "mailbox-reports"), "not a folder");
+  const result = await new Promise<{ code: number | string; stderr: string }>(resolve => {
+    const child = execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(f.bin, "orbit-msg.ps1"), "--report", "FAIL", "BLOCKED-SAVE", "--file", file], { env: f.env, cwd: f.root, windowsHide: true }, (error, _stdout, stderr) => resolve({ code: error?.code ?? 0, stderr }));
+    child.stdin!.end();
+  });
+  expect(result.code, result.stderr).toBe(0);
+  expect(f.notes()).toHaveLength(1);
+  expect(f.notes()[0]!.text).toMatch(/\n\[truncated\]$/);
+  expect(f.notes()[0]!.text).not.toContain("Full report:");
+}, 30_000);
+
+it.skipIf(process.platform !== "win32")("leaves remote reports truncated without a local file", async () => {
+  const f = await fixture();
+  const file = join(f.root, "remote.txt");
+  writeFileSync(file, "x".repeat(9000));
+  const result = await new Promise<number | string>(resolve => {
+    const child = execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(f.bin, "orbit-msg.ps1"), "--report", "FAIL", "REMOTE", "--file", file], { env: { ...f.env, ORBIT_URL: f.url.replace("127.0.0.1", "localhost") }, cwd: f.root, windowsHide: true }, error => resolve(error?.code ?? 0));
+    child.stdin!.end();
+  });
+  expect(result).toBe(0);
+  expect(f.notes()[0]!.text).toMatch(/\[truncated\]$/);
+  expect(() => readdirSync(join(f.profile, "mailbox-reports"))).toThrow();
+}, 30_000);
+
+it("keeps the full report path last when delivering a queued note", async () => {
+  const f = await fixture();
+  const path = "C:\\orbit\\report.txt";
+  const response = await f.post({ text: `DONE TEST branch=x sha=y dirty=no\npartial\n[truncated]\nFull report: ${path}`, kind: "report", messageId: randomUUID(), sentAt: Date.now(), queued: true });
+  expect(response.status).toBe(200);
+  expect(f.notes()[0]!.text).toMatch(/\(sent \d\d:\d\d while Wink was closed\)\n\[truncated\]\nFull report: C:\\orbit\\report\.txt$/);
+});
 
 it("deduplicates a lost reply, concurrent retries and a database restart", async () => {
   const f = await fixture();

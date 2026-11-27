@@ -17,7 +17,7 @@ const PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/gi;
 const PR_REF = /\bPR\s*#?(\d{1,6})\b/gi;
 const BRANCH = / branch=(\S+)/;
 const NOT_PR_BRANCH = new Set(["none", "HEAD", "main", "master"]);
-const NOT_FOUND = /no pull requests found|Could not resolve to a PullRequest|HTTP 404/i;
+export const NOT_FOUND = /no pull requests found|Could not resolve to a PullRequest|HTTP 404/i;
 
 const viewSchema = z.object({
   number: z.number(), title: z.string(), url: z.string(), state: z.enum(["OPEN", "MERGED", "CLOSED"]),
@@ -35,21 +35,31 @@ export interface UnlandedPr {
   at: number;
 }
 
-/** PRs named in the newest orbit-msg reports, by URL, "PR n", or else the report's branch. */
-export function reportedPrs(newestFirst: Iterable<{ kind?: string; text?: string; at?: number }>): ReportedPr[] {
-  const refs: ReportedPr[] = [];
+type ReportRow = { kind?: string; text?: string; at?: number };
+
+const isReport = (message: ReportRow) => message.kind === "note" && message.at !== undefined && Boolean(message.text) && Boolean(parsePaneNote(message.text!).status);
+
+/** The rows reportedPrs reads, newest first: through the newest REPORTS_READ reports, so boot's worker can read them off the main thread. */
+export function* reportNotes<T extends ReportRow>(newestFirst: Iterable<T>): Generator<T> {
   let reports = 0;
   for (const message of newestFirst) {
-    if (reports >= REPORTS_READ) break;
-    if (message.kind !== "note" || message.at === undefined || !message.text) continue;
-    const note = parsePaneNote(message.text);
-    if (!note.status) continue;
-    reports++;
-    const at = message.at;
+    if (reports >= REPORTS_READ) return;
+    yield message;
+    if (isReport(message)) reports++;
+  }
+}
+
+/** PRs named in the newest orbit-msg reports, by URL, "PR n", or else the report's branch. */
+export function reportedPrs(newestFirst: Iterable<ReportRow>): ReportedPr[] {
+  const refs: ReportedPr[] = [];
+  for (const message of reportNotes(newestFirst)) {
+    if (!isReport(message)) continue;
+    const note = parsePaneNote(message.text!);
+    const at = message.at!;
     const found: ReportedPr[] = [];
     for (const match of note.body.matchAll(PR_URL)) found.push({ at, repo: match[1]!.toLowerCase(), number: Number(match[2]) });
     for (const match of note.body.replace(PR_URL, "").matchAll(PR_REF)) found.push({ at, number: Number(match[1]) });
-    const branch = BRANCH.exec(message.text.split("\n", 1)[0]!)?.[1];
+    const branch = BRANCH.exec(message.text!.split("\n", 1)[0]!)?.[1];
     if (!found.length && branch && !NOT_PR_BRANCH.has(branch)) found.push({ at, branch });
     refs.push(...found);
   }
@@ -93,7 +103,8 @@ export interface UnlandedWorkDeps {
 export interface UnlandedWork {
   /** The header this task's own reports built, "" when none. No I/O. */
   take(threadId: string): string;
-  refresh(botId: string, threadId: string): Promise<void>;
+  /** `reports`: rows boot's worker already read (reportNotes), used in place of reportsBack for this pass. */
+  refresh(botId: string, threadId: string, reports?: Iterable<ReportRow>): Promise<void>;
 }
 
 type Lookup = { at: number; final: boolean; pr: Omit<UnlandedPr, "at"> | null };
@@ -142,10 +153,10 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
     }
   }
 
-  async function run(botId: string, threadId: string) {
+  async function run(botId: string, threadId: string, reports?: Iterable<ReportRow>) {
     const dir = deps.repoDir(botId, threadId);
     const found = new Map<string, UnlandedPr>();
-    for (const ref of reportedPrs(deps.reportsBack(threadId))) {
+    for (const ref of reportedPrs(reports ?? deps.reportsBack(threadId))) {
       if (!ref.repo && !dir) continue;
       const key = `${ref.repo ?? dir}|${ref.number ?? ref.branch}`;
       let entry = lookups.get(key);
@@ -160,17 +171,19 @@ export function createUnlandedWork(deps: UnlandedWorkDeps): UnlandedWork {
     unlanded.set(threadId, [...found.values()]);
   }
 
-  function refresh(botId: string, threadId: string): Promise<void> {
+  function refresh(botId: string, threadId: string, reports?: Iterable<ReportRow>): Promise<void> {
     const prior = running.get(threadId);
     if (prior) {
       stale.add(threadId);
       return prior;
     }
     const job = (async () => {
-      do {
+      // a rerun reads the store: the given rows predate the report that asked again
+      for (let rows = reports; ; rows = undefined) {
         stale.delete(threadId);
-        await run(botId, threadId).catch(() => {});
-      } while (stale.has(threadId));
+        await run(botId, threadId, rows).catch(() => {});
+        if (!stale.has(threadId)) break;
+      }
     })().finally(() => running.delete(threadId));
     running.set(threadId, job);
     return job;

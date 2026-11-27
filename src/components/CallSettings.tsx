@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Pause, Play } from "lucide-react";
+import { Pause, Play, Settings } from "lucide-react";
 
-import { useStore, type Bot } from "@/state/store";
+import { api, useStore, type Bot, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useActiveCall } from "@/lib/live-call/active";
+import { setCallCaptions, useCallCaptions } from "@/lib/live-call/captions";
 import { voiceLabel } from "@/lib/live-call/voice-label";
 import { CALL_VOLUME, setCallVolume, useCallVolume } from "@/lib/live-call/volume";
 import { hapticTick } from "@/lib/phone-swipe";
@@ -14,12 +15,11 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { guardMenuTouch, useListMenuDismiss } from "@/lib/use-hold-menu";
 import { usePresence } from "@/lib/use-presence";
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
-import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, STYLE_GAIN, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
+import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallAnswer, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
 import { BotAvatar } from "./Avatar";
-import { DETAILS_BOX, DETAILS_ROW } from "./BotDetailsRows";
-import { Fold } from "./Fold";
+import { DetailsSwitch } from "./BotDetailsRows";
 import { MENU_CLASS } from "./MessageMenu";
-import { ROW_BUTTON } from "./SettingsPrimitives";
+import { SegmentedRow } from "./Segmented";
 import { AccountPicker } from "./UsageAccounts";
 
 const LABEL = "shrink-0 text-[14px] text-ink";
@@ -57,19 +57,20 @@ function usePreview(language: "en" | "ko", speed: number, style: CallStyle): { p
   useEffect(() => (onCall ? stop() : undefined), [onCall]);
   useEffect(() => () => clip.current?.pause(), []);
   // the call's own level and pitch-kept speed, so the sample sounds like the call
-  const level = OUTPUT_GAIN * STYLE_GAIN[style] * useCallVolume();
+  const level = OUTPUT_GAIN * useCallVolume();
+  const pace = callPace({ speed, style });
   useEffect(() => {
     if (!clip.current) return;
     clip.current.volume = level;
-    clip.current.playbackRate = speed;
-  }, [level, speed]);
+    clip.current.playbackRate = pace;
+  }, [level, pace]);
   const preview = (name: LiveVoice) => {
     const was = playing;
     stop();
     if (was === name) return;
     const audio = new Audio(`/voice-preview/${name}-${language}.mp3`);
     audio.volume = level;
-    audio.playbackRate = speed;
+    audio.playbackRate = pace;
     audio.onended = () => clip.current === audio && stop();
     clip.current = audio;
     setPlaying(name);
@@ -105,6 +106,31 @@ function CallLanguage({ bot }: { bot: Bot }) {
       select={(id) => set({ language: id === "en" || id === "ko" ? id : undefined })}
       className="shrink-0" triggerClassName="w-auto gap-1.5 rounded-full bg-transparent px-3 py-1 text-[13px] ring-1 ring-hairline max-md:min-h-8"
       accounts={[{ id: "", name: t("callMenu.auto") }, ...LANGUAGES]} />
+  );
+}
+
+/** Who answers calls, app-wide: the bot itself (its reply read out) or the Gemini voice. A call on now moves over once nothing is in flight. */
+function CallAnswerRow() {
+  const { t } = useI18n();
+  const { state, dispatch } = useStore();
+  const latest = useRef(0);
+  const config = useRef(state.config);
+  config.current = state.config;
+  const value = state.config?.liveCall?.answer ?? "gemini";
+  const show = (answer?: CallAnswer) => config.current && dispatch({ type: "configStatus", config: { ...config.current, liveCall: { voice: LIVE_VOICE, ...config.current.liveCall, answer } } });
+  const pick = (answer: CallAnswer) => {
+    const mine = ++latest.current;
+    const was = config.current?.liveCall?.answer;
+    // Shown at once, so a call placed before the save lands answers as picked; only the newest pick's reply counts.
+    show(answer);
+    void api("/api/config", { method: "PATCH", body: JSON.stringify({ liveCall: { answer } }) }).then(
+      (saved: ConfigStatus) => mine === latest.current && dispatch({ type: "configStatus", config: saved }),
+      () => mine === latest.current && show(was),
+    );
+  };
+  return (
+    <SegmentedRow<CallAnswer> label={t("callMenu.answer")} value={value}
+      options={(["bot", "gemini"] as const).map((id) => ({ id, label: t(`callMenu.answer.${id}`) }))} onChange={pick} />
   );
 }
 
@@ -159,23 +185,29 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   const { t, locale } = useI18n();
   const prefs = useCallPrefs(bot);
   const volume = useCallVolume();
+  const captions = useCallCaptions();
   const { playing, preview } = usePreview(prefs.language ?? (locale === "ko" ? "ko" : "en"), prefs.speed, prefs.style);
   return (
     // tabIndex keeps a press on the panel from focusing the message box under it
     <div data-call-settings="" tabIndex={-1} className={cn("flex flex-col gap-2 outline-none", className)}>
+      <CallAnswerRow />
       <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
         onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
       <Slider label={t("callMenu.volume")} value={volume} range={CALL_VOLUME} text={`${Math.round(volume * 100)}%`} onChange={setCallVolume} />
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 max-[379px]:gap-2">
         <span className={LABEL}>{t("callMenu.style")}</span>
         <div role="radiogroup" aria-label={t("callMenu.style")} className="flex gap-0.5 rounded-lg bg-inset p-[3px]">
           {CALL_STYLES.map((style) => (
             <button key={style} type="button" role="radio" aria-checked={style === prefs.style} onClick={() => prefs.set({ style })}
-              className={cn("px-2 py-0.5 text-[12px] font-medium max-md:min-h-8", PILL,
+              className={cn("px-2 py-0.5 text-[12px] font-medium max-md:min-h-8 max-[379px]:px-1.5", PILL,
                 style === prefs.style ? "bg-raised text-ink shadow-sm ring-1 ring-hairline/60" : "text-ink-secondary hover:text-ink")}>
               {t(`callMenu.style.${style}`)}
             </button>
           ))}
+        </div>
+        <div className="flex items-center gap-2 max-[379px]:gap-1.5">
+          <span className={LABEL}>{t("callMenu.captions")}</span>
+          <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
         </div>
       </div>
       <VoiceGrid value={prefs.voice} onPick={(voice) => prefs.set({ voice })} playing={playing} preview={preview}
@@ -187,6 +219,19 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
         </div>
       )}
     </div>
+  );
+}
+
+export const CALL_ICON = "flex size-8 shrink-0 items-center justify-center rounded-full max-md:size-10";
+
+export function CallGear({ bot, className }: { bot: Bot; className?: string }) {
+  const { t } = useI18n();
+  return (
+    <CallSettingsHold bot={bot} tap>
+      <button type="button" aria-label={t("callMenu.open")} title={t("callMenu.open")} className={cn(CALL_ICON, "text-ink-secondary hover:bg-control hover:text-ink", className)}>
+        <Settings size={17} />
+      </button>
+    </CallSettingsHold>
   );
 }
 
@@ -206,8 +251,8 @@ export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: R
     return held;
   };
   useEffect(() => () => clearTimeout(press.current?.timer), []);
-  // The Language menu is portaled outside the panel.
-  useListMenuDismiss(`[data-call-settings-menu], [role="menu"]${tap ? ", [data-call-tap]" : ""}`, "[data-call-hold]", !at, close);
+  // The Language menu is portaled outside the panel; End is never a dismiss tap, it always ends the call.
+  useListMenuDismiss(`[data-call-settings-menu], [role="menu"], [data-call-end]${tap ? ", [data-call-tap]" : ""}`, "[data-call-hold]", !at, close);
   useBackLayer(Boolean(at), close);
   const rect = shown.value;
   const width = Math.min(360, window.innerWidth - 16);
@@ -257,38 +302,5 @@ export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: R
         document.body,
       )}
     </span>
-  );
-}
-
-/** Bot details rows: Voice opens the panel in place, Language picks the call language. */
-export function VoiceChatSettings({ bot }: { bot: Bot }) {
-  const { t } = useI18n();
-  const { voice, speed } = useCallPrefs(bot);
-  const [open, setOpen] = useState(false);
-  const id = useId();
-  return (
-    <section aria-label={t("callMenu.voiceChat")}>
-      <h3 className="mb-1.5 px-1 text-[13px] font-medium text-ink-secondary">{t("callMenu.voiceChat")}</h3>
-      <div className={DETAILS_BOX}>
-        <div className={DETAILS_ROW}>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[14px] font-medium text-ink">{t("callMenu.voice")}</span>
-            <button type="button" data-call-voice-row="" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)} className={cn(ROW_BUTTON, "gap-1 text-ink")}>
-              <span>{`${voiceLabel(t, voice)} ${speed.toFixed(1)}x`}</span>
-              <ChevronDown size={12} aria-hidden className={cn("text-ink-secondary transition-transform motion-reduce:transition-none", open && "rotate-180")} />
-            </button>
-          </div>
-          <Fold open={open} id={id}>
-            <CallSettings bot={bot} language={false} className="mt-3" />
-          </Fold>
-        </div>
-        <div className={DETAILS_ROW}>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[14px] font-medium text-ink">{t("callMenu.language")}</span>
-            <CallLanguage bot={bot} />
-          </div>
-        </div>
-      </div>
-    </section>
   );
 }

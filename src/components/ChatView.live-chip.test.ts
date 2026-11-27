@@ -11,7 +11,7 @@ import { ChatView } from "./ChatView";
 const live = vi.hoisted(() => ({ current: { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} } as TurnStreamState }));
 vi.mock("@/state/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/store")>(),
-  useStreaming: () => live.current,
+  useStreamSelect: <T>(select: (stream: TurnStreamState) => T) => select(live.current),
 }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 
@@ -107,7 +107,7 @@ const remoteTerminal = (botId: string, live: { ids: string[] }): typeof fetch =>
   };
 };
 
-const chipLabel = (host: HTMLElement) => host.querySelector("[data-worker-strip]")?.getAttribute("aria-label") ?? null;
+const chipLabel = (host: HTMLElement) => host.querySelector("[data-show-pane-button]")?.getAttribute("aria-label") ?? null;
 
 describe("worker chip liveness", () => {
   it("lists nothing on a first desktop visit until readBot answers", async () => {
@@ -116,7 +116,7 @@ describe("worker chip liveness", () => {
     const { host, unmount } = await mountChat(fresh);
     try {
       await vi.waitFor(() => expect(resolvers.has("chip-fresh")).toBe(true));
-      expect(host.querySelector("[data-worker-strip]")).toBeNull();
+      expect(chipLabel(host)).toBe("Show and media");
       await answer(resolvers, "chip-fresh", ["f1ffffff-1"]);
       await vi.waitFor(() => expect(chipLabel(host)).toBe("1 working, 0 waiting, 0 failed, 0 done. Show workers"));
     } finally {
@@ -178,6 +178,19 @@ describe("worker chip liveness", () => {
         });
         await vi.waitFor(() => expect(chipLabel(host)).toBe("2 working, 0 waiting, 0 failed, 0 done. Show workers"));
         expect(badgeOf("chip-remote")).toEqual(ids.slice(0, 2).map((id) => `L-${id}`));
+      } finally {
+        await unmount();
+      }
+    });
+
+    it("keeps every open pane in the badge, past sixteen, so the sidebar matches the chip", async () => {
+      const many = Array.from({ length: 24 }, (_, index) => `m${String(index).padStart(2, "0")}mmmmm-${index}`);
+      const wide = bot("chip-wide", "Wide", []);
+      const { host, unmount } = await mountChat(wide, remoteTerminal("chip-wide", { ids: many }));
+      try {
+        await act(async () => seedBadge({ "chip-wide": many.map((id) => `L-${id}`) }));
+        await vi.waitFor(() => expect(chipLabel(host)).toBe("24 working, 0 waiting, 0 failed, 0 done. Show workers"));
+        expect(badgeOf("chip-wide")).toHaveLength(24);
       } finally {
         await unmount();
       }

@@ -268,7 +268,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop }, webhooks: { disableForBot: noop },
     lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,
     computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes, accountNotices: { forget: noop }, limitWaits: { cancel: noop },
-    perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(),
+    perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(), warmPool: { retire: noop },
     EVENTS_DIR: "events", NATIVE_DIR: "native", join: (...parts: string[]) => parts.join("/"), removeRotatingLog: noop,
   };
   const deleteBotFully = load("deleteBotFully", { ...deleteDeps, stopBotWork: load("stopBotWork", deleteDeps) });
@@ -413,10 +413,12 @@ describe("task resume during cancelled preparation", () => {
       store: { bot: () => f.bot }, cancelSteeredMessage, broadcast: (frame: unknown) => frames.push(frame),
       json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
     });
-    expect(await cancel({}, ["", f.bot.id, queued.id])).toMatchObject({ status: 200, body: { cancelled: true } });
+    const send = { threadId: f.bot.threadId, queueId: queued.id, sendId: "send_1234567890123456", text: "from phone" };
+    expect(await cancel({}, ["", f.bot.id, send.sendId])).toMatchObject({ status: 200, body: { cancelled: true, send } });
+    expect(await cancel({}, ["", f.bot.id, "send_not_yet_posted"])).toMatchObject({ status: 200, body: { cancelled: true, send: undefined } });
     expect(frames).toEqual([{
       kind: "queue.cancelled", botId: f.bot.id,
-      sends: [{ threadId: f.bot.threadId, queueId: queued.id, sendId: "send_1234567890123456", text: "from phone" }],
+      sends: [send],
     }]);
   });
 
@@ -515,8 +517,8 @@ describe("interrupt ownership", () => {
     }
     visit(room);
     const javascript = ts.transpileModule(`const bind = ${binding.getText(parsed)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
-    new Function("bindInterruptedTurn", "threadId", "bot", "epoch", "currentTurnEpoch", "isCancelled", "liveTurnIdByThread", "reply", "markMailRead", "store", "roomMail", "accountNote", "releaseStarting", "boardTurnStarted", "turnKey", `${javascript}\nreturn bind;`)(
-      f.bind, threadId, { id: "bot-1" }, 0, () => 1, () => true, f.liveTurnIdByThread, { claim: () => {} }, () => {}, {}, [], { commit: () => {} }, () => {}, () => {}, "bot-1",
+    new Function("bindInterruptedTurn", "threadId", "bot", "epoch", "currentTurnEpoch", "isCancelled", "liveTurnIdByThread", "reply", "markMailRead", "store", "roomMail", "accountNote", "releaseStarting", "boardTurnStarted", "turnKey", "askPrs", "closes", `${javascript}\nreturn bind;`)(
+      f.bind, threadId, { id: "bot-1" }, 0, () => 1, () => true, f.liveTurnIdByThread, { claim: () => {} }, () => {}, {}, [], { commit: () => {} }, () => {}, () => {}, "bot-1", { closing: () => {} }, { ids: [] },
     )({ turnId: "stopped-turn" });
     expect(f.liveTurnIdByThread.get(threadId)).toBe("new-turn");
     expect(f.stale(threadId, "new-turn")).toBe(false);

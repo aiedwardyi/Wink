@@ -67,12 +67,15 @@ function parseMuseText(stdout: string): string {
 }
 
 /** From 1.4.15 Muse starts no session MCP server, Wink's tools included, in an untrusted workspace.
- * Muse's goal and verify judges re-read the chat after every turn. An unknown -c key refuses the run and `wsl` hands argv to a shell, so only native 1.4.15+ gets the -c switch. */
-export function museServeArgs(version: string | null, wsl: boolean): string[] {
+ * Muse's goal and verify judges re-read the chat after every turn. An unknown -c key refuses the run and `wsl` hands argv to a shell, so only native 1.4.15+ gets the -c switch.
+ * Contributor mode from the user's settings is host-wide and asks for `<model>-contributor`, which only Spark has. */
+export function museServeArgs(version: string | null, wsl: boolean, model?: string | null): string[] {
   const [major = 0, minor = 0, patch = 0] = /(\d+)\.(\d+)\.(\d+)/.exec(version ?? "")?.slice(1).map(Number) ?? [];
   const recent = major > 1 || (major === 1 && (minor > 4 || (minor === 4 && patch >= 15)));
   if (!recent) return [];
-  return wsl ? ["--trust-workspace"] : ["--trust-workspace", "-c", "run.reminder_roster.agents=[]"];
+  const args = wsl ? ["--trust-workspace"] : ["--trust-workspace", "-c", "run.reminder_roster.agents=[]"];
+  const contributor = `${model?.replace(/-contributor$/, "")}-contributor`;
+  return !model || MSP_MUSE_MODELS.options.some((o) => o.id === contributor) ? args : [...args, "--contributor-mode", "off"];
 }
 
 const MUSE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+-R[0-9]+(\.[0-9]+)?$/;

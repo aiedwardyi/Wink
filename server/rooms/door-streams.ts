@@ -17,6 +17,7 @@ export interface DoorEntry {
   id: string;
   at: number;
   author: RoomAuthor;
+  seat?: string;
   text: string;
   replyToId?: string;
   files?: RoomFile[];
@@ -29,8 +30,9 @@ export interface DoorState {
   roomName: string;
   instructions: string;
   host: string;
-  me: { id: string; name: string };
-  people: Array<{ id: string; name: string }>;
+  me: { id: string; name: string; host?: true };
+  hostSeats?: string[];
+  people: Array<{ id: string; name: string; works: boolean }>;
   bots: Array<{ id: string; name: string; color: string; mascotStyle?: string }>;
   /** Teammates' own bots; only a host that takes them sends this. */
   teamBots: Array<{ id: string; name: string; color: string; owner: string; mascotStyle?: string }>;
@@ -79,6 +81,7 @@ export const doorEntry = (entry: RoomEntry, bots = true): DoorEntry => ({
   id: entry.id,
   at: entry.at,
   author: wireAuthor(entry.author, bots),
+  ...(entry.seat ? { seat: entry.seat } : {}),
   text: entry.text,
   ...(entry.replyToId ? { replyToId: entry.replyToId } : {}),
   ...(entry.files ? { files: entry.files } : {}),

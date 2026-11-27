@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Import, Keyboard, KeyRound, MonitorSmartphone, Palette, Settings, User, Users, X } from "lucide-react";
+import { ChartScatter, ChevronDown, ChevronRight, Coins, Import, Keyboard, KeyRound, MonitorSmartphone, Palette, Settings, User, Users, X } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
-import { detailedRepliesEnabled, modelDialEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
+import { detailedRepliesEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
 import {
   friendsSettingsNavVisible,
   resolvedAppSettingsSection,
 } from "@/lib/settings-chrome";
 import { SavedKeys } from "./ApiKeys";
+import { BackButton } from "./BackButton";
 import { updaterActions, useManualCheck, useUpdaterState } from "@/lib/updater";
 import { EnginesSettings } from "./EnginesSettings";
 import { ProfileFields } from "./ProfileFields";
@@ -17,7 +18,6 @@ import { UsageSection } from "./UsageSection";
 import { QuorumRow, prefetchQuorum } from "./QuorumRow";
 import { TeamSection, type TeamView } from "./TeamSection";
 import { useTeamToday } from "@/lib/team-today";
-import { useAutoRefresh } from "@/lib/usage-auto-refresh";
 import { ModelIndexSection } from "./ModelIndexSection";
 import { SkinPicker } from "./SkinPicker";
 import { GeometryPicker } from "./GeometryPicker";
@@ -34,11 +34,14 @@ import { saveRainbowBox, useRainbowBox, type RainbowBox } from "@/lib/rainbow-bo
 import { saveTerminalPopups, useTerminalPopups } from "@/lib/terminal-popups";
 import { saveReplyStyle, useReplyStyle, type ReplyStyle } from "@/lib/reply-style";
 import { cn } from "@/lib/cn";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { showTerminalAlerts, showTerminalColors } from "@/lib/friends-chrome";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { SyncPanel } from "./SyncPanel";
+import { BrowserAccount } from "./BrowserAccount";
+import { relaySignInSite } from "@/lib/devices-setup";
 import { StartFreshRow } from "./StartFreshRow";
 import { ErrorReportsRow } from "./ErrorReportsRow";
 import { AnalyticsRow } from "./AnalyticsRow";
@@ -410,7 +413,6 @@ export function SettingsModal({
   const { state, dispatch } = useStore();
   const section = resolvedAppSettingsSection(state.appSettingsSection);
   const phone = useIsPhone();
-  useAutoRefresh();
   const page = !phone || state.appSettingsPage;
   const back = useCallback(() => {
     dispatch({ type: "toggleAppSettings", open: phone && page });
@@ -424,6 +426,7 @@ export function SettingsModal({
   const activityWaved = useRef(false);
   useSettingsSwipe(dialogRef, phone && !closing, phone && page ? section : false, back);
   const [preferencesOpen, setPreferencesOpen] = useState(defaultAdvancedOpen);
+  const preferences = useRef<HTMLDivElement>(null);
   const phoneAvailable = true;
   const [teamOwner, setTeamOwner] = useState(false);
   const [teamStats, setTeamStats] = useState<TeamView | null>(null);
@@ -434,6 +437,7 @@ export function SettingsModal({
     [phoneAvailable, teamOwner, phone],
   );
   const visibleSections = SECTIONS.filter(sectionShown);
+  const signInSite = section === "account" ? relaySignInSite() : null;
 
   useEffect(() => {
     if (!closing && teamOwner) prefetchQuorum();
@@ -599,11 +603,7 @@ export function SettingsModal({
         {page && (
         <div data-settings-page={phone ? section : undefined} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", phone && "relative bg-panel")}>
           <div className={phone ? "relative flex shrink-0 items-center gap-3 px-2 py-3" : "flex shrink-0 items-center justify-between px-5 py-3 gap-3"}>
-            {phone && (
-              <button onClick={back} aria-label={t("settings.sync.back")} className="flex min-h-11 items-center gap-0.5 rounded-md px-1.5 text-[15px] text-accent hover:bg-control">
-                <ChevronLeft size={20} />{t("settings.title")}
-              </button>
-            )}
+            {phone && <BackButton label={t("settings.title")} ariaLabel={t("settings.sync.back")} onClick={back} />}
             <span id={phone ? "app-settings-title" : undefined} className={cn("text-[15px] font-semibold text-ink", phone && "pointer-events-none absolute left-1/2 -translate-x-1/2")}>
               {t(SECTION_KEY[section])}
             </span>
@@ -624,11 +624,12 @@ export function SettingsModal({
             {section === "account" && (
               <>
                 <Card>
+                  {phone && (signInSite ? <BrowserAccount site={signInSite} className="mb-4" /> : <SyncPanel rowOnly onAccountEmail={setAccountEmail} />)}
                   <div className="flex items-center gap-6">
                     <div className="min-w-0 flex-1 md:min-w-[13rem] lg:min-w-[19rem]"><ProfileFields /></div>
                     {!phone && (
                       <div className="min-w-0 self-stretch border-l border-hairline/40 pl-6">
-                        <SyncPanel onAccountEmail={setAccountEmail} />
+                        {signInSite ? <BrowserAccount site={signInSite} /> : <SyncPanel onAccountEmail={setAccountEmail} />}
                       </div>
                     )}
                   </div>
@@ -662,8 +663,8 @@ export function SettingsModal({
                     className={cn("text-ink-secondary transition-transform", preferencesOpen && "rotate-180")}
                   />
                 </button>
-                <Fold open={preferencesOpen} className="-mt-4">
-                  <div data-settings-preferences className="pt-4">
+                <Fold open={preferencesOpen} className="-mt-4" onOpened={() => revealOnOpen(preferences.current?.querySelector<HTMLElement>(".divide-y > *") ?? null)}>
+                  <div ref={preferences} data-settings-preferences className="pt-4">
                     <Card>
                       <div className="divide-y divide-hairline/40">
                         <SidebarSideRow />
@@ -697,7 +698,7 @@ export function SettingsModal({
             )}
 
 
-            {section === "usage" && <UsageSection />}
+            {section === "usage" && <UsageSection closing={closing} />}
             {section === "team" && teamStats && (
               <>
                 <TeamSection stats={teamStats} today={teamToday} />
@@ -705,7 +706,7 @@ export function SettingsModal({
               </>
             )}
             {section === "models-index" && <ModelIndexSection />}
-            {section === "shortcuts" && <KeyboardShortcuts pickerStyle={modelDialEnabled(state.config)} />}
+            {section === "shortcuts" && <KeyboardShortcuts />}
           </div>
         </div>
         )}

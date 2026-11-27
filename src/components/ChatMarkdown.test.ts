@@ -1008,6 +1008,19 @@ describe("relative file links", () => {
       expect(button()!.getAttribute("aria-label")).toBe("전체 화면 종료");
     });
 
+    it("hands Space back to a desktop video after the browser's full screen button", async () => {
+      await mount(false);
+      const video = host.querySelector("video")!;
+      const blurred = vi.fn();
+      video.addEventListener("blur", blurred);
+      video.setAttribute("tabindex", "0");
+      video.focus();
+      await act(async () => setFullscreen(video));
+      await act(async () => setFullscreen(null));
+      expect(blurred).toHaveBeenCalledTimes(2);
+      expect(document.activeElement).toBe(video);
+    });
+
     it("sizes the touch target and keeps it off the seek bar", async () => {
       await mount();
       const classes = button()!.className;
@@ -1199,7 +1212,7 @@ describe("relative file links", () => {
         expect(host.querySelector("[data-linked-picture]")!.textContent).toBe("");
       });
 
-      it("marks the picture with the card's pane icon, and a click on it shows the picture", async () => {
+      it("marks the picture with the card's pane icon, and a click on it opens the viewer", async () => {
         desktop();
         await act(async () => closeShow());
         await mount("Saved to [plot.png](C:\\w\\plot.png).");
@@ -1208,8 +1221,8 @@ describe("relative file links", () => {
         expect(icons[0]!.parentElement!.className).toContain("rounded-full bg-black/55 text-white");
         expect(host.querySelectorAll("[data-linked-picture] button")).toHaveLength(1);
         await act(async () => void icons[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })));
-        expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\plot.png", kind: "image" });
-        expect(document.querySelector("[data-media-viewer]")).toBeNull();
+        expect(document.querySelector("[data-media-viewer] img")?.getAttribute("src")).toBe(src("plot.png"));
+        expect(lastShown("t1")?.path).not.toBe("C:\\w\\plot.png");
       });
 
       it("opens the file card's menu on a right-click, on the link and on the picture", async () => {
@@ -1248,15 +1261,16 @@ describe("relative file links", () => {
         expect(pictures().map((picture) => picture.getAttribute("src"))).toEqual([src("b.png"), src("a.png")]);
       });
 
-      it("shows the picture in the pane on a click, and opens nothing before it", async () => {
+      it("opens the picture in the viewer on a click, and opens nothing before it", async () => {
         desktop();
         await act(async () => closeShow());
         await mount("Saved to [chart.png](C:\\w\\chart.png).");
         expect(lastShown("t1")?.path).not.toBe("C:\\w\\chart.png");
-        await act(async () => pictures()[0]!.click());
-        expect(lastShown("t1")).toEqual({ threadId: "t1", path: "C:\\w\\chart.png", kind: "image" });
-        expect(window.ogb!.openFile).not.toHaveBeenCalled();
         expect(document.querySelector("[data-media-viewer]")).toBeNull();
+        await act(async () => pictures()[0]!.click());
+        expect(document.querySelector("[data-media-viewer] img")?.getAttribute("src")).toBe(src("chart.png"));
+        expect(lastShown("t1")?.path).not.toBe("C:\\w\\chart.png");
+        expect(window.ogb!.openFile).not.toHaveBeenCalled();
       });
 
       it("draws no picture the bot already showed", async () => {
@@ -1348,7 +1362,7 @@ describe("relative file links", () => {
     }
   });
 
-  it("opens a linked md from an authenticated browser without the desktop bridge", async () => {
+  it("shows a linked md as text from an authenticated browser without the desktop bridge", async () => {
     const ext = "md";
     vi.stubGlobal("fetch", vi.fn(async () => new Response("x", { status: 206 })));
     const host = document.createElement("div");
@@ -1356,10 +1370,9 @@ describe("relative file links", () => {
     const file = `C:/clips/file.${ext}`;
     try {
       await act(async () => root.render(createElement(ChatMarkdown, { text: `[file](${file})`, threadId: "t1" })));
-      const link = host.querySelector("a")!;
-      expect(link).not.toBeNull();
-      expect(link.getAttribute("href")).toBe(`/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`);
-      expect(link.hasAttribute("download")).toBe(true);
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-file-link]")!.click());
+      expect(lastShown("t1")).toEqual({ threadId: "t1", path: file, kind: "text" });
+      expect(host.querySelector("a[download]")).toBeNull();
       expect(host.textContent).not.toContain("Files open in the desktop app");
     } finally {
       await act(async () => root.unmount());
@@ -1393,17 +1406,16 @@ describe("relative file links", () => {
     }
   });
 
-  it.each([["unlisted-folder", 404, false], ["empty.py", 416, true]] as const)("keeps the behavior for %s", async (name, status, download) => {
+  it.each([["unlisted-folder", 404], ["empty.py", 416]] as const)("opens %s by the one rule", async (name, status) => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status, headers: { "content-range": "bytes */0" } })));
     const host = document.createElement("div");
     const root = createRoot(host);
     try {
       await act(async () => root.render(createElement(ChatMarkdown, { text: `[file](C:/clips/${name})`, threadId: "t1" })));
-      expect(Boolean(host.querySelector("a[download]"))).toBe(download);
-      if (!download) {
-        await act(async () => host.querySelector("button")!.click());
-        expect(host.textContent).toContain("Files open in the desktop app");
-      }
+      await act(async () => host.querySelector("button")!.click());
+      if (status === 404) expect(host.textContent).toContain("That folder could not be opened");
+      else expect(lastShown("t1")).toEqual({ threadId: "t1", path: `C:/clips/${name}`, kind: "text" });
+      expect(host.textContent).not.toContain("Files open in the desktop app");
     } finally {
       await act(async () => root.unmount());
       vi.unstubAllGlobals();
@@ -1446,11 +1458,11 @@ describe("relative file links", () => {
       }
     });
 
-    it("a folder this PC won't list says it opens on the desktop", async () => {
+    it("a folder this PC won't list says it could not open", async () => {
       const { host, root } = await mount(folder, 404, "t-refused");
       try {
         expect(lastShown("t-refused")).toBeUndefined();
-        expect(host.textContent).toContain("Files open in the desktop app");
+        expect(host.textContent).toContain("That folder could not be opened");
       } finally {
         await act(async () => root.unmount());
       }

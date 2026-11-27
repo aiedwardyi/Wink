@@ -19,6 +19,7 @@ import {
   watchMemory,
   type MemoryLatest,
 } from "@/lib/memory-drafts";
+import { lastMemory, rememberMemory } from "@/lib/memory-last";
 import { requestNotificationPermission } from "@/lib/notify";
 import { shortPath } from "@/lib/short-path";
 import { MOTION_MODERATE_MS } from "@/lib/motion";
@@ -30,7 +31,7 @@ import { BotAvatar } from "./Avatar";
 import { BotAlarms } from "./BotAlarms";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
-import { currentTask, MemoryEditButton, MemoryEmpty, MemoryFile, MemoryGroup, SaveState, type MemorySaveStatus, type MemoryTopic } from "./MemoryGroups";
+import { currentTask, MemoryDoneButton, MemoryEmpty, MemoryFile, MemoryGroup, SaveState, type MemorySaveStatus, type MemoryTopic } from "./MemoryGroups";
 import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, DetailsSwitch, FitTextarea, SwitchRow } from "./BotDetailsRows";
 import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
 import { SegmentedRow } from "./Segmented";
@@ -43,9 +44,8 @@ import { memoryTargetLine } from "@/lib/memory-recent";
 import { botAsks } from "@/lib/asks";
 import { useCoverChat } from "@/lib/cover-chat";
 import { lazyView } from "@/lib/stale-build";
-import { watchMemoryArrival } from "@/lib/memory-clean-events";
+import { watchMemoryChange } from "@/lib/memory-clean-events";
 import { VoiceSettings } from "./VoiceSettings";
-import { VoiceChatSettings } from "./CallSettings";
 import { LazyView } from "./LazyView";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { Fold } from "./Fold";
@@ -264,9 +264,13 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   const [mapReady, setMapReady] = useState(Boolean(loadedMap));
   const [error, setError] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [text, setText] = useState("");
-  const [truncated, setTruncated] = useState(false);
-  const [topics, setTopics] = useState<MemoryTopic[]>([]);
+  // a draft is newer than any read, so it waits for the read that opens it
+  const [last] = useState(() => (memoryDraft(bot.id) === null ? lastMemory(bot.id) : null));
+  // the last read paints at once; edits still wait for the fresh read, which replaces it
+  const blank = loading && !last;
+  const [text, setText] = useState(last?.text ?? "");
+  const [truncated, setTruncated] = useState(last?.truncated ?? false);
+  const [topics, setTopics] = useState<MemoryTopic[]>(last?.topics ?? []);
   const [status, setStatus] = useState<MemorySaveStatus>("idle");
   const [conflict, setConflict] = useState<MemoryLatest | null>(null);
   const savedFade = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -322,7 +326,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     focusFile.current = false;
   }, [editing]);
   const MapView = loadedMap ?? MemoryMap;
-  const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot) && !botAsks(bot).length;
+  const empty = !blank && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot) && !botAsks(bot).length;
 
   const read = (signal?: AbortSignal): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
     api(`/api/bots/${botId}/memory`, signal && { signal }).then((result) => {
@@ -340,6 +344,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
       const result = await read(AbortSignal.timeout(MEMORY_READ_MS));
       // a refresh that landed first is as new, and an edit may have saved since
       if (landed.current) return;
+      rememberMemory(botId, result);
       setTruncated(result.truncated);
       setTopics(result.topics);
       const draft = openMemory(botId, result);
@@ -357,7 +362,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
 
   useEffect(() => {
     if (!active) return;
-    return watchMemoryArrival(botId, () => { void refresh(); });
+    return watchMemoryChange(botId, () => { void refresh(); });
   }, [active, botId]);
   useEffect(() => {
     if (!active || loading || !target) return;
@@ -377,6 +382,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
     // a save that started after this read went out is newer than it
     if (!result || memoryDraft(botId) !== null || memorySaves(botId) !== saves) return;
     openMemory(botId, result);
+    rememberMemory(botId, result);
     landed.current = true;
     setText(result.text);
     setLoading(false);
@@ -447,13 +453,14 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
       window.removeEventListener("pagehide", onPageHide);
       if (savedFade.current !== null) clearTimeout(savedFade.current);
       // the panel is gone, so the red line under the editor is too
+      const toast = (message: string) => {
+        dispatch({ type: "error", message });
+        setTimeout(() => dispatch({ type: "error", message: null }), 6000);
+      };
       watchMemory(botId, {
         saved: () => undefined,
-        failed: (message) => {
-          dispatch({ type: "error", message });
-          setTimeout(() => dispatch({ type: "error", message: null }), 6000);
-        },
-        conflict: () => undefined,
+        failed: toast,
+        conflict: () => toast(t("bot.memoryConflict")),
       });
       void flushMemory(botId);
     };
@@ -495,14 +502,14 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
       {truncated && <div className="mt-2 text-[12px] text-ink-secondary">{t("bot.memoryTruncated")}</div>}
     </>
   );
-  const edits = !loading && !loadFailed && !conflict ? startEdit : undefined;
+  const done = editing && !loading && !loadFailed && !conflict ? () => startEdit(false) : undefined;
 
   return (
     <div ref={card} className="mm-wrap relative flex flex-col gap-3">
       {/* a phone's lazy map would suspend after its rows had shown, so there it still waits for the read */}
       {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (mapReady || !loading || loadFailed) && (
         <LazyView>
-          <MapView bot={bot} text={text} topics={topics} target={target} active={up} loading={loading} failed={loadFailed} onRetry={() => void load()} editor={file} saveState={<SaveState status={status} />} fileAction={edits && <MemoryEditButton editing={editing} onEdit={edits} />} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
+          <MapView bot={bot} text={text} topics={topics} target={target} active={up} loading={blank} failed={loadFailed} onRetry={() => void load()} editor={file} saveState={<SaveState status={status} />} fileAction={done && <MemoryDoneButton onDone={done} />} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
         </LazyView>
       )}
       <MemoryGroup>
@@ -513,7 +520,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
           onToggle={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
         />
       </MemoryGroup>
-      <MemoryFile ref={fileRow} text={text} loading={loading} save={inFold ? status : undefined} open={expanded} editing={editing} onEdit={inFold ? edits : undefined} onToggle={() => openFile(!expanded)}>
+      <MemoryFile ref={fileRow} text={text} loading={blank} save={inFold ? status : undefined} open={expanded} onDone={inFold ? done : undefined} onToggle={() => openFile(!expanded)}>
         {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
         <Fold open={inFold}>
           <div className="px-4 pb-4 pt-3">
@@ -699,7 +706,7 @@ export function SettingsPanel({
       </div>
 
       <div ref={pagesRef} className={cn("relative min-h-0 flex-1 overflow-hidden", paging && "pointer-events-none")}>
-        <div hidden={memoryTab && !paging} inert={memoryTab} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4 max-md:pt-0 max-md:[&>:first-child]:mt-4">
+        <div hidden={memoryTab && !paging} inert={memoryTab} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 [&>:first-child]:mt-4">
           {rows > 0 && (
             <>
               <KeepGoingCard bot={bot} />
@@ -826,14 +833,20 @@ export function SettingsPanel({
                 )}
               </div>
 
-              <BotAlarms routines={state.routines.filter((each) => each.botId === bot.id)} />
+              <BotAlarms
+                routines={state.routines.filter((each) => each.botId === bot.id)}
+                onDelete={(routineId) =>
+                  api(`/api/routines/${routineId}`, { method: "DELETE" })
+                    .then(() => dispatch({ type: "routineDeleted", routineId }))
+                    .catch((cause) => dispatch({ type: "error", message: cause instanceof Error ? cause.message : String(cause) }))
+                }
+              />
 
-              <VoiceChatSettings bot={bot} />
               {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
             </>
           )}
         </div>
-        <div hidden={!memoryTab && !paging} inert={!memoryTab} className="absolute inset-0 overflow-y-auto px-5 pb-5 pt-4 max-md:pt-0 max-md:[&>:first-child]:mt-4">
+        <div hidden={!memoryTab && !paging} inert={!memoryTab} className="absolute inset-0 overflow-y-auto px-5 pb-5 [&>:first-child]:mt-4">
           {rows > 0 && <MemoryCard key={bot.id} bot={bot} active={memoryTab} warm={paging} />}
         </div>
       </div>

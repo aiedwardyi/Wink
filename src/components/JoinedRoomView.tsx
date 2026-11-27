@@ -1,5 +1,6 @@
 // A room joined on someone else's Wink. Only its lines and files reach this screen.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { roomAuthorIsMine } from "../../shared/room-routing";
 
 import { request } from "@/lib/api-request";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
@@ -11,11 +12,12 @@ import { useJoinedRoom } from "@/lib/joined-rooms";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { useSkin } from "@/lib/skins";
 import { DEFAULT_MAUS_COLOR, type MausColor } from "@/lib/mascot";
-import { joinedLines, joinedPhase, joinedRoomBase, joinedSelection, reactInJoinedRoom, reactionNames, roomMessage, roomPictureUrl, setJoinedNotice } from "@/lib/team-rooms";
+import { joinedLines, joinedPhase, joinedRoomBase, joinedSelection, reactInJoinedRoom, reactionNames, roomMentionPeople, roomMessage, roomPictureUrl, setJoinedNotice } from "@/lib/team-rooms";
 import { shouldClearSelectedUnread, useStore } from "@/state/store";
 
 import { AppErrorBanner } from "./AppErrorBanner";
 import { RoomBotAvatar } from "./Avatar";
+import { roomCallBot, useCallControls } from "./CallControls";
 import { ChatScene, sceneOf } from "./ChatScene";
 import { RoomAlertsBell } from "./RoomAlertsBell";
 import { RoomPicture } from "./RoomPicture";
@@ -55,7 +57,8 @@ export function JoinedRoomView({ roomId, hidden = false }: { roomId: string; hid
       .catch(() => { paging.current = null; });
   }, [roomId, first]);
   const meId = room?.me.id;
-  const lines = useMemo(() => joinedLines(entries ?? [], bots, meId), [entries, bots, meId]);
+  const meHost = room?.me.host;
+  const lines = useMemo(() => joinedLines(entries ?? [], bots, meId, meHost), [entries, bots, meId, meHost]);
   const people = room?.state?.people;
   const host = room?.state?.host;
   const names = useMemo(() => reactionNames(people ?? [], host, bots), [people, host, bots]);
@@ -74,7 +77,7 @@ export function JoinedRoomView({ roomId, hidden = false }: { roomId: string; hid
     : phase === "left" ? t(room?.gone ? "teamRoom.gone" : "teamRoom.left")
     : null;
   const me = room?.me.id;
-  const composerPeople = room?.state ? [{ id: "host", name: room.state.host }, ...room.state.people.filter((person) => person.id !== me)] : undefined;
+  const composerPeople = room?.state ? roomMentionPeople(room.state.people.filter((person) => person.id !== me), room.state.host) : undefined;
   const joined = phase === "connecting" || phase === "live" || phase === "offline";
   const myTurns = (status === null ? myBots ?? [] : []).map((bot) => {
     const listed = teamBots?.find((candidate) => candidate.id === bot.id);
@@ -86,6 +89,7 @@ export function JoinedRoomView({ roomId, hidden = false }: { roomId: string; hid
   const scene = sceneOf(skin);
   const sceneSend = useRef<(() => void) | null>(null);
   const seq = entries?.at(-1)?.seq;
+  const call = useCallControls(status === null ? roomCallBot(state.bots) : undefined, hidden, { id: roomId, kind: "joined", name });
   useEffect(() => {
     if (preview) return;
     const read = () => {
@@ -113,7 +117,7 @@ export function JoinedRoomView({ roomId, hidden = false }: { roomId: string; hid
         lines={lines}
         hasMore={Boolean(room?.hasMore)}
         loadOlder={loadOlder}
-        mine={(line) => line.author.kind === "person" && line.author.id === me}
+        mine={(line) => roomAuthorIsMine(line.author, room?.me)}
         base={base}
         label={t("chat.roomAria", { name })}
         people={room?.state?.people}
@@ -124,7 +128,7 @@ export function JoinedRoomView({ roomId, hidden = false }: { roomId: string; hid
         notice={{
           entryId: notice?.entryId,
           text: room?.noticeEntry?.text ?? notice?.text,
-          canUnpin: notice?.by === `person:${meId}`,
+          canUnpin: notice?.by === (meHost ? "host" : `person:${meId}`),
           set: room?.canReact ? (entryId) => void setJoinedNotice(roomId, entryId).catch(() => {}) : undefined,
         }}
         empty={entries && room?.state ? { name, members: [room.state.host, ...room.state.people.map((person) => person.name)], picture: roomPictureUrl(base, room.state.picture), retry: room.link } : undefined}
@@ -158,6 +162,7 @@ export function JoinedRoomView({ roomId, hidden = false }: { roomId: string; hid
               onStop={stoppable ? () => void request(`${base}/stop`, { method: "POST" }).catch(() => {}) : undefined}
               onSend={() => sceneSend.current?.()}
               chain={chain}
+              call={call}
             />
           </>
         ) : <TeamRoomStatus text={status ?? ""} />}

@@ -15,7 +15,7 @@ function rig(staleTurns: string[] = []) {
   const tool = (threadId: string, turnId: string) => event(threadId, turnId, { type: "item.completed", itemType: "tool", itemId: "call-1" });
   const started = (threadId: string, turnId: string) => event(threadId, turnId, { type: "turn.started" });
   const completed = (threadId: string, turnId: string | undefined, ok = true) => event(threadId, turnId, { type: "turn.completed", ok });
-  return { replies, text, tool, started, completed };
+  return { replies, event, text, tool, started, completed };
 }
 
 describe("peerTurnReplies", () => {
@@ -80,9 +80,10 @@ describe("peerTurnReplies", () => {
     const wink = r.replies.start("wink");
     const atlas = r.replies.start("atlas");
     r.text("wink", "stopped", "late text of a stopped turn");
+    expect(wink.engine).toBeUndefined();
     r.started("wink", "w1");
     r.started("atlas", "a1");
-    r.text("atlas", "a1", "Atlas answer.");
+    r.event("atlas", "a1", { provider: "grokAgent", type: "item.completed", itemType: "assistant_text", text: "Atlas answer." });
     r.text("wink", "w1", "Wink answer.");
     r.text("wink", "other", "not this turn");
     r.completed("wink", "other");
@@ -92,6 +93,7 @@ describe("peerTurnReplies", () => {
     r.text("atlas", "a1", "after the end");
     expect(wink.text()).toBe("Wink answer.\nWink more.");
     expect(atlas.text()).toBe("Atlas answer.");
+    expect([wink.engine, atlas.engine]).toEqual(["claude", "grokAgent"]);
   });
 
   it("stops at its turn's completion and when released, keeping the text readable", () => {

@@ -42,6 +42,7 @@ const held = new Map<string, Held>();
 const loads = new Map<string, Promise<Held>>();
 const tails = new WeakMap<MediaFile[], { known: Set<string>; fresh: string; files: MediaFile[] }>();
 const kinds = new Map<string, MediaKind>();
+const warmed = new Set<string>();
 
 const heldKey = (threadId: string, roomId?: string) => roomId ? `room:${roomId}` : threadId;
 
@@ -66,7 +67,7 @@ export function loadMedia(threadId: string, roomId?: string): Promise<Held> {
     const ask = (): Promise<Held> => roomId
       ? request(`${hostRoomBase(roomId)}/files`).then((list: RoomFiles & { files: Array<RoomFile & { at: number; sender?: string }> }) => ({ files: roomMedia(threadId, roomId, list.files), list }))
       : request(`/api/threads/${threadId}/media${was?.v ? `?v=${encodeURIComponent(was.v)}` : ""}`)
-        .then((wire: MediaWire | { v: string }) => "ids" in wire ? { v: wire.v, files: decodeMedia(threadId, wire) } : was!);
+        .then((wire: MediaWire | { v: string }) => "ids" in wire ? { v: wire.v, files: decodeMedia(threadId, wire) } : was ?? Promise.reject(new Error("an unchanged media answer with nothing held")));
     const next = ask().catch(() => new Promise((wait) => setTimeout(wait, RETRY_MS)).then(ask));
     load = next.then((got) => {
       held.delete(key);
@@ -79,7 +80,16 @@ export function loadMedia(threadId: string, roomId?: string): Promise<Held> {
   return load;
 }
 
+/** Asks once per chat per session, ahead of the Media tab, so its first press draws the held list. */
+export function warmMedia(threadId: string): void {
+  if (warmed.has(threadId) || held.has(threadId)) return;
+  warmed.add(threadId);
+  // the tab asks again, with its own failure shown, when it opens
+  loadMedia(threadId).catch(() => undefined);
+}
+
 export function forgetMedia(): void {
+  warmed.clear();
   held.clear();
   loads.clear();
   kinds.clear();

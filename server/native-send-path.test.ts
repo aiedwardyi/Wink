@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as compaction from "./context-compaction.ts";
+import { decodeCodexSelection, OFFICIAL_CODEX_PROVIDER } from "./drivers/codex-catalog.ts";
 import { composeUserTurnPrompt } from "./replies.ts";
-import type { Message } from "./store.ts";
+import { Store, type Message } from "./store.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryBuild } from "./summary-build.ts";
 import { summaryInstance } from "./summary-instance.ts";
 import { asksNudge, isStatusTurn } from "./task-asks.ts";
@@ -41,7 +43,7 @@ function setup({ messages, nativePrompt, driverKind = "claudeAgent", model = MOD
 }) {
   const rows = [...messages];
   const appended: Message[] = [];
-  const generateText = vi.fn(async (): Promise<string> => "SUMMARY\nthe harbor decisions");
+  const generateText = vi.fn(async (_prompt: string): Promise<string> => "SUMMARY\nthe harbor decisions");
   const store = {
     taskByThread: () => task as never,
     activePath: () => [...rows],
@@ -95,12 +97,13 @@ function setup({ messages, nativePrompt, driverKind = "claudeAgent", model = MOD
     const userMessage = store.appendMessage(THREAD, { role: "user", kind: "text", text: "next request" });
     const skipTranscript = new Set([userMessage.id]);
     const result = await runSend({
-      ...compaction, ...turnContext, composeUserTurnPrompt, inlineDeadlineMs, inlineSummarizer, summaryInstance, asksNudge, isStatusTurn,
+      ...compaction, ...turnContext, composeUserTurnPrompt, inlineDeadlineMs, inlineSummarizer, summaryInstance, asksNudge, isStatusTurn, goalsOf: () => [],
+      decodeCodexSelection, OFFICIAL_CODEX_PROVIDER, heldQuestions: new Map(),
       store, task, instance, model, instanceId: "claude", threadId: THREAD, bot, summaryBuild: build,
       cfg: {}, accounts: { snapshot: [] }, process: { env: {} }, instanceConfigs: () => ({ claude: { environment: env } }),
       text: "next request", userMessage, skipTranscript, opts: {}, holdNotes: undefined, routineTurn: false, recovering: false, priorTaskPacket: undefined, commsDepth: 0,
-      latencySendId: "send", taskPacketForWrite: () => undefined, persistTaskPacket: () => undefined, stampTaskResumePacket: () => undefined,
-      unsettledRequest: () => "", lastUserInstruction: () => undefined, decodeInjectId: () => null, logSummaryCall: () => {}, startedTurn: () => ({}),
+      latencySendId: "send", memoryLookup: { ready: () => undefined }, taskPacketForWrite: () => undefined, closeMergedAsks: () => ({ ids: [], shown: (record: unknown) => record, notes: () => [] }), persistTaskPacket: () => undefined, stampTaskResumePacket: () => undefined,
+      unsettledRequest: () => "", lastUserInstruction: () => undefined, taskRows: (rows: Message[]) => rows, decodeInjectId: () => null, logSummaryCall: () => {}, startedTurn: () => ({}),
     });
     return { ...result, skipTranscript };
   };
@@ -141,6 +144,47 @@ afterEach(() => {
 });
 
 describe("native send path", () => {
+  it("matches the base summary and replay prompt for a settled fixture chat", async () => {
+    vi.setSystemTime(new Date("2026-11-19T12:00:00Z"));
+    const h = setup({ messages: [
+      ...turn("memory", "Remember that the blue crate stays at the harbor."),
+      ...Array.from({ length: 69 }, (_, index) => turn(`t${index}`, `request ${index}`)).flat(),
+    ] });
+    h.build.onSettled("bot", THREAD);
+    await h.build.idle();
+    const { prepared } = await h.send();
+    expect(h.generateText).toHaveBeenCalledOnce();
+    expect(prepared).toMatchObject({ status: "ready", compactionId: "summary-0" });
+    const prompt = composeUserTurnPrompt("next request", { messages: h.store.activePath(), userName: "User", replayedTranscript: prepared.transcript });
+    const output = { summaryPrompt: h.generateText.mock.calls[0]![0], summary: h.appended[0]!.compaction, transcript: prepared.transcript, prompt };
+    expect(createHash("sha256").update(JSON.stringify(output)).digest("hex")).toMatchInlineSnapshot(`"a8f021bb10dfcd158e80ba8a49840dd851d1d4317f8ea2efd120511a50fb1efa"`);
+  });
+
+  it.each([false, true])("shares a projection per send revision (mid-send edit: %s)", async (edit) => {
+    const h = setup({ messages: [] });
+    const store = new Store(() => ({ instanceId: "claude", model: MODEL }));
+    const threadId = edit ? "mid-send-edit" : "steady-send";
+    const previous = store.appendMessage(threadId, { role: "bot", kind: "text", text: "previous reply" });
+    vi.spyOn(h.store, "appendMessage").mockImplementation((_id, row) => store.appendMessage(threadId, row));
+    vi.spyOn(h.store, "messagesFor").mockImplementation(() => store.messagesFor(threadId));
+    const paths = vi.spyOn(h.store, "activePath").mockImplementation(() => store.activePath(threadId));
+    let settle!: (waitedMs: number) => void;
+    vi.spyOn(h.build, "settle").mockImplementationOnce(() => new Promise((resolve) => { settle = resolve; }));
+
+    const sending = h.send();
+    if (edit) store.patchMessage(threadId, previous.id, { text: "updated reply" });
+    settle(0);
+    const { prepared } = await sending;
+
+    expect(prepared.transcript.map((row: Message) => row.text)).toEqual([edit ? "updated reply" : "previous reply"]);
+    expect(paths.mock.results).toHaveLength(2);
+    const [before, after] = paths.mock.results.map(({ value }) => value);
+    expect(before[0]).toBe(previous);
+    if (edit) expect(after).not.toBe(before);
+    else expect(after).toBe(before);
+    expect(store.activePath(threadId)).toBe(after);
+  });
+
   it("does not summarize or wait on the first send after Claude compacted", async () => {
     const h = await afterClaudeCompacted();
     expect(compaction.planCompaction({ messages: h.store.activePath(), contextWindow: 1_000_000, nativeAt: 967_000 })).toMatchObject({ needed: true, budgetTokens: 870_300 });

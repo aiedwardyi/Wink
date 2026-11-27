@@ -1,11 +1,11 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setSafeTimers } from "vitest/internal/browser";
 
 import type { BotRecord, Message, TaskRecord } from "./store.ts";
 import { CONFLICT_NOTICE } from "./thread-sync.ts";
@@ -13,13 +13,15 @@ import { ThreadSyncV2 } from "./thread-sync-v2.ts";
 import { writeDeviceRecord } from "./device-sync.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import type { Snapshot, TestArgs, TestResult } from "./testing/thread-sync-v2-pc.ts";
+import { bootRowsNow, testBootReads } from "./testing/boot-rows.ts";
+import { testHome } from "./testing/test-home.ts";
 
 const roots: string[] = [];
 const peers: Array<{ close(): Promise<void> }> = [];
 const CONFLICT_NOTICE_V2 = "This chat also changed on another PC. Both versions were kept.";
 const isConflictNotice = (message: Message) => [CONFLICT_NOTICE, CONFLICT_NOTICE_V2].some((notice) => message.tool?.name === `error: ${notice}`);
 const temp = () => {
-  const root = mkdtempSync(join(tmpdir(), "sync-v2-store-"));
+  const root = mkdtempSync(join(testHome(), "sync-v2-store-"));
   roots.push(root);
   return root;
 };
@@ -179,11 +181,140 @@ async function exchange(a: ReturnType<typeof pc>, c: ReturnType<typeof pc>): Pro
 }
 
 afterEach(async () => {
+  const fakeTimers = vi.isFakeTimers();
+  vi.useRealTimers();
+  setSafeTimers();
+  vi.restoreAllMocks();
   await Promise.all(peers.splice(0).map((peer) => peer.close()));
   await Promise.all(roots.splice(0).map(removeTempDir));
+  expect(fakeTimers, "restore real timers in test cleanup").toBe(false);
 });
 
 describe("store delta sync", { timeout: 60_000 }, () => {
+  it("reads boot state through an index, never a scan of every message", async () => {
+    const { DATA_DIR } = await import("./config.ts");
+    const { Store } = await import("./store.ts");
+    const { messageDatabase } = await import("./message-db.ts");
+    const { createThreadSyncV2Store } = await import("./thread-sync-v2-store.ts");
+    const store = new Store(() => ({ instanceId: "test", model: "test" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    const prepare = DatabaseSync.prototype.prepare;
+    const prepared: string[] = [];
+    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql: string) {
+      prepared.push(sql);
+      return prepare.call(this, sql);
+    });
+    await createThreadSyncV2Store({
+      store, dataDir: DATA_DIR, bootReads: testBootReads(DATA_DIR), deviceId: "local", folder: () => temp(), enabled: () => true,
+      target: () => ({ botId: bot.id, botSyncId: "bot" }), bots: () => [{ botId: bot.id, botSyncId: "bot" }],
+      running: () => false, project: (message) => message, imported: () => {}, maintenance: () => {},
+    })!.close();
+    vi.restoreAllMocks();
+    const plans = prepared.filter((sql) => /^\s*SELECT/i.test(sql) && /\bmessages\b/.test(sql))
+      .flatMap((sql) => messageDatabase().prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map((row) => String(row.detail)));
+    expect(plans.filter((detail) => /^SCAN (m|messages)$/.test(detail))).toEqual([]);
+  });
+
+  it("flushes without counting the chat's outbox", async () => {
+    const { DATA_DIR } = await import("./config.ts");
+    const { Store } = await import("./store.ts");
+    const { createThreadSyncV2Store } = await import("./thread-sync-v2-store.ts");
+    const store = new Store(() => ({ instanceId: "test", model: "test" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    store.adoptSyncedTask(bot.id, { threadId: "thread", title: "Chat", createdAt: 1 }, [], null, true);
+    const folder = temp();
+    const sync = createThreadSyncV2Store({
+      store, dataDir: DATA_DIR, bootReads: testBootReads(DATA_DIR), deviceId: "local", folder: () => folder, enabled: () => true,
+      target: () => ({ botId: bot.id, botSyncId: "bot" }), bots: () => [{ botId: bot.id, botSyncId: "bot" }],
+      running: () => false, project: (message) => message, imported: () => {}, maintenance: () => {},
+    })!;
+    const prepare = DatabaseSync.prototype.prepare;
+    const prepared: string[] = [];
+    try {
+      vi.useFakeTimers();
+      // A reintroduced waitFor must use this clock to expose its deadline.
+      setSafeTimers();
+      const flush = ThreadSyncV2.prototype.flush;
+      vi.spyOn(ThreadSyncV2.prototype, "flush").mockImplementationOnce(async function (this: ThreadSyncV2, ...args) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        return flush.apply(this, args);
+      });
+      store.appendMessage("thread", { role: "user", kind: "text", text: "local" });
+      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql: string) {
+        prepared.push(sql);
+        return prepare.call(this, sql);
+      });
+      expect(await sync.flush("thread")).toBe("written");
+    } finally {
+      vi.restoreAllMocks();
+      try {
+        await sync.close();
+      } finally {
+        vi.useRealTimers();
+        setSafeTimers();
+      }
+    }
+    expect(prepared.filter((sql) => /COUNT\(\*\)[\s\S]*sync_v2_packets/.test(sql))).toEqual([]);
+  });
+
+  it("flushes a task saved at boot as soon as its notice cleanup lands", async () => {
+    const { DATA_DIR } = await import("./config.ts");
+    const { Store } = await import("./store.ts");
+    const { createThreadSyncV2Store } = await import("./thread-sync-v2-store.ts");
+    const store = new Store(() => ({ instanceId: "test", model: "test" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    store.adoptSyncedTask(bot.id, { threadId: "thread", title: "Chat", createdAt: 1 }, [], null, true);
+    const folder = temp();
+    const options = {
+      store, dataDir: DATA_DIR, deviceId: "local", folder: () => folder, enabled: () => true,
+      target: () => ({ botId: bot.id, botSyncId: "bot" }), bots: () => [{ botId: bot.id, botSyncId: "bot" }],
+      running: () => false, project: (message: Message) => message, imported: () => {}, maintenance: () => {},
+    };
+    const first = createThreadSyncV2Store({ ...options, bootReads: testBootReads(DATA_DIR) })!;
+    store.appendMessage("thread", { role: "user", kind: "text", text: "local" });
+    expect(await first.flush("thread")).toBe("written");
+    await first.close();
+    let release!: () => void;
+    const rows = new Promise<void>((resolve) => { release = resolve; }).then(() => bootRowsNow([], DATA_DIR));
+    const sync = createThreadSyncV2Store({ ...options, bootReads: () => rows })!;
+    try {
+      store.appendMessage("thread", { role: "user", kind: "text", text: "after restart" });
+      const flushed = sync.flush("thread");
+      release();
+      expect(await flushed).toBe("written");
+    } finally {
+      await sync.close();
+    }
+  });
+
+  it("drops a flush still waiting on boot cleanup when the store closes", async () => {
+    const { DATA_DIR } = await import("./config.ts");
+    const { Store } = await import("./store.ts");
+    const { createThreadSyncV2Store } = await import("./thread-sync-v2-store.ts");
+    const store = new Store(() => ({ instanceId: "test", model: "test" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    store.adoptSyncedTask(bot.id, { threadId: "thread", title: "Chat", createdAt: 1 }, [], null, true);
+    const folder = temp();
+    const options = {
+      store, dataDir: DATA_DIR, deviceId: "local", folder: () => folder, enabled: () => true,
+      target: () => ({ botId: bot.id, botSyncId: "bot" }), bots: () => [{ botId: bot.id, botSyncId: "bot" }],
+      running: () => false, project: (message: Message) => message, imported: () => {}, maintenance: () => {},
+    };
+    const first = createThreadSyncV2Store({ ...options, bootReads: testBootReads(DATA_DIR) })!;
+    store.appendMessage("thread", { role: "user", kind: "text", text: "local" });
+    expect(await first.flush("thread")).toBe("written");
+    await first.close();
+    let release!: () => void;
+    const rows = new Promise<void>((resolve) => { release = resolve; }).then(() => bootRowsNow([], DATA_DIR));
+    const sync = createThreadSyncV2Store({ ...options, bootReads: () => rows })!;
+    store.appendMessage("thread", { role: "user", kind: "text", text: "after restart" });
+    const flushed = sync.flush("thread");
+    const closed = sync.close();
+    release();
+    expect(await flushed).toBe("skipped");
+    await closed;
+  });
+
   it("does not note a pulled head after the folder switches while adoption awaits", async () => {
     const { DATA_DIR } = await import("./config.ts");
     const { Store } = await import("./store.ts");
@@ -199,7 +330,7 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     store.adoptSyncedTask(bot.id, { threadId: "thread", title: "Chat", createdAt: 1 }, [], null, true);
     let folder = original;
     const sync = createThreadSyncV2Store({
-      store, dataDir: DATA_DIR, deviceId: "local", folder: () => folder, enabled: () => true,
+      store, dataDir: DATA_DIR, bootReads: testBootReads(DATA_DIR), deviceId: "local", folder: () => folder, enabled: () => true,
       target: () => ({ botId: bot.id, botSyncId: "bot" }), bots: () => [{ botId: bot.id, botSyncId: "bot" }],
       running: () => false, project: (message) => message, imported: () => {}, maintenance: () => {},
     })!;
@@ -272,6 +403,7 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await a.call("restart");
     const after = await a.snapshot();
     expect(after.rows.filter(isConflictNotice)).toHaveLength(0);
+    expect(bootRowsNow([], a.dataDir).migration).toEqual([]);
     expect(after.rows.find((row) => row.id === child.id)?.parentId).toBe(before.leaf);
     expect(after.leaf).toBe(child.id);
     expect(after.disk).toEqual(after.rows);
@@ -424,6 +556,28 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await b.call("restart");
     await b.call("poll");
     expect((await b.snapshot()).noticeChecks).toBe(second.noticeChecks);
+  });
+
+  it("keeps a checked conflict's memo through migration cleanup and never rescans it on boot", async () => {
+    const folder = temp();
+    const a = pc(folder, "a");
+    const b = pc(folder, "b");
+    const row = await a.call<Message>("append", { text: "base" });
+    await a.call("flush");
+    await b.call("pull");
+    await a.call("patch", { id: row.id, patch: { text: "a" } });
+    await b.call("patch", { id: row.id, patch: { text: "b" } });
+    await a.call("flush");
+    await b.call("pull");
+    const checked = await b.snapshot();
+    expect(checked.memo).toBeGreaterThan(0);
+    writeFileSync(join(b.dataDir, "thread-sync-v2-cutover.json"), JSON.stringify({ version: 2, cutoverAt: 1 }));
+    for (const _ of [1, 2]) {
+      await b.call("restart");
+      await b.call("poll");
+    }
+    const booted = await b.snapshot();
+    expect({ conflictScans: booted.conflictScans, memo: booted.memo }).toEqual({ conflictScans: checked.conflictScans, memo: checked.memo });
   });
 
   it("keeps v1 working until both fresh PCs update, then migrates once", async () => {
@@ -1117,12 +1271,12 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     const folder = temp();
     const a = pc(folder, "a");
     const b = pc(folder, "b");
-    const row = await a.call<Message>("append", { text: "first" });
+    const row = await a.call<Message>("append", { role: "bot", text: "first", patch: { engine: "grokAgent" } });
     await a.call("flush");
     await b.call("cursor");
     await b.call("pull");
     const first = await b.snapshot();
-    expect(first.rows).toMatchObject([{ id: row.id, text: "first" }]);
+    expect(first.rows).toMatchObject([{ id: row.id, text: "first", engine: "grokAgent" }]);
     expect(first.events).toContainEqual(expect.objectContaining({ type: "message", imported: true, importing: true }));
     expect(first.tasks.find((task) => task.threadId === "thread")?.resumeCursors).toEqual({});
     expect(first.outbox).toBe(0);
@@ -1131,7 +1285,7 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     await a.call("flush");
     await b.call("pull");
     const second = await b.snapshot();
-    expect(second.rows[0].text).toBe("edited");
+    expect(second.rows[0]).toMatchObject({ text: "edited", engine: "grokAgent" });
     expect(second.events).toContainEqual(expect.objectContaining({ type: "message.patch", importing: true }));
     expect(second.tasks.find((task) => task.threadId === "thread")?.title).toBe("Renamed");
     expect(second.outbox).toBe(0);

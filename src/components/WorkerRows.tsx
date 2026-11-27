@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, Bot, Check, ChevronDown, ScrollText, TerminalSquare, X } from "lucide-react";
 
@@ -9,22 +9,23 @@ import { NOTE_STATUS_KEY, noteText } from "@/lib/pane-note";
 import { lateReportText } from "@/lib/late-report";
 import { isPhone, PHONE_QUERY } from "@/lib/phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
-import { useSheetSwipe } from "@/lib/use-phone-swipe";
+import { useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
 import { usePresence } from "@/lib/use-presence";
 import type { Message } from "@/state/store";
 import { listedRuns, listedSessionId, workerAnchors, type WorkerRun, type WorkerShownState } from "@/lib/worker-runs";
-import { ProviderMark } from "./ProviderIcons";
+import { ProviderBrandMark } from "./ProviderIcons";
 import { Fold } from "./Fold";
 import { MENU_CLASS } from "./MessageMenu";
 import { trackScreen } from "@/lib/usage-stats";
 
+// `ink` is the number on a count badge filled with `dot`. "" only where a .bg-x rule in styles.css already sets the color (it beats a text-x utility): bg-accent and bg-danger.
 export const WORKER_STATUS = {
-  working: { key: "workers.working", text: "text-accent", dot: "bg-accent" },
-  waiting: { key: "workers.waiting", text: "text-warning", dot: "bg-warning" },
-  failed: { key: "workers.failed", text: "text-danger", dot: "bg-danger" },
-  done: { key: "workers.done", text: "text-success", dot: "bg-success" },
-  ended: { key: "workers.ended", text: "text-ink-secondary", dot: "bg-ink-secondary" },
-} as const satisfies Record<WorkerShownState, { key: string; text: string; dot: string }>;
+  working: { key: "workers.working", text: "text-accent", dot: "bg-accent", ink: "" },
+  waiting: { key: "workers.waiting", text: "text-warning", dot: "bg-warning", ink: "text-app" },
+  failed: { key: "workers.failed", text: "text-danger", dot: "bg-danger", ink: "" },
+  done: { key: "workers.done", text: "text-success", dot: "bg-success", ink: "text-app" },
+  ended: { key: "workers.ended", text: "text-ink-secondary", dot: "bg-ink-secondary", ink: "text-app" },
+} as const satisfies Record<WorkerShownState, { key: string; text: string; dot: string; ink: string }>;
 
 export type ShownRun = { run: WorkerRun; state: WorkerShownState };
 
@@ -45,7 +46,7 @@ export function WorkerMark({ provider, compact = false }: { provider: string | n
   const size = 14;
   return (
     <span aria-hidden={compact || undefined} className={compact ? "mr-1.5 inline-flex size-3.5 shrink-0 items-center justify-center align-middle" : "flex size-6 shrink-0 items-center justify-center rounded-md border border-hairline/40 bg-raised"}>
-      {provider === "script" ? <ScrollText size={size} className="text-ink-secondary" aria-hidden /> : provider ? <ProviderMark driverKind={provider} size={size} /> : <Bot size={size} className="text-ink-secondary" aria-hidden />}
+      {provider === "script" ? <ScrollText size={size} className="text-ink-secondary" aria-hidden /> : provider ? <ProviderBrandMark driverKind={provider} size={size} /> : <Bot size={size} className="text-ink-secondary" aria-hidden />}
     </span>
   );
 }
@@ -196,6 +197,7 @@ function WorkerEntries({ runs, livePanes, onOpenTerminalPane, onClose, inset, ni
 
 function TerminalEntry({ onOpenTerminal, onClose, inset, hotkey }: { onOpenTerminal: () => void; onClose: () => void; inset?: boolean; hotkey?: number }) {
   const { t } = useI18n();
+  const phone = useIsPhone();
   return (
     <button
       type="button"
@@ -211,7 +213,7 @@ function TerminalEntry({ onOpenTerminal, onClose, inset, hotkey }: { onOpenTermi
         <TerminalSquare size={18} aria-hidden className="text-ink-secondary" />
       </span>
       <span className="min-w-0 flex-1 truncate font-medium text-ink">{t("terminal.open")}</span>
-      {inset && <kbd className="shrink-0 font-sans text-[12.5px] text-ink-secondary">{window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}`</kbd>}
+      {inset && !phone && <kbd className="shrink-0 font-sans text-[12.5px] text-ink-secondary">{window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}`</kbd>}
     </button>
   );
 }
@@ -294,7 +296,71 @@ function WorkerList({ title, runs, livePanes, onClose, onOpenTerminalPane, onOpe
   );
 }
 
-/** Header chip for this chat's listed runs. Opens the worker list. */
+/** A chat's worker list as its header hands it to the side pane. */
+export type WorkerSource = { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void };
+
+export const listedFor = ({ runs, livePanes = null, paneLabels, waitForLive = false }: WorkerSource): ShownRun[] => livePanes === null && waitForLive ? [] : listedRuns(runs, livePanes, paneLabels);
+
+export const workerCounts = (listed: readonly ShownRun[]) => ({
+  working: listed.filter((shown) => shown.state === "working").length,
+  waiting: listed.filter((shown) => shown.state === "waiting").length,
+  failed: listed.filter((shown) => shown.state === "failed").length,
+  done: listed.filter((shown) => shown.state === "done").length,
+});
+
+const sources = new Map<string, WorkerSource>();
+const sourceListeners = new Set<() => void>();
+const subscribeSources = (listener: () => void) => { sourceListeners.add(listener); return () => { sourceListeners.delete(listener); }; };
+const emitSources = () => { for (const listener of sourceListeners) listener(); };
+
+/** The pane renders in App, away from the chat that owns the runs and terminal callbacks, so the chat shares them by thread. */
+export function useShareWorkers(threadId: string, source: WorkerSource | undefined) {
+  const on = source !== undefined;
+  const { name = "", runs = [], livePanes, paneLabels, waitForLive, onOpenTerminalPane, onOpenTerminal } = source ?? {};
+  useEffect(() => {
+    if (!on) return;
+    const shared = { name, runs, livePanes, paneLabels, waitForLive, onOpenTerminalPane, onOpenTerminal };
+    sources.set(threadId, shared);
+    emitSources();
+    return () => {
+      if (sources.get(threadId) !== shared) return;
+      sources.delete(threadId);
+      emitSources();
+    };
+  }, [threadId, on, name, runs, livePanes, paneLabels, waitForLive, onOpenTerminalPane, onOpenTerminal]);
+}
+
+export function useSharedWorkers(threadId: string | undefined): WorkerSource | undefined {
+  return useSyncExternalStore(subscribeSources, () => (threadId ? sources.get(threadId) : undefined), () => undefined);
+}
+
+/** The side pane's Workers tab: the chat's one worker list. */
+export function WorkerPage({ source, maximized, kept, onClose }: { source: WorkerSource | undefined; maximized: boolean; kept?: boolean; onClose: () => void }) {
+  const { t } = useI18n();
+  const phone = useIsPhone();
+  useEffect(() => { trackScreen("workers"); }, []);
+  // The desktop pane goes along on a chat switch, so only the phone's sheet shuts with the worker menus.
+  useEffect(() => {
+    if (!phone) return;
+    window.addEventListener("orbit:close-worker-menu", onClose);
+    return () => window.removeEventListener("orbit:close-worker-menu", onClose);
+  }, [onClose, phone]);
+  const listed = source ? listedFor(source) : [];
+  return (
+    <div data-worker-list className="verify-watch-frame show-workers" data-maximized={maximized || undefined} data-kept={kept}>
+      <div className="verify-watch-bar show-frame-bar">
+        <Bot size={14} aria-hidden className="show-frame-icon" />
+        <h2 className="show-frame-name">{source ? t("workers.title", { name: source.name }) : t("show.workers")}</h2>
+      </div>
+      {listed.length > 0
+        ? <WorkerEntries inset nickFirst runs={listed} livePanes={source?.livePanes ?? null} onOpenTerminalPane={source?.onOpenTerminalPane} onClose={onClose} />
+        : source && <p className="px-3 py-4 text-[13px] text-ink-secondary">{t("terminal.workersEmpty", { name: source.name })}</p>}
+      {source?.onOpenTerminal && <TerminalEntry inset onOpenTerminal={source.onOpenTerminal} onClose={onClose} />}
+    </div>
+  );
+}
+
+/** A terminal header's chip for its listed panes. Opens the worker list. */
 export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPanes, waitForLive = false, onOpenTerminalPane, onOpenTerminal, hotkeyOf, className }: { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; endedPanes?: ReadonlySet<string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void; hotkeyOf?: (sessionId: string | null) => number | undefined; className?: string }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -371,8 +437,8 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPane
   useEffect(() => {
     if (!shown) return;
     const onToggle = () => {
-      // Chat stays mounted under the terminal, so only the chip that is not inert answers Alt+W.
-      if (rootRef.current?.closest("[inert]")) return;
+      // Chat stays mounted under the terminal, so only the chip that is not inert answers Alt+W; a docked terminal leaves it to the Workers pane.
+      if (rootRef.current?.closest("[inert], [data-side]")) return;
       if (open && rootRef.current?.contains(document.activeElement)) buttonRef.current?.focus();
       setOpen(!open);
     };
@@ -387,12 +453,7 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPane
   }, [open]);
   if (!shown) return null;
   const first = listed[0];
-  const counts = {
-    working: listed.filter((shown) => shown.state === "working").length,
-    waiting: listed.filter((shown) => shown.state === "waiting").length,
-    failed: listed.filter((shown) => shown.state === "failed").length,
-    done: listed.filter((shown) => shown.state === "done").length,
-  };
+  const counts = workerCounts(listed);
   const close = () => setOpen(false);
   return (
     <div ref={rootRef} className="relative shrink-0">

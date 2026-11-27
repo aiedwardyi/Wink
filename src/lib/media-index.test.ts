@@ -1,12 +1,21 @@
-import { describe, expect, it } from "vitest";
+import type { ServerResponse } from "node:http";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Message } from "@/state/store";
 
+import { DATA_DIR } from "../../server/config.ts";
+import { Store } from "../../server/store.ts";
+import { createThreadRoutes } from "../../server/thread-routes.ts";
+
 import { mediaKey, messageRefs } from "./chat-media";
-import { decodeMedia, mediaMonths, withLive, type MediaWire } from "./media-index";
+import { decodeMedia, loadMedia, mediaMonths, withLive, type MediaWire } from "./media-index";
 import { mediaList } from "./media-viewer";
 import { linkedFileSrc } from "./show-pane";
 import type { MediaFile } from "./show-media";
+import { removeTestData } from "../../server/testing/test-home.ts";
+
+const mock = vi.hoisted(() => ({ request: vi.fn() }));
+vi.mock("@/lib/api-request", () => ({ request: mock.request }));
 
 const AT = 1_790_000_000;
 const file = (key: string, at = 0): MediaFile => ({ key, name: key, at, src: key, image: true });
@@ -27,10 +36,10 @@ describe("media index", () => {
     const shot = linkedFileSrc("t1", "C:\\w\\shot.png");
     expect(decodeMedia("t1", wire)).toEqual([
       { key: "https://example.com/chart.png", name: "chart.png", at, src: "https://example.com/chart.png", image: true },
-      { key: deck, name: "deck.pdf", at, src: deck, path: "C:\\w\\deck.pdf", size: 300, show: { threadId: "t1", path: "C:\\w\\deck.pdf", kind: "pdf" } },
-      { key: shot, name: "shot.png", at, src: shot, path: "C:\\w\\shot.png", image: true },
+      { key: deck, name: "deck.pdf", at, src: deck, path: "C:\\w\\deck.pdf", size: 300, tap: { threadId: "t1", path: "C:\\w\\deck.pdf" } },
+      { key: shot, name: "shot.png", at, src: shot, path: "C:\\w\\shot.png", image: true, tap: { threadId: "t1", path: "C:\\w\\shot.png" } },
       { key: "/api/attachments/abc-1.png", name: "abc-1.png", at, src: "/api/attachments/abc-1.png", image: true },
-      { key: "C:\\att\\notes.docx", name: "notes.docx", at, path: "C:\\att\\notes.docx", size: 2048 },
+      { key: "C:\\att\\notes.docx", name: "notes.docx", at, src: linkedFileSrc("t1", "C:\\att\\notes.docx"), path: "C:\\att\\notes.docx", size: 2048, tap: { threadId: "t1", path: "C:\\att\\notes.docx" } },
     ]);
   });
 
@@ -47,6 +56,26 @@ describe("media index", () => {
       return pictures.length;
     });
     expect(found).toEqual([1, 1, 4, 0]);
+  });
+
+  it("lists a long chat's oldest picture in the first answer", async () => {
+    removeTestData(DATA_DIR);
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const { threadId } = store.createBot({}, { seedMessages: false });
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[old.png](C:\\w\\old.png)" });
+    for (let n = 0; n < 1_000; n++) store.appendMessage(threadId, { role: "user", kind: "text", text: `note ${n}` });
+    store.appendMessage(threadId, { role: "bot", kind: "text", text: "[new.png](C:\\w\\new.png)" });
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn() } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    mock.request.mockImplementation(async (path: string) => {
+      let body = "";
+      const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+      await route.media(res, ["", threadId] as RegExpMatchArray, new URL(path, "http://localhost"));
+      return JSON.parse(body);
+    });
+
+    const { files } = await loadMedia(threadId);
+
+    expect(files.map((each) => each.name)).toEqual(["new.png", "old.png"]);
   });
 
   it("keeps the same list while the open chat gains nothing new", () => {

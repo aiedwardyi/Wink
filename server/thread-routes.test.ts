@@ -1,19 +1,22 @@
-import { rmSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BotTrash } from "./bot-trash.ts";
 import { DATA_DIR } from "./config.ts";
+import { closeMessageDb } from "./message-db.ts";
 import { RoutineManager } from "./routines.ts";
-import { Store } from "./store.ts";
+import { Store, type Message } from "./store.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
+import { removeTestData } from "./testing/test-home.ts";
+import type { SyncChange } from "./thread-sync-v2.ts";
 
 function pager() {
   vi.useFakeTimers();
   const messagePage = vi.fn(() => ({ messages: [], hasMore: true }));
   const route = createThreadRoutes({
-    dataDir: DATA_DIR, store: { botByThread: () => ({}), messagesFor: () => [{ id: "cursor" }] },
+    dataDir: DATA_DIR, store: { botByThread: () => ({}), loaded: () => true, messagesFor: () => [{ id: "cursor" }] },
     threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn(), DEFAULT_PAGE: 50,
     pageSize: (raw: string | null) => raw === null ? undefined : Math.min(Number(raw), 200), messagePage, messageWindow: vi.fn(() => ({ messages: [], hasMore: false })),
   } as unknown as Parameters<typeof createThreadRoutes>[0]);
@@ -55,9 +58,127 @@ describe("older message batches", () => {
   });
 });
 
+describe("older pages of an unloaded chat", () => {
+  it("pages off disk without loading the whole chat", async () => {
+    const writer = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = writer.createBot({ name: "Long" }, { seedMessages: false });
+    for (let i = 0; i < 300; i++) writer.appendMessage(bot.threadId, { role: i % 30 ? "bot" : "user", kind: "text", text: `line ${i}`, at: i });
+    const ids = writer.messagesFor(bot.threadId).map((message) => message.id);
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const messagePage = (threadId: string, limit: number, before: string) => {
+      const all = store.messagesFor(threadId);
+      const stop = all.findIndex((message) => message.id === before);
+      return { messages: all.slice(Math.max(0, stop - limit), stop), hasMore: stop > limit };
+    };
+    const route = createThreadRoutes({
+      dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn(), DEFAULT_PAGE: 50,
+      pageSize: (raw: string | null) => raw === null ? undefined : Math.min(Number(raw), 200), slimMessage: (message: unknown) => message, messagePage,
+    } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    let body = "";
+    const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+
+    await route.listMessages(res, ["", bot.threadId] as RegExpMatchArray, new URL(`http://localhost/messages?limit=50&before=${ids[250]}&pages=2`));
+
+    expect(store.loaded(bot.threadId)).toBe(false);
+    const page = JSON.parse(body);
+    expect(page.messages.map((message: { id: string }) => message.id)).toEqual(ids.slice(150, 250));
+    expect(page.hasMore).toBe(true);
+  });
+});
+
+describe("turn index of an unloaded chat", () => {
+  async function turnsOf(store: Store, threadId: string) {
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn() } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    let body = "";
+    const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+    const answered = route.turns(res, ["", threadId] as RegExpMatchArray);
+    const loadedAtOnce = store.loaded(threadId);
+    await answered;
+    return { loadedAtOnce, turns: JSON.parse(body) };
+  }
+
+  it("loads the chat without holding other requests", async () => {
+    const writer = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = writer.createBot({ name: "Long" }, { seedMessages: false });
+    for (let i = 0; i < 300; i++) writer.appendMessage(bot.threadId, { role: i % 3 ? "bot" : "user", kind: "text", text: `line ${i}`, at: i * 1000 });
+    const loaded = await turnsOf(writer, bot.threadId);
+
+    const cold = await turnsOf(new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" })), bot.threadId);
+
+    expect(cold.loadedAtOnce).toBe(false);
+    expect(loaded.turns.ids).toHaveLength(100);
+    expect(cold.turns).toEqual(loaded.turns);
+  });
+});
+
+describe("media of an unloaded chat", () => {
+  async function mediaOf(store: Store, threadId: string) {
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn() } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    let body = "";
+    const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+    const answered = route.media(res, ["", threadId] as RegExpMatchArray, new URL("http://localhost/media"));
+    const loadedAtOnce = store.loaded(threadId);
+    await answered;
+    const { v: _v, ...list } = JSON.parse(body);
+    return { loadedAtOnce, list };
+  }
+
+  it("loads the chat without holding other requests", async () => {
+    removeTestData(DATA_DIR);
+    const writer = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = writer.createBot({ name: "Long" }, { seedMessages: false });
+    for (let i = 0; i < 300; i++) writer.appendMessage(bot.threadId, { role: i % 3 ? "bot" : "user", kind: "text", text: i % 7 ? `line ${i}` : `[shot-${i}.png](C:\\w\\shot-${i}.png)`, at: i * 1000 });
+    const loaded = await mediaOf(writer, bot.threadId);
+
+    const cold = await mediaOf(new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" })), bot.threadId);
+
+    expect(cold.loadedAtOnce).toBe(false);
+    expect(loaded.list.ids.length).toBeGreaterThan(20);
+    expect(cold.list).toEqual(loaded.list);
+  });
+
+  function threeChats() {
+    removeTestData(DATA_DIR);
+    const writer = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const threads = ["A", "B", "C"].map((name) => writer.createBot({ name }, { seedMessages: false }).threadId);
+    for (const threadId of threads) for (let i = 0; i < 100; i++) writer.appendMessage(threadId, { role: i % 3 ? "bot" : "user", kind: "text", text: i % 7 ? `line ${i}` : `[shot-${i}.png](C:\\w\\shot-${i}.png)`, at: i * 1000 });
+    // a cache with room for no chat beyond the two newest
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }), { threadCacheChars: 1 });
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn() } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    const ask = async (threadId: string, v?: string) => {
+      let body = "";
+      const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+      await route.media(res, ["", threadId] as RegExpMatchArray, new URL(`http://localhost/media${v ? `?v=${v}` : ""}`));
+      return JSON.parse(body);
+    };
+    return { store, threads, ask };
+  }
+
+  it("keeps the chats in use when a look ahead finds no room", async () => {
+    const { store, threads: [a, b, c], ask } = threeChats();
+    store.messagesFor(a!);
+    store.messagesFor(b!);
+
+    expect((await ask(c!)).ids.length).toBeGreaterThan(5);
+
+    expect([a, b, c].map((threadId) => store.loaded(threadId!))).toEqual([true, true, false]);
+  });
+
+  it("answers a held list without reading a chat that was pushed out", async () => {
+    const { store, threads: [a, b, c], ask } = threeChats();
+    const { v } = await ask(c!);
+    store.messagesFor(a!);
+    store.messagesFor(b!);
+
+    expect(await ask(c!, v)).toEqual({ v });
+
+    expect(store.loaded(c!)).toBe(false);
+  });
+});
+
 describe("search", () => {
   it("returns live hits past a trashed bot's", async () => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const routines = new RoutineManager({
       file: join(DATA_DIR, "routines.json"),
@@ -81,7 +202,7 @@ describe("search", () => {
   });
 
   it("leaves out the threads it is told to hide", async () => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const bot = store.createBot({ name: "Live" }, { seedMessages: false });
     const room = store.createGroup("Team", [bot.id], false, undefined, undefined, { roomId: "r1" });
@@ -97,9 +218,240 @@ describe("search", () => {
   });
 });
 
+describe("find in a chat not in memory", () => {
+  it("pages the newest hit, then the rest, the same as one page", async () => {
+    removeTestData(DATA_DIR);
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = store.createBot({ name: "Pages" }, { seedMessages: false });
+    for (let i = 0; i < 130; i++) store.appendMessage(bot.threadId, { role: i % 2 ? "bot" : "user", kind: "text", text: i % 3 ? `kiwi ${i} kiwi` : `row ${i}`, at: 1_000 + Math.floor(i / 4) });
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, clientMessage: (message: unknown) => message } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    const page = async (query: string) => {
+      let body = "";
+      const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+      await route.search(res, new URL(`http://localhost/search?q=kiwi&threadId=${bot.threadId}&view=chips&${query}`));
+      return JSON.parse(body) as { hits: Array<{ messageId: string }>; more: boolean };
+    };
+    const whole = await page("limit=60");
+    const first = await page("limit=1");
+    const rest = await page(`limit=59&before=${first.hits[0]!.messageId}`);
+    expect(whole.hits).toHaveLength(60);
+    expect(first.more).toBe(true);
+    expect({ hits: [...first.hits, ...rest.hits], more: rest.more }).toEqual(whole);
+  });
+
+  it("answers without loading the chat, and still marks the version an edit replaced", async () => {
+    removeTestData(DATA_DIR);
+    const selection = () => ({ instanceId: "claude", model: "claude-sonnet-5" });
+    const writer = new Store(selection);
+    const bot = writer.createBot({ name: "Long" }, { seedMessages: false });
+    const first = writer.appendMessage(bot.threadId, { role: "user", kind: "text", text: "kiwi first", at: 1_000 });
+    writer.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "kiwi reply", at: 1_001 });
+    writer.branchMessage(bot.threadId, first.id, "kiwi edited");
+    for (let i = 0; i < 300; i++) writer.appendMessage(bot.threadId, { role: i % 2 ? "bot" : "user", kind: "text", text: `row ${i}` });
+    writer.appendMessage(bot.threadId, { role: "user", kind: "text", text: "kiwi newest" });
+    closeMessageDb();
+    const store = new Store(selection);
+    const route = createThreadRoutes({ dataDir: DATA_DIR, store, clientMessage: (message: unknown) => message } as unknown as Parameters<typeof createThreadRoutes>[0]);
+    const find = async (q = "kiwi") => {
+      let body = "";
+      const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+      await route.search(res, new URL(`http://localhost/search?q=${q}&threadId=${bot.threadId}&view=chips`));
+      return Object.fromEntries(JSON.parse(body).hits.map((hit: { snippet: string; onActivePath: boolean }) => [hit.snippet, hit.onActivePath]));
+    };
+    const shown = { "kiwi newest": true, "kiwi edited": true, "kiwi reply": false, "kiwi first": false };
+
+    expect(await find("plum")).toEqual({});
+    expect(await find()).toEqual(shown);
+    // the old route read and parsed every row of the chat to answer this
+    expect(store.loaded(bot.threadId)).toBe(false);
+    store.messagesFor(bot.threadId);
+    expect(await find()).toEqual(shown);
+  });
+
+  describe("after sync, marks the version a loaded chat would", () => {
+    const selection = () => ({ instanceId: "claude", model: "claude-sonnet-5" });
+    const row = (id: string, parentId?: string | null): Message => ({ id, ...(parentId === undefined ? {} : { parentId }), at: 1_000, role: "user", kind: "text", text: `kiwi ${id}` });
+    const rows = (...messages: Message[]): SyncChange[] => messages.map((value) => ({ cursor: 0, kind: "row", rowId: value.id, value, conflict: false }));
+    const head = (value: string | null): SyncChange => ({ cursor: 0, kind: "head", rowId: "", value, conflict: false });
+    function synced() {
+      removeTestData(DATA_DIR);
+      const store = new Store(selection);
+      const bot = store.createBot({ name: "Synced" }, { seedMessages: false });
+      const threadId = "synced-task";
+      const route = createThreadRoutes({ dataDir: DATA_DIR, store, clientMessage: (message: unknown) => message } as unknown as Parameters<typeof createThreadRoutes>[0]);
+      const find = async () => {
+        let body = "";
+        const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+        await route.search(res, new URL(`http://localhost/search?q=kiwi&threadId=${threadId}`));
+        return Object.fromEntries(JSON.parse(body).hits.map((hit: { messageId: string; onActivePath: boolean }) => [hit.messageId, hit.onActivePath]));
+      };
+      return { store, threadId, sync: (changes: SyncChange[]) => store.applySyncChanges(bot.id, threadId, changes), find };
+    }
+
+    it("a task deleted and re-created with the same ids and row count", async () => {
+      const { sync, find } = synced();
+      sync([...rows(row("left", null), row("right", null), row("tip", "left")), head("tip")]);
+      expect(await find()).toEqual({ left: true, right: false, tip: true });
+      sync([{ cursor: 0, kind: "delete", rowId: "", value: { deletedAt: 2_000 }, conflict: false }]);
+      sync([...rows(row("left", null), row("right", null), row("tip", "right")), head("tip")]);
+      expect(await find()).toEqual({ left: false, right: true, tip: true });
+    });
+
+    it("a legacy row without a parent made the tip", async () => {
+      const { sync, find } = synced();
+      sync([...rows(row("old", null)), head("old")]);
+      expect(await find()).toEqual({ old: true });
+      sync([...rows(row("flat")), head("flat")]);
+      expect(await find()).toEqual({ old: false, flat: true });
+    });
+
+    it("a null head", async () => {
+      const { sync, find } = synced();
+      sync([...rows(row("root", null), row("child", "root")), head("child")]);
+      expect(await find()).toEqual({ root: true, child: true });
+      sync([head(null)]);
+      expect(await find()).toEqual({ root: false, child: false });
+    });
+
+    it("rows synced a page at a time before their head", async () => {
+      const { sync, find } = synced();
+      sync(rows(row("page-0", null), row("page-127", "page-0")));
+      expect(await find()).toEqual({ "page-0": true, "page-127": true });
+      // the loaded chat kept the newest row it saw as its head until a head came
+      sync(rows(row("page-128", "page-127"), row("page-255", "page-128")));
+      expect(await find()).toEqual({ "page-0": true, "page-127": true, "page-128": false, "page-255": false });
+      sync([head("page-255")]);
+      expect(await find()).toEqual({ "page-0": true, "page-127": true, "page-128": true, "page-255": true });
+    });
+
+    it("a legacy chat with a saved null head, then a row with a parent and no head", async () => {
+      const { sync, find } = synced();
+      sync([...rows(row("legacy-root"), row("legacy-flat")), head(null)]);
+      expect(await find()).toEqual({ "legacy-root": true, "legacy-flat": true });
+      sync(rows(row("legacy-appended", "legacy-flat")));
+      expect(await find()).toEqual({ "legacy-root": true, "legacy-flat": true, "legacy-appended": false });
+    });
+
+    it("a jump read from disk, then a null head", async () => {
+      const { store, threadId, sync, find } = synced();
+      sync([...rows(row("jump-root", null), row("jump-child", "jump-root")), head("jump-child")]);
+      expect(store.storedWindow(threadId, "jump-root", 200)?.messages.map((message) => message.id)).toEqual(["jump-root", "jump-child"]);
+      expect(store.loaded(threadId)).toBe(false);
+      sync([head(null)]);
+      expect(await find()).toEqual({ "jump-root": false, "jump-child": false });
+    });
+  });
+
+  describe("a write between the scan and the answer", () => {
+    const selection = () => ({ instanceId: "claude", model: "claude-sonnet-5" });
+    const row = (id: string, parentId: string | null, at: number, text = `kiwi ${id}`): Message => ({ id, parentId, at, role: "user", kind: "text", text });
+    const rows = (...messages: Message[]): SyncChange[] => messages.map((value) => ({ cursor: 0, kind: "row", rowId: value.id, value, conflict: false }));
+    const head = (value: string | null): SyncChange => ({ cursor: 0, kind: "head", rowId: "", value, conflict: false });
+    type Page = { hits: Array<{ messageId: string; at: number; row: number; matches: number; onActivePath: boolean }>; more: boolean };
+    const marks = (page: Page) => Object.fromEntries(page.hits.map((hit) => [hit.messageId, hit.onActivePath]));
+    function synced() {
+      removeTestData(DATA_DIR);
+      const store = new Store(selection);
+      const bot = store.createBot({ name: "Synced" }, { seedMessages: false });
+      const threadId = "pending-task";
+      const route = createThreadRoutes({ dataDir: DATA_DIR, store, clientMessage: (message: unknown) => message } as unknown as Parameters<typeof createThreadRoutes>[0]);
+      const search = async (query = "") => {
+        let body = "";
+        const res = { writeHead: () => {}, end: (text: string) => { body = text; } } as unknown as ServerResponse;
+        await route.search(res, new URL(`http://localhost/search?q=kiwi&threadId=${threadId}&${query}`));
+        return JSON.parse(body) as Page;
+      };
+      return { store, threadId, sync: (changes: SyncChange[]) => store.applySyncChanges(bot.id, threadId, changes), search };
+    }
+    // runs `write` once the scan worker has answered for this chat, before the route builds its answer
+    function afterScan(threadId: string, write: () => void) {
+      const wrote = { done: false };
+      const emit = Worker.prototype.emit;
+      const spy = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (this: Worker, event: string | symbol, ...args: unknown[]) {
+        const value = (args[0] as { value?: unknown } | undefined)?.value;
+        if (event === "message" && Array.isArray(value) && value.some((hit: { threadId?: string }) => hit?.threadId === threadId)) {
+          spy.mockRestore();
+          write();
+          wrote.done = true;
+        }
+        return emit.call(this, event, ...args);
+      });
+      return wrote;
+    }
+    afterEach(() => vi.restoreAllMocks());
+
+    it.each([
+      ["removed", (s: ReturnType<typeof synced>, id: string) => s.store.removeSyncNotices(s.threadId, [id])],
+      ["edited", (s: ReturnType<typeof synced>, id: string) => s.sync(rows(row(id, "mid", 1_000, "now amber")))],
+    ])("pages past a newest hit %s after it was found", async (_, write) => {
+      const s = synced();
+      // one stamp for all three: their order is their rowid
+      s.sync([...rows(row("old", null, 1_000), row("mid", "old", 1_000), row("new", "mid", 1_000)), head("new")]);
+      const first = await s.search("limit=1");
+      expect(first.hits.map((hit) => hit.messageId)).toEqual(["new"]);
+      expect(first.more).toBe(true);
+      const [newest] = first.hits;
+      write(s, newest!.messageId);
+      const rest = await s.search(`limit=99&before=${newest!.messageId}&at=${newest!.at}&row=${newest!.row}`);
+      expect(rest.hits.map((hit) => hit.messageId)).toEqual(["mid", "old"]);
+    });
+
+    it("a page whose scanned hits were all edited away goes on to the live ones", async () => {
+      const s = synced();
+      s.sync([...rows(row("a", null, 1), row("b", "a", 2), row("c", "b", 3), row("d", "c", 4)), head("d")]);
+      const wrote = afterScan(s.threadId, () => s.sync(rows(row("d", "c", 4, "now amber"), row("c", "b", 3, "now amber"))));
+      const first = await s.search("limit=1");
+      expect(wrote.done).toBe(true);
+      expect(first.hits.map((hit) => hit.messageId)).toEqual(["b"]);
+      expect(first.more).toBe(true);
+      const [newest] = first.hits;
+      // the find bar reads the rest from just past the newest hit, so that hit comes again as it stands
+      const rest = await s.search(`limit=100&before=${newest!.messageId}&at=${newest!.at}&row=${newest!.row + 1}`);
+      expect(rest.hits.map((hit) => hit.messageId)).toEqual(["b", "a"]);
+      expect(rest.more).toBe(false);
+    });
+
+    it("an append before the scan starts is in the answer", async () => {
+      const s = synced();
+      s.sync([...rows(row("anchor", null, 1)), head("anchor")]);
+      const started = s.search();
+      s.sync([...rows(row("synced", "anchor", 2)), head("synced")]);
+      const first = await started;
+      expect(marks(first)).toEqual({ synced: true, anchor: true });
+      expect(first).toEqual(await s.search());
+    });
+
+    it.each([
+      ["a branch switch", (s: ReturnType<typeof synced>) => s.sync([head("right")])],
+      ["an edit", (s: ReturnType<typeof synced>) => s.sync(rows(row("right", "root", 3, "changed to amber")))],
+      ["a removal", (s: ReturnType<typeof synced>) => s.store.removeSyncNotices(s.threadId, ["right"])],
+    ])("%s after the scan is in the answer as the next find has it", async (_, write) => {
+      const s = synced();
+      s.sync([...rows(row("root", null, 1), row("left", "root", 2), row("right", "root", 3)), head("left")]);
+      const wrote = afterScan(s.threadId, () => write(s));
+      const first = await s.search();
+      expect(wrote.done).toBe(true);
+      expect(first.hits.every((hit) => hit.matches > 0)).toBe(true);
+      expect(first).toEqual(await s.search());
+    });
+
+    it("rows synced after the scan keep the head the find began with", async () => {
+      const s = synced();
+      s.sync(rows(row("staged-anchor", null, 1)));
+      const wrote = afterScan(s.threadId, () => s.sync(rows(row("staged-child", "staged-anchor", 2))));
+      expect(marks(await s.search())).toEqual({ "staged-anchor": true });
+      expect(wrote.done).toBe(true);
+      // a loaded chat kept the newest row it saw as its head until a head came
+      expect(marks(await s.search())).toEqual({ "staged-child": false, "staged-anchor": true });
+      s.sync([head("staged-child")]);
+      expect(marks(await s.search())).toEqual({ "staged-child": true, "staged-anchor": true });
+    });
+  });
+});
+
 describe("media", () => {
   it("lists a chat's files in one answer, then the version alone, and 404s an unknown chat", async () => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const bot = store.createBot({ name: "Live" }, { seedMessages: false });
     const sent = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "[a.png](C:\\w\\a.png)", at: 1_000 });

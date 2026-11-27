@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,11 +6,12 @@ import { DATA_DIR } from "../config.ts";
 import { Store } from "../store.ts";
 import * as asks from "./asks.ts";
 import { closeAsksDb, configureRoomAsks, roomAsks, type HostedGroup } from "./asks.ts";
-import { closeRoomsDb, createRoom, roomPeople, type RoomPerson } from "./db.ts";
+import { closeRoomsDb, createRoom, roomPeople, setPersonWorks, type RoomPerson } from "./db.ts";
 import { closeInvitesDb, joinRoom, roomCode } from "./invites.ts";
 import { teammatesLine } from "./multiplayer.ts";
 import { hostedSend, teamBotSend } from "./send.ts";
 import { addTeamBot } from "./team-bots.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 let store: Store;
 let group: HostedGroup;
@@ -30,7 +31,7 @@ beforeEach(() => {
   closeInvitesDb();
   closeAsksDb();
   closeRoomsDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   wink = store.patchBot(store.createBot().id, { name: "Wink" })!.id;
   const helper = store.patchBot(store.createBot().id, { name: "Helper" })!.id;
@@ -87,6 +88,15 @@ describe("team rooms are open for collab", () => {
     const line = teammatesLine(group);
     expect(line).toContain("Any member's request here is collab work for this team: help them as you would your owner.");
     expect(teammatesLine({})).toBe("");
+  });
+
+  it("tells host bots each teammate's switch as of this turn, and that only an @ here reaches a team bot", () => {
+    const sora = joiner("Sora");
+    addTeamBot(group.hosted.roomId, sora.id, "Star", "teal", ["Wink", "Helper"]);
+    expect(teammatesLine(group)).toContain("Teammates in this room: Sora (read-only).");
+    expect(teammatesLine(group)).toContain('Team bots (owner): "Star" ("Sora"). Each is on its owner\'s PC; only @ here reaches it.');
+    setPersonWorks(group.hosted.roomId, sora.id, true);
+    expect(teammatesLine(group)).toContain("Teammates in this room: Sora.");
   });
 
   it("adds no per-person cap or refusal back to room sends", () => {

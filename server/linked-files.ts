@@ -1,4 +1,4 @@
-// Linked media and pages may leave the bot's output roots, excluding private and system folders.
+// Linked media and pages may leave the bot's output roots, excluding private and system folders; in the owner's own chat any linked file may.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
@@ -11,6 +11,7 @@ import { gfm } from "micromark-extension-gfm";
 import { cardFile } from "../shared/file-cards.ts";
 import { windowsPathLinks } from "../shared/windows-path-links.ts";
 import { apiRequestAuthorized } from "./remote-access.ts";
+import { roomTaskThreads } from "./rooms/joined.ts";
 
 const MEDIA = {
   png: "image/png",
@@ -60,10 +61,18 @@ export interface ServeLinkedFileOptions {
   /** The phone a page's grant is minted for; this PC when unset. */
   holder?: string;
   threadId: string;
-  messages: readonly LinkedMessage[];
+  /** Every message that may link `target`; more is fine, the text is checked here. */
+  messages(target: string): Iterable<LinkedMessage>;
   deviceId: string;
   writerDeviceId(messageId: string): string | null;
   rootsFor(message: LinkedMessage): readonly string[];
+  /** The owner's own chat, where any file a bot links or its person attached opens; a room's turns can come from other people's text, so it keeps the folder limit. */
+  own?: boolean;
+}
+
+/** A room turn, hosted or joined, keeps the folder limit; `live` loses joined rooms on a restart, so their saved threads count too. */
+export function ownChat(threadId: string, hosted: boolean, live: ReadonlySet<string>): boolean {
+  return !hosted && !live.has(threadId) && !roomTaskThreads().has(threadId);
 }
 
 interface LinkedFolderFile {
@@ -271,10 +280,10 @@ function folderGrant(folder: string, roots: readonly string[]): string | null {
 function linkingMessages(options: ServeLinkedFileOptions, target: string, folder = false): { id: string; roots: readonly string[] }[] {
   const forms = nameForms(target);
   const hits: { id: string; roots: readonly string[] }[] = [];
-  const picture = !folder && mediaType(target)?.startsWith("image/");
-  for (const message of options.messages) {
+  const attached = !folder && (options.own || mediaType(target)?.startsWith("image/"));
+  for (const message of options.messages(target)) {
     // A picture the user attached by path shows on its own file chip.
-    if (picture && message.role === "user" && attachedFiles(message.text ?? "").some((path) => samePath(path, target))) {
+    if (attached && message.role === "user" && attachedFiles(message.text ?? "").some((path) => samePath(path, target))) {
       hits.push({ id: message.id, roots: [] });
       continue;
     }
@@ -434,7 +443,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     }
   }
   const inRoot = insideRoot(real, roots);
-  if (!inRoot && !outsideMedia(real)) {
+  if (!inRoot && !options.own && !outsideMedia(real)) {
     let file = false;
     try { file = statSync(real).isFile(); } catch { /* file disappeared */ }
     sendJson(res, 404, file ? { error: "not found", reason: "outside" } : { error: "not found" });

@@ -7,7 +7,8 @@ import { cn } from "@/lib/cn";
 import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import type { MediaFile } from "@/lib/show-media";
-import { saveFile, showName } from "@/lib/show-pane";
+import { saveFile } from "@/lib/open-file";
+import { showName } from "@/lib/show-pane";
 import { hostRoomBase } from "@/lib/team-rooms";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -326,7 +327,7 @@ export function FileMenu({ at, path, base, onOpen, onError, onClose }: { at: Fil
     shown.opener.focus({ preventScroll: true });
     if (action === "open") onOpen();
     else if (action === "show") void window.ogb?.showInFolder?.(path, base).catch((error) => onError?.(error instanceof Error ? error.message : "That file could not be opened"));
-    else if (action === "save") void window.ogb?.saveFile?.(resolved!).catch(() => {});
+    else if (action === "save") saveFile("", showName(resolved!), resolved!);
     else void navigator.clipboard?.writeText(resolved ?? path).catch(() => {});
   };
   return createPortal(

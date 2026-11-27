@@ -10,16 +10,16 @@
 // turned it into `node <script>` on Windows too, so the e2e half now runs
 // everywhere alongside the mention-resolution units.
 import type { ChildProcess } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 
 import { mentionedBots, normalizeGroupDefaultResponder, roomResponders } from "./store.ts";
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
@@ -96,7 +96,7 @@ describe("comms e2e (fake ACP fleet)", () => {
 
   beforeAll(async () => {
     chmodSync(FAKE_CLI, 0o755);
-    home = mkdtempSync(join(tmpdir(), "omb-comms-test-"));
+    home = createFixtureHome("omb-comms-test-");
     mkdirSync(join(home, ".orbit"), { recursive: true });
     writeFileSync(
       join(home, ".orbit", "config.json"),
@@ -210,7 +210,7 @@ describe("comms e2e (fake ACP fleet)", () => {
 
   afterAll(async () => {
     await waitForExit(child, { signal: "SIGTERM" });
-    await removeTempDir(home);
+    removeTestData(home);
   });
 
   it("seals the internal comms endpoints behind the boot token", async () => {
@@ -429,10 +429,8 @@ describe("comms e2e (fake ACP fleet)", () => {
       expect(room.memberIds).toContain(helper.id);
       // a bot may not file a room outside its own section
       expect(room.section).toBe("RoomScope");
-      // the room is usable straight away, but the bot that opened it does
-      // not make itself the one who answers in it
       expect(room.setupCompletedAt).toBeTruthy();
-      expect(room.defaultResponder).toEqual({ kind: "member", botId: helper.id });
+      expect(room.defaultResponder).toEqual({ kind: "everyone" });
     },
     45_000,
   );

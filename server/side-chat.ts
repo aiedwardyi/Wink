@@ -12,8 +12,10 @@ import { liveBlock, quotesUnread } from "./side-live-state.ts";
 import type { Message } from "./store.ts";
 
 const PREAMBLE =
-  "[Quick helper. The person sent the message below while you are busy on the main task. You are a read-only copy of yourself answering beside that work: the main task keeps running, and it only learns this exchange later as a short note. If the message is a question you can fully answer from this conversation, or with at most 3 Read, Glob or Grep lookups in this project folder, answer it in 1 to 4 short lines under 400 characters (a longer answer is dropped), stating only what this conversation or your lookups show, naming only the files the question needs, never what a file you have not seen does or does not contain, with no extra tips, guesses, or commands and code you composed yourself. Otherwise reply with exactly HANDOFF and nothing else. HANDOFF whenever answering needs editing or creating files, running commands, the web, other computers, workers or other bots, or whenever the message asks for, approves, corrects, pauses or changes work, even when it is phrased as a question. Your latest step may show here as interrupted or without a result; the main task is still running it, so call it in progress. A file being written now: don't state what it says, answer the rest. For anything a file says now, read it; the chat may be behind.]";
+  "[Quick helper. The person sent the message below while you are busy on the main task. You are a read-only copy of yourself answering beside that work: the main task keeps running, and it only learns this exchange later as a short note. If the message is a question you can fully answer from this conversation, or with at most 3 Read, Glob or Grep lookups in this project folder, answer it in 1 to 4 short lines under 400 characters (a longer answer is dropped), stating only what this conversation or your lookups show, naming only the files the question needs, never what a file you have not seen does or does not contain, with no extra tips, guesses, or commands and code you composed yourself. Start with the answer itself: no opener like \"Got it\" or \"Sure\", no restating the question, and never say what you or the main task will do. Otherwise reply with exactly HANDOFF and nothing else. HANDOFF whenever answering needs editing or creating files, running commands, the web, other computers, workers or other bots, or whenever the message asks for, approves, corrects, pauses or changes work, even when it is phrased as a question. Your latest step may show here as interrupted or without a result; the main task is still running it, so call it in progress. A file being written now: don't state what it says, answer the rest. For anything a file says now, read it; the chat may be behind.]";
 const READ_TOOLS = new Set(["Read", "Glob", "Grep"]);
+// "On item 3" or "네가" stays: an opener only counts with punctuation after it
+const OPENER = /^(?:(?:got it|sure|okay|ok|on it|alright|all right|understood|noted|will do|sounds good|알겠어요|알겠습니다|알았어요|네|넵|좋아요)\s*[,.!:;\u2014\u2013-]+\s*)+/i;
 const CAP_MS = 12_000;
 // a fork still reading or writing gets a fresh CAP_MS, up to this
 const MAX_MS = 25_000;
@@ -120,6 +122,12 @@ export async function sideIdle(): Promise<void> {
   while (closing.size) await Promise.all([...closing]);
 }
 
+/** A filler opener the model added anyway comes off; a line that is only filler stays. */
+export function dropOpener(line: string): string {
+  const rest = line.replace(OPENER, "");
+  return rest && rest !== line ? rest[0]!.toUpperCase() + rest.slice(1) : line;
+}
+
 const handoff = (started: number, usage?: Usage): QuickResult => ({ route: "handoff", ...(usage ? { usage } : {}), ms: Date.now() - started });
 const usable = (threadId: string, answer: string, reads: string[]) =>
   Boolean(answer) && !answer.startsWith("HANDOFF") && answer.length <= MAX_CHARS && !quotesUnread(threadId, answer, reads);
@@ -212,8 +220,9 @@ export function quickAsk(bot: QuickBot, threadId: string, ask: { text: string; n
   } catch {
     return Promise.resolve(handoff(started));
   }
-  if (handle) return viaFork(handle, threadId, started, live.attached);
+  const plain = (result: QuickResult) => (result.text ? { ...result, text: dropOpener(result.text) } : result);
+  if (handle) return viaFork(handle, threadId, started, live.attached).then(plain);
   // the chat-only path cannot do the lookups the prompt promises, so an engine with a fork never falls back to it
   if (bot.instance.fork) return Promise.resolve(handoff(started));
-  return viaText(bot, threadId, [live.text, text].filter(Boolean).join("\n\n"), started, live.attached);
+  return viaText(bot, threadId, [live.text, text].filter(Boolean).join("\n\n"), started, live.attached).then(plain);
 }

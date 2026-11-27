@@ -24,6 +24,7 @@ import { Store, type BotRecord } from "../store.ts";
 import { ensureSyncV2Identity } from "../thread-sync-v2-engine.ts";
 import { createThreadSyncV2Store } from "../thread-sync-v2-store.ts";
 import { workspaceDir } from "../workspace.ts";
+import { testBootReads } from "./boot-rows.ts";
 
 export interface ChatSpec { title: string; rows: number; pictureAges?: number[] }
 export interface BotSpec { name: string; memory?: string; chats?: ChatSpec[] }
@@ -157,7 +158,7 @@ function syncProfile(folder: string): void {
   if (!old) publishRooms(roomHost, folder);
   finishRevive(host, marks.revive, (botId) => v2?.rebuild(botId));
   for (const bot of store.bots) if (settings.botMap[bot.id]) syncBotMemory(folder, settings.botMap[bot.id]!, workspaceDir(bot.id), ledger);
-  writeDeviceRecord(folder, { deviceId: settings.deviceId, name: "Test PC", host: "test.example.ts.net", chatSync: 2 }, Date.now());
+  writeDeviceRecord(folder, { deviceId: settings.deviceId, name: "Test PC", host: `${settings.deviceId}.example.ts.net`, chatSync: 2 }, Date.now());
   save();
 }
 
@@ -165,7 +166,7 @@ function chats() {
   const folder = settings.folder;
   if (!folder || !settings.syncChats) return null;
   v2 ??= createThreadSyncV2Store({
-    store, dataDir, deviceId: settings.deviceId,
+    store, dataDir, deviceId: settings.deviceId, bootReads: testBootReads(dataDir),
     folder: () => settings.folder, enabled: () => settings.syncChats,
     target: (threadId) => {
       if (store.groupByThread(threadId)) return old ? null : roomThreads.target(threadId);

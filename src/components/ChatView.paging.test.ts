@@ -3,18 +3,22 @@ import { Suspense, act, createElement, startTransition, use } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { StoreProvider, formatTime, useStore, type Bot, type Group, type Message } from "@/state/store";
+import { StoreProvider, formatTime, openNotificationTarget, useStore, type Bot, type Group, type Message } from "@/state/store";
 import type { TurnStreamState } from "@/lib/turn-stage";
 import { applyLocale } from "@/lib/i18n";
+import { REVEALED_EVENT, STOP_FOLLOW_EVENT } from "@/lib/bottom-follow";
 import { applySkin } from "@/lib/skins";
+import { landOnSearchHit } from "@/lib/focus-message";
 
+import { closeShow, useWorkersThread } from "@/lib/show-pane";
 import { ChatView, clearLivePaneCache } from "./ChatView";
 import { GroupView } from "./GroupView";
+import { ShowPane } from "./ShowPane";
 
 const live = vi.hoisted(() => ({ current: { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} } as TurnStreamState }));
 vi.mock("@/state/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/state/store")>();
-  return { ...actual, formatTime: vi.fn(actual.formatTime), useStreaming: () => live.current };
+  return { ...actual, formatTime: vi.fn(actual.formatTime), useStreamSelect: <T>(select: (stream: TurnStreamState) => T) => select(live.current) };
 });
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 // These scenarios page from a tail one whole window long; the short switch tail has its own suite.
@@ -134,7 +138,8 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-async function mount(view: "chat" | "room") {
+// `pages`: each chat mounts its own view, as phone swipe pages do
+async function mount(view: "chat" | "room", pages = false) {
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("ResizeObserver", class {
     constructor(callback: () => void) {
@@ -145,12 +150,16 @@ async function mount(view: "chat" | "room") {
     disconnect() {}
   });
   vi.spyOn(console, "warn").mockImplementation(() => {});
+  function WorkersPane() {
+    const thread = useWorkersThread();
+    return thread ? createElement(ShowPane, { workers: true, source: { threadId: thread, messages: [] }, hidden: false }) : null;
+  }
   function Live() {
     store = useStore();
     const b = store.state.bots.find((candidate) => candidate.id === store.state.selectedId) ?? store.state.bots[0];
     const g = store.state.groups[0];
-    const transcript = view === "chat" ? (b ? createElement(ChatView, { bot: b }) : null) : g ? createElement(GroupView, { group: g }) : null;
-    return createElement(Suspense, { fallback: null }, transcript, createElement(Gate));
+    const transcript = view === "chat" ? (b ? createElement(ChatView, { key: pages ? b.id : undefined, bot: b }) : null) : g ? createElement(GroupView, { group: g }) : null;
+    return createElement(Suspense, { fallback: null }, transcript, createElement(Gate), createElement(WorkersPane));
   }
   const host = document.createElement("div");
   document.body.append(host);
@@ -160,7 +169,7 @@ async function mount(view: "chat" | "room") {
     FakeEventSource.last!.onmessage!({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c1" }), lastEventId: "" });
   });
   unmount = async () => {
-    await act(async () => root.unmount());
+    await act(async () => { root.unmount(); closeShow(); });
     host.remove();
   };
   return host;
@@ -353,7 +362,7 @@ describe("paged transcripts", () => {
     await act(async () => store.dispatch({ type: "focusMessage", threadId, messageId: "old-hit" }));
     await vi.waitFor(() => expect(host.querySelector('[data-mid="old-hit"]')).not.toBeNull());
     expect(host.querySelector("[data-worker-run] [data-worker-state]")?.getAttribute("data-worker-state")).toBe("done");
-    const strip = host.querySelector<HTMLButtonElement>("[data-worker-strip]")!;
+    const strip = host.querySelector<HTMLButtonElement>("[data-show-pane-button]")!;
     expect(strip.closest("[class*='@container/chathead']")).not.toBeNull();
     // JOB's launch is only on the jumped page. Chat still lists it: one live pane starts with its pane id. A room has no roster.
     const chat = view === "chat";
@@ -361,6 +370,7 @@ describe("paged transcripts", () => {
       ? "1 working, 0 waiting, 0 failed, 1 done. Show workers"
       : "1 working, 0 waiting, 0 failed, 0 done. Show workers");
     await act(async () => strip.click());
+    await vi.waitFor(() => expect(document.querySelector("[data-side-panel] [data-worker-list] li")).not.toBeNull());
     expect(Array.from(document.querySelectorAll("[data-worker-list] li")).map((li) => li.textContent)).toEqual(
       chat ? ["CURRENTscriptWorking", "JOBscriptDone"] : ["CURRENTscriptWorking"],
     );
@@ -385,7 +395,7 @@ describe("paged transcripts", () => {
     await vi.waitFor(() => expect(host.querySelector('[data-mid="old-hit"]')).not.toBeNull());
     expect(readBot).not.toHaveBeenCalled();
     expect(onExit).not.toHaveBeenCalled();
-    expect(host.querySelector("[data-worker-strip]")).toBeNull();
+    expect(host.querySelector("[data-show-pane-button]")?.getAttribute("aria-label")).toBe("Show and media");
     expect(host.querySelector("[data-worker-run]")).not.toBeNull();
   });
 
@@ -465,6 +475,25 @@ describe("paged transcripts", () => {
     await reachTop();
     await vi.waitFor(() => expect(host.textContent).toContain("row 380;"));
     expect(calls.some((call) => call.includes("before=m400"))).toBe(true);
+  });
+
+  it.each(["chat", "room"] as const)("holds older %s rows while a box opening in a row scrolls into view, then loads them", async (view) => {
+    const reachTop = topObservers();
+    const thread = rows(0, 500);
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const calls = pagedServer(threadId, thread, view === "chat" ? { bots: [bot(thread.slice(-100), true)], groups: [] } : { bots: [], groups: [room(thread.slice(-100), true)] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.textContent).toContain("row 499;"));
+    nearTop(host);
+    const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+    await act(async () => { scroller.querySelector("[data-mid]")!.dispatchEvent(new Event(STOP_FOLLOW_EVENT, { bubbles: true })); });
+    await reachTop();
+    await act(async () => { await Promise.resolve(); });
+    expect(calls.some((call) => call.includes("before="))).toBe(false);
+    expect(host.textContent).not.toContain("row 380;");
+    await act(async () => { scroller.dispatchEvent(new Event(REVEALED_EVENT)); });
+    await reachTop();
+    await vi.waitFor(() => expect(host.textContent).toContain("row 380;"));
   });
 
   it.each(["chat", "room"] as const)("keeps mounted %s rows under the cap while reading back to the first row", async (view) => {
@@ -749,6 +778,141 @@ describe("paged transcripts", () => {
     await act(async () => store.dispatch({ type: "select", id: "a" }));
     expect(host.textContent).toContain("a row 5000;");
     expect(host.querySelector('[data-mid="a2500"]')).toBeNull();
+  });
+
+  it("opens at the newest message on return after leaving a jump still loading", async () => {
+    const thread = (p: string) =>
+      Array.from({ length: 5000 }, (_, i): Message => ({ id: `${p}${i}`, at: 1, role: "user", kind: "text", text: `${p} row ${i};` }));
+    const threads: Record<string, Message[]> = { "thread-a": thread("a"), "thread-b": thread("b") };
+    const b = { ...bot(threads["thread-b"]!.slice(-200), true), id: "b", threadId: "thread-b", name: "B" } as Bot;
+    const held: (() => void)[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const path = String(url);
+      if (path === "/api/bots?messages=200") {
+        return Response.json({ bots: [bot(threads["thread-a"]!.slice(-200), true), b], groups: [], computerControl: {} });
+      }
+      const around = path.match(/^\/api\/threads\/([\w-]+)\/messages\?around=(\w+)&limit=200$/);
+      if (around) {
+        const all = threads[around[1]!]!;
+        const index = all.findIndex((message) => message.id === around[2]);
+        const page = Response.json({ messages: all.slice(index - 99, index + 101), hasMore: true });
+        return new Promise<Response>((resolve) => held.push(() => resolve(page)));
+      }
+      return new Promise<Response>(() => {});
+    }));
+    const host = await mount("chat", true);
+    await act(async () => store.dispatch({ type: "select", id: "a" }));
+    await vi.waitFor(() => expect(host.textContent).toContain("a row 4999;"));
+    await act(async () => store.dispatch({ type: "focusMessage", threadId: "thread-a", messageId: "a2500" }));
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    await act(async () => store.dispatch({ type: "select", id: "b" }));
+    await vi.waitFor(() => expect(host.textContent).toContain("b row 4999;"));
+    await act(async () => held.shift()!());
+    await act(async () => store.dispatch({ type: "select", id: "a" }));
+    await act(async () => held.shift()?.());
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(host.textContent).toContain("a row 4999;");
+    expect(host.querySelector('[data-mid="a2500"]')).toBeNull();
+    expect(button(host, "Jump to latest")).toBeUndefined();
+  });
+
+  it.each(["sidebar", "notification", "notification broadcast", "room task"] as const)("discards a held jump after a round trip via %s", async (route) => {
+    const a = bot(lettered("a", 600).slice(-200), true);
+    const b = { ...a, id: "b", threadId: "thread-b", name: "B", messages: lettered("b", 200) };
+    const task = { ...a, threadId: b.threadId, messages: b.messages };
+    const g = room(a.messages, true);
+    const roomTask = { ...g, threadId: b.threadId, messages: b.messages };
+    const isRoom = route === "room task";
+    const isNotification = route === "notification" || route === "notification broadcast";
+    const threadId = isRoom ? g.threadId : a.threadId;
+    let release: (() => void) | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url === "/api/bots?messages=200") return Response.json({ bots: isRoom ? [] : [a, b], groups: isRoom ? [g] : [], computerControl: {} });
+      if (url === `/api/threads/${threadId}/messages?around=a150&limit=200`) {
+        return new Promise<Response>((resolve) => { release = () => resolve(Response.json({ messages: lettered("a", 251).slice(51), hasMore: true })); });
+      }
+      if (isNotification && url.startsWith("/api/bots/a/tasks/")) {
+        const next = url.endsWith(`/${task.threadId}`) ? task : a;
+        if (route === "notification broadcast") {
+          store.dispatch({ type: "botPatched", bot: next });
+        }
+        return Response.json({ bot: next });
+      }
+      if (url === `/api/groups/g/tasks/${roomTask.threadId}`) return Response.json({ group: roomTask });
+      if (url === `/api/groups/g/tasks/${g.threadId}`) return Response.json({ group: g });
+      return new Promise<Response>(() => {});
+    }));
+    if (isNotification) {
+      a.tasks = [{ threadId: a.threadId }, { threadId: task.threadId }] as Bot["tasks"];
+      task.tasks = a.tasks;
+    }
+    const host = await mount(isRoom ? "room" : "chat");
+    await act(async () => store.dispatch({ type: "select", id: isRoom ? g.id : a.id }));
+    await act(async () => store.dispatch({ type: "focusMessage", threadId, messageId: "a150" }));
+    expect(release).toBeDefined();
+
+    const navigate = (away: boolean) => act(async () => {
+      if (route === "sidebar") store.dispatch({ type: "select", id: away ? b.id : a.id });
+      else if (isNotification) openNotificationTarget(store.dispatch, { botId: a.id, threadId: away ? task.threadId : a.threadId }, store.state, true);
+      else store.dispatch({ type: "switchGroupTask", groupId: g.id, threadId: away ? roomTask.threadId : g.threadId });
+    });
+    await navigate(true);
+    expect(host.querySelector('[data-mid="b199"]')).not.toBeNull();
+    await navigate(false);
+    expect(host.querySelector('[data-mid="a599"]')).not.toBeNull();
+
+    await act(async () => release!());
+    expect(host.querySelector('[data-mid="a599"]')).not.toBeNull();
+    expect(host.querySelector('[data-mid="a150"]')).toBeNull();
+    expect(button(host, "Jump to latest")).toBeUndefined();
+  });
+
+  it.each(["swiping away and back", "opening another task by notification"] as const)("discards a held search task switch after %s", async (navigation) => {
+    const a = bot(lettered("a", 200), false);
+    const b = { ...a, id: "b", threadId: "thread-b", name: "B", messages: lettered("b", 200) };
+    const task = { ...a, threadId: "thread-a2", messages: lettered("t", 600).slice(-200), hasMore: true };
+    const next = { ...a, threadId: "thread-a3", messages: lettered("n", 200) };
+    a.tasks = [task, next].map(({ threadId }) => ({ threadId, title: threadId, createdAt: 1 }));
+    let release: (() => void) | undefined;
+    const fetch = vi.fn(async (url: string) => {
+      if (url === "/api/bots?messages=200") return Response.json({ bots: [a, b], groups: [], computerControl: {} });
+      if (url === `/api/bots/a/tasks/${task.threadId}`) {
+        return new Promise<Response>((resolve) => { release = () => resolve(Response.json({ bot: task })); });
+      }
+      if (url === `/api/bots/a/tasks/${next.threadId}`) return Response.json({ bot: next });
+      if (url === `/api/threads/${task.threadId}/messages?around=t150&limit=200`) {
+        return Response.json({ messages: lettered("t", 251).slice(51), hasMore: true });
+      }
+      return new Promise<Response>(() => {});
+    });
+    vi.stubGlobal("fetch", fetch);
+    const host = await mount("chat", true);
+    await act(async () => store.dispatch({ type: "select", id: b.id }));
+    let landing: ReturnType<typeof landOnSearchHit>;
+    await act(async () => {
+      landing = landOnSearchHit({
+        botId: a.id, name: a.name, threadId: task.threadId, messageId: "t150", role: "user", kind: "text",
+        at: 1, snippet: "t row 150;", matchStart: 0, matchLength: 1, onActivePath: true,
+      }, store.state, store.dispatch);
+    });
+    expect(release).toBeDefined();
+    expect(host.querySelector('[data-mid="a199"]')).not.toBeNull();
+    if (navigation === "swiping away and back") {
+      await act(async () => store.dispatch({ type: "select", id: b.id }));
+      expect(host.querySelector('[data-mid="b199"]')).not.toBeNull();
+      await act(async () => store.dispatch({ type: "select", id: a.id }));
+    } else {
+      await act(async () => openNotificationTarget(store.dispatch, { botId: a.id, threadId: next.threadId }, store.state, true));
+    }
+    const current = navigation === "swiping away and back" ? a : next;
+    const latest = `[data-mid="${current.messages.at(-1)!.id}"]`;
+    expect(host.querySelector(latest)).not.toBeNull();
+
+    await act(async () => { release!(); await landing; });
+    expect(host.querySelector(latest)).not.toBeNull();
+    expect(store.state.bots.find((candidate) => candidate.id === a.id)?.threadId).toBe(current.threadId);
+    expect(store.state.focusMessage).toBeNull();
+    expect(fetch.mock.calls.some(([url]) => url.includes("around=t150"))).toBe(false);
   });
 
   it("shows an edit made in a jump window on its new branch with the ancestors", async () => {
@@ -1115,6 +1279,83 @@ describe("open window and jump pill", () => {
     };
     expect(await flashClasses("b1")).toEqual(expect.arrayContaining(["box-content", "px-3", "-mx-3"]));
     expect(await flashClasses("m2")).not.toContain("px-3");
+  });
+
+  it.each(["chat", "room"] as const)("lands a tap on the %s question card on the bot's text after the window slid back to old history, flashing it", async (view) => {
+    const tool = (i: number): Message => ({ id: `m${i}`, at: 1, role: "bot", kind: "activity", tool: { name: "Read", ok: true } });
+    const thread: Message[] = [
+      ...rows(0, 596),
+      { id: "m596", at: 1, role: "bot", kind: "text", text: "REASON_FOR_ASKING;" },
+      tool(597),
+      tool(598),
+      { id: "m599", at: 1, role: "bot", kind: "options", card: { title: "Question", subtitle: "Ship it?", options: ["Yes", "No"], askUser: true, replyId: "m596" } },
+    ];
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const loaded = thread.slice(-200);
+    pagedServer(threadId, thread, { bots: view === "chat" ? [bot(loaded, true)] : [], groups: view === "room" ? [room(loaded, true)] : [] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.querySelector("[data-question-body]")).not.toBeNull());
+    await act(async () => store.dispatch({ type: "focusMessage", threadId, messageId: "m5" }));
+    await vi.waitFor(() => expect(host.querySelector('[data-mid="m5"]')).not.toBeNull());
+    expect(host.querySelector('[data-mid="m596"]')).toBeNull();
+    await act(async () => host.querySelector<HTMLElement>("[data-question-body]")!.click());
+    await vi.waitFor(() => expect(flashed(host, "m596")).toBe(true));
+    expect(host.querySelector('[data-mid="m596"]')!.textContent).toContain("REASON_FOR_ASKING;");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1900); });
+    expect(flashed(host, "m596")).toBe(false);
+  });
+
+  it.each(["chat", "room"] as const)("pages in the %s question's text from before the loaded tail, then flashes it", async (view) => {
+    const thread: Message[] = [
+      ...rows(0, 300),
+      { id: "m300", at: 1, role: "bot", kind: "text", text: "OLD_REASON_FOR_ASKING;" },
+      ...Array.from({ length: 298 }, (_, i): Message => ({ id: `m${301 + i}`, at: 1, role: "bot", kind: "activity", tool: { name: "Read", ok: true } })),
+      { id: "m599", at: 1, role: "bot", kind: "options", card: { title: "Question", subtitle: "Ship it?", options: ["Yes", "No"], askUser: true, staysOpen: true, replyId: "m300" } },
+    ];
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const loaded = thread.slice(-200);
+    pagedServer(threadId, thread, { bots: view === "chat" ? [bot(loaded, true)] : [], groups: view === "room" ? [room(loaded, true)] : [] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.querySelector("[data-question-body]")).not.toBeNull());
+    await act(async () => host.querySelector<HTMLElement>("[data-question-body]")!.click());
+    await vi.waitFor(() => expect(flashed(host, "m300")).toBe(true));
+    expect(host.querySelector('[data-mid="m300"]')!.textContent).toContain("OLD_REASON_FOR_ASKING;");
+  });
+
+  it.each(["chat", "room"] as const)("does nothing on a tap of the %s question asked by a woken turn with no text", async (view) => {
+    const ada = view === "room" ? { from: { botId: "ada", name: "Ada", color: "blue" as const } } : {};
+    const between: Message = view === "room"
+      ? { id: "wake", at: 1, role: "bot", kind: "text", text: "MAX_BRINGS_ADA_BACK;", from: { botId: "max", name: "Max", color: "blue" } }
+      : { id: "wake", at: 1, role: "bot", kind: "note", text: "[pane aaaaaaaa] DONE JOB" };
+    const thread: Message[] = [
+      ...rows(0, 500),
+      { id: "prev", at: 1, role: "bot", kind: "text", text: "EARLIER_TURN_REPLY;", ...ada },
+      between,
+      ...Array.from({ length: 90 }, (_, i): Message => ({ id: `t${i}`, at: 1, role: "bot", kind: "activity", tool: { name: "Read", ok: true }, ...ada })),
+      { id: "ask", at: 1, role: "bot", kind: "options", card: { title: "Question", subtitle: "Revert the deploy?", options: ["Yes", "No"], askUser: true, staysOpen: true }, ...ada },
+    ];
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const loaded = thread.slice(-200);
+    pagedServer(threadId, thread, { bots: view === "chat" ? [bot(loaded, true)] : [], groups: view === "room" ? [room(loaded, true)] : [] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.querySelector("[data-question-body]")).not.toBeNull());
+    const body = host.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.className).not.toContain("cursor-pointer");
+    await act(async () => body.click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(store.state.focusMessage).toBeNull();
+    expect(flashed(host, "prev")).toBe(false);
+  });
+
+  it.each(["chat", "room"] as const)("does nothing on a tap of the %s question card that came with no text", async (view) => {
+    const thread = toolThread(400, { 0: ["user", "start;"] });
+    thread[399] = { ...thread[399]!, role: "bot", kind: "options", text: undefined,
+      card: { title: "Question", subtitle: "Ship it?", options: ["Yes", "No"], askUser: true } };
+    serveReplyThread(view, thread);
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.querySelector("[data-question-body]")).not.toBeNull());
+    await act(async () => host.querySelector<HTMLElement>("[data-question-body]")!.click());
+    expect(store.state.focusMessage).toBeNull();
   });
 
   it.each([

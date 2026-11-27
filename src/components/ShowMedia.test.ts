@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import { forgetMedia, type MediaWire } from "@/lib/media-index";
 import { useThumb } from "@/lib/media-thumbs";
-import { closeShow, showFolder, showItem, showMedia, useMediaThread, useShowItem, type FolderListing, type ShowItem } from "@/lib/show-pane";
+import { closeShow, showFolder, showItem, showMap, showMedia, useMediaThread, useShowItem, type FolderListing, type ShowItem } from "@/lib/show-pane";
 import type { MediaSource } from "@/lib/show-media";
 import { usePresence } from "@/lib/use-presence";
 import type { Message } from "@/state/store";
@@ -107,6 +107,7 @@ const render = (source: MediaSource) => act(async () => root.render(createElemen
 const settle = () => act(async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0)); });
 const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((each) => each.textContent === name)!;
 const click = (el: Element | null) => act(async () => (el as HTMLElement).click());
+const openTool = async (name: string) => { await click(host.querySelector("[data-pane-add]")); await click(document.querySelector(`[data-pane-tools-menu] [data-pane-tool="${name}"]`)); };
 const thumbs = () => [...host.querySelectorAll("[data-media-grid] img")].map((img) => img.getAttribute("src")!);
 const months = () => [...host.querySelectorAll("[data-media-month]")].map((head) => head.textContent);
 const names = () => [...host.querySelectorAll("[data-media-file]")].map((row) => row.querySelector("span span")!.textContent);
@@ -144,13 +145,13 @@ const deck: ShowItem = { threadId: "t1", path: "C:\\w\\deck.pdf", kind: "pdf" };
 it("switches between Show and Media", async () => {
   await act(async () => showItem(deck));
   await render(chat);
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
-  await click(tab("Media"));
+  expect(tab("deck.pdf").getAttribute("aria-selected")).toBe("true");
+  await openTool("media");
   await settle();
   expect(tab("Media").getAttribute("aria-selected")).toBe("true");
   expect(host.querySelector("[data-show-media]")).not.toBeNull();
-  await click(tab("Show"));
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  await click(tab("deck.pdf"));
+  expect(tab("deck.pdf").getAttribute("aria-selected")).toBe("true");
   expect(host.querySelector(".show-frame-name")?.textContent).toBe("deck.pdf");
 });
 
@@ -158,7 +159,7 @@ it("lists a chat's images and files newest first, the ones since it loaded on to
   media.t1 = wire([["u1", 1, "a", "abc-1.png", ""], ["u1", 1, "f", "notes.docx", "C:\\att\\notes.docx"]]);
   await act(async () => showItem(deck));
   await render(chat);
-  await click(tab("Media"));
+  await openTool("media");
   await settle();
   expect(thumbs()).toEqual([
     "/api/threads/t1/linked-file?path=" + encodeURIComponent("C:\\w\\chart.png"),
@@ -168,12 +169,26 @@ it("lists a chat's images and files newest first, the ones since it loaded on to
   expect(names()).toEqual(["deck.pdf", "data.zip", "notes.docx"]);
 });
 
+it("keeps an audio row playing when a photo arrives", async () => {
+  media.t1 = wire([["b1", 1000, "l", "audio.mp3", "C:\\w\\audio.mp3"]]);
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [] });
+  await settle();
+  await click(row("audio.mp3"));
+  const playing = host.querySelector("audio");
+  expect(playing).not.toBeNull();
+  await render({ threadId: "t1", messages: [{ id: "b2", role: "bot", kind: "text", at: 2000, text: "[photo.png](C:\\w\\photo.png)" }] });
+  await settle();
+  expect(tab("Files").getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelector("audio")).toBe(playing);
+});
+
 it("an image opens full size, a showable file shows, the rest open as before", async () => {
   const openFile = vi.fn(async () => {});
   window.ogb = { openFile } as unknown as typeof window.ogb;
   await act(async () => showItem(deck));
   await render(chat);
-  await click(tab("Media"));
+  await openTool("media");
   await settle();
   await click(host.querySelector("[data-media-grid] button"));
   expect(document.querySelector("[data-media-viewer]")).not.toBeNull();
@@ -182,7 +197,7 @@ it("an image opens full size, a showable file shows, the rest open as before", a
   await click(row("data.zip"));
   expect(openFile).toHaveBeenCalledWith("C:\\w\\data.zip");
   await click(row("deck.pdf"));
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(tab("deck.pdf").getAttribute("aria-selected")).toBe("true");
   expect(shown).toEqual(deck);
 });
 
@@ -192,13 +207,13 @@ it("asks for the whole timeline only once Media opens, then for its version alon
   await render({ ...chat, hasMore: true });
   await settle();
   expect(calls).toEqual([]);
-  await click(tab("Media"));
+  await openTool("media");
   await settle();
   expect(calls).toEqual(["/api/threads/t1/media"]);
   await click(tab("Files"));
   expect(names().at(-1)).toBe("first.pdf");
-  await click(tab("Show"));
-  await click(tab("Media"));
+  await act(async () => closeShow());
+  await act(async () => showMedia("t1"));
   await settle();
   expect(calls).toEqual(["/api/threads/t1/media", "/api/threads/t1/media?v=1"]);
   expect(names().at(-1)).toBe("first.pdf");
@@ -260,7 +275,7 @@ it("lists a room's files from the room, and shows its PDFs", async () => {
   await render(source);
   const { togglePane } = await import("@/lib/show-pane");
   await act(async () => togglePane("r-thread"));
-  await click(tab("Media"));
+  await openTool("media");
   await settle();
   expect(calls).toContain("/api/rooms/r1/files");
   expect(host.querySelector("[data-media-grid] img")?.getAttribute("src")).toBe(`/api/rooms/r1/files/${id(3)}/preview`);
@@ -268,14 +283,16 @@ it("lists a room's files from the room, and shows its PDFs", async () => {
   await click(tab("Files"));
   const sheet = row("sheet.xlsx");
   expect(sheet.getAttribute("data-media-key")).toBe(id(1));
-  expect(sheet.getAttribute("href")).toBe(`/api/rooms/r1/files/${id(1)}`);
-  expect(sheet.hasAttribute("download")).toBe(true);
+  const saved = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  await click(sheet);
+  expect((saved.mock.contexts as HTMLAnchorElement[]).map((link) => [link.getAttribute("href"), link.download])).toEqual([[`/api/rooms/r1/files/${id(1)}`, "sheet.xlsx"]]);
   await click(row("plan.pdf"));
   expect(shown).toEqual({ threadId: "r-thread", path: "plan.pdf", kind: "pdf", src: `/api/rooms/r1/files/${id(2)}` });
 });
 
 it("a room's pane has no Map tab, a bot chat's does", async () => {
   const room: MediaSource = { threadId: "r-thread", roomId: "r1", messages: [] };
+  await act(async () => { showMap("r-thread"); showMap("t1"); closeShow(); });
   await act(async () => root.render(createElement(ShowPane, { media: true, source: room, hidden: false })));
   expect(tab("Map")).toBeUndefined();
   await act(async () => root.render(createElement(ShowPane, { media: true, source: chat, botId: "b1", hidden: false })));
@@ -288,7 +305,7 @@ it("says so when there are no files yet, in English and Korean", async () => {
   await render({ threadId: "t9", messages: [] });
   await settle();
   expect(host.querySelector("[data-show-media]")?.textContent).toBe("No files yet");
-  expect(tab("Show").disabled).toBe(true);
+  expect([...host.querySelectorAll(".show-pane-tabs [role=tab]")].map((each) => each.textContent)).toEqual(["Media"]);
   applyLocale("ko");
   await render({ threadId: "t9", roomId: "r1", messages: [] });
   await settle();
@@ -339,6 +356,8 @@ it("dragging the scroll thumb shows the month beside it until 600 ms after relea
   await render({ threadId: "t1", messages: [] });
   await settle();
   const thumb = host.querySelector("[data-media-thumb]")!;
+  // a phone pane's right swipe to close leaves the thumb its drag
+  expect(thumb.closest("[data-no-swipe]")).not.toBeNull();
   const bubble = () => host.querySelector("[data-media-bubble]");
   expect(bubble()?.hasAttribute("data-shown") ?? false).toBe(false);
   await pointer(thumb, "pointerdown", 0);
@@ -396,7 +415,7 @@ it("sizes the scroll thumb to grab: 44px to catch on a phone, a wider bar on a d
   expect(phone).toBeGreaterThanOrEqual(GRAB);
 });
 
-it("closing with X neither asks again nor touches the grid", async () => {
+it("closing with the pane toggle neither asks again nor touches the grid", async () => {
   media.t1 = shots(200);
   await act(async () => showMedia("t1"));
   await act(async () => root.render(createElement(Presence, { source: { threadId: "t1", messages: [] } })));
@@ -408,7 +427,7 @@ it("closing with X neither asks again nor touches the grid", async () => {
   const changes: MutationRecord[] = [];
   const watch = new MutationObserver((records) => changes.push(...records));
   watch.observe(grid, { subtree: true, childList: true, attributes: true, characterData: true });
-  await click(host.querySelector('button[aria-label="Close"]'));
+  await click(host.querySelector(".show-pane-head [data-show-pane-button]"));
   expect(host.querySelector("[data-closing]")).not.toBeNull();
   expect(host.querySelector("[data-media-grid] img")).toBe(img);
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -607,7 +626,7 @@ it("a hover preview keeps its source when StrictMode runs its ref twice", async 
   expect(tile.querySelector("video")!.getAttribute("src")).toBe("/api/threads/t1/linked-file?path=" + encodeURIComponent("C:\\w\\loop.mp4"));
 });
 
-it("a room video keeps its play icon and name, since a room sends its files whole", async () => {
+it("a room video keeps its play icon and name, and a tap downloads it, since a room sends its files whole", async () => {
   frames(true);
   room = { files: [{ id: id(4), name: "walk.mp4", type: "video/mp4", bytes: 10, at: 4, sender: "Mina" }] };
   await render({ threadId: "r-thread", roomId: "r1", messages: [] });
@@ -618,6 +637,10 @@ it("a room video keeps its play icon and name, since a room sends its files whol
   const tile = host.querySelector<HTMLElement>('[data-media-grid] [title="walk.mp4"]')!;
   expect(tile.querySelector("img")).toBeNull();
   expect(tile.querySelector(".truncate")!.textContent).toBe("walk.mp4");
+  const saved = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  await click(tile);
+  expect((saved.mock.contexts as HTMLAnchorElement[]).map((link) => [link.getAttribute("href"), link.download])).toEqual([[`/api/rooms/r1/files/${id(4)}`, "walk.mp4"]]);
+  expect(document.querySelector("[data-media-viewer]")).toBeNull();
 });
 
 it("a video whose frame can't be read keeps its play icon and name", async () => {
@@ -629,6 +652,25 @@ it("a video whose frame can't be read keeps its play icon and name", async () =>
   expect(tile.querySelector("img")).toBeNull();
   expect(tile.querySelector(".lucide-play")).not.toBeNull();
   expect(tile.querySelector(".truncate")!.textContent).toBe("broken.mov");
+});
+
+it("a tap on a video tile plays it in the viewer, between its neighbours, with no download", async () => {
+  frames(true);
+  const bot = (n: number, name: string): Message => ({ id: "m" + n, role: "bot", kind: "text", at: n, text: `[${name}](C:\\w\\${name})` });
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [bot(1, "a.png"), bot(2, "walk.mp4"), bot(3, "c.png")] });
+  await settle();
+  expect(host.querySelector("[data-media-grid] a[download]")).toBeNull();
+  await click(host.querySelector('[data-media-grid] [title="walk.mp4"]'));
+  expect(host.querySelector("[data-media-grid] a[download]")).toBeNull();
+  const video = () => document.querySelector("[data-media-viewer] video");
+  expect(video()!.getAttribute("src")).toBe(linked("C:\\w\\walk.mp4"));
+  await key("ArrowRight");
+  expect(video()).toBeNull();
+  expect(viewed()).toBe(linked("C:\\w\\a.png"));
+  await key("ArrowLeft");
+  await key("ArrowLeft");
+  expect(viewed()).toBe(linked("C:\\w\\c.png"));
 });
 
 const mock = String.raw`C:\cards\forum-look-mock-2`;
@@ -654,7 +696,7 @@ it("a linked folder shows in Show, and its pictures step with the arrow keys", a
   await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
   await render(chat);
   await settle();
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(tab("forum-look-mock-2").getAttribute("aria-selected")).toBe("true");
   expect(host.querySelector(".show-frame-name")?.textContent).toBe("forum-look-mock-2");
   expect(calls).toContain(`/api/threads/t1/linked-folder?path=${encodeURIComponent(mock)}`);
   expect(tiles()).toEqual(["icon-31-wink.png", "icon-25-pixel-bot.png", "icon-22-radar-rings.png"]);
@@ -670,7 +712,7 @@ it("a linked folder shows in Show, and its pictures step with the arrow keys", a
   expect(viewed()).toBe(linked(listing.files[1]!.path));
 });
 
-it("a linked folder's page shows in Show, other files download, and it says how many more", async () => {
+it("a linked folder's page and text show in Show, and it says how many more", async () => {
   folderFetch(listing);
   await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
   await render(chat);
@@ -678,12 +720,15 @@ it("a linked folder's page shows in Show, other files download, and it says how 
   await click(tab("Files"));
   expect(names()).toEqual(["forum-look-mock-2.html", "notes.txt"]);
   expect(host.querySelector("[data-folder-more]")?.textContent).toBe("2 more files");
-  expect(row("notes.txt").getAttribute("href")).toBe(linked(listing.files[4]!.path));
-  expect(row("notes.txt").hasAttribute("download")).toBe(true);
   await click(row("forum-look-mock-2.html"));
   await settle();
   expect(shown).toEqual({ threadId: "t1", path: listing.files[3]!.path, kind: "page" });
   expect(host.querySelector('.show-frame[data-kind="page"] .show-frame-name')?.textContent).toBe("forum-look-mock-2.html");
+  await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
+  await settle();
+  await click(row("notes.txt"));
+  await settle();
+  expect(shown).toEqual({ threadId: "t1", path: listing.files[4]!.path, kind: "text" });
 });
 
 it("a folder its link just listed draws without asking again, and says so when it can't list", async () => {
@@ -721,10 +766,10 @@ it("clicking an open folder's link again draws the fresh listing, even behind an
   await act(async () => showFolder("t1", folder, added));
   await settle();
   expect(tiles()).toEqual(["icon-37-job-code.png", ...listing.files.slice(0, 3).map((file) => file.name)]);
-  await click(tab("Media"));
+  await openTool("media");
   await act(async () => showFolder("t1", folder, listing));
   await settle();
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(tab("forum-look-mock-2-again").getAttribute("aria-selected")).toBe("true");
   expect(tiles()).toHaveLength(3);
   expect(calls.filter((url) => url.includes("/linked-folder?"))).toEqual([]);
 });

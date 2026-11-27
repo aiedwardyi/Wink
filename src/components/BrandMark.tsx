@@ -5,7 +5,7 @@ type Brand = { name: string; icon: string };
 let pending: Promise<Brand | null> | undefined;
 
 /** This PC's brand override, if its data folder has one; otherwise the empty spacer it replaces. */
-export function BrandMark() {
+export function BrandMark({ omitEmpty = false }: { omitEmpty?: boolean }) {
   const [brand, setBrand] = useState<Brand | null>(null);
   useEffect(() => {
     let live = true;
@@ -17,7 +17,7 @@ export function BrandMark() {
       live = false;
     };
   }, []);
-  if (!brand) return <div />;
+  if (!brand) return omitEmpty ? null : <div />;
   return (
     <div data-brand-override className="-ml-1 flex min-w-0 items-center gap-2">
       <img src={brand.icon} alt="" className="size-6 shrink-0" />

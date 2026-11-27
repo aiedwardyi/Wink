@@ -10,13 +10,13 @@ import { isTerminalSkin, useSkin } from "@/lib/skins";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine } from "@/lib/usage-board";
 import { checkedMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { useBackLayer } from "@/lib/use-back-layer";
-import { useIsPhone } from "@/lib/use-phone-swipe";
+import { useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
 import { useSpinUntilTurnEnds } from "@/lib/use-spin-until-turn-ends";
 import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
 import { refreshUsage, useAutoRefresh, useRefreshKey, useRefreshPending } from "@/lib/usage-auto-refresh";
-import { ProviderMark } from "./ProviderIcons";
+import { ProviderBrandMark } from "./ProviderIcons";
 import { AccountGroup, AccountRow, ENGINE_DRIVER, engineName, Hero, mainFailedText, type Clock } from "./UsageDesk";
 import { usageAccounts } from "./usage-layout";
 import "./UsageDesk.css";
@@ -83,7 +83,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
   anchor: RefObject<HTMLElement | null>; onClose: () => void; closing?: boolean;
 }) {
   const { t, locale } = useI18n();
-  useAutoRefresh(board);
+  useAutoRefresh(board, closing ? undefined : "quick");
   const { state: store, dispatch, refreshInstances } = useStore();
   const phone = useIsPhone();
   const terminal = isTerminalSkin(useSkin());
@@ -120,6 +120,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
   const closeRef = useRef(close);
   useLayoutEffect(() => { closeRef.current = close; });
   useBackLayer(!closing, close);
+  useSheetSwipe(box, phone && !closing && Boolean(spot), close, true);
 
   useLayoutEffect(() => {
     const update = () => {
@@ -150,8 +151,10 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
 
   useEffect(() => {
     if (closing) return;
+    let pressedClose = false;
     const away = (event: PointerEvent) => {
       const target = event.target as Node;
+      pressedClose = event.pointerType === "touch" && Boolean(box.current?.querySelector("[data-quick-close]")?.contains(target));
       if (box.current?.contains(target) || anchor.current?.contains(target)) return;
       // An open account menu inside the view is the top layer; its own listener closes it.
       if (box.current?.querySelector('[role="menu"]')) return;
@@ -162,10 +165,24 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
       event.preventDefault();
       closeRef.current();
     };
+    // The view grows up from its line, so a refresh landing mid-tap moves Close from under the finger and its click lands beside it.
+    const tapped = (event: MouseEvent) => {
+      if (!pressedClose) return;
+      pressedClose = false;
+      if (event.target instanceof Node && box.current?.querySelector("[data-quick-close]")?.contains(event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeRef.current();
+    };
+    const cancelled = () => { pressedClose = false; };
     document.addEventListener("pointerdown", away, true);
+    document.addEventListener("pointercancel", cancelled, true);
+    document.addEventListener("click", tapped, true);
     document.addEventListener("keydown", key);
     return () => {
       document.removeEventListener("pointerdown", away, true);
+      document.removeEventListener("pointercancel", cancelled, true);
+      document.removeEventListener("click", tapped, true);
       document.removeEventListener("keydown", key);
     };
   }, [anchor, closing]);
@@ -200,7 +217,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
           terminal ? "rounded-none" : "rounded-[6px] [corner-shape:bevel]")}
         style={{ left: spot.left, bottom: spot.bottom, width: spot.width, maxHeight: spot.maxHeight }}>
         {!tight && <div className="flex shrink-0 items-center gap-2 py-1 pl-4 pr-1.5">
-          <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px]")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
+          <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px]")}><ProviderBrandMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
           <span data-engine-name="" className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{engineName(engine.engine)}</span>
           {buttons}
         </div>}

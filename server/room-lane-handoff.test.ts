@@ -38,6 +38,12 @@ describe("lane hand-off", () => {
     expect(laneHandoff({ ...turn, teammate: null, autoApprove: true })).toBeNull();
   });
 
+  it("hands off the owner seat's original ask in Ask mode", () => {
+    const owner = { ...turn, ownerAsk: true, teammate: { asker: "Edward", ask: "fix the build" } };
+    expect(laneHandoff(owner)).toEqual(owner.teammate);
+    expect(laneHandoff({ ...owner, works: false })).toBeNull();
+  });
+
   it("decides the hand-off on the turn's Can make bots work switch, not the ask's grant", () => {
     const decide = section("  const handoff = instance.adapter.capabilities.agentsMcp === true", "  if (instance.adapter.capabilities.agentsMcp === true) {");
     expect(decide).toContain("laneHandoff({ lane, hop, works,");

@@ -4,7 +4,7 @@
 // sidebar glow, the pin over the composer and the inline record can never disagree.
 import type { Message } from "@/state/store";
 import { isShownMessage } from "./shown-message";
-import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, lineSettles, typedReply, type AskState } from "../../shared/open-question";
+import { askStates, isAskUserCard, isOpenRequest, isSentByPerson, type AskState } from "../../shared/open-question";
 
 export { ANSWERED_IN_CHAT } from "../../shared/open-question";
 export { isAskUserCard, isSentByPerson };
@@ -42,14 +42,6 @@ export function openQuestions(messages: readonly Message[]): readonly Message[] 
   return needsYou(messages).questions;
 }
 
-/** The open question a typed `text` settles at once, what with, and whether the line alone settles it once it lands. */
-export function typedAnswer(messages: readonly Message[], text: string): { question: Message; answered: string; byLine: boolean } | null {
-  const question = openQuestion(messages);
-  if (!question) return null;
-  const answered = typedReply(question, text);
-  return answered === null ? null : { question, answered, byLine: lineSettles(messages, question, text) };
-}
-
 /** An open permission ask: it takes the composer over, so it hides the pin. */
 function isOpenApproval(message: Message): boolean {
   return isOpenRequest(message) && Boolean(message.card?.tool);
@@ -69,6 +61,15 @@ export function chatMovedOn(messages: readonly Message[], question: Message): bo
     message.role === "bot"
       ? message.kind === "text" && message.from?.botId === asker && isShownMessage(message)
       : isSentByPerson(message) && !message.queueId);
+}
+
+/** Where a tap on the open question lands: its own record once the pin no longer hides it, else the text of the turn that asked it, paged in when older than the loaded tail. */
+export function questionJumpId(messages: readonly Message[], question: Message, pinned: Message | null, hasMore = false): string | null {
+  if (question.id !== pinned?.id) return messages.some((message) => message.id === question.id) ? question.id : null;
+  const id = question.card?.replyId;
+  const reply = id ? messages.find((message) => message.id === id) : undefined;
+  if (reply) return isShownMessage(reply) ? reply.id : null;
+  return id && hasMore ? id : null;
 }
 
 /** True when a sidebar row for this chat should glow. */

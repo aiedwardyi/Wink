@@ -61,6 +61,17 @@ describe("AskUserRecord", () => {
     }
   });
 
+  it("greys an answered or dismissed question and offers no choice to tap again", () => {
+    const question = ask("q1");
+    const reply: Message = { id: "u1", role: "user", kind: "text", at: 2, text: "Staging" };
+    const dismissed = ask("q1", { dismissed: true });
+    for (const [message, transcript] of [[question, [question, reply]], [dismissed, [dismissed]]] as const) {
+      const markup = renderToStaticMarkup(createElement(AskUserRecord, { message, transcript: [...transcript], askerName: "Ada", onPick: () => {} }));
+      expect(markup).toContain("opacity-70");
+      expect(markup).not.toContain("<button");
+    }
+  });
+
   it("renders nothing while the composer pins the question", () => {
     const question = ask("q1");
     expect(render(question, [question], true)).toBe("");

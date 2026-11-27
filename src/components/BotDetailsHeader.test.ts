@@ -7,7 +7,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Bot } from "@/state/store";
 import type { AcceptedSends } from "@/lib/send-accept";
-import { currentTurnId } from "@/lib/turn-stage";
+import { currentTurnId, type TurnStreamState } from "@/lib/turn-stage";
 import { en, ko } from "@/lib/i18n-catalog";
 
 const acceptedSends: AcceptedSends = {};
@@ -71,7 +71,8 @@ describe("QA 17 one Bot-details header entry", () => {
     expect(phoneHeaderName).not.toContain("data-chat-terminal");
     expect(chatHeader).not.toContain("data-chat-terminal");
     expect(chatHeader).not.toContain("TerminalSquare");
-    expect(chatHeader).toContain("onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />");
+    expect(chatHeader).toContain("workers={paneSource} />");
+    expect(chatView).toContain("onOpenTerminalPane, onOpenTerminal };");
     expect(chatHeader).toContain('className="min-w-0 flex-1 overflow-hidden max-md:hidden"');
   });
 
@@ -99,7 +100,6 @@ describe("QA 17 one Bot-details header entry", () => {
   it("gives every header icon button the same soft hover fill", () => {
     const hover = (source: string, marker: string) => headerBlock(source, marker, "/>").match(/hover:bg-[\w-]+/g);
     expect(hover(chatHeader, "data-chat-keep-going")).toEqual(["hover:bg-control"]);
-    expect(hover(chatHeader, "<WorkerChip")).toEqual(["hover:bg-control"]);
     expect(hover(chatHeader, "onClick={() => find.toggleFind()}")).toEqual(["hover:bg-control"]);
     expect(hover(verifyCard, "data-verify-watch-icon")).toEqual(["hover:bg-control"]);
   });
@@ -144,7 +144,7 @@ vi.mock("@/state/store", async (importOriginal) => {
       turnOrigin: () => undefined,
     }),
     useStoreDispatch: () => () => undefined,
-    useStreaming: () => ({
+    useStreamSelect: (select: (stream: TurnStreamState) => unknown) => select({
       streaming: { t1: "A reply still streaming\n\n" }, reasoning: {}, signal: {},
       turn: { t1: currentTurnId({}, "t1", "u1") },
     }),

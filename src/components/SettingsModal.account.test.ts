@@ -80,7 +80,7 @@ describe("Account settings", () => {
     await render();
     const buttons = [...host.querySelectorAll("nav button")];
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Account", "About You", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
+      "Account", "Import Memory", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
     ]);
     expect(buttons.map((button) => button.querySelector("svg")?.classList.item(1))).toEqual([
       "lucide-user", "lucide-import", "lucide-settings", "lucide-key-round", "lucide-coins", "lucide-monitor-smartphone", "lucide-palette", "lucide-chart-scatter", "lucide-keyboard",
@@ -91,7 +91,7 @@ describe("Account settings", () => {
     const pane = await render();
     const cards = [...pane.children];
     expect(cards).toHaveLength(1);
-    expect(pane.textContent).not.toContain("About You");
+    expect(pane.textContent).not.toContain("Import Memory");
     expect(cards[0].querySelector("#settings-profile-name")).not.toBeNull();
     expect(cards[0].querySelector<HTMLElement>('[style*="width: 56px"]')).not.toBeNull();
     expect(cards[0].textContent).not.toContain("Profile");
@@ -125,8 +125,8 @@ describe("Account settings", () => {
 
   it("gives About You its own entry, right under Account", async () => {
     const pane = await render("about-you");
-    expect(host.querySelector('nav [aria-current="page"]')?.getAttribute("aria-label")).toBe("About You");
-    expect(pane.textContent).toContain("Copy Prompt");
+    expect(host.querySelector('nav [aria-current="page"]')?.getAttribute("aria-label")).toBe("Import Memory");
+    expect(pane.querySelector('button[aria-label="Copy Prompt"]')).not.toBeNull();
     expect(pane.querySelector("#settings-profile-name")).toBeNull();
   });
 

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import { closeShow, showItem } from "@/lib/show-pane";
+import { closeShow, closeTab, paneTabs, showItem, tabKey } from "@/lib/show-pane";
 import { closeVerifyWatch } from "@/lib/verify-watch";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { SIDEBAR_COLLAPSED_KEY, SIDEBAR_WIDTH_KEY } from "@/lib/sidebar-preferences";
@@ -67,6 +67,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   closeVerifyWatch();
   closeShow();
+  for (const thread of ["t1", "t2", "gt1"]) for (const tab of paneTabs(thread)) closeTab(thread, tabKey(tab), null);
   host.remove();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -119,11 +120,11 @@ describe("right slot", () => {
     await act(async () => showItem({ threadId: "t1", path: "C:\\w\\a.png", kind: "image" }));
     await openWatch();
     const tabs = () => [...document.querySelectorAll(".show-pane-tabs [role=tab]")].map(tab => `${tab.textContent}${tab.getAttribute("aria-selected") === "true" ? "*" : ""}`);
-    expect(tabs()).toEqual(["Show", "Media", "Check*", "Map"]);
+    expect(tabs()).toEqual(["a.png", "Check*"]);
     const img = document.querySelector(".show-pane img");
     expect(img).toBeTruthy();
-    await act(async () => button(".show-pane-tabs [role=tab]").click());
-    expect(tabs()).toEqual(["Show*", "Media", "Check", "Map"]);
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".show-pane-tabs [role=tab]")].find((tab) => tab.textContent === "a.png")!.click());
+    expect(tabs()).toEqual(["a.png*", "Check"]);
     expect(document.querySelector(".show-pane img")).toBe(img);
     expect(document.querySelector(".show-pane .verify-watch-url")).toBeTruthy();
   });
@@ -133,10 +134,11 @@ describe("right slot", () => {
     await pick("b2");
     await act(async () => (await until(() => button("button[data-show-pane-button]")) as HTMLButtonElement).click());
     await until(watchPanel);
-    expect([...document.querySelectorAll(".show-pane-tabs [role=tab]")].map(tab => tab.textContent)).toEqual(["Show", "Media", "Map"]);
+    expect([...document.querySelectorAll(".show-pane-tabs [role=tab]")].map(tab => tab.textContent)).toEqual([]);
+    expect(document.querySelector('[data-pane-tools] [data-pane-tool="check"]')?.getAttribute("aria-disabled")).toBe("true");
   });
 
-  it("picking another bot closes the slot, and the same bot again keeps it", async () => {
+  it("picking another bot closes the slot but the pane follows, and the same bot again keeps it", async () => {
     await act(async () => root.render(createElement(App)));
     await openDetails();
     await pick("b1");
@@ -154,7 +156,7 @@ describe("right slot", () => {
     await pick("b2");
     await pick("b1");
     await wait(PRESENCE_EXIT_MS + 40);
-    expect(watchPanel()).toBeNull();
+    expect(watchPanel()).toBeTruthy();
   });
 
   it("folds the bot list to faces while open and restores its width on close", async () => {

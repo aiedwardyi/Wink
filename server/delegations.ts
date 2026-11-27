@@ -9,7 +9,6 @@ import { peerMessagePrompt } from "./chief-of-staff.ts";
 import { release, type Reservation } from "./comms-root.ts";
 import { findDelegationReceipt, loadDelegationReceipts, recordDelegationReceipt, receiptSnapshot, resetDelegationReceipts } from "./delegation-ledger.ts";
 import { terminalMailState, type MailDestination, type MailState } from "./mail-types.ts";
-import { recoverHandedMail } from "./mail-index.ts";
 import { publishPeerReply, replyDestinations, wakeForPeerReply } from "./peer-reply-publication.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import {
@@ -503,7 +502,6 @@ export function discardOrphanedDelegations(bus: CommsBus): number {
   }
   pendingDelegations.clear();
   savePending();
-  recoverHandedMail(bus.store);
   return threads.length;
 }
 
@@ -569,6 +567,7 @@ const delegatedPrompt = (sender: BotRecord, item: PendingDelegationItem) =>
 
 /** A delegated turn on the target's own thread, watched until it ends. */
 export interface DelegatedTurn {
+  engine?: string;
   inline?: true;
   channelId?: string;
   toBotId: string;
@@ -608,7 +607,7 @@ export function finishDelegatedTurn(
       finishedAt: Date.now(), kind: existing?.kind ?? (turn.ask ? "ask" : "delegation"), deliver: existing?.deliver ?? "queued",
       source: existing?.source ?? (sender ? { botId: sender.id, threadId: turn.sourceThreadId, turnId: "" } : undefined),
     };
-    terminal.publish = replyDestinations(bus, terminal);
+    terminal.publish = replyDestinations(bus, terminal, false, turn.engine);
     recordDelegationReceipt({ ...terminal, state: "finishing" });
     publishPeerReply(bus, terminal);
     recordDelegationReceipt(terminal);
@@ -616,7 +615,7 @@ export function finishDelegatedTurn(
     if (!turn.inline) wakeForPeerReply(bus, terminal);
     return terminal.publish.length > 0;
   }
-  if (target && ok && reply.trim()) mirrorReply(bus, target, reply, channel);
+  if (target && ok && reply.trim()) mirrorReply(bus, target, reply, channel, turn.engine);
   else if (target) mirrorActivity(bus, target, channel, failureName, false);
   return false;
 }

@@ -2,14 +2,15 @@
 // the name-lock that keeps the serving route inside the attachments dir.
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -23,7 +24,7 @@ vi.mock("node:fs", async (importOriginal) => {
 
 // The module reads DATA_DIR at import time, so the env var must be set
 // before the import is evaluated.
-const DATA_ROOT = mkdtempSync(join(tmpdir(), "omb-attachments-"));
+const DATA_ROOT = mkdtempSync(join(testHome(), "omb-attachments-"));
 process.env.OMB_DATA_DIR = join(DATA_ROOT, "data");
 
 const { ATTACHMENTS_DIR, IMAGE_MAX_BYTES, extensionForMime, importLocalImage, readAttachment, receiveAttachment, saveImage, sharableLocalFile, sniffImageMime } = await import("./attachments.ts");
@@ -40,7 +41,7 @@ function uploadRequest(name: string | undefined, chunks: Buffer[], mime = "appli
 
 describe("document uploads", () => {
   afterEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
   });
 
   it.each(["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "txt", "md", "csv", "json"])("stores .%s bytes under a random name", async (ext) => {
@@ -103,10 +104,10 @@ describe("extensionForMime", () => {
 
 describe("saveImage", () => {
   beforeEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
   });
   afterEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
   });
 
   it("persists bytes under the attachments dir with a generated name", () => {
@@ -138,10 +139,10 @@ describe("saveImage", () => {
 
 describe("readAttachment name lock", () => {
   beforeEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
   });
   afterEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
   });
 
   it("refuses traversal, dotfiles, and names the saver never writes", () => {
@@ -177,14 +178,14 @@ describe("importLocalImage", () => {
   const scope = { kind: "roots", roots } as const;
   const ANY = { kind: "any" } as const;
   beforeEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
     mkdirSync(src, { recursive: true });
     mkdirSync(outside, { recursive: true });
   });
   afterEach(() => {
-    rmSync(ATTACHMENTS_DIR, { recursive: true, force: true });
-    rmSync(src, { recursive: true, force: true });
-    rmSync(outside, { recursive: true, force: true });
+    removeTestData(ATTACHMENTS_DIR);
+    removeTestData(src);
+    removeTestData(outside);
   });
 
   it("copies a real PNG into the store under a generated name", () => {
@@ -289,7 +290,7 @@ describe("importLocalImage", () => {
 describe("sharableLocalFile", () => {
   const project = join(DATA_ROOT, "project");
   beforeEach(() => mkdirSync(join(project, ".secretdir"), { recursive: true }));
-  afterEach(() => rmSync(project, { recursive: true, force: true }));
+  afterEach(() => removeTestData(project));
   const shortName = (dir: string, name: string) => execFileSync("cmd.exe", ["/d", "/c", "dir", "/x", "/a"], { cwd: dir, encoding: "utf8", windowsHide: true })
     .split(/\r?\n/).find((line) => line.trim().endsWith(` ${name}`))?.match(/\s(\S*~\d+\S*)\s+\S+$/)?.[1];
 
@@ -311,7 +312,7 @@ describe("sharableLocalFile", () => {
 describe("show-image route", () => {
   const indexSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8").replace(/\r\n/g, "\n");
   const internalSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "internal-routes.ts"), "utf8");
-  const route = internalSource.slice(internalSource.indexOf("showImage: async ("));
+  const route = internalSource.slice(internalSource.indexOf("showImage: async ("), internalSource.indexOf("generateImage: async ("));
 
   it("publishes into the sender's own thread as a screen message", () => {
     expect(route).toContain("connectorThread(from.id, fromThreadId)");
@@ -319,10 +320,10 @@ describe("show-image route", () => {
     expect(route).toContain('const scope: FileScope = deps.readOnlyTurn(from.id, fromThreadId) ? { kind: "roots", roots } : { kind: "any" };');
     expect(route).toContain("workspaceDir(from.id)");
     expect(route).toContain('kind: "screen"');
-    expect(route).toContain("image: saved.name,");
+    expect(route).toMatch(/shared \? \{[^}]*roomFiles: shared\.roomFiles[^}]*\} : \{ image: saved\.name \}/);
     expect(route).toContain("shown: true");
-    expect(route.slice(0, route.indexOf("return json(res, 201"))).not.toContain("png:");
-    expect(route).toContain("url: `/api/attachments/${saved.name}`");
+    expect(route).not.toContain("png:");
+    expect(route).toContain("url: shared?.url ?? `/api/attachments/${saved.name}`");
   });
 
   it("tells bots about show_image only when the agents integration is mounted", () => {
@@ -332,9 +333,10 @@ describe("show-image route", () => {
 
   it("puts the always-reply, say-once and default-voice rules in every bot's base prompt", () => {
     const constants = indexSource.slice(indexSource.indexOf("const ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS ="), indexSource.indexOf("const CORPUS_SEARCH_INSTRUCTIONS ="));
-    expect(runInNewContext(constants + "ALWAYS_REPLY_INSTRUCTIONS")).toContain("for a question, the short answer");
+    expect(runInNewContext(constants + "ALWAYS_REPLY_INSTRUCTIONS")).toContain("for an instruction or correction, act on it; write a line only if it changes what they see now or you must ask");
+    expect(runInNewContext(constants + "ALWAYS_REPLY_INSTRUCTIONS")).not.toContain("acknowledge it");
     expect(runInNewContext(constants + "ALWAYS_REPLY_INSTRUCTIONS")).toContain("Say what you verified yourself and what you assume or were told.");
-    expect(JSON.stringify(runInNewContext(constants + "ALWAYS_REPLY_INSTRUCTIONS"))).toBe("\" When reporting after time away, in a summary or wrap-up, or after helpers finish, list every finished deliverable and every item waiting on the user, each with its picture or clickable link. If any part of what the user asked was skipped, cut, left for them to do by hand, or failed, say so in plain words at the top of that reply. Keep it short and drop nothing. If the user answers an open card in their own words, close the card. Always give a visible reply to a message the user types. A turn woken by a pane note, helper report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes while you work, reply immediately in one short visible line (for a question, the short answer; for a correction or instruction, acknowledge it), then continue unless they asked you to stop or pause; thinking alone is not a reply. If that line answered it, do not recap or expand it in your final reply unless later work changed the answer or a Wink note says the user never saw it; then send the answer once more. This applies to user-typed messages, not automated notes. Text outside tool calls appears in chat: never write notes to yourself or your next step there ('Now the tests.', 'Need X.', a bare filename); make the tool call. Some engines replace long between-tool text with a summary the user never sees. Give the full answer once, after your last tool call, with every detail, link and list the user must read exactly. Before then, give at most one short activity line, never the answer, so the final reply does not repeat it. Write every line, including mid-turn text, in the user's language. Say each thing once: repeat no information or status from this or earlier turns unless it changed. If a user-started turn brings nothing new, reply in one short line. For a decision or input needed to continue, use ask_user so it gets noticed; reply text alone is insufficient. The tool does not pause you. After verifying a task's result, remove its temporary files, folders and worktrees you created, by exact path only. Never delete by wildcard, age or anything you did not create; ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a helper, CI, the user), never 'we'; call a cause likely until reproduced. Quote numbers only from sources you opened; name the run, file or date. Before proposing, planning or building, follow existing work and decisions (feature list, status board, decision notes, memory); say first if your plan would redo or contradict them. In any build card, hand-off or note, each thing the user decided or asked quotes their words with the date, like: \\\"use cards\\\" (Nov 17). Mark everything else 'suggestion, not agreed' and ask before building it. When the user changes their mind, replace the old note; never keep two that disagree. Judge ideas on merit; plainly say when the user's idea is wrong or low value. If you change your mind, say what convinced you. State usage limits plainly, with a known reset time. Never promise to resume yourself; chat shows whether Wink will continue. Default voice (role description and user requests override it, including length and teaching style): answer first, 2-5 short lines, the few key points unless asked for every option, plain words, a few bullets over paragraphs, warm like a friend on the user's side. Celebrate real wins, name frustration in a few words before fixing it, and never flatter ordinary messages or agree when the user is wrong. Work out questions before answering. Skip preamble, recaps and generic closing offers; needed questions and asking before acting are not padding. Give code, plans, drafts, commands and anything to paste or follow step by step in full. Otherwise go longer only when asked or needed, still verdict first.\"");
+    expect(JSON.stringify(runInNewContext(constants + "ALWAYS_REPLY_INSTRUCTIONS"))).toBe("\" When reporting after time away, in a summary or wrap-up, or after helpers finish, list every finished deliverable and every item waiting on the user, each with its picture or clickable link. If any part of what the user asked was skipped, cut, left for them to do by hand, or failed, say so in plain words at the top of that reply. Keep it short and drop nothing. If the user answers an open card in their own words, close the card. Always give a visible reply to a message the user types. A turn woken by a pane note, helper report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes while you work, answer a question at once in one short visible line (thinking alone is not a reply); for an instruction or correction, act on it; write a line only if it changes what they see now or you must ask; your final reply covers it. Continue unless they asked you to stop or pause. When a Wink note with their message says a fast reply answers it, skip that line and continue. If that line answered it, do not recap or expand it in your final reply unless later work changed the answer or a Wink note says the user never saw it; then send the answer once more. This applies to user-typed messages, not automated notes. Text outside tool calls appears in chat: never write notes to yourself or your next step there ('Now the tests.', 'Need X.', a bare filename); make the tool call. Some engines replace long between-tool text with a summary the user never sees. Give the full answer once, after your last tool call, with every detail, link and list the user must read exactly. Before then, give at most one short activity line, never the answer, so the final reply does not repeat it. Write every line, including mid-turn text, in the user's language. Say each thing once: repeat no information or status from this or earlier turns unless it changed. If a user-started turn brings nothing new, reply in one short line. For a decision or input needed to continue, use ask_user so it gets noticed; reply text alone is insufficient. The tool does not pause you. After verifying a task's result, remove its temporary files, folders and worktrees you created, by exact path only. Never delete by wildcard, age or anything you did not create; ask when unsure. Say what you verified yourself and what you assume or were told. Name who did or checked each thing (you, a helper, CI, the user), never 'we'; call a cause likely until reproduced. Quote numbers only from sources you opened; name the run, file or date. Before proposing, planning or building, follow existing work and decisions (feature list, status board, decision notes, memory); say first if your plan would redo or contradict them. In any build card, hand-off or note, each thing the user decided or asked quotes their words with the date, like: \\\"use cards\\\" (Nov 17). Mark everything else 'suggestion, not agreed' and ask before building it. When the user changes their mind, replace the old note; never keep two that disagree. Judge ideas on merit; plainly say when the user's idea is wrong or low value. If you change your mind, say what convinced you. State usage limits plainly, with a known reset time. Never promise to resume yourself; chat shows whether Wink will continue. Default voice (role description and user requests override it, including length and teaching style): answer first, 2-5 short lines, the few key points unless asked for every option, plain words, a few bullets over paragraphs, warm like a friend on the user's side. Celebrate real wins, name frustration in a few words before fixing it, and never flatter ordinary messages or agree when the user is wrong. Work out questions before answering. Skip preamble, recaps and generic closing offers; needed questions and asking before acting are not padding. Give code, plans, drafts, commands and anything to paste or follow step by step in full. Otherwise go longer only when asked or needed, still verdict first.\"");
     expect(indexSource.split(" : ALWAYS_REPLY_INSTRUCTIONS) +").length - 1).toBe(2);
   });
 });

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { setAsideFile, writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
+import type { Message } from "./store.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { RoutineRequestOperation } from "../shared/routine-request.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
@@ -138,6 +139,8 @@ interface RoutineFile {
   runs: RoutineRun[];
   /** Durable commit receipts for cross-file confirmation recovery. */
   routineRequestReceipts?: RoutineRequestReceipt[];
+  /** Chat cards of earlier wakes carry the wake flag; set once, so boot never reloads threads for it. */
+  wakeCardsFlagged?: true;
 }
 
 export type RoutineRequestOwner = Pick<RoutineRequestReceipt, "requestId" | "messageId" | "botId" | "threadId">;
@@ -283,6 +286,7 @@ export function routineRunCard(run: RoutineRun): RoutineRunCardData {
   if (run.startedAt) card.startedAt = run.startedAt;
   if (run.finishedAt) card.finishedAt = run.finishedAt;
   if (run.threadId) card.executionThreadId = run.threadId;
+  if (run.wake) card.wake = true;
   if (summary) card.summary = summary;
   if (error) card.error = error;
   return card;
@@ -295,6 +299,7 @@ export class RoutineManager {
   private routines: Routine[] = [];
   private runs: RoutineRun[] = [];
   private routineRequestReceipts: RoutineRequestReceipt[] = [];
+  private wakeCardsFlagged = false;
   /** The file was there but did not load; the first save moves it aside instead of writing over it. */
   private unloaded = false;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -320,6 +325,7 @@ export class RoutineManager {
             sourceThreadId: persistedSourceThreadId.parse(run.sourceThreadId),
           }))
         : [];
+      this.wakeCardsFlagged = disk.wakeCardsFlagged === true;
       this.routineRequestReceipts = Array.isArray(disk.routineRequestReceipts)
         ? disk.routineRequestReceipts.filter((receipt): receipt is RoutineRequestReceipt =>
             typeof receipt?.requestId === "string" &&
@@ -361,6 +367,18 @@ export class RoutineManager {
 
   listRoutines(): Routine[] {
     return this.routines.map((r) => ({ ...r, schedule: { ...r.schedule } }));
+  }
+
+  /** Once per file: gives the chat card of each earlier wake the flag, then never touches a thread again. */
+  flagWakeCards(chats: { messagesFor(threadId: string): readonly Message[]; patchMessage(threadId: string, id: string, patch: Partial<Message>): unknown }) {
+    if (this.wakeCardsFlagged) return;
+    const wakes = this.runs.filter((run) => run.wake && run.sourceThreadId);
+    for (const run of wakes) {
+      const row = chats.messagesFor(run.sourceThreadId!).find((message) => message.kind === "routine.run" && message.routineRun?.runId === run.id);
+      if (row?.routineRun && !row.routineRun.wake) chats.patchMessage(run.sourceThreadId!, row.id, { routineRun: { ...row.routineRun, wake: true } });
+    }
+    this.wakeCardsFlagged = true;
+    if (wakes.length) this.save();
   }
 
   listRuns(from?: number, to?: number): RoutineRun[] {
@@ -790,17 +808,31 @@ export class RoutineManager {
   }
 
   /** A chat run is matched by its chat and bot: a room thread hosts several members' turns. */
-  handleRuntimeEvent(event: RuntimeEvent, ownerBotId: string | undefined): RoutineRun | null {
-    const run = this.runs.find(
+  private liveRunFor(event: RuntimeEvent, ownerBotId: string | undefined): RoutineRun | undefined {
+    return this.runs.find(
       (r) =>
         ["running", "waiting"].includes(r.status) &&
         (r.threadId ? r.threadId === event.threadId : r.sourceThreadId === event.threadId && r.botId === ownerBotId),
     );
+  }
+
+  /** Called once a request really waits on the user. Auto mode answers most
+   * requests moments after they open, so opening alone must not flip the run. */
+  requestWaiting(event: RuntimeEvent, ownerBotId: string | undefined): RoutineRun | null {
+    if (event.type !== "request.opened") return null;
+    const run = this.liveRunFor(event, ownerBotId);
     if (!run) return null;
-    if (event.type === "request.opened") {
-      run.status = "waiting";
-      run.attention = redactSecretsInText(event.summary).trim().slice(0, 500) || undefined;
-    } else if (event.type === "request.resolved") {
+    run.status = "waiting";
+    run.attention = redactSecretsInText(event.summary).trim().slice(0, 500) || undefined;
+    this.save();
+    this.emitRun(run);
+    return { ...run };
+  }
+
+  handleRuntimeEvent(event: RuntimeEvent, ownerBotId: string | undefined): RoutineRun | null {
+    const run = this.liveRunFor(event, ownerBotId);
+    if (!run) return null;
+    if (event.type === "request.resolved") {
       run.status = "running";
       run.attention = undefined;
     } else if (event.type === "item.completed" && event.itemType === "assistant_text" && !event.summarized) {
@@ -972,6 +1004,7 @@ export class RoutineManager {
       routines: this.routines,
       runs: this.runs,
       routineRequestReceipts: this.routineRequestReceipts,
+      ...(this.wakeCardsFlagged ? { wakeCardsFlagged: true as const } : {}),
     } satisfies RoutineFile, null, 2));
   }
 }

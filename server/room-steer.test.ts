@@ -46,9 +46,19 @@ describe("steerRoomSend", () => {
 
   it("marks a tapped choice steered into the asker's turn with its card", async () => {
     const { deps, group, steer } = setup();
-    const row = await steerRoomSend(deps, group, "Sure", undefined, "send-2", "ask");
+    const row = await steerRoomSend(deps, group, "Sure", undefined, "send-2", "ask", [], 5_000);
     expect(steer).toHaveBeenCalledWith("room-t", "Sure", undefined, { fromUser: true });
-    expect(row).toMatchObject({ text: "Sure", steered: true, answersCard: "ask" });
+    expect(row).toMatchObject({ text: "Sure", steered: true, answersCard: "ask", actedAt: 5_000 });
+  });
+
+  it("keeps a held line's waited mark on the row it steers", async () => {
+    const { deps, group } = setup();
+    expect(await steerRoomSend(deps, group, "later", undefined, "send-3", undefined, [], 5_000, true)).toMatchObject({ steered: true, actedAt: 5_000, waited: true });
+  });
+
+  it("keeps a line's send order on the row it steers", async () => {
+    const { deps, group } = setup();
+    expect(await steerRoomSend(deps, group, "next", undefined, "send-4", undefined, [], 5_000, undefined, 2)).toMatchObject({ steered: true, actedAt: 5_000, sendSeq: 2 });
   });
 
   it("leaves the line to the room's next turn when it can't steer", async () => {
@@ -102,7 +112,7 @@ describe("room send route", () => {
     const startGroupTurn = vi.fn();
     const routes = createGroupRoutes({
       ...deps,
-      store: { ...deps.store, group: () => room, messagesFor: () => [] },
+      store: { ...deps.store, group: () => room, messagesFor: () => [], loaded: () => true },
       instanceForBot: () => ({ adapter: { capabilities: { queueing: true }, steer: async () => {
         room.busyBotId = null;
         await routes.interrupt(Readable.from([]) as unknown as IncomingMessage, { writeHead: vi.fn(), end: vi.fn() } as unknown as ServerResponse, ["", room.id] as RegExpMatchArray);

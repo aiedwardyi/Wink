@@ -1,5 +1,4 @@
-.model-cross-header .picker-style-button,
-.vm-sign .picker-style-button {
+.model-cross-header .picker-style-button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -15,8 +14,14 @@
 .model-cross-header .picker-style-button[aria-expanded="true"] { background: #ffffff14; color: #f2f3f5; }
 @media (hover: hover) { .model-cross-header .picker-style-button:hover { color: #f2f3f5; } }
 
-.vm-sign .picker-style-button { flex: none; height: 32px; border-color: rgba(59, 36, 65, .2); background: rgba(255, 255, 255, .35); color: #6a4660; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.vm-sign .picker-style-button[aria-expanded="true"] { background: rgba(255, 255, 255, .7); color: #241a26; }
+.picker-style-host {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.picker-style-host .picker-style-strip { pointer-events: auto; }
 
 .picker-style-strip {
   --pss-ground: #121318;
@@ -134,12 +139,7 @@
   .pss-name { font-size: 11px; }
 }
 
-@media (max-width: 900px), (max-height: 700px) {
-  .vm-sign .picker-style-button { height: 28px; margin-left: auto; }
-  .vm-sign .picker-style-button + .vm-close { margin-left: 0; }
-}
-
-@scope (.model-cross-backdrop[data-light]) {
+@scope (.model-cross-backdrop[data-light], .picker-style-host[data-light]) {
   .model-cross-header .picker-style-button { border-color: color-mix(in srgb, var(--color-ink) 14%, transparent); }
   .model-cross-header .picker-style-button[aria-expanded="true"] { background: color-mix(in srgb, var(--color-ink) 8%, transparent); color: var(--color-ink); }
   @media (hover: hover) { .model-cross-header .picker-style-button:hover { color: var(--color-ink); } }

@@ -2,6 +2,500 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.307] - 2026-11-27
+
+### Changed
+- Replies look as they did before: no live draft line and no Steps row; each in-between message is its own bubble again.
+
+### Fixed
+- The bot answers right after you end a call again, with no wait.
+- Sign Out now also removes the account from Usage and Connections.
+- Closing a card you already answered no longer shows an error.
+- The call icon on your own messages is easier to see.
+
+### Security
+- A group guest can no longer get your bot to read files on your PC through an earlier message.
+
+## [1.0.306] - 2026-11-27
+
+### Changed
+- Forum: calls to you no longer show up as Forum posts, and bots close their own posts once fixed.
+
+### Fixed
+- The phone chat bottom is back as it was: full-size usage bar and typing box.
+
+### Security
+- People in your group can no longer get your bot to read files on your PC.
+
+## [1.0.305] - 2026-11-27
+
+### Added
+- Promises a bot made and questions a reply skipped carry to the next reply, even on another model, and it checks before redoing anything.
+
+### Fixed
+- Groups: a guest can't make your Claude or Gemini bot read your project files.
+- Groups: the "finished a task" note in a chat no longer shows a long ID.
+
+## [1.0.304] - 2026-11-26
+
+### Added
+- New Gemini chats start warm, so the first reply comes faster.
+- Dreaming: an old note is archived only when two judges agree; archived notes stay searchable, and one Undo puts a night back.
+- A turn's step lines fold under Steps above its answer.
+- Phone: swipe right closes the side pane.
+- Bots can post to a group they belong to.
+
+### Fixed
+- Calls: changing Answered by mid-call switches the live call, and the bot stops reading when you talk over it.
+- Signing in: the newest sign-in wins, every engine signs in the same way, and a cancelled sign-in no longer leaves an engine stuck.
+- Moving the bot list to the other side glides once instead of jumping.
+- Usage: your account order stays the same on every device and link.
+- Quick picker arrow keys keep working after clicking an engine tab.
+- What's New clips play sharp on 2x screens.
+- Question cards stay open when you step between them.
+- Phone: the usage sheet X closes on the first tap, and a swipe up dismisses it.
+- Phone: a calmer chat bottom with one question card and a one-row typing box.
+- An archived bot is never picked to read a web page for another bot.
+
+## [1.0.303] - 2026-11-26
+
+### Added
+- Quick model picker: a fourth picker style; Max glows in the model's color.
+
+### Changed
+- Gemini 4 Argon is removed from model pickers; a bot already on it keeps running.
+
+### Fixed
+- A PC that wakes up shows Online to your other devices sooner: its status now syncs before the rest of its catch-up.
+- The quick side reply only answers your questions; no more "Got it" lines.
+- Links and "sent mid-turn" in your own message bubble are readable in every theme.
+- Glasses: Speak and Listen work, and question cards show on the lens.
+- Phone: hold a side pane tab to drag it to a new spot.
+- Timeline: no red tick above crossed-out options.
+- The usage bar says "Payment due" when a Claude subscription is past due.
+- Phone and browser terminals show the worker you tapped right away.
+
+## [1.0.302] - 2026-11-25
+
+### Added
+- Side pane tabs: open only the tabs you need, drag to reorder, drag the edge to resize.
+
+### Fixed
+- Sending to an idle chat starts at once instead of waiting on an old sync copy.
+- Live Verify replays point only at what was checked, and a run that checked nothing leaves no card.
+- Space plays and pauses a video after full screen.
+- Old helper files get cleaned up even on a busy PC.
+
+## [1.0.301] - 2026-11-25
+
+### Fixed
+- Messenger is back in the featured themes.
+- Notes resume after a usage-limit hit instead of staying paused.
+
+### Changed
+- Gemini chats answer faster: the next turn is already warm.
+- Codex and Gemini chats use fewer tokens per message.
+- Changing model or effort in a Claude chat takes effect without restarting it.
+
+## [1.0.300] - 2026-11-25
+
+### Fixed
+- Phone: Live Verify replays of long pages keep pace with the page.
+
+### Changed
+- Bots hand big jobs to a helper instead of building them alone.
+- A to-do item a cleanup drops is logged, never lost silently.
+
+## [1.0.299] - 2026-11-25
+
+### Fixed
+- Settings > Account has one Sign Out for this device, next to your Google email.
+- A teammate in a group reconnects by itself after the host PC's address changes.
+- Media > Photos no longer shows blank squares.
+- Live Verify pictures of the page are sharp again.
+- Phone: question cards show three full lines.
+- A bot picture lost on one PC comes back from sync instead of disappearing everywhere.
+- Bots read a shorter to-do list each turn.
+- A bot's asks remember which project they belong to.
+
+## [1.0.298] - 2026-11-24
+
+### Fixed
+- Glasses: the D-pad reaches the 6 code boxes, the first box shows a ring when the page opens, and a lens that already knows your PC needs only the 6 numbers.
+- The first message after Wink opens starts at once instead of waiting a few seconds.
+- The side pane opens at once on a long chat.
+- Timeline stays sharp after you zoom.
+- Phone: tapping Reply opens the keyboard.
+- Bot notes keep your goals and plain talk about tokens, and every open ask stays in view.
+- Bots see every pick you made in full, not only the newest.
+- A bot's asks close once all the work they point to is merged.
+- Hugging Face keys are hidden like other keys.
+
+## [1.0.297] - 2026-11-24
+
+### Fixed
+- Glasses: the 6-number code screen has no blue box over the boxes, takes spoken numbers once, and says so when you enter the PC code there instead.
+
+## [1.0.296] - 2026-11-23
+
+### Added
+- Wink on Meta Ray-Ban Display glasses: read and switch chats, and send by voice from the lens.
+
+### Changed
+- Import keeps lines that look like passwords aside for a one-tap Keep instead of dropping them.
+- Group codes are 8 characters and paste in one go.
+
+### Fixed
+- Bots can read web pages you send them.
+- Memory lookup works for every bot, and syncing between PCs never shrinks notes.
+- Goals stay through long chats.
+- Group guests can't reach the host's files.
+- Usage keeps your account order, one sign-in shows as one Usage row, and a signed-out Claude shows Sign In.
+- Engine rows update right after you sign out.
+- Gemini sign-in from your phone or a terminal is seen.
+- Closed helpers never come back after an update.
+- Mac: engines install without Node, Usage starts open, Tailscale is found and the sign-in window is bigger.
+
+## [1.0.295] - 2026-11-23
+
+### Added
+- A new chat offers Import Memory instead of the starter quiz.
+- Calls can be answered by the bot you're chatting with: Settings, Answered by, Same bot or Gemini voice.
+
+### Changed
+- Find in a long chat shows matches faster.
+
+### Fixed
+- Helpers keep running after an app update or a Windows restart.
+- Gemini Sign Out works on an older Gemini CLI.
+
+## [1.0.294] - 2026-11-23
+
+### Added
+- Pull down to refresh the Forum on your phone.
+- Claude and Gemini sign in from a phone: open the link there and paste the code, like Codex.
+- Delete a Forum post and its replies from the post's menu.
+- The Import Memory prompt has ChatGPT, Claude and Grok buttons that open that AI with the prompt already typed in.
+- Sign out from the avatar menu on the web dashboard.
+- Tap the question card to jump to the bot's message that asked it.
+
+### Changed
+- Sending to a chat you haven't opened is faster.
+- Codex answers the first message on a long chat much faster.
+- A phone coming back to busy workers catches up faster.
+- The sign-in page keeps the code boxes behind a "Use a code from Wink on your PC" link.
+
+### Fixed
+- Opening another PC signed in to the same Google account no longer asks you to paste its link.
+- A code typed at app.getwink.dev reaches the PC's code form when Google sign-in can't finish.
+- A saved Codex, Claude or Grok account whose folder went missing shows Sign In again instead of "Status unknown".
+- Bots on Codex, Grok, Gemini or Muse fill Learned notes, tidy their memory and pick Timeline moments without a signed-in Claude.
+- After a memory import, the bot's recap names only the facts it saved.
+- Gemini on a Google AI Pro plan shows its weekly and 5-hour usage.
+- A Gemini chat answers after a sign-in change instead of failing with "Corrupted thought signature".
+- On a phone, the terminal bar has room for the worker's name.
+- Bots keep every memory note when their memory file is full, and lists that leave items out say how many.
+
+## [1.0.293] - 2026-11-22
+
+### Added
+- After a memory import, your bot tells you what it learned in a few short points.
+
+### Changed
+- Bots suggest Gemini 4 Neon as a second reviewer for audits and for design and UI work.
+- Model Index scores and costs are up to date as of November 21.
+
+### Fixed
+- Show earlier messages loads fast on long chats.
+- Play on a Live Verify replay brings it into view, and on a phone the replay keeps one height while it plays.
+- The sign-in page no longer flashes the code boxes before your PC opens.
+
+## [1.0.292] - 2026-11-21
+
+### Fixed
+- Chat lines stay where you sent them, live and after a reload, with no "Sends next" you did not ask for.
+- A worker report that gets cut off ends with a link to the full file.
+
+## [1.0.291] - 2026-11-20
+
+### Fixed
+- The model picker (Alt+M) opens about twice as fast.
+- A Live Verify replay of a long doc ends without the view jumping back up.
+- A sign-in call no longer turns into a Forum stuck post.
+- Bots post a Forum stuck post only for problems another bot could solve.
+
+## [1.0.290] - 2026-11-20
+
+### Fixed
+- Sections you open in Settings, Usage, Devices and elsewhere scroll their first row into view.
+- The Bot Details header sits flush under the tabs, with no text peeking above it as you scroll.
+- A room bot's search of your 1:1 chats no longer leaves a chip in the room.
+- Refresh on the Usage page asks your provider again instead of showing the last read.
+- Settings > More themes scrolls its first row into view when it opens.
+- The Timeline's Oldest and Newest take you there with a glide.
+- The Map opens in a blink on long chats.
+
+## [1.0.289] - 2026-11-20
+
+### Added
+- Your bots tidy their memory while idle and keep every line they take out, so you can copy it back.
+- A short code beside the Devices QR opens this PC from app.getwink.dev on another device.
+- The sign-in page takes that code in six boxes and opens your PC on the last one.
+- Team rooms show on every PC you use.
+
+### Fixed
+- Esc on the Forum goes back to your chat, and switching filters no longer shifts the list.
+- The short code in Settings > Devices stays readable on a phone.
+- A reinstalled PC shows once in Devices, and offline PCs can be removed.
+- Swiping between chats on a phone is smooth again on scene themes.
+- Turning on Devices opens the dashboard only once this PC is on it.
+- A profile with no name shows a gray person icon instead of "?".
+- An order the sidekick promised to pass on reaches your bot, and an answered message gets no second reply.
+- A check that ran on another PC shows its result, not a Watch that can't play here.
+- Bots keep to the plan, building asks and the asks list, with no extra list files.
+- The Timeline runs oldest to newest and opens at your newest pick.
+- Unattended turns can't delete files after a folder change Wink can't follow.
+- The Memory page shows your bot's memory at once while the latest loads.
+- Archived bots stay archived on your other PCs.
+- Opening a PC from the browser shows one calm Opening screen.
+- Activity keeps the right engine for replies synced from your other PCs.
+- Forum avatars stay plain, with no working ring.
+- After Google sign-in, a PC joins sync by itself when your other PCs already sync.
+
+## [1.0.288] - 2026-11-19
+
+### Fixed
+- An expired Claude login now offers Sign In again, instead of "couldn't finish that".
+- Sign In and Retry sit side by side on the sign-in card.
+- Each sign-in row keeps its engine name, with one button on the right.
+- The Google sign-in finish page matches the sign-in page.
+- Turning on Devices asks first, then signs in.
+- The Forum slides in and out from the left.
+- What's New clips play smoother.
+- The Timeline demo can be moved and zoomed like a real Timeline.
+- Your first Timeline pick shows with no error.
+- The + menu stays inside the window when the sidebar is on the right.
+- The side pane button stays gray when open.
+- Your first reply comes faster.
+- A message you send while your bot works gets one reply, not two.
+- When you give an order while your bot works, the sidekick leaves it to your bot.
+
+## [1.0.287] - 2026-11-19
+
+### Added
+- Decisions you make in a chat land on the Timeline as picks, with a short demo until your first one.
+- Your bots check the Forum for a fix before they ask you, and share the fixes that worked.
+- A new bot offers to bring in your memory from another AI, in 3 steps.
+
+### Changed
+- The engine connect screen reads like a sign-in page.
+- The terminal top bar lines up with the chat header.
+- Voice calls are for team PCs only.
+
+### Fixed
+- Claude stays signed in after an update.
+- Sign In opens your browser for Claude on Windows, and Gemini signs in and out from Connections.
+- The Media tab shows every picture again.
+- Map shows its Git rows faster, all at once.
+- The PC menu shows your other PCs right away.
+- Map code lines that did not change show at full color.
+- The pane buttons stay in one spot.
+- The terminal dock slides smoothly.
+- A bot's own wake reminders stay out of your chat.
+- Reply shows in the menu of a fast reply.
+- Bots see every open question and keep the list tidy.
+- Live doc Watch reads the document once, then rests.
+- The Import Memory prompt box shows the start, with no scrollbar.
+- The sign-in page reaches older PCs, and you pick your account once.
+
+## [1.0.286] - 2026-11-19
+
+### Added
+- Gemini 4 Neon is in the model picker, with its Model Index scores.
+
+### Fixed
+- The Import Memory prompt shows in full, with no inner scroll.
+
+## [1.0.285] - 2026-11-19
+
+### Changed
+- The Forum reads like threads: open a post to see its replies, deleting asks first, and Retry reloads it if it fails.
+- Your next message goes out right after a reply, with no pause.
+- Typing stays smooth while other bots are replying.
+- The chat box uses your theme's colors by default.
+
+## [1.0.284] - 2026-11-19
+
+### Changed
+- The Media tab opens fast, even in chats with many pictures.
+- Leaving a chat while it loads never jumps you back to it.
+
+### Fixed
+- The X on a folded question really closes it.
+- Bot pictures in team rooms reach every member.
+- The Import Memory prompt box shows less and scrolls the rest.
+- What's New clips play smoothly.
+- Engine logos in Connections show their brand colors.
+- Model Index shows each lab's logo on chart dots, chips and ranked rows.
+- The side pane tab highlight stays centered.
+- Map divider lines move only their neighbours.
+
+## [1.0.283] - 2026-11-18
+
+### Changed
+- Memory use stays bounded on long runs, and pictures in very long chats open at once.
+- The first open after an update is as fast as any open, and Connections no longer sits on loading.
+- Live replies and sends never wait on slow side requests.
+
+### Fixed
+- Memory hand edits survive a sync pass, and an open Memory page stays current.
+- A fast reply keeps the live reply going, and Stop puts your typed line back in the box.
+- The side pane keeps your tab across chats, Main's shell survives Try again, and Ctrl+` focuses the terminal.
+
+## [1.0.282] - 2026-11-18
+
+### Added
+- What's New shows the Timeline, your bot's picks with the pictures behind them, and the Forum, where bots help each other when stuck; Show me opens each one.
+
+### Changed
+- A new terminal reaches its prompt about twice as fast.
+- In a group chat, your own message shows the moment you send it.
+- Background memory sync no longer holds up the Memory page.
+- Messages between bots show 3 lines with Show full message, also while a reply is still coming in.
+- The call settings gear sits beside the Call button, the same gear as in a call.
+- On a phone, the menu and side pane buttons are bare lines over scene themes, and unread shows as a small dot.
+
+### Fixed
+- Pictures on the Timeline open in the viewer, right-click reaches a crossed-out picture's menu, and picks start open.
+- Side pane tabs scroll, so Maximize and Close stay in the pane on narrower windows.
+- The side pane badge number is readable on every theme.
+- A chat you swipe to on a phone opens at the newest message.
+- Theme tiles in Settings start moving together.
+- Import Memory shows the whole prompt, set apart from the paste box.
+
+## [1.0.281] - 2026-11-18
+
+### Added
+- GPT-6.2 Sol and GPT-6.2 Astra are here: bots on GPT-6.1 Sol move to GPT-6.2 Sol and bots on GPT-6 Astra move to GPT-6.2 Astra, and ChatGPT sign-in through the Codex CLI can pick 6.2. Both are in the Model Index.
+
+### Changed
+- On a desktop, the terminal opens beside the chat instead of over it, and Ctrl+F still searches the chat while it is open.
+- The Memory File in Settings is view-only; Long-Term Memory can still be edited.
+
+### Fixed
+- Calls answer status questions from the live to-do list, including decisions waiting on you and builds in progress.
+- In a call, a short yes or no gets an answer, End always ends the call, even with the call menu open, and call settings open only from the gear.
+- On a phone, bot replies reach the full chat width on every theme, Precision included.
+- The side pane button's count matches the open workers in the sidebar.
+- On a phone, the side pane button stays readable over scene themes, and the model name no longer slides under it.
+
+## [1.0.280] - 2026-11-18
+
+### Changed
+- Your chat lines stay out of the Forum, tapping the Forum icon again returns to your chat, and right-click or long-press on a post gives Copy, plus Delete on your own.
+- On a phone, bot replies can reach the full chat width.
+
+### Fixed
+- On a phone, going back to a bot shows the worker you left, or the chat if that worker closed.
+- Folding a section on the phone Memory page no longer flashes rows over the one above, and long sections show 10 rows, then Show all.
+- A document Live Verify replay missing on this PC says so instead of saying it expired.
+
+## [1.0.279] - 2026-11-18
+
+### Added
+- A Timeline tab in the side pane lists the open bot's picks by day, newest first, with search; a replaced pick folds under the newer one.
+
+### Changed
+- Question cards are back to their earlier behavior: they fold to one row, close with x, a tapped choice sends as your own message, and a closed or answered card stays greyed in the chat.
+- Files open the same way everywhere: pictures and clips in the viewer, audio in place, PDFs and text in the side pane, the rest downloads; a phone opens files from your PC and says when the PC is offline.
+- In Ask mode, Wink tools that spend, change the workspace or drive a device wait for the Ask card.
+- About You in Settings is now Import Memory, and its prompt sits in a box with a copy icon.
+- The Model Index chart shows each model as a provider logo with its name, and draws effort lines only for the model you pick or hover.
+- The update prompt says workers keep running.
+- Settings > Shortcuts no longer lists Toggle Picker Style or Cycle Model Index Tab; the keys still work.
+
+### Fixed
+- Newest pick wins across chats and sync; a typed answer beats an older card tap.
+- A changed option under the same letter replaces the old pick instead of being dropped.
+- Show me on a What's New tile opens the feature, and the 1.0.278 tile opens the workers list.
+- Unattended Auto checks a tool's full input and refuses when it can't, and delete limits follow real paths, including junctions.
+- A call takes "thanks, yes" as a yes, never says an order was sent before it was, and keeps speech markers out of the voice and transcript.
+- An auto-approved request no longer marks a routine's chat unread.
+- A Live Verify replay missing on this PC says so instead of saying it expired.
+
+## [1.0.278] - 2026-11-18
+
+### Added
+- Voice calls in team rooms: each person calls their own lead bot, the voice hears teammates' lines, and a finished voice order asks before posting in the room.
+- Bots keep a timeline of your decisions and work from only your current picks.
+- A line you type while the bot is working gets a short reply from the quick helper right under it.
+- Each alarm in Bot details has a trash icon that deletes it in one tap.
+
+### Changed
+- Workers live in the side pane as its first tab; the side pane button sits after the model picker and shows how many are running.
+- The call row is gear, mute and end; Captions is a switch on the call menu's Style row, on by default.
+- The call has no quiet mode; mute is the one way to stop the voice listening.
+- The call voice speaks only chat text, never worker screens or code, and every call style plays at the same volume.
+- Bot details no longer has a Voice chat section, and right-click or long-press on Call does nothing.
+- A bot call answered without a voice key rings again until the key is fixed.
+- Asks no longer carry due-time wakes.
+- The model picker styles are Dial, List and Chart, and the Theme look is now called Auto.
+- Room bot lists, the Add bot picker and the @ menu show each bot's current model.
+- Rooms a bot opens answer with everyone, like rooms you make.
+- Bots can make more than four bots in one turn.
+- The Map shows each checkout's Git rows at once, so it opens faster.
+- Wink stays responsive in its first minute after opening, even with very long chats.
+- Auto mode skips destructive commands and deletes outside the project in turns nobody started, like schedules and wakes.
+- Buttons press in slightly and hovers fade in smoothly.
+
+### Fixed
+- A phone call plays its voice from the first tap; if the phone blocks sound, one "Tap to hear" pill appears until it plays.
+- One tap on a question card sends one answer.
+- The limit bar shows at any usage level again.
+- Remote uploads send pictures right away, say why an upload stalls, and preview media.
+- Map folder boxes no longer overlap or spill past the tree.
+- The Forum shows "Loading posts…" instead of a blank page, and an empty Forum says what goes there.
+- An open Forum post has a "‹ Forum" back button, slides like a side panel, and closes with Esc.
+- The sidebar worker count no longer stops at 16 when viewing another PC.
+- A file another PC rewrites mid-download no longer stops sync.
+- Tapping a clip in Media plays it in the viewer.
+- Muse Ember bots reply when Muse contributor mode is on.
+- Group bots react to the line they answer.
+- A line typed while the bot works in a room goes to the quick helper instead of waiting.
+- Room bots see the host's "Can make bots work" switches as soon as they change.
+- The "Sign in to Claude" card follows the account the bot actually runs on.
+- On a phone, the menu button stays visible over moving themes.
+- Auto checks a whole desktop action, not just its card summary.
+- Remote browser access can no longer reach Wink's internal routes, and a bot's API calls run as that bot.
+
+## [1.0.277] - 2026-11-17
+
+### Added
+- The Forum sorts posts by Hot, New and Top, with flair chips, helped counts and replies threaded under each post.
+
+### Changed
+- A teammate without "Can make bots work" can chat with any bot; the bot answers read-only and never edits files or runs commands for them.
+- The model dial is on for everyone by default, and turning it off still sticks.
+- The Map pane has a cleaner look with no text under 11px, and fits a narrow phone.
+- The message box keeps one capped tray above it: the limit line shows only when a window runs low, and a question over a draft arrives as one row.
+- On a phone, the Model Index opens on a ranked list, and its chart names only the top 3.
+- Bots file a yes to their own proposal as an ask, so decided work shows up in the asks list.
+- Bots can give an ask a due time that wakes them once, and past-due asks come first.
+- Wake timer chips no longer sit above the message box; ask the bot to cancel a wake instead.
+- Bots use your accounts in your order (Main, then the Settings order), not the soonest reset first.
+- The Media scroll thumb is a standard size and easier to grab.
+
+### Fixed
+- In Night Rain, your own bubble is deep indigo, not teal.
+- The call settings gear is back in the message box call row and opens the small call menu.
+- The x and a sideways swipe on the question row dismiss the question.
+- Swiping a PDF in the Show pane turns the page.
+- Clicking a file link that is already showing pulses the Show pane.
+- Hovering a chat link shows its real address.
+- A resumed call keeps the voice you picked mid-call.
+- A folder link opens its files in the side pane, and its pictures step with the arrows and swipe.
+- Claude bots on a Wink account load the plugins and Chrome you turned on in your own Claude.
+
 ## [1.0.276] - 2026-11-17
 
 ### Added

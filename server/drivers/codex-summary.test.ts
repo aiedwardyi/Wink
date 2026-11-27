@@ -39,7 +39,7 @@ describe("Codex summaries", () => {
     const root = join(tmpdir(), "wink-codex-summary", "tests");
     mkdirSync(root, { recursive: true });
     scratch = mkdtempSync(join(root, "case-"));
-    writeFileSync(join(scratch, "models_cache.json"), JSON.stringify({ models: ["gpt-6.1-sol", "gpt-6-astra"].map((slug) => ({ slug, tool_mode: "code_mode_only", context_window: 200_000 })) }));
+    writeFileSync(join(scratch, "models_cache.json"), JSON.stringify({ models: ["gpt-6.1-sol", "gpt-6.2-astra"].map((slug) => ({ slug, tool_mode: "code_mode_only", context_window: 200_000 })) }));
     vi.spyOn(console, "info").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(procs, "killCliTree").mockImplementation((child) => {
@@ -130,7 +130,7 @@ describe("Codex summaries", () => {
   });
 
   it("uses the bot's selected model at low effort in an ephemeral restricted thread", async () => {
-    const selected = summaryInstance(instance, "gpt-6-astra");
+    const selected = summaryInstance(instance, "gpt-6.2-astra");
     const originalSpawn = vi.mocked(procs.spawnCli).getMockImplementation()!;
     const catalogs: unknown[] = [];
     vi.mocked(procs.spawnCli).mockImplementation((cli, args, opts) => {
@@ -139,10 +139,10 @@ describe("Codex summaries", () => {
       return originalSpawn(cli, args, opts);
     });
     await expect(selected.generateText!("summarize")).resolves.toBe(SUMMARY);
-    expect(selected.textModel).toBe("gpt-6-astra");
-    expect(calls.find((call) => call.method === "thread/start")?.params).toMatchObject({ model: "gpt-6-astra", modelProvider: "openai", ephemeral: true, sandbox: "read-only", approvalPolicy: "never", config: { "mcp_servers.custom.enabled": false } });
+    expect(selected.textModel).toBe("gpt-6.2-astra");
+    expect(calls.find((call) => call.method === "thread/start")?.params).toMatchObject({ model: "gpt-6.2-astra", modelProvider: "openai", ephemeral: true, sandbox: "read-only", approvalPolicy: "never", config: { "mcp_servers.custom.enabled": false } });
     expect(calls.find((call) => call.method === "turn/start")?.params).toMatchObject({ effort: "low", approvalPolicy: "never", sandboxPolicy: { type: "readOnly" }, input: [{ type: "text", text: "summarize" }] });
-    expect(catalogs).toEqual([{ models: [expect.objectContaining({ slug: "gpt-6-astra", tool_mode: "direct", shell_type: "disabled", apply_patch_tool_type: null, experimental_supported_tools: [], multi_agent_version: null, context_window: 200_000 })] }]);
+    expect(catalogs).toEqual([{ models: [expect.objectContaining({ slug: "gpt-6.2-astra", tool_mode: "direct", shell_type: "disabled", apply_patch_tool_type: null, experimental_supported_tools: [], multi_agent_version: null, context_window: 200_000 })] }]);
     expect(children.at(-1)!.exitCode).toBe(0);
   });
 
@@ -156,7 +156,8 @@ describe("Codex summaries", () => {
   });
 
   it.each([
-    ["gpt-6.1-sol", "gpt-6-sol"],
+    ["gpt-6.2-sol", "gpt-6-sol"],
+    ["gpt-6.2-sol", "gpt-6.1-sol"],
     ["gpt-6.1-terra", "gpt-5.6-terra"],
   ])("uses compatible cached metadata for %s", async (model, legacy) => {
     const originalSpawn = vi.mocked(procs.spawnCli).getMockImplementation()!;
@@ -241,13 +242,13 @@ describe("Codex summaries", () => {
       messages.push(message);
       return message;
     });
-    const repair = createSummaryRepair({ store: { activePath: () => [...messages], messagesFor: () => messages, appendCompaction }, instanceFor: async () => summaryInstance(instance, "gpt-6-astra"), busy: () => false, taskRecordText: () => "Continue research", userName: () => "User" });
+    const repair = createSummaryRepair({ store: { activePath: () => [...messages], messagesFor: () => messages, appendCompaction }, instanceFor: async () => summaryInstance(instance, "gpt-6.2-astra"), busy: () => false, taskRecordText: () => "Continue research", userName: () => "User" });
     try {
       repair.onSettled("bot", "thread");
       await repair.idle();
       expect(appendCompaction).toHaveBeenCalledOnce();
       expect(isFallbackSummary(appendCompaction.mock.calls[0]![1].summary)).toBe(false);
-      expect(calls.find((call) => call.method === "thread/start")?.params.model).toBe("gpt-6-astra");
+      expect(calls.find((call) => call.method === "thread/start")?.params.model).toBe("gpt-6.2-astra");
     } finally { repair.dispose(); }
   });
 

@@ -8,6 +8,7 @@ import type { Bot } from "@/state/store-types";
 import { STALE_RELOAD_KEY } from "../../shared/stale-reload";
 import { endCall, startCall } from "./call";
 import { dropCall, placeCall } from "./live-call/active";
+import type { CallSound } from "./live-call/warm-audio";
 import { lazyView, useStaleBuildReload } from "./stale-build";
 
 // a module script would make happy-dom try to load it
@@ -72,7 +73,7 @@ describe("useStaleBuildReload", () => {
 
   it.each<[string, () => () => void]>([
     ["live call", () => {
-      const call = placeCall({ id: "atlas" } as Bot, {} as AudioContext);
+      const call = placeCall({ id: "atlas" } as Bot, {} as CallSound);
       return () => dropCall(call);
     }],
     ["call mode", () => {
