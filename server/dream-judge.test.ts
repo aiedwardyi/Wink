@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { agreed, dreamPrompt, expired, neverMoves, parseDream, planDream, type Flag } from "./dream-judge.ts";
+import { agreed, dreamPrompt, eventDays, expired, neverMoves, parseDream, planDream, type Flag } from "./dream-judge.ts";
 import { noteLines } from "./memory-sleep.ts";
 import { hiddenFromRecall } from "./recall-row.ts";
 import { at, SAFETY_IDS, SAFETY_MEMORY, SAFETY_REPLIES, SAFETY_RIGHT, SAFETY_TODAY, SAFETY_WRONG } from "./testing/dream-safety.ts";
@@ -70,12 +70,17 @@ describe("gates", () => {
     ["a date still to come", "- Dentist on 11-02, then again 12-01", false],
     ["no written date, only the stamp", "- Likes tea (noted 2026-10-01)", false],
     ["a range, not a date", "- Replies run 3-5 lines", false],
-    ["a written-out day in a later year", "- Studio booked for 10 Nov. 2027", false],
-    ["a range still running", "- Studio booked November 10 to 30", false],
-    ["a day range before its month", "- Studio booked 10-30 November", false],
-    ["a range that ran out", "- Studio booked November 2 to 10", true],
+    ["a written-out day, which live tidy does not read", "- Studio booked November 2 to 10", false],
   ])("expired: %s", (_, text, past) => {
     expect(expired(text, "2026-11-26")).toBe(past);
+  });
+
+  it.each([
+    ["a written-out day in a later year", "- Studio booked for 10 Nov. 2027", ["2027-11-10"]],
+    ["a range by both ends", "- Studio booked November 10 to 30", ["2026-11-10", "2026-11-30"]],
+    ["a day range before its month", "- Studio booked 10-30 November", ["2026-11-10", "2026-11-30"]],
+  ])("eventDays: %s", (_, text, days) => {
+    expect(eventDays(text, "2026-11-26")).toEqual(days);
   });
 
   it.each([

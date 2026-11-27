@@ -362,12 +362,23 @@ describe("dreaming, dry", () => {
     expect(plans()).toEqual([]);
   });
 
+  // live tidy moves without an OK, so it reads only numeric days; written-out ones are for fixes the owner OKs
   it.each([
     ["10 Nov. 2027", false],
     ["November 10 to 30", false],
     ["10 to 30 November", false],
-    ["November 2 to 10", true],
-  ])("live tidy moves a booking on %s only once every day of it is past", async (date, moves) => {
+    ["November 2 to 10", false],
+    ["November 10 to 12/02", false],
+    ["November 10 through the 30th", false],
+    ["November 10 next year", false],
+    ["November 10, probably ending in December", false],
+    ["November 10 to December 2", false],
+    ["November 10 to November 25", false],
+    ["November 10, 2027", false],
+    ["11-02 to 12/02", false],
+    ["11-02", true],
+    ["2026-11-02", true],
+  ])("live tidy moves a booking on %s only once every numeric day of it is past", async (date, moves) => {
     setMode({ [bot]: "live" });
     const raw = memory(`- The studio booking is for ${date} at the annex`, "- Bring the studio keys");
     writeMemoryFile(bot, raw);
@@ -678,6 +689,26 @@ describe("dreaming, dry", () => {
       sleep.onSettled(bot);
       await quiet(SLEEP_GAP_MS);
       expect(judged).toEqual(expect.arrayContaining([april, withdraw]));
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)).toBeUndefined();
+      expect(approve(false)).toEqual({ ok: false, error: "no-item" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+    });
+
+    it.each([
+      ["after a newer correction in the same pass", true, "Please disregard March and April. The main account's plan ends in January."],
+      ["with no newer correction", false, "Please disregard March and April. The main account's plan ends in January."],
+      ["in a line no guard holds back", true, "Disregard March and April, the main account's plan ends in January for now"],
+    ])("drops a waiting fix when the owner restates the saved note %s", async (_, newer, withdraw) => {
+      await quiet();
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)?.by).toBe(NEW);
+      const april = "The main account plan ends in April now, instead of March.";
+      typed.set("t1", [...(newer ? [said("april", Date.now() + 90_000, april)] : []), said("withdraw", Date.now() + 180_000, withdraw)]);
+      generator = async (prompt) => {
+        const pairs = [...prompt.matchAll(/^PAIR\n(L\d+) \(written [^)]*\): ([^\n]+)\n(M\d+) \([^)]*\): ([^\n]+)/gm)];
+        return JSON.stringify({ wrong: pairs.flatMap(([, note, text, message, row]) => (text === OLD && row === april ? [{ note, message, quote: "ends in April now", fix: NEW.replace("March", "April") }] : [])) });
+      };
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
       expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)).toBeUndefined();
       expect(approve(false)).toEqual({ ok: false, error: "no-item" });
       expect(memoryFileRaw(bot)).toBe(raw);

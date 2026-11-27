@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { checkWrong, fixTargets, planWrong, wrongPairs, wrongPrompt, applyFix, undoFix, type OwnerRow, type SavedNotes } from "./dream-wrong.ts";
+import { checkWrong, fixTargets, planWrong, restatements, wrongPairs, wrongPrompt, applyFix, undoFix, type OwnerRow, type SavedNotes } from "./dream-wrong.ts";
 import { sha8 } from "./memory-clean.ts";
 import type { NoteGenerator } from "./memory-pass.ts";
 import { at, SAFETY_IDS, SAFETY_MEMORY } from "./testing/dream-safety.ts";
@@ -240,5 +240,24 @@ describe("pairing limits", () => {
     const counts: number[] = [];
     for (const raw of [notes, notes + "- Prefers apple juice (noted 2026-11-21)\n", notes + "- Prefers apple juice (noted 2026-11-21)\n- Drinks tea (noted 2026-11-22)\n"]) counts.push((await wrongPairs(raw, fixTargets(raw), [owner])).length);
     expect(counts.every((count) => count > 0)).toBe(true);
+  });
+});
+
+describe("a line that restates a note", () => {
+  const note = TRAPS.plan;
+  const raw = SAFETY_MEMORY + note + "\n";
+  const notes = fixTargets(raw);
+  const target = `note:${sha8(note)}`;
+
+  it("counts as a later word on the note, guarded or not, and never reaches a judge", async () => {
+    const said = [row("plain", time(25, 9), "Disregard April, the main account's plan ends in January for now"), { ...row("guarded", time(25, 10), "Please disregard March and April. The main account's plan ends in January."), guarded: true as const }];
+    expect([...restatements(notes, said)]).toEqual([[target, { at: time(25, 10), line: raw.split("\n").indexOf(note) + 1 }]]);
+    expect([...restatements(notes, said.slice(0, 1))]).toEqual([[target, { at: time(25, 9), line: raw.split("\n").indexOf(note) + 1 }]]);
+    expect((await wrongPairs(raw, notes, [{ ...row("secret", time(25, 11), "The main account plan password is SunnyHarbor! now, not March"), guarded: true }])).length).toBe(0);
+  });
+
+  it("does not count when it turns the note or names only part of it", () => {
+    expect(restatements(notes, [row("turned", time(25, 9), "It is not true that the main account's plan ends in January")]).size).toBe(0);
+    expect(restatements(notes, [row("part", time(25, 9), "The main account's plan ends in April")]).size).toBe(0);
   });
 });

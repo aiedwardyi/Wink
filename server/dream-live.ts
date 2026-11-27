@@ -221,7 +221,7 @@ export function createDreamLive(deps: DreamLiveDeps) {
     }
   }
 
-  // the last plan's fixes stay listed until their line ages out, OK'd or not; a waiting one goes once its note changed or both judges read its note again against a newer line
+  // the last plan's fixes stay listed until their line ages out, OK'd or not; a waiting one goes once its note changed, both judges read its note again against a newer line, or a newer line restates it
   function carried(botId: string, at: number, found: DryFixes): FixItem[] {
     const raw = memoryFileRaw(botId).split("\n").map((line) => line.replace(/\r$/, ""));
     const judged = new Set([...(found.judged ?? []), ...found.items.map((each) => each.target)]);

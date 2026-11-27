@@ -44,8 +44,16 @@ const PINNED = /\bpin(?:ned|s)?\b|\block(?:ed)?\b|\bpicks?\b|\bdecisions?\b|📌
 const ref = (line: NoteLine) => `L${line.at + 1}`;
 const withoutStamp = (text: string) => text.replace(STAMP, " ");
 
-/** Every day the note itself names, not its Auto Notes stamp, a range by both ends; a day with no year is in today's year. */
+/** Every day the note itself names, not its Auto Notes stamp; a day with no year is in today's year. */
 export function writtenDays(text: string, today: string): string[] {
+  const body = withoutStamp(text);
+  const days = [...body.matchAll(FULL_DATE)].map(([, y, m, d]) => `${y}-${m}-${d}`);
+  const rest = body.replace(FULL_DATE, " ");
+  return [...days, ...[...rest.matchAll(SHORT_DATE)].map(([, m, d]) => `${today.slice(0, 4)}-${m}-${d}`)];
+}
+
+/** writtenDays plus written-out days and ranges by both ends; only for fixes the owner OKs, never for a line that moves on its own. */
+export function eventDays(text: string, today: string): string[] {
   const body = withoutStamp(text);
   const days = [...body.matchAll(FULL_DATE)].map(([, y, m, d]) => `${y}-${m}-${d}`);
   const named = (month: string, date: string, year = today.slice(0, 4)) => `${year}-${String(MONTHS.indexOf(month.slice(0, 3).toLowerCase()) + 1).padStart(2, "0")}-${date.padStart(2, "0")}`;

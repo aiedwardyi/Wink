@@ -2,7 +2,7 @@
 // dream judges. A fix both agree on that passes the code gates is only listed; it changes MEMORY.md once the user OKs that one item.
 import { z } from "zod";
 
-import { factsSurvive, neverMoves, writtenDays, type DreamJudges } from "./dream-judge.ts";
+import { eventDays, factsSurvive, neverMoves, type DreamJudges } from "./dream-judge.ts";
 import { cleanerSkip, sha8 } from "./memory-clean.ts";
 import { buildRecallIndex, searchable, skipped as recallSkipped } from "./memory-lookup.ts";
 import { decisionSpan, eligibleRow, quotes, userTyping, type NoteGenerator } from "./memory-pass.ts";
@@ -28,7 +28,8 @@ const SPOKEN = /"[^"\n]+"|“[^”\n]+”|「[^」\n]+」|«[^»\n]+»/g;
 // an instruction that holds from now on, not a fact a newer line can turn
 const STANDING = /^(?:use|reply|answer|write|keep|call|ask|send|show|put|add|avoid|prefer|check|run|make|give|start|stop|treat)\b|\b(?:every|each time|whenever|from now on|by default)\b/i;
 
-export type OwnerRow = { thread: string; id: string; at: number; text: string };
+/** guarded: the line may hold a login or code, so no judge reads it; it only counts when it restates a note. */
+export type OwnerRow = { thread: string; id: string; at: number; text: string; guarded?: true };
 /** When Auto Notes saved a batch of notes, and what its receipt says it saved. */
 export type SavedNotes = { at: number; text: string };
 export type FixItem = {
@@ -47,17 +48,20 @@ const replySchema = z.object({ wrong: z.array(z.object({ note: z.string(), messa
 const day = (at: number) => pickStamp(at).slice(0, 10);
 const yieldLoop = () => new Promise((resolve) => setImmediate(resolve));
 // the day a note was written: its stamp, else the first day it names
-const noted = (note: NoteLine, today: string) => note.date ?? writtenDays(note.text, today)[0];
+const noted = (note: NoteLine, today: string) => note.date ?? eventDays(note.text, today)[0];
 const plain = (line: string) => line.replace(/\r$/, "");
 const body = (text: string) => text.replace(/^\s*[-*+]\s+/, "").replace(/\s*\(noted \d{4}-\d{2}-\d{2}\)\s*$/, "").trim();
 const lowWords = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
 
-/** The owner's own typing in these rows after `since`; a line that may hold a login or code is never read. */
+/** The owner's own typing in these rows after `since`; a line that may hold a login or code is marked guarded. */
 export function ownerRows(thread: string, messages: readonly Message[], since: number): OwnerRow[] {
   return messages.flatMap((message) => {
     if (message.at <= since || !eligibleRow(message)) return [];
     const text = userTyping(message.text);
-    return text.trim() && !cleanerSkip(text) ? [{ thread, id: message.id, at: message.at, text }] : [];
+    if (!text.trim()) return [];
+    const row: OwnerRow = { thread, id: message.id, at: message.at, text };
+    if (cleanerSkip(text)) row.guarded = true;
+    return [row];
   });
 }
 
@@ -84,8 +88,29 @@ const writtenFrom = (note: string, line: string) => {
   return false;
 };
 
+// a sentence that holds the note's whole body and adds no turning word: the owner standing by the note
+const SENTENCE = /[.!?\n]+/;
+export type Restated = { at: number; line: number };
+
+/** The newest owner line that restates each note, by target; it reads as a later word on the note, never as a fix. */
+export function restatements(notes: ReadonlyMap<number, NoteLine>, rows: readonly OwnerRow[]): Map<string, Restated> {
+  const said = rows.map((row) => ({ at: row.at, sentences: row.text.split(SENTENCE).map(lowWords).filter((words) => words.length) }));
+  const found = new Map<string, Restated>();
+  for (const note of notes.values()) {
+    const need: string[] = lowWords(body(note.text));
+    if (!need.length) continue;
+    const target = `note:${sha8(note.text)}`;
+    for (const { at, sentences } of said) {
+      if (at <= (found.get(target)?.at ?? -Infinity)) continue;
+      if (sentences.some((words) => ` ${words.join(" ")} `.includes(` ${need.join(" ")} `) && !words.filter((word) => !need.includes(word)).some(negates))) found.set(target, { at, line: note.at + 1 });
+    }
+  }
+  return found;
+}
+
 /** Owner lines paired with notes they may be about, best first: each note's best line before any note's second. */
-export async function wrongPairs(raw: string, notes: ReadonlyMap<number, NoteLine>, rows: readonly OwnerRow[], signal?: AbortSignal): Promise<Pair[]> {
+export async function wrongPairs(raw: string, notes: ReadonlyMap<number, NoteLine>, all: readonly OwnerRow[], signal?: AbortSignal): Promise<Pair[]> {
+  const rows = all.filter((row) => !row.guarded);
   if (!rows.length || !notes.size) return [];
   const noteWords = new Map([...notes.values()].map((line) => [line.at, content(line.text)]));
   const counts = new Map<string, number>();
@@ -223,17 +248,17 @@ function typedSpan(text: string, quote: string): string | null {
 }
 
 export type Rejected = { note: number; message: string; why: string };
-export type WrongContext = { all: readonly string[]; today: string; written(note: NoteLine): number | undefined };
+export type WrongContext = { all: readonly string[]; today: string; written(note: NoteLine): number | undefined; restated?: ReadonlyMap<string, Restated> };
 
 /** Flags both judges agree on that pass the code gates, as items; nothing is applied. */
 export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: ReadonlyMap<string, Pair>, context: WrongContext) {
   const items: FixItem[] = [];
   const rejected: Rejected[] = [];
-  // the newest owner line both judges read about each note
-  const lastRead = new Map<string, Pair>();
+  // the newest owner line both judges read about each note, or that restates it
+  const lastRead = new Map<string, Restated>(context.restated);
   for (const pair of refs.values()) {
     const key = `note:${sha8(pair.note.text)}`;
-    if (pair.row.at > (lastRead.get(key)?.row.at ?? -Infinity)) lastRead.set(key, pair);
+    if (pair.row.at > (lastRead.get(key)?.at ?? -Infinity)) lastRead.set(key, { at: pair.row.at, line: pair.note.at + 1 });
   }
   for (const one of a) {
     const pair = refs.get(one.message);
@@ -270,8 +295,8 @@ export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: Readon
       no("quote is not the owner's own typing");
       continue;
     }
-    const days = writtenDays(note.text, context.today);
-    const said = writtenDays(row.text, context.today);
+    const days = eventDays(note.text, context.today);
+    const said = eventDays(row.text, context.today);
     if (days.length && said.length && !said.some((each) => days.includes(each))) {
       no("row is about another day's event");
       continue;
@@ -291,8 +316,8 @@ export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: Readon
   // a later line about the note that no agreed flag backs takes the fix back, as it would in a newer pass
   const backed = items.filter((item) => {
     const last = lastRead.get(item.target)!;
-    if (item.evidence.at >= last.row.at) return true;
-    rejected.push({ note: last.note.at + 1, message: item.evidence.message, why: "a later row takes it back" });
+    if (item.evidence.at >= last.at) return true;
+    rejected.push({ note: last.line, message: item.evidence.message, why: "a later row takes it back" });
     return false;
   });
   return { items: backed, rejected };
@@ -306,17 +331,17 @@ export function writtenAt(saved: readonly SavedNotes[]) {
   };
 }
 
-/** judged: the notes both judges read against a newer owner line this pass, fixed or not. */
+/** judged: the notes both judges read against a newer owner line this pass, fixed or not, and the notes a newer owner line restates. */
 export type WrongCheck = { state: "checked" | "no-model"; items: FixItem[]; judged: string[]; pairs: number; bytes: number; logs: Partial<Record<keyof DreamJudges, JudgeLog>>; reason?: string };
 
 /** One pass: pair, ask both judges once, keep what both agree on and the gates pass. */
 export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]; saved: readonly SavedNotes[]; judges: DreamJudges; today: string; signal: AbortSignal; now(): number }): Promise<WrongCheck> {
   const logs: WrongCheck["logs"] = {};
   const notes = fixTargets(input.raw);
+  const restated = restatements(notes, input.rows);
   const { prompt, refs } = wrongPrompt(await wrongPairs(input.raw, notes, input.rows, input.signal), input.today);
   const none: FixItem[] = [];
-  const unread: string[] = [];
-  const base = { items: none, judged: unread, pairs: refs.size, bytes: refs.size ? Buffer.byteLength(prompt) : 0, logs };
+  const base = { items: none, judged: [...restated.keys()], pairs: refs.size, bytes: refs.size ? Buffer.byteLength(prompt) : 0, logs };
   if (!refs.size) return { state: "checked", ...base };
   const { claude, gemini } = input.judges;
   if (!claude || !gemini) return { state: "no-model", ...base, reason: `${[!claude && "claude", !gemini && "gemini"].filter(Boolean).join(" and ")} judge unavailable` };
@@ -340,8 +365,8 @@ export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]
     return { state: "no-model", ...base, reason: `${failed === a ? "claude" : "gemini"} judge ${failed.status === "rejected" ? "failed" : "reply unreadable"}` };
   }
   const all = input.raw.split("\n").map(plain);
-  const judged = [...new Set([...refs.values()].map((pair) => `note:${sha8(pair.note.text)}`))];
-  return { state: "checked", ...base, judged, items: planWrong(a.value, b.value, refs, { all, today: input.today, written: writtenAt(input.saved) }).items };
+  const judged = [...new Set([...restated.keys(), ...[...refs.values()].map((pair) => `note:${sha8(pair.note.text)}`)])];
+  return { state: "checked", ...base, judged, items: planWrong(a.value, b.value, refs, { all, today: input.today, written: writtenAt(input.saved), restated }).items };
 }
 
 // the lines that read as the fix, and the heading above one
