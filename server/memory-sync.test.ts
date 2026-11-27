@@ -179,6 +179,8 @@ function handover(plan: Handover, { took, pcs } = beforeHandover()) {
     if (!on(to, at) || (n < now && !(from === b && sent[n].claims && sent[now].claims))) return;
     landed.set(to, n);
     receive(from, to, sent[n].text);
+    // written at the landing, so the racy-file guard sees it as in use; a copy stamped by the real clock could match the last one's size and time
+    utimesSync(join(memorySyncDir(to.folder, "bot-1"), `${from.ledger.device}.json`), at / 1000, at / 1000);
     pass(to, at);
   };
   const pass = (pc: PC, at: number, message = false) => {
