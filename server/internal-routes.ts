@@ -189,6 +189,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!bot) return json(res, 403, { error: "unknown sender" });
       const conversation = store.conversationForBot(bot.id, body.fromThreadId);
       if (!conversation) return json(res, 403, { error: "source conversation does not belong to sender" });
+      if (tokenMismatch(deps.resolveCommsCaller?.(req.headers?.authorization), bot.id, body.fromThreadId)) {
+        return json(res, 403, { error: "source conversation does not belong to sender" });
+      }
       if (deps.readOnlyTurn(bot.id, body.fromThreadId)) {
         return json(res, 403, { error: 'update_task_state is unavailable: the host has to turn on "Can make bots work" for whoever asked.' });
       }
