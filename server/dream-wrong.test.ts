@@ -92,6 +92,14 @@ describe("wrong-note check", () => {
     expect(lines(TRAPS.rooms)).toEqual([]);
   });
 
+  it("never sends a guarded line that names a note, even beside a later match", async () => {
+    const secret: OwnerRow = { ...row("secret", time(24, 21), "The main account password is SunnyHarbor! now"), guarded: true };
+    const pairs = await wrongPairs(MEMORY, fixTargets(MEMORY), [...ROWS, secret]);
+    expect(pairs.filter((pair) => pair.note.text === TRAPS.plan).map((pair) => pair.row.id)).toEqual(["store", "accounts", "plan"]);
+    expect(pairs.some((pair) => pair.row.guarded)).toBe(false);
+    expect(wrongPrompt(pairs, TODAY).prompt).not.toContain("SunnyHarbor");
+  });
+
   it("holds a flag back unless both judges name it, quote the row word for word and alike, the row comes after the note and the fix adds nothing", async () => {
     const pairs = await wrongPairs(MEMORY, fixTargets(MEMORY), ROWS);
     const { refs } = wrongPrompt(pairs, TODAY);

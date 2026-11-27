@@ -157,7 +157,8 @@ export async function wrongPairs(raw: string, notes: ReadonlyMap<number, NoteLin
     index.close();
   }
   const weighed = (pair: Pair) => pair.score * TURN_WEIGHT[pair.turning]!;
-  const said = [...all].sort((a, b) => a.at - b.at).map((row) => ({ row, words: wordsOf(row.text) }));
+  // a guarded line never reaches a judge; planWrong still counts it as a later word on the note
+  const said = [...rows].sort((a, b) => a.at - b.at).map((row) => ({ row, words: wordsOf(row.text) }));
   // each note with every line from its day on that names it, oldest first; only the newest can propose, so a note goes only when that line is a match
   const groups = [...new Set([...found.values()].map((pair) => pair.note))].flatMap((note) => {
     const subject = wordsOf(body(note.text));
