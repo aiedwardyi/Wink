@@ -13,19 +13,38 @@ export const ENGINE_SUMMARY_PREFIX = "[Engine summary of a mid-turn note, not sh
 
 const summaryLabel = (message: Message) => (message.summarized ? ENGINE_SUMMARY_PREFIX : "");
 
-type Line = { role?: string; author?: { kind: string; owner?: string }; from?: unknown; comm?: unknown };
+type Line = { role?: string; author?: { kind: string; owner?: string }; from?: unknown; comm?: unknown; guest?: boolean };
 
 /** Room words from anyone but the host: a teammate, or a teammate's own bot. */
 export const typedByGuest = (author?: { kind: string; owner?: string }) => author?.kind === "person" || (author?.kind === "bot" && author.owner !== undefined);
 
 /** Words the host typed: never a teammate's, a bot's, a bot's mail or a summary. */
-export const typedByHost = (line: Line) => (line.author ? line.author.kind === "host" : line.role === "user" && !line.from && !line.comm);
+export const typedByHost = (line: Line) => (line.author ? line.author.kind === "host" : line.role === "user" && !line.from && !line.comm && !line.guest);
 
-// the Claude CLI attaches whatever file an "@" starting a word names, with no ask; a zero-width space before it keeps the words
-export const inertMentions = (text: string) => text.replace(/(^|[\s\u3002\u3001\uFF1F\uFF01])@/g, "$1\u200B@");
+// Claude attaches the file an "@" starting a word names, and grok 1.0.92 the one after an "@" at the start, after a space,
+// a zero-width space or any of : , - / = \, with no ask; a zero-width space right after every "@" names no file in either
+export const inertMentions = (text: string) => text.replace(/@(?!\u200B)/g, "@\u200B");
+
+/** Prompt text whose every "@" may stand: Wink's own words, or words this PC's person typed. */
+export class PromptText {
+  readonly text: string;
+  constructor(text: string) {
+    this.text = text;
+  }
+}
+export const asIs = (text: string) => new PromptText(text);
+/** Prompt text from Wink's own template: every ${} value goes through inertMentions unless it is PromptText. */
+export const inert = (parts: TemplateStringsArray, ...values: readonly (string | PromptText)[]): PromptText =>
+  asIs(parts.reduce((out, part, index) => {
+    const value = values[index - 1]!;
+    return out + (value instanceof PromptText ? value.text : inertMentions(value)) + part;
+  }));
 
 /** A line's words as a prompt may carry them: a guest's @path names no file, and in a group nothing the host did not type does. */
-export const lineWords = (line: Line, text: string, group = false) => ((group ? !typedByHost(line) : typedByGuest(line.author)) ? inertMentions(text) : text);
+export const lineWords = (line: Line, text: string, group = false) => ((group ? !typedByHost(line) : line.guest || typedByGuest(line.author)) ? inertMentions(text) : text);
+
+/** A room task's user row with no stamp predates it and may be anyone's, so it reads as a guest's. */
+export const unstampedAsGuest = (rows: Message[]) => rows.map((row) => (row.role === "user" && row.guest === undefined ? { ...row, guest: true } : row));
 
 export function replyExcerpt(text: string, limit = MAX_REPLY_EXCERPT): string {
   const clean = text

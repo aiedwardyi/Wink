@@ -331,7 +331,7 @@ describe("repos a bot works in", () => {
     expect(source).toContain("  return remotes.flatMap((url) => remoteRepo(url) ?? []);\n}, cited: async (botId, boot) => {\n");
     expect(source).toContain("  return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? \"\"), ...reports]);\n} });");
     expect(source).toContain("    knownRepos: _knownRepos,\n");
-    const unlanded = source.slice(source.indexOf('startupTiming.afterPaint("unlanded"'), source.indexOf("const memoryLookup = createMemoryLookup("));
+    const unlanded = source.slice(source.indexOf('startupTiming.afterPaint("unlanded"'), source.indexOf("const memoryLookup = withBoardRecall(createMemoryLookup("));
     expect(unlanded, "a restart reads the cited repos off the send path, from boot's reports").toContain("  for (const bot of store.bots) await knownRepos.cite(bot.id, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));\n");
   });
 
@@ -520,7 +520,7 @@ describe("a closing turn in index.ts", () => {
       taskPacketForWrite: () => structuredClone(stored),
       persistTaskPacket: (packet: typeof stored) => { persisted.push(packet); return packet; },
       stampTaskResumePacket, taskRecordBlock,
-      lastUserInstruction: () => undefined, sessionPromptFor: () => undefined, store: { messagesFor: () => [] },
+      lastUserInstruction: () => undefined, sessionPromptFor: () => undefined, store: { messagesFor: () => [] }, taskRows: (rows: unknown[]) => rows,
       inlineSummarizer: () => undefined, summaryInstance: () => ({}), goalsOf: () => [], logSummaryCall: () => {}, inlineDeadlineMs: () => 0,
       prepareModelContext: async (input: { beforeSummarize?: () => void }) => { input.beforeSummarize?.(); return { status: "ready" }; },
     };
@@ -545,6 +545,23 @@ describe("a closing turn in index.ts", () => {
     const source = index();
     expect(source).not.toContain("const taskRecordToFlush = taskRecord;");
     expect(source.split("const taskRecordToFlush = storedTaskRecord;")).toHaveLength(3);
+  });
+
+  it("stamps a 1:1 turn's leftovers shown only once an engine took the prompt, so a setup failure leaves them for the retry", () => {
+    const source = index();
+    const stamp = source.indexOf("  stampShownAsks(threadId, turnText);");
+    expect(source.split("stampShownAsks(threadId, turnText);")).toHaveLength(2);
+    expect(stamp).toBeGreaterThan(source.indexOf("return live.adapter.sendTurn({"));
+    expect(source.lastIndexOf("store.markReactionsDelivered(bot.id, threadId, reactionsSeen);", stamp)).toBeGreaterThan(source.indexOf("return live.adapter.sendTurn({"));
+  });
+
+  it("keeps the last turn's held question until an engine accepted the next prompt, so a failed start, even a late one, still carries it to a switch", () => {
+    const source = index();
+    const start = source.slice(source.indexOf("async function startClaimedTurn("), source.indexOf("async function startClaimedTurn(") + 60_000);
+    expect(start).toContain("heldQuestions.get(threadId)");
+    expect(start).not.toContain("heldQuestions.delete");
+    const settle = source.slice(source.indexOf('case "turn.completed": {'));
+    expect(settle).toContain("if (!superseded && !disowned && (event.promptAccepted || event.ok && !interrupted)) heldQuestions.delete(event.threadId);");
   });
 });
 

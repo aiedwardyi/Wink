@@ -39,6 +39,8 @@ import type { ChildProcess } from "node:child_process";
 import type {
   DriverCreateInput,
   ModelCatalog,
+  PrepareFocus,
+  PrepareTurn,
   ProviderDriver,
   ProviderInstance,
   ProviderSnapshot,
@@ -54,7 +56,7 @@ import { systemLedger } from "./system-ledger.ts";
 import { ANTIGRAVITY_KEYRING, antigravityCredentialStore, antigravityKeyringSignOut, antigravitySignIn, forgetAntigravitySignIn, probeAntigravitySignIn, readAntigravityAccount, readAntigravityLogSignIn, signedOutMarkFile } from "./antigravity-auth.ts";
 import { antigravityHelperHome, dropAntigravityHelperToken } from "./antigravity-home.ts";
 import { unrestated } from "../turn-reply.ts";
-import { FREE_ACCESS, type TurnAccess } from "./turn-access.ts";
+import { FREE_ACCESS, guestText, type TurnAccess } from "./turn-access.ts";
 import { warmPool, type Lease } from "./warm-pool.ts";
 
 const DRIVER_KIND = "antigravityAgent";
@@ -554,6 +556,8 @@ export interface AntigravityTurnArgvInput {
   model?: string | null;
   resumeCursor?: string | null;
   readOnly?: boolean;
+  /** A read-only turn on someone else's words */
+  guestText?: boolean;
 }
 
 /** Print-mode argv with the prompt on stdin — never on --print. */
@@ -570,7 +574,8 @@ export function buildAntigravityTurnArgv(input: AntigravityTurnArgvInput): strin
   ];
   // plan, never agy's default mode: the user's own agy settings can make the default edit and run commands
   // plan reads outside the workspace only with Non-Workspace Access, which the owner may have turned on for themselves
-  if (input.readOnly) args.push("--mode", "plan", "--settings", JSON.stringify({ allowNonWorkspaceAccess: false }));
+  // and reads the workspace, the host's project, unasked: someone else's words read no file at all
+  if (input.readOnly) args.push("--mode", "plan", "--settings", JSON.stringify({ allowNonWorkspaceAccess: false, ...(input.guestText && { permissions: { deny: ["read_file(*)"] } }) }));
   else if (input.fullAuto) args.push("--dangerously-skip-permissions");
   else {
     args.push("--mode", "accept-edits");
@@ -610,8 +615,8 @@ export function measureAntigravityTransportLengths(opts: {
   };
 }
 
-/** A one-shot agy started on the thread's conversation once a turn's child exits: it signs in, starts its MCP servers
- * and loads the conversation while the user reads, then serves exactly one turn the way a cold spawn would. */
+/** A one-shot agy started on the thread's conversation once a turn's child exits, or for a new chat when it opens: it signs in,
+ * starts its MCP servers and loads the conversation while the user reads, then serves exactly one turn the way a cold spawn would. */
 type Standby = {
   child: ReturnType<typeof spawnCli>;
   /** stdout lines (only init) and stderr from before the turn took it */
@@ -754,11 +759,33 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     const captured = (threadId: string) => ({ generation: warmPool.generation(warmKey(threadId)), incarnation, identity: "" });
     const standbys = new WeakMap<Lease, Standby>();
     const standbyOf = new Map<string, Standby>();
+    const refusedStandby = new Map<string, { conversation: string; turn: SendTurnInput; cwd: string; childEnv: NodeJS.ProcessEnv; epoch: number }>();
+
+    /** The folder and env a turn's agy runs with; a standby launched otherwise never serves it. */
+    const launchOf = (turn: SendTurnInput) => {
+      // Default cwd to a per-thread workspace under DATA_DIR — deliberately
+      // NOT homedir(): a bot running unattended should not get the whole home
+      // as its default sandbox. `--add-dir` grants agy access to that dir.
+      // strip filesystem-unsafe chars only — never truncate: a 36-char UUID
+      // sliced to 32 would collide two threads sharing the first 32 chars onto
+      // one workspace dir. replace() already keeps a UUID unique and safe.
+      const tag = turn.threadId.replace(/[^\w-]/g, "");
+      const workspace = join(DATA_DIR, "workspaces", tag);
+      mkdirSync(workspace, { recursive: true });
+      // The static agents and terminal entries read this turn's identity from
+      // agy's env. Added after the credential allowlist, which strips *_TOKEN;
+      // the node flag would leak into every shell command the agent runs.
+      const { ELECTRON_RUN_AS_NODE: _nodeFlag, ...identity } = {
+        ...turn.integrations?.terminal?.env,
+        ...(turn.integrations?.agents && experimentalAgents(turn.integrations.agents, true).env),
+      };
+      return { cwd: turn.cwd ?? workspace, childEnv: { ...env(), ...identity } };
+    };
 
     /** Takes over the exiting turn's shared mount and lock, so agy's config is not rewritten between the two. */
     const startStandby = (
       threadId: string,
-      conversation: string,
+      conversation: string | null,
       turn: SendTurnInput,
       cwd: string,
       childEnv: NodeJS.ProcessEnv,
@@ -778,8 +805,9 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       };
       // a standby started beside a running turn would load the conversation before that turn's messages
       if (disposed || active.has(threadId) || keyringSignOut.pending || mcpExclusiveWanted()) return finalizeMcp();
-      const args = buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd, model: turn.model, resumeCursor: conversation, readOnly: turn.readOnly });
-      const lease = warmPool.reserve(warmKey(threadId), launchFingerprint(config.cli, args, cwd, childEnv, turn), captured(threadId), "speculative");
+      const args = buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd, model: turn.model, resumeCursor: conversation, readOnly: turn.readOnly, guestText: guestText(turn) });
+      const lease = warmPool.reserve(warmKey(threadId), launchFingerprint(config.cli, args, cwd, childEnv, turn), captured(threadId), "speculative", { evict: true });
+      if (lease === "denied" && conversation) refusedStandby.set(threadId, { conversation, turn, cwd, childEnv, epoch: warmPool.generation(warmKey(threadId)) });
       if (typeof lease !== "object" || standbys.has(lease)) return finalizeMcp();
       let child: ReturnType<typeof spawnCli>;
       try {
@@ -847,7 +875,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       standbys.set(lease, standby);
       standbyOf.set(threadId, standby);
       lease.attach({
-        session: { kind: "loaded", id: conversation },
+        session: conversation ? { kind: "loaded", id: conversation } : { kind: "fresh" },
         alive: () => !standby.closed && !standby.broken,
         close: async () => {
           if (!standby.closed) killCliTree(child);
@@ -858,7 +886,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
     };
 
     /** The thread's standby when this launch matches it; otherwise a dying one to wait out, so two agy never share a conversation. */
-    const takeStandby = (threadId: string, fingerprint: string, resumeCursor: string): { standby?: Standby; dying?: Promise<void> } => {
+    const takeStandby = (threadId: string, fingerprint: string, resumeCursor: string | null): { standby?: Standby; dying?: Promise<void> } => {
       const taken = warmPool.take(warmKey(threadId), fingerprint, captured(threadId), resumeCursor);
       if (typeof taken === "object") {
         const standby = "hit" in taken ? standbys.get(taken.hit) : undefined;
@@ -883,6 +911,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       if (disposed) throw new Error("Antigravity instance is disposed");
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = relaunchOf ?? newId();
+      const epoch = warmPool.generation(warmKey(threadId));
+      refusedStandby.delete(threadId);
       if (signedOut) {
         emit({ ...base(threadId, turnId), type: "turn.started" });
         emit({ ...base(threadId, turnId), type: "runtime.error", message: "Gemini is not signed in.", setup: true, signIn: true, signedOut: true });
@@ -890,16 +920,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         return { turnId };
       }
 
-      // Default cwd to a per-thread workspace under DATA_DIR — deliberately
-      // NOT homedir(): a bot running unattended should not get the whole home
-      // as its default sandbox. `--add-dir` grants agy access to that dir.
-      // strip filesystem-unsafe chars only — never truncate: a 36-char UUID
-      // sliced to 32 would collide two threads sharing the first 32 chars onto
-      // one workspace dir. replace() already keeps a UUID unique and safe.
-      const tag = threadId.replace(/[^\w-]/g, "");
-      const workspace = join(DATA_DIR, "workspaces", tag);
-      mkdirSync(workspace, { recursive: true });
-      const cwd = turn.cwd ?? workspace;
+      const { cwd, childEnv } = launchOf(turn);
 
       // Prompt travels on stdin via --input-format stream-json (agy 1.1.15+;
       // verified 1.2.4). --print <prompt> is mutually exclusive with that
@@ -998,18 +1019,11 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         model: turn.model,
         resumeCursor,
         readOnly: turn.readOnly,
+        guestText: guestText(turn),
       });
-      // The static agents and terminal entries read this turn's identity from
-      // agy's env. Added after the credential allowlist, which strips *_TOKEN;
-      // the node flag would leak into every shell command the agent runs.
-      const { ELECTRON_RUN_AS_NODE: _nodeFlag, ...identity } = {
-        ...turn.integrations?.terminal?.env,
-        ...(turn.integrations?.agents && experimentalAgents(turn.integrations.agents, true).env),
-      };
-      const childEnv = { ...env(), ...identity };
       // a computer turn's mount carries its box token, so it never runs on or leaves a standby
       const ordinary = computer === null;
-      const taken = ordinary && !relaunchOf && resumeCursor
+      const taken = ordinary && !relaunchOf
         ? takeStandby(threadId, launchFingerprint(config.cli, args, cwd, childEnv, turn), resumeCursor)
         : {};
       const standby = taken.standby;
@@ -1203,6 +1217,10 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       let deltaText = "";
       let streamed = "";
       const steps = new Map<number, string>();
+      // a tool between two texts splits them: the earlier one is a step, its own row
+      const spanOf = new Map<number, number>();
+      let span = 0;
+      let toolSinceText = false;
       const streamDelta = (delta: string) => {
         deltaText += delta;
         if (cancelledTool) return;
@@ -1277,6 +1295,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
             if (payload.step_type === "checkpoint") checkpointed = true;
             if (payload.step_type === "tool") {
               toolRan = true;
+              toolSinceText = true;
               cancelledTool ||= isCancelledTool(payload);
               const itemId = `${conversationId ?? o.conversation_id ?? "conv"}:${payload.step_index}`;
               if (payload.state === "ACTIVE") {
@@ -1288,6 +1307,11 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               }
             } else if (payload.step_type === "agent_response") {
               if (typeof payload.text_delta === "string") {
+                if (!steps.has(payload.step_index)) {
+                  if (toolSinceText && steps.size) span++;
+                  spanOf.set(payload.step_index, span);
+                  toolSinceText = false;
+                }
                 steps.set(payload.step_index, (steps.get(payload.step_index) ?? "") + payload.text_delta);
                 streamDelta(payload.text_delta);
               }
@@ -1323,7 +1347,12 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
               // item.completed carries the reply; a result that disagrees with the stream adds no delta
               const rest = response.startsWith(streamed) ? response.slice(streamed.length) : "";
               if (rest) emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: rest });
-              emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text: response });
+              const spans: string[] = [];
+              for (const [index, text] of steps) spans[spanOf.get(index) ?? 0] = (spans[spanOf.get(index) ?? 0] ?? "") + text;
+              const split = unrestated(spans.filter((text) => text !== undefined)).map(stripAntigravitySystemNotices).filter((text) => text.trim());
+              for (const text of split.length > 1 && split.join("") === response ? split : [response]) {
+                emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text });
+              }
             }
             const conversation = conversationId ?? resumeCursor;
             if (busyReason && !recoveredTransient && conversation && busyResumes < BUSY_RESUME_DELAYS_MS.length) {
@@ -1400,7 +1429,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         clearTimeout(terminationEscalation);
         standby?.lease.release("used");
         // agy has saved the turn once it exits
-        if (next && !mcpFinalized) {
+        // a room's next turn sends no cursor, so a loaded standby could never serve it
+        if (next && !turn.hosted && !mcpFinalized && epoch === warmPool.generation(warmKey(threadId))) {
           mcpFinalized = true;
           startStandby(threadId, next, turn, cwd, childEnv, { restoreMcp, releaseMcpLock });
         } else finalizeMcp();
@@ -1502,6 +1532,29 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         void retireStandbys("signed out");
         keyringSignOut.signedOutByAgy();
       },
+      // a chat with a conversation gets its standby when its last turn exits, or when next opened if the pool was full then
+      prepare: async (_shape?: PrepareTurn, focus?: PrepareFocus) => {
+        if (!focus) return;
+        warmPool.open(warmKey(focus.threadId));
+        const refused = refusedStandby.get(focus.threadId);
+        refusedStandby.delete(focus.threadId);
+        if (disposed || active.has(focus.threadId) || keyringSignOut.pending || mcpExclusiveWanted()) return;
+        const { fresh, ...settings } = focus;
+        const turn: SendTurnInput = { ...settings, ...fresh, text: "" };
+        const launch = fresh
+          ? antigravityComputerMcpServer(turn.integrations) === null && { conversation: null, turn, ...launchOf(turn) }
+          : refused?.epoch === warmPool.generation(warmKey(focus.threadId)) && refused;
+        if (!launch) return;
+        const releaseMcpLock = await acquireAntigravityMcpLock(false).granted;
+        let restoreMcp: () => void;
+        try {
+          restoreMcp = mountAntigravityMcp(null, env());
+        } catch {
+          releaseMcpLock();
+          return;
+        }
+        startStandby(focus.threadId, launch.conversation, launch.turn, launch.cwd, launch.childEnv, { restoreMcp, releaseMcpLock });
+      },
       adapter: {
         provider: DRIVER_KIND,
         capabilities: {
@@ -1529,7 +1582,12 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         },
         sendTurn,
         access: (turn) => antigravityAccess(buildAntigravityTurnArgv({ fullAuto: config.fullAuto, cwd: "", readOnly: turn.readOnly })),
-        interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
+        interruptTurn: async (threadId) => {
+          // a Stop or a bot delete ends the chat's idle standby too
+          warmPool.invalidate({ instanceId, threadId }, "stopped");
+          refusedStandby.delete(threadId);
+          active.get(threadId)?.interrupt();
+        },
         respondToRequest: async () => "unavailable" as const, // this engine has no asks to answer
         hasSession: (threadId) => active.has(threadId),
         stopAll: async () => {

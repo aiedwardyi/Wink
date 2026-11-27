@@ -7,14 +7,19 @@
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 import * as auth from "./antigravity-auth.ts";
 
+import { createBotRoutes } from "../bot-routes.ts";
+import { createGroupRoutes } from "../group-routes.ts";
 import { DATA_DIR, ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts";
-import type { ProviderInstance } from "../contracts.ts";
+import type { PrepareFocus, ProviderInstance } from "../contracts.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+import { Store } from "../store.ts";
 import { summaryInstance } from "../summary-instance.ts";
 import { AGENTS_IDENTITY, expectAgentsBudget, listAgentsTools } from "../testing/agents-tools.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
@@ -37,6 +42,7 @@ import {
 } from "./antigravity.ts";
 import { noteGenerator } from "../memory-pass.ts";
 import * as procs from "../procs.ts";
+import { warmPool } from "./warm-pool.ts";
 
 vi.mock("./warm-pool.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./warm-pool.ts")>();
@@ -587,7 +593,7 @@ describe("Antigravity turns (fake CLI)", () => {
       await replay("t-stream-notice", [...lines, result(raw)]);
 
       expect(deltas().join("")).toBe("Checking.\nDone.");
-      expect(replies()).toEqual(["Checking.\nDone."]);
+      expect(replies()).toEqual(["Checking.\n", "Done."]);
       expect(recorder.events.some((event) => JSON.stringify(event).includes("SYSTEM_MES"))).toBe(false);
       const types = recorder.events.map((event) => (event.type === "item.started" || event.type === "item.completed" ? `${event.type}:${event.itemType}` : event.type));
       expect(types.indexOf("item.started:tool")).toBeGreaterThan(types.indexOf("content.delta"));
@@ -2961,7 +2967,7 @@ describe("Antigravity computer MCP config", () => {
         return false;
       }
     };
-    /** Turn processes in start order: a standby is logged when it starts, before any prompt. */
+    /** Turn processes in the order each logged its start, before any prompt: two quick starts can log in either order. */
     const spawns = (): Array<{ pid: number; argv: string[] }> =>
       existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
     const make = async (name: string, environment: Record<string, string> = {}) => {
@@ -2988,6 +2994,9 @@ describe("Antigravity computer MCP config", () => {
         recorder.stop();
       }
     };
+    /** Turn processes in spawn order. */
+    const started = (spawn: MockInstance<typeof procs.spawnCli>): number[] =>
+      spawn.mock.calls.flatMap(([, args], i) => (args.includes("--input-format") ? [spawn.mock.results[i]!.value.pid] : []));
     const standbyAfter = async (count: number) => {
       await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(count);
       return spawns()[count - 1]!;
@@ -3176,6 +3185,290 @@ require(${JSON.stringify(fake)});
       const standby = await standbyAfter(2);
       await instance.dispose();
       await expect.poll(() => alive(standby.pid), { timeout: 5_000 }).toBe(false);
+    });
+
+    describe("prepared on chat open", () => {
+      const open = (instance: ProviderInstance, focus: Partial<PrepareFocus> = {}) =>
+        instance.prepare?.(undefined, { threadId: chat.threadId, fresh: { integrations: chat.integrations }, ...focus });
+
+      it("runs a new chat's first turn on the agy its prewarm started, with the prompt a cold spawn gets", async () => {
+        const instance = await make("open");
+        await open(instance);
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(1);
+        const standby = spawns()[0]!;
+        expect(standby.argv).not.toContain("--conversation");
+        // nothing reaches agy before Send
+        expect(existsSync(dump)).toBe(false);
+        // notes saved after the prewarm ride this turn's system text
+        const first = await turn(instance, { ...chat, text: "one", system: "Notes: saved after open" });
+        expect(first.pid).toBe(standby.pid);
+        expect(first.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+        const cold = await turn(await make("cold"), { ...chat, threadId: "t-standby-cold", text: "one", system: "Notes: saved after open" });
+        expect(first.prompt).toBe(cold.prompt);
+        expect(first.prompt).toContain("Notes: saved after open");
+      });
+
+      it.each([
+        ["model", { model: "gemini-4-neon-low" }],
+        ["effort", { effort: "high" as const }],
+        ["folder", { cwd: tmpdir() }],
+      ])("retires the prepared agy when the %s changed before Send", async (_change, change) => {
+        const instance = await make("open-refuse");
+        await open(instance);
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(1);
+        const standby = spawns()[0]!;
+        const first = await turn(instance, { ...chat, text: "one", ...change });
+        expect(first.pid).not.toBe(standby.pid);
+        expect(first.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+        expect(alive(standby.pid)).toBe(false);
+      });
+
+      it("swaps the prepared agy when the chat's model changes on open", async () => {
+        const instance = await make("open-swap");
+        await open(instance);
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(1);
+        const stale = spawns()[0]!;
+        await open(instance, { model: "gemini-4-neon-low" });
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(2);
+        await expect.poll(() => alive(stale.pid), { timeout: 5_000 }).toBe(false);
+        const first = await turn(instance, { ...chat, text: "one", model: "gemini-4-neon-low" });
+        expect(first.pid).toBe(spawns()[1]!.pid);
+      });
+
+      it("starts one agy per chat however often it is opened, and a third chat retires the least recently opened", async () => {
+        const instance = await make("open-cap");
+        const spawn = vi.spyOn(procs, "spawnCli");
+        try {
+          // a prepare has spawned its agy, or never will, by the time it resolves
+          await open(instance);
+          await open(instance);
+          await open(instance, { threadId: "t-standby-2" });
+          await open(instance, { threadId: "t-standby-3" });
+          const pids = started(spawn);
+          expect(pids).toHaveLength(3);
+          await expect.poll(() => pids.map(alive), { timeout: 5_000 }).toEqual([false, true, true]);
+          const third = await turn(instance, { ...chat, threadId: "t-standby-3", text: "one" });
+          expect(third.pid).toBe(pids[2]);
+        } finally {
+          spawn.mockRestore();
+        }
+      });
+
+      it("keeps the standby of a chat reopened after it when a background turn ends on a full pool", async () => {
+        const instance = await make("open-focus");
+        const spawn = vi.spyOn(procs, "spawnCli");
+        const agys = () => spawn.mock.calls.filter(([, args]) => args.includes("--input-format"));
+        const recorder = recordEvents(instance.adapter);
+        rmSync(join(dir, "go"));
+        try {
+          const { turnId } = await instance.adapter.sendTurn({ ...chat, threadId: "t-focus-a", text: "a" });
+          const child = spawn.mock.results[spawn.mock.calls.lastIndexOf(agys().at(-1)!)]!.value as ReturnType<typeof procs.spawnCli>;
+          const closed = new Promise((done) => child.once("close", done));
+          await expect.poll(() => existsSync(dump) && JSON.parse(readFileSync(dump, "utf8")).prompt, { timeout: 5_000 }).toBe("a");
+          await open(instance, { threadId: "t-focus-b" });
+          await open(instance, { threadId: "t-focus-c" });
+          await open(instance, { threadId: "t-focus-b" });
+          await standbyAfter(3);
+          writeFileSync(join(dir, "go"), "");
+          await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+          await closed;
+          expect(agys()).toHaveLength(3);
+          expect(started(spawn).slice(1).map(alive)).toEqual([true, true]);
+          const b = await turn(instance, { ...chat, threadId: "t-focus-b", text: "b" });
+          expect(b.pid).toBe(started(spawn)[1]);
+        } finally {
+          recorder.stop();
+          spawn.mockRestore();
+          writeFileSync(join(dir, "go"), "");
+        }
+      });
+
+      it("starts the standby of a chat returned to mid-reply when it is opened after the reply", async () => {
+        const instance = await make("open-return");
+        const spawn = vi.spyOn(procs, "spawnCli");
+        const agys = () => spawn.mock.calls.filter(([, args]) => args.includes("--input-format"));
+        const recorder = recordEvents(instance.adapter);
+        rmSync(join(dir, "go"));
+        try {
+          const { turnId } = await instance.adapter.sendTurn({ ...chat, threadId: "t-return-b", text: "b" });
+          const child = spawn.mock.results[spawn.mock.calls.lastIndexOf(agys().at(-1)!)]!.value as ReturnType<typeof procs.spawnCli>;
+          const closed = new Promise((done) => child.once("close", done));
+          await expect.poll(() => existsSync(dump) && JSON.parse(readFileSync(dump, "utf8")).prompt, { timeout: 5_000 }).toBe("b");
+          await open(instance, { threadId: "t-return-c" });
+          await open(instance, { threadId: "t-return-d" });
+          await standbyAfter(3);
+          // a composer returned to mid-reply asks only once the reply ends
+          writeFileSync(join(dir, "go"), "");
+          await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+          await closed;
+          expect(agys()).toHaveLength(3);
+          const cursor = (recorder.events.find((event) => event.type === "session.started" && event.turnId === turnId) as { sessionId: string }).sessionId;
+          await open(instance, { threadId: "t-return-b", fresh: undefined });
+          const standby = await standbyAfter(4);
+          expect(standby.argv[standby.argv.indexOf("--conversation") + 1]).toBe(cursor);
+          await expect.poll(() => started(spawn).slice(1, 3).map(alive), { timeout: 5_000 }).toEqual([false, true]);
+          const b = await turn(instance, { ...chat, threadId: "t-return-b", text: "again", resumeCursor: cursor });
+          expect(b.pid).toBe(standby.pid);
+        } finally {
+          recorder.stop();
+          spawn.mockRestore();
+          writeFileSync(join(dir, "go"), "");
+        }
+      });
+
+      it("leaves no standby after room turns, which never resume, so the next chat still gets one", async () => {
+        const gemini = await make("room-turns");
+        const spawn = vi.spyOn(procs, "spawnCli");
+        const agys = () => spawn.mock.calls.filter(([, args]) => args.includes("--input-format"));
+        try {
+          for (const threadId of ["t-room-1", "t-room-2"]) {
+            const recorder = recordEvents(gemini.adapter);
+            try {
+              const { turnId } = await gemini.adapter.sendTurn({ ...chat, threadId, text: threadId, hosted: true });
+              const child = spawn.mock.results[spawn.mock.calls.lastIndexOf(agys().at(-1)!)]!.value as ReturnType<typeof procs.spawnCli>;
+              const closed = new Promise((done) => child.once("close", done));
+              await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+              await closed;
+            } finally {
+              recorder.stop();
+            }
+          }
+          expect(agys()).toHaveLength(2);
+          await open(gemini, { threadId: "t-room-chat" });
+          expect(agys()).toHaveLength(3);
+          await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(3);
+          expect(spawns()[2]!.argv).not.toContain("--conversation");
+          expect(alive(spawns()[2]!.pid)).toBe(true);
+        } finally {
+          spawn.mockRestore();
+        }
+      });
+
+      it("starts none beside a running turn or for a chat that resumes", async () => {
+        const instance = await make("open-busy");
+        rmSync(join(dir, "go"));
+        await instance.adapter.sendTurn({ ...chat, text: "one" });
+        await expect.poll(() => existsSync(dump) && JSON.parse(readFileSync(dump, "utf8")).prompt, { timeout: 5_000 }).toBe("one");
+        const spawn = vi.spyOn(procs, "spawnCli");
+        try {
+          await open(instance);
+          await open(instance, { threadId: "t-standby-resume", fresh: undefined });
+          expect(spawn).not.toHaveBeenCalled();
+        } finally {
+          spawn.mockRestore();
+          writeFileSync(join(dir, "go"), "");
+        }
+      });
+
+      it("retires the prepared agy when its bot switches engine, freeing the slot for the next chat", async () => {
+        const gemini = await make("open-switch");
+        const codex = { instanceId: "codex", adapter: {} };
+        const store = new Store(() => ({ instanceId: gemini.instanceId, model: "gemini-4-neon" }));
+        const routes = createBotRoutes({
+          store, registry: { get: (id: string) => [gemini, codex].find((instance) => instance.instanceId === id) },
+          checkedModelSelection: (selection: unknown) => ({ ok: true, selection }), wireBot: (bot: unknown) => bot,
+        } as unknown as Parameters<typeof createBotRoutes>[0]);
+        const [first, second, third] = [store.createBot(), store.createBot(), store.createBot()];
+        await open(gemini, { threadId: first.threadId });
+        await open(gemini, { threadId: second.threadId });
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(2);
+        for (const bot of [first, second]) {
+          const req = Readable.from([JSON.stringify({ modelSelection: { instanceId: "codex", model: "gpt-5" } })]) as IncomingMessage;
+          await routes.patch(req, { writeHead: () => {}, end: () => {} } as unknown as ServerResponse, ["", bot.id] as RegExpMatchArray);
+        }
+        // a Stop or Delete now reaches only Codex
+        for (const { pid } of spawns()) await expect.poll(() => alive(pid), { timeout: 5_000 }).toBe(false);
+        // a slot frees on the child's close event, a beat after its pid dies
+        await expect.poll(() => warmPool.stats().reserved, { timeout: 5_000 }).toBe(0);
+        await open(gemini, { threadId: third.threadId });
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(3);
+        expect(alive(spawns()[2]!.pid)).toBe(true);
+        await gemini.dispose();
+        await expect.poll(() => alive(spawns()[2]!.pid), { timeout: 5_000 }).toBe(false);
+      });
+
+      it("leaves no standby for a bot switched engine mid-reply, so the next chat still gets one", async () => {
+        const gemini = await make("reply-switch");
+        const codex = { instanceId: "codex", adapter: {} };
+        const store = new Store(() => ({ instanceId: gemini.instanceId, model: "gemini-4-neon" }));
+        const routes = createBotRoutes({
+          store, registry: { get: (id: string) => [gemini, codex].find((instance) => instance.instanceId === id) },
+          checkedModelSelection: (selection: unknown) => ({ ok: true, selection }), wireBot: (bot: unknown) => bot,
+        } as unknown as Parameters<typeof createBotRoutes>[0]);
+        const [first, second, third] = [store.createBot(), store.createBot(), store.createBot()];
+        const spawn = vi.spyOn(procs, "spawnCli");
+        const agys = () => spawn.mock.calls.filter(([, args]) => args.includes("--input-format"));
+        try {
+          for (const bot of [first, second]) {
+            rmSync(join(dir, "go"));
+            store.setActivity(bot.id, "working");
+            const recorder = recordEvents(gemini.adapter);
+            try {
+              const { turnId } = await gemini.adapter.sendTurn({ ...chat, threadId: bot.threadId, text: bot.id });
+              const child = spawn.mock.results[spawn.mock.calls.lastIndexOf(agys().at(-1)!)]!.value as ReturnType<typeof procs.spawnCli>;
+              const closed = new Promise((done) => child.once("close", done));
+              await expect.poll(() => existsSync(dump) && JSON.parse(readFileSync(dump, "utf8")).prompt, { timeout: 5_000 }).toBe(bot.id);
+              const req = Readable.from([JSON.stringify({ modelSelection: { instanceId: "codex", model: "gpt-5" } })]) as IncomingMessage;
+              await routes.patch(req, { writeHead: () => {}, end: () => {} } as unknown as ServerResponse, ["", bot.id] as RegExpMatchArray);
+              writeFileSync(join(dir, "go"), "");
+              await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+              store.setActivity(bot.id, "idle");
+              await closed;
+            } finally {
+              recorder.stop();
+            }
+            expect(store.bot(bot.id)!.modelSelection.instanceId).toBe("codex");
+          }
+          expect(agys()).toHaveLength(2);
+          await open(gemini, { threadId: third.threadId });
+          expect(agys()).toHaveLength(3);
+          await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(3);
+          expect(alive(spawns()[2]!.pid)).toBe(true);
+          await gemini.dispose();
+          await expect.poll(() => alive(spawns()[2]!.pid), { timeout: 5_000 }).toBe(false);
+        } finally {
+          spawn.mockRestore();
+          writeFileSync(join(dir, "go"), "");
+        }
+      });
+
+      it("frees the slots of deleted rooms' standbys, so the next chat still gets one", async () => {
+        const gemini = await make("room-delete");
+        const store = new Store(() => ({ instanceId: gemini.instanceId, model: "gemini-4-neon" }));
+        // index.ts's owner, with the bot's own pick for its account
+        const unown = warmPool.setOwner("antigravityAgent", (key) => store.threadBots(key.threadId).some((bot) => bot.modelSelection.instanceId === key.instanceId));
+        const routes = createGroupRoutes({ store, groupIsWorking: () => false, lastReply: new Map() } as unknown as Parameters<typeof createGroupRoutes>[0]);
+        const [first, second, third] = [store.createBot(), store.createBot(), store.createBot()];
+        try {
+          for (const [i, bot] of [first, second].entries()) {
+            const room = store.createGroup(bot.name, [bot.id], false, undefined, { defaultResponder: { kind: "member", botId: bot.id } });
+            await turn(gemini, { ...chat, threadId: room.threadId, text: bot.id });
+            await standbyAfter(2 * i + 2);
+            await routes.remove({ writeHead: () => {}, end: () => {} } as unknown as ServerResponse, ["", room.id] as RegExpMatchArray);
+          }
+          const [, standby1, , standby2] = spawns();
+          await open(gemini, { threadId: third.threadId });
+          await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(5);
+          expect(alive(spawns()[4]!.pid)).toBe(true);
+          for (const { pid } of [standby1!, standby2!]) await expect.poll(() => alive(pid), { timeout: 5_000 }).toBe(false);
+          await gemini.dispose();
+          await expect.poll(() => alive(spawns()[4]!.pid), { timeout: 5_000 }).toBe(false);
+        } finally {
+          unown();
+        }
+      });
+
+      it("retires the prepared agy on Stop (a bot delete stops its chat) and on dispose", async () => {
+        const instance = await make("open-stop");
+        await open(instance);
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(1);
+        await instance.adapter.interruptTurn(chat.threadId);
+        await expect.poll(() => alive(spawns()[0]!.pid), { timeout: 5_000 }).toBe(false);
+        await open(instance);
+        await expect.poll(() => spawns().length, { timeout: 5_000 }).toBe(2);
+        await instance.dispose();
+        await expect.poll(() => alive(spawns()[1]!.pid), { timeout: 5_000 }).toBe(false);
+      });
     });
 
     // sign-in first: agy's sign-out is module state that outlives the registry

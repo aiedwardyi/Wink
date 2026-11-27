@@ -2,6 +2,8 @@
 // even while that sign-out's own logout helper is still pending; an idle Sign Out still honours the sign-in owner.
 import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -17,6 +19,7 @@ const ROOT = join(SERVER_DIR, "..");
 const FAKE_CLAUDE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 
 let child: ChildProcess;
+let terminal: Server;
 let home: string;
 let dir: string;
 let port = 0;
@@ -38,6 +41,14 @@ const until = async (check: () => boolean | Promise<boolean>, what: string) => {
   for (const deadline = Date.now() + 15_000; !await check();) {
     if (Date.now() > deadline || child.exitCode !== null) throw new Error(`${what} never happened. stderr:\n${stderr.slice(-2000)}`);
     await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+};
+// A usage check that starts as the login appears holds Sign Out off (409) for a moment, as it does for any account: press again.
+const pressed = async (client: string) => {
+  for (const deadline = Date.now() + 15_000; ;) {
+    const press = signOut(client);
+    const answered = await Promise.race([press, new Promise<null>((resolve) => setTimeout(() => resolve(null), 500))]);
+    if (answered?.status !== 409 || Date.now() > deadline) return answered ?? press;
   }
 };
 const logouts = () => existsSync(at("logouts")) ? readFileSync(at("logouts"), "utf8").trim().split("\n").length : 0;
@@ -84,7 +95,15 @@ if (args[0] === "auth" && args[1] === "status") {
 }
 `);
   writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({ instances: { claude: { driver: "claudeAgent", displayName: "Fixture Claude", config: { cli } } } }));
-  const env: NodeJS.ProcessEnv = { HOME: home, USERPROFILE: home, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1) };
+  // A terminal host with no panes: Sign Out asks it whether a worker is busy on the login first.
+  terminal = createServer((req, res) => {
+    const panes = req.url?.startsWith("/v1/terminal/account-panes?");
+    res.writeHead(panes ? 200 : 404, { "content-type": "application/json" });
+    res.end(JSON.stringify(panes ? { count: 0, unknown: 0, generations: {} } : {}));
+  });
+  await new Promise<void>((resolve) => terminal.listen(0, "127.0.0.1", resolve));
+  const env: NodeJS.ProcessEnv = { HOME: home, USERPROFILE: home, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1),
+    OMB_TERMINAL_URL: `http://127.0.0.1:${(terminal.address() as AddressInfo).port}`, OMB_TERMINAL_TOKEN: "fixture" };
   if (process.env.PATH) env.PATH = process.env.PATH;
   if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], { cwd: ROOT, env, windowsHide: true });
@@ -98,6 +117,7 @@ afterEach(() => { writeFileSync(at("release"), ""); });
 
 afterAll(async () => {
   await waitForExit(child, { signal: "SIGTERM" });
+  await new Promise((resolve) => terminal?.close(resolve));
   removeTestData(home);
 });
 
@@ -113,7 +133,7 @@ describe("instance Sign Out route", () => {
     writeFileSync(at("auth.json"), "");
     await until(async () => await authenticated() === true, "Claude connected");
 
-    const first = signOut(tab);
+    const first = pressed(tab);
     await until(() => existsSync(at("logout-started")), "logout helper start");
     const presses = await joined([otherTab, tab, "c".repeat(32)]);
     expect({ ...presses, first: (await first).status }).toEqual({ early: 0, statuses: [200, 200, 200], first: 200 });
@@ -130,7 +150,7 @@ describe("instance Sign Out route", () => {
     writeFileSync(at("refuse"), "");
     await until(async () => await authenticated() === true, "Claude connected again");
 
-    const first = signOut(tab);
+    const first = pressed(tab);
     await until(() => existsSync(at("logout-started")), "logout helper start");
     const presses = await joined([otherTab, tab]);
     expect({ ...presses, first: (await first).status }).toEqual({ early: 0, statuses: [502, 502], first: 502 });
@@ -138,7 +158,7 @@ describe("instance Sign Out route", () => {
     expect(await authenticated()).toBe(true);
 
     rmSync(at("refuse"));
-    expect((await signOut(otherTab)).status).toBe(200);
+    expect((await pressed(otherTab)).status).toBe(200);
     expect(logouts()).toBe(2);
     expect(await authenticated()).toBe(false);
   }, 40_000);

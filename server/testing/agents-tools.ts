@@ -10,7 +10,7 @@ export type ListedTool = { name: string; description: string; inputSchema: objec
 export const AGENTS_PROXY = fileURLToPath(new URL("../drivers/agents-proxy.ts", import.meta.url));
 export const AGENTS_IDENTITY = { OMB_HARNESS_URL: "http://127.0.0.1:1", OMB_BOT_ID: "b1", OMB_THREAD_ID: "t-agents-budget", OMB_COMMS_TOKEN: "tok", OMB_TURN_DEPTH: "0" };
 /** The tools behind find_wink_tool (tool-catalog.ts OPTIONAL). */
-export const CATALOG_ONLY = ["web_read", "board_search", "board_post", "create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "wake_me", "link_room_fix"];
+export const CATALOG_ONLY = ["web_read", "board_search", "board_post", "create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "wake_me", "link_room_fix", "post_to_group"];
 
 /** Only the proxy's OMB_* settings cross over: the rest is the test's own profile. */
 export async function listAgentsTools(engineEnv: Record<string, string | undefined>): Promise<ListedTool[]> {
@@ -42,7 +42,7 @@ export function schemaChars(tools: readonly ListedTool[]): number {
   return JSON.stringify(tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema }))).length;
 }
 
-/** Every call re-sends these; the 11 catalog tools wait behind find_wink_tool. */
+/** Every call re-sends these; catalog tools wait behind find_wink_tool. */
 export function expectAgentsBudget(engine: string, tools: readonly ListedTool[], budget: number) {
   const names = tools.map((tool) => tool.name);
   expect(names.filter((name) => CATALOG_ONLY.includes(name))).toEqual([]);

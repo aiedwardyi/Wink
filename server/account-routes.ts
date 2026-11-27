@@ -7,14 +7,20 @@ import { AccountNameError, type AccountNames } from "./account-names.ts";
 import { LoginBusyError, logSignInRefusal, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { shownLogin } from "../shared/usage-identity.ts";
 
 const signInSchema = z.object({ device: z.boolean().optional() }).strict();
 const addSchema = signInSchema.extend({ of: z.string().refine(isInstanceId) });
-const removalSchema = z.object({ destinationId: z.string().refine(isInstanceId).optional() }).strict();
+// `login` is the sign-in the client's row showed (shownLogin): a different one there now is not the client's to end.
+const removalSchema = z.object({ destinationId: z.string().refine(isInstanceId).optional(), login: z.string().nullable().optional() }).strict();
 const codeSchema = z.object({ generation: z.number().int().positive(), code: z.string().min(1).max(4096).refine((code) => !/[^!-~]/.test(code)) }).strict();
 const nameSchema = z.object({ nickname: z.string().nullable() }).strict();
 
-export function createAccountRoutes(lifecycle: AccountLifecycle, registry: ProviderRegistry, deps: { names?: AccountNames; onNamesChanged?: () => void } = {}) {
+export function createAccountRoutes(lifecycle: AccountLifecycle, registry: ProviderRegistry, deps: {
+  names?: AccountNames; onNamesChanged?: () => void;
+  /** The saved Usage order (#2218), by engine base. */
+  usageOrder?: () => Record<string, string[]> | undefined;
+} = {}) {
   /** `owner` names the requesting session (signInOwner); only the session that started a sign-in may answer or cancel it. */
   return async (req: IncomingMessage, res: ServerResponse, method: string, path: string, owner: string): Promise<boolean> => {
     const route = /^\/api\/accounts(?:\/([^/]+)(?:\/(sign-in\/code|sign-in|sign-out|default|destination))?)?$/.exec(path);
@@ -60,7 +66,10 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
       } else if (id && action === "destination" && method === "GET") {
         if (!lifecycle.bots) throw new AccountError("Bot account routing is unavailable", 503);
         const instances = await registry.describeCached();
-        const destination = lifecycle.accounts.list().find((account) => {
+        // Main goes to the first ready account in the order Usage and Connections show.
+        const order = deps.usageOrder?.()?.[lifecycle.accounts.get(id)?.of ?? id] ?? [];
+        const rank = (accountId: string) => order.includes(accountId) ? order.indexOf(accountId) : order.length;
+        const destination = lifecycle.accounts.list().sort((a, b) => rank(a.id) - rank(b.id)).find((account) => {
           const instance = instances.find((row) => row.instanceId === account.id);
           if (instance?.snapshot.state !== "available" || instance.snapshot.authenticated !== true) return false;
           try { lifecycle.bots!.destination(id, account.id); return true; }
@@ -101,6 +110,11 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
       else if (id && ((action === "sign-out" && method === "POST") || (!action && method === "DELETE"))) {
         const parsed = removalSchema.safeParse(method === "POST" ? await body(req) : {});
         if (!parsed.success) throw new AccountError("destinationId must name an account", 400);
+        if (parsed.data.login !== undefined) {
+          await registry.recheck(id);
+          const now = (await registry.describeCached()).find((row) => row.instanceId === id)?.snapshot;
+          if (shownLogin(now ?? {}) !== parsed.data.login) throw new AccountError("This account's sign-in changed since it was shown", 409, "login-changed");
+        }
         json(res, 200, await lifecycle.remove(id, parsed.data.destinationId, { owner, generation: registry.logins.generation(id) }));
       } else {
         if (signIn) logSignInRefusal(405);

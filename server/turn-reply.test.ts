@@ -93,6 +93,15 @@ describe("ownTurnReply", () => {
 });
 
 describe("turnSummaries", () => {
+  it("keeps a peer turn's commentary out of Steps", () => {
+    const steps: string[][] = [];
+    const summaries = turnSummaries(undefined, (_threadId, ids) => steps.push(ids));
+    summaries.note("t1", "turn-1", "c1", false, "commentary", "Looking at the release notes now.", false);
+    summaries.note("t1", "turn-1", "f1", false, "final_answer", "The release is ready to ship.", false);
+    summaries.settle("t1", "turn-1");
+    expect(steps).toEqual([]);
+  });
+
   it("shows a turn's summaries when it wrote no other text", () => {
     const summaries = turnSummaries();
     summaries.note("t1", "turn-1", "s1", true);
@@ -209,5 +218,16 @@ describe("turnSummaries", () => {
   it("keeps a row noted without text", () => {
     expect(settled([undefined, answer])).toEqual([]);
     expect(settled([answer, undefined])).toEqual([]);
+  });
+
+  it("marks earlier shown progress lines as steps while keeping the final answer and un-foldable replies", () => {
+    const steps: string[] = [];
+    const summaries = turnSummaries(undefined, (_threadId, ids) => steps.push(...ids));
+    summaries.note("t1", "turn-1", "s1", false, undefined, "Checking logs.");
+    summaries.note("t1", "turn-1", "steer", false, undefined, "Good point, checking staging too.", false);
+    summaries.note("t1", "turn-1", "s2", false, undefined, "Patched retry cursor.");
+    summaries.note("t1", "turn-1", "final", false, undefined, "All 14 tests pass.");
+    summaries.settle("t1", "turn-1");
+    expect(steps).toEqual(["s1", "s2"]);
   });
 });

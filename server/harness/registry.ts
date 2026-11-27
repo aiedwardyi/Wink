@@ -107,6 +107,7 @@ export class ProviderRegistry {
   private blockedAccounts = new Set<string>();
   private checkingAccounts = new Set<string>();
   private accountIdentity?: (id: string, snapshot: ProviderSnapshot) => Promise<void>;
+  private userSignedOut?: (id: string) => boolean;
   private environmentByInstance = new Map<InstanceId, Record<string, string>>();
   private byId = new Map<InstanceId, RegistryEntry>();
   /** decoded per-instance `cli` overrides, for describe() — drivers spawn
@@ -278,6 +279,11 @@ export class ProviderRegistry {
   }
 
   onAccountIdentity(listener: (id: string, snapshot: ProviderSnapshot) => Promise<void>) { this.accountIdentity = listener; }
+  /** A base the user signed out stays blocked, but a refresh or rescan still reads its CLI home: a login found there ends the block. */
+  recheckSignedOut(check: (id: string) => boolean) { this.userSignedOut = check; }
+  private signedOutBase(id: string) {
+    return this.accountStopped(id) && !this.accounts.has(id) && !this.signingOut.has(id) && this.logins.state(id) !== "pending" && this.userSignedOut?.(id) === true;
+  }
   blockAccount(id: string, blocked: boolean) {
     this.checkingAccounts.delete(id);
     if (blocked) this.blockedAccounts.add(id);
@@ -325,6 +331,11 @@ export class ProviderRegistry {
   async retryAccount(id: string) {
     const entry = this.byId.get(id);
     if (entry?.live) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }, true));
+  }
+  /** Reads the account's CLI home again, a signed-out base's too, so an account action sees the login there now. */
+  async recheck(id: string) {
+    const entry = this.byId.get(id);
+    if (entry?.live) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }));
   }
   accountAvailable(id: string, confirmed = false) {
     const snapshot = this.probed.get(id)?.snapshot;
@@ -677,13 +688,15 @@ export class ProviderRegistry {
   ): Promise<Probe> {
     const id = entry.instanceId;
     const since = this.holdSeq;
-    if (this.accountBlocked(id) && !retryAccount) return this.accountChecking(id) ? Promise.resolve(CHECKING) : this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? BLOCKED);
+    const recheck = !retryAccount && Boolean(opts?.rescan || opts?.refresh) && this.signedOutBase(id);
+    if (this.accountBlocked(id) && !retryAccount && !recheck) return this.accountChecking(id) ? Promise.resolve(CHECKING) : this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? BLOCKED);
     const pending: Promise<Probe> = this.probe(entry, candidatesFor, opts).then(async (probe) => {
       if (this.byId.get(id) === entry && this.probing.get(id) === pending) {
         this.probed.set(id, probe);
         // Identity observation must not count its own completed probe as live work.
         this.probing.delete(id);
         this.probeVersion += 1;
+        if (recheck && probe.snapshot.authenticated === true && this.signedOutBase(id)) this.blockAccount(id, false);
         if (entry.live?.account) {
           try { await this.accountIdentity?.(id, probe.snapshot); }
           catch (error) {

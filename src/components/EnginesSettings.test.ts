@@ -338,6 +338,27 @@ it.each(["grokAgent", "museAgent", "antigravityAgent"])("flips %s to Sign In onc
   }
 });
 
+it.each(["museAgent", "antigravityAgent"])("names the login %s showed on Sign Out, and redraws the one another client put there with no error", async (driverKind) => {
+  const shown = instance({ instanceId: driverKind, driverKind, install: { login: { args: ["login"] }, logout: ["logout"] },
+    snapshot: { state: "available", authenticated: true, account: "old@example.com" } });
+  const replaced = { ...shown, snapshot: { state: "available" as const, authenticated: true, account: "new@example.com" } };
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => init?.method === "POST"
+    ? Response.json({ error: "changed", code: "login-changed" }, { status: 409 }) : Response.json({ instances: [replaced] }));
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(EngineRow, { instance: shown }))));
+    await act(async () => host.querySelector("button")!.click());
+    expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body))).toEqual({ login: "old@example.com" });
+    expect(host.querySelector("[data-account-email]")?.textContent).toBe("new@example.com");
+    expect(host.querySelector("button")?.textContent).toBe("Sign Out");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    fetch.mockRestore();
+  }
+});
+
 it("shows the Gemini account once its browser sign-in finishes, with no reopen", async () => {
   vi.useFakeTimers();
   const signedOut = instance({ instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", install: { login: { args: ["login"] }, logout: ["logout"] },

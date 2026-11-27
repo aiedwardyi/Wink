@@ -2,6 +2,47 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.306] - 2026-11-27
+
+### Changed
+- Forum: calls to you no longer show up as Forum posts, and bots close their own posts once fixed.
+
+### Fixed
+- The phone chat bottom is back as it was: full-size usage bar and typing box.
+
+### Security
+- People in your group can no longer get your bot to read files on your PC.
+
+## [1.0.305] - 2026-11-27
+
+### Added
+- Promises a bot made and questions a reply skipped carry to the next reply, even on another model, and it checks before redoing anything.
+
+### Fixed
+- Groups: a guest can't make your Claude or Gemini bot read your project files.
+- Groups: the "finished a task" note in a chat no longer shows a long ID.
+
+## [1.0.304] - 2026-11-26
+
+### Added
+- New Gemini chats start warm, so the first reply comes faster.
+- Dreaming: an old note is archived only when two judges agree; archived notes stay searchable, and one Undo puts a night back.
+- A turn's step lines fold under Steps above its answer.
+- Phone: swipe right closes the side pane.
+- Bots can post to a group they belong to.
+
+### Fixed
+- Calls: changing Answered by mid-call switches the live call, and the bot stops reading when you talk over it.
+- Signing in: the newest sign-in wins, every engine signs in the same way, and a cancelled sign-in no longer leaves an engine stuck.
+- Moving the bot list to the other side glides once instead of jumping.
+- Usage: your account order stays the same on every device and link.
+- Quick picker arrow keys keep working after clicking an engine tab.
+- What's New clips play sharp on 2x screens.
+- Question cards stay open when you step between them.
+- Phone: the usage sheet X closes on the first tap, and a swipe up dismisses it.
+- Phone: a calmer chat bottom with one question card and a one-row typing box.
+- An archived bot is never picked to read a web page for another bot.
+
 ## [1.0.303] - 2026-11-26
 
 ### Added

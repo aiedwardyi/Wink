@@ -1,11 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useRef, type KeyboardEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
 import { reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING } from "./phone-swipe";
 import { LIFT_SCALE, LONG_PRESS_SLOP, soften, travel, useTouchDrag, type Travel } from "./use-touch-drag";
+import { saveUsageOrder, useUsageOrders } from "./usage-order";
 
-const KEY = "openmausbot.usageOrder.v1";
-const CHANGE = "usage-order";
-type Orders = Record<string, string[]>;
 const ROW = "[data-account-row]";
 const SECTION = "[data-usage-engine]";
 const PRESSABLE = "[data-usage-reorder]";
@@ -18,14 +16,6 @@ const SLOP = 4;
 export const reorderable = (label: string) => ({
   "data-usage-reorder": "", role: "group", tabIndex: 0, "aria-label": label, "aria-keyshortcuts": "Alt+ArrowUp Alt+ArrowDown",
 });
-
-function load(): Orders {
-  try {
-    const value = JSON.parse(localStorage.getItem(KEY) ?? "{}");
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string[]] => Array.isArray(entry[1]) && entry[1].every((id) => typeof id === "string"))) : {};
-  } catch { return {}; }
-}
 
 export function ordered<T>(items: T[], order: string[] = [], id: (item: T) => string): T[] {
   const rank = new Map(order.map((key, index) => [key, index]));
@@ -42,16 +32,9 @@ function scrollParent(node: HTMLElement | null) {
 }
 
 export function useUsageDrag(engines: { base: string; accounts: { id: string }[] }[]) {
-  const [orders, setOrders] = useState(load);
+  const orders = useUsageOrders();
   const latest = useRef(orders);
   latest.current = orders;
-  useEffect(() => {
-    const changed = (event: Event) => { if (event instanceof CustomEvent) setOrders(event.detail); };
-    const stored = (event: StorageEvent) => { if (event.key === KEY || event.key === null) setOrders(load()); };
-    window.addEventListener(CHANGE, changed);
-    window.addEventListener("storage", stored);
-    return () => { window.removeEventListener(CHANGE, changed); window.removeEventListener("storage", stored); };
-  }, []);
   const active = useRef<Drag | null>(null);
   const list = useRef<HTMLElement | null>(null);
   const unbind = useRef(() => {});
@@ -79,10 +62,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     let index = 0;
     const order = accounts ? ordered(accounts, before[drag.key], (account) => account.id)
       .map((account) => visible.has(account.id) ? ids[index++]! : account.id) : ids;
-    const next = { ...before, [drag.key]: order };
-    setOrders(next);
-    try { localStorage.setItem(KEY, JSON.stringify(next)); } catch { /* Keep the session order. */ }
-    window.dispatchEvent(new CustomEvent(CHANGE, { detail: next }));
+    saveUsageOrder(drag.key, order);
   };
   const focus = (drag: Drag) => {
     const selector = drag.node.matches(ROW) ? ROW : SECTION;

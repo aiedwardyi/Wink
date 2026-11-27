@@ -16,6 +16,7 @@ import picksClip from "@/assets/whats-new/1.0.287-timeline.webp";
 import forumFirstClip from "@/assets/whats-new/1.0.287-forum.webp";
 import paneClip from "@/assets/whats-new/1.0.302-pane.mp4";
 import quickClip from "@/assets/whats-new/1.0.303-quick.mp4";
+import quickMotionClip from "@/assets/whats-new/1.0.304-quick.mp4";
 import { newerRelease } from "../../shared/release-order";
 import type { LocaleId } from "./i18n";
 import type { SkinId } from "./skins";
@@ -203,6 +204,20 @@ export const RELEASE_NOTES: Record<string, WhatsNewEntry | WhatsNewNone> = {
     ],
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
   },
+  "1.0.304": {
+    title: { en: "New in Wink 1.0.304", ko: "Wink 1.0.304 새 기능" },
+    tiles: [
+      {
+        clip: quickMotionClip,
+        title: { en: "Quick model picker", ko: "빠른 모델 선택" },
+        line: { en: "A fourth picker style: pick model and effort in one step. Max glows in the model's color.", ko: "네 번째 선택 방식: 모델과 추론 강도를 한 번에 골라요. 최대로 고르면 모델 색으로 빛나요." },
+        show: "quick",
+      },
+    ],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
+  "1.0.305": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.306": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
 };
 
 /** The releases with tiles; a no-tile record has nothing to show. */

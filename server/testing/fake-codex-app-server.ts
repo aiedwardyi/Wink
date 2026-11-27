@@ -19,6 +19,8 @@
 //                     thread/resume, stamped with an earlier turn's id
 //   FAKE_CODEX_MESSAGES  JSON array of {text, phase?}: the turn's agentMessage
 //                     items, in place of the one default reply
+//   FAKE_CODEX_COMMENTARY  steer modes: JSON array of {text, phase?} agentMessage items
+//                     the turn completes before it waits for the steer
 //   FAKE_CODEX_NO_INJECT  thread/inject_items fails, like a CLI without it
 //   FAKE_CODEX_CONFIG  JSON config that config/read answers
 //   thread/fork answers a new thread id and echoes `ephemeral`; the params land in the dump's calls
@@ -279,6 +281,7 @@ process.stdin.on("data", (chunk) => {
         notify("turn/started", { threadId: "codex-thread-1", turn: { id: "native-turn-1" } });
         if (mode.startsWith("steer")) {
           notify("item/agentMessage/delta", { delta: "working" });
+          for (const [i, message] of JSON.parse(process.env.FAKE_CODEX_COMMENTARY ?? "[]").entries()) notify("item/completed", { item: { id: `c${i + 1}`, type: "agentMessage", ...message } });
           break;
         }
         const command = mode === "windows-command"
@@ -295,7 +298,7 @@ process.stdin.on("data", (chunk) => {
         if (mode === "mcp-elicitation") {
           const [serverName, named] = (process.env.FAKE_CODEX_ELICIT ?? "agents/list_bots").split("/");
           // with the catalog mounted the model reaches these only through the gateway (tool-catalog.ts OPTIONAL)
-          const hidden = ["create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "link_room_fix", "board_search", "board_post", "wake_me", "web_read"];
+          const hidden = ["create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "link_room_fix", "post_to_group", "board_search", "board_post", "wake_me", "web_read"];
           const tool = serverName === "agents" && process.env.WINK_MCP_AGENTS_OMB_WINK_TOOL_CATALOG === "1" && hidden.includes(named) ? "call_wink_tool" : named;
           out({
             jsonrpc: "2.0",

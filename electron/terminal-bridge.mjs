@@ -227,7 +227,7 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         const accountId = parsed.searchParams.get("accountId") ?? "";
         if (!/^[\w.-]{1,128}$/.test(accountId)) return json(res, 400, { error: "Invalid account" });
         try {
-          return json(res, 200, host.livePanesForAccount?.(accountId) ?? { count: 0, unknown: 1, generations: {} });
+          return json(res, 200, (await host.livePanesForAccount?.(accountId)) ?? { count: 0, unknown: 1, generations: {} });
         } catch {
           return json(res, 503, { count: 0, unknown: 1, generations: {} });
         }

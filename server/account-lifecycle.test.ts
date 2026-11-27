@@ -19,6 +19,8 @@ import { ClaudeDriver } from "./drivers/claude.ts";
 import { accountLaunch } from "./account-policy.ts";
 import { shareUserSetup } from "./account-shared-setup.ts";
 import { markCodexPromo } from "../electron/codex-promo.mjs";
+import { createUsageBoard } from "./usage-board.ts";
+import { createUsageHistory } from "./usage-history.ts";
 
 const core = await import("./accounts.ts").catch(() => null);
 const lifecycle = await import("./account-lifecycle.ts").catch(() => null);
@@ -460,7 +462,7 @@ describe("account lifecycle", () => {
     expect(f.start).not.toHaveBeenCalled();
     expect(f.registry.accountBlocked("claude")).toBe(false);
     expect(f.accounts.get(account.id)?.state).toBe("ready");
-    await expect(runtime!.accountPanesBusy(null, account.id)).rejects.toMatchObject({ code: "host-unknown" });
+    await expect(runtime!.accountPanesBusy({ url: "http://127.0.0.1:1", token: "fixture" }, account.id)).rejects.toMatchObject({ code: "host-unknown" });
     const { LoginBusyError } = await import("./engine-login.ts");
     (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async () => false;
     vi.spyOn(f.registry, "startSignIn").mockRejectedValue(new LoginBusyError());
@@ -1080,13 +1082,14 @@ describe("account lifecycle", () => {
   });
 });
 
-async function request(f: Pick<Awaited<ReturnType<typeof fixture>>, "controller" | "registry">, method: string, path: string, value: unknown = {}, contentType = "application/json") {
+async function request(f: Pick<Awaited<ReturnType<typeof fixture>>, "controller" | "registry">, method: string, path: string, value: unknown = {}, contentType = "application/json",
+  deps?: Parameters<NonNullable<typeof routes>["createAccountRoutes"]>[2]) {
   expect(routes, "account routes exist").not.toBeNull();
   const req = Object.assign(Readable.from([JSON.stringify(value)]), { headers: { "content-type": contentType } }) as unknown as IncomingMessage;
   let status = 0;
   let output = "";
   const res = { writeHead: (code: number) => { status = code; }, end: (body: string) => { output = body; } } as unknown as ServerResponse;
-  const handled = await routes!.createAccountRoutes(f.controller, f.registry)(req, res, method, path, "pc:");
+  const handled = await routes!.createAccountRoutes(f.controller, f.registry, deps)(req, res, method, path, "pc:");
   return { handled, status, body: output ? JSON.parse(output) : undefined };
 }
 
@@ -1217,6 +1220,73 @@ describe("account HTTP routes", () => {
     expect(f.start).not.toHaveBeenCalled();
   });
 
+  it("hands Main to the first ready account in the saved Usage order, not the order accounts were added", async () => {
+    const f = await fixture(vi.fn());
+    const first = await f.add();
+    const second = await f.add();
+    const usageOrder = () => ({ claude: ["claude", second.id, first.id] });
+    expect(await request(f, "GET", "/api/accounts/claude/destination", {}, "application/json", { usageOrder })).toMatchObject({ status: 200, body: { destinationId: second.id } });
+  });
+
+  it.each([false, true])("refuses a base Sign Out while a worker is busy on it and keeps the login (another engine's account=%s)", async (other) => {
+    const f = await fixture();
+    if (other) await f.add("codex");
+    (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async (id) => id === "claude";
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/accounts/claude/sign-out")).toMatchObject({ status: 409 });
+    expect(f.start).not.toHaveBeenCalled();
+    expect(f.registry.accountBlocked("claude")).toBe(false);
+  });
+
+  it.each([
+    ["no terminal host, as the browser-only launch runs", null, 200],
+    ["an unreachable terminal host", { url: "http://127.0.0.1:1", token: "fixture" }, 409],
+  ])("signs out a lone base with %s only when its workers are known", async (_name, access, status) => {
+    const f = await fixture();
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("unreachable"); }));
+    (f.controller as unknown as { hooks: { panesBusy(id: string, activeOnly?: boolean): Promise<boolean> } }).hooks.panesBusy = (id, activeOnly) => runtime!.accountPanesBusy(access, id, activeOnly);
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/accounts/claude/sign-out")).toMatchObject({ status });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(status === 200);
+  });
+
+  it("refuses a stale Remove of a signed-out base whose home now holds another login, and keeps that login", async () => {
+    const f = await fixture(vi.fn());
+    const added = await f.add("codex");
+    await f.controller.useForBots(added.id);
+    await f.controller.remove("codex");
+    // Another login lands on the base; a client that drew the row signed out still offers Remove.
+    f.statuses.set("codex", { state: "available", authenticated: true, account: "replacement@example.test" });
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/accounts/codex/sign-out", { login: null })).toMatchObject({ status: 409, body: { code: "login-changed" } });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(false);
+    expect(f.registry.accountAvailable("codex", true)).toBe(true);
+    expect(f.accounts.list().find((row) => row.id === "codex")?.userSignedOut).toBeUndefined();
+  });
+
+  it("refuses a stale Sign Out of a login another one replaced, then signs out the one it names", async () => {
+    const f = await fixture(vi.fn());
+    const added = await f.add("codex");
+    f.statuses.set("codex", { state: "available", authenticated: true, account: "first@example.test" });
+    await f.registry.describe({ refresh: true });
+    f.statuses.set("codex", { state: "available", authenticated: true, account: "replacement@example.test" });
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/accounts/codex/sign-out", { destinationId: added.id, login: "first@example.test" })).toMatchObject({ status: 409, body: { code: "login-changed" } });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(false);
+    expect(await request(f, "POST", "/api/accounts/codex/sign-out", { destinationId: added.id, login: "replacement@example.test" })).toMatchObject({ status: 200 });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(true);
+  });
+
+  it("refuses a stale single-account Sign Out on the instance route before the provider runs", async () => {
+    const f = await fixture(vi.fn());
+    f.statuses.set("codex", { state: "available", authenticated: true, account: "replacement@example.test" });
+    await f.registry.describe({ refresh: true });
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/instances/codex/sign-out", { login: "first@example.test" })).toMatchObject({ status: 409, body: { code: "login-changed" } });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(false);
+    expect(f.registry.accountAvailable("codex", true)).toBe(true);
+  });
+
   it("uses the same removal guard for legacy managed-instance sign-out", async () => {
     const f = await fixture();
     const added = await f.add();
@@ -1249,6 +1319,156 @@ describe("base sign-out beside added accounts", () => {
     }
     expect(f.accounts.list().filter((row) => row.of === "claude").map((row) => row.id)).toEqual(["claude", account.id]);
     expect(f.accounts.get(account.id)?.state).toBe("ready");
+  });
+});
+
+describe("a user Sign Out removes the account from Usage and Connections", () => {
+  type Fixture = Awaited<ReturnType<typeof fixture>>;
+  // What Usage lists for this engine and what Connections hides, built the way the server builds them.
+  async function listed(f: Fixture, base: string, accounts = f.accounts) {
+    const status = new Map((await f.registry.describeCached()).map((row) => [row.instanceId, row.snapshot]));
+    const board = createUsageBoard({
+      accounts: { list: () => accounts.list().map((row) => {
+        const snapshot = status.get(row.id);
+        return { ...row, blocked: f.registry.accountStopped(row.id), checking: f.registry.accountChecking(row.id),
+          status: snapshot && { state: snapshot.state === "available" ? "available" as const : "unavailable" as const, authenticated: snapshot.authenticated, account: snapshot.account, accountIdentity: snapshot.accountIdentity } };
+      }), defaultFor: (of) => accounts.defaultFor(of), get drains() { return accounts.drains; } },
+      names: { get: () => null }, rateLimits: new Map(), history: createUsageHistory(join(f.dir, "usage")),
+      runs: async () => ({ known: true, runs: [] }), bots: () => [],
+    });
+    const engine = (await board.read()).engines.find((group) => group.base === base)!;
+    const hidden = engine.duplicates ?? [];
+    return { usage: engine.accounts.map((row) => row.id), connections: accounts.list().filter((row) => row.of === base && !hidden.includes(row.id)).map((row) => row.id),
+      signIn: Object.fromEntries(engine.accounts.map((row) => [row.id, row.signIn])), mainId: engine.mainId };
+  }
+
+  it.each(["codex", "claude"])("takes a signed-out %s base off both lists, after a restart too, while another account is left", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await f.controller.useForBots(added.id);
+    await f.controller.remove(base);
+    expect(await listed(f, base)).toMatchObject({ usage: [added.id], connections: [added.id], mainId: added.id });
+    const restarted = new core!.AccountService(f.dir, () => f.bases);
+    expect((await listed(f, base, restarted)).connections).toEqual([added.id]);
+  });
+
+  it.each(["codex", "claude"])("hands Main on and takes the %s base off both lists when Main signs out", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await expect(f.controller.remove(base, added.id)).resolves.toEqual({ state: "removed", destinationId: added.id });
+    expect(await listed(f, base)).toMatchObject({ usage: [added.id], connections: [added.id], mainId: added.id });
+  });
+
+  it.each(["codex", "claude"])("removes a signed-out added %s account as it always did", async (base) => {
+    const f = await fixture(vi.fn());
+    const first = await f.add(base);
+    const second = await f.add(base);
+    await f.controller.remove(second.id);
+    expect(await listed(f, base)).toMatchObject({ usage: [base, first.id], connections: [base, first.id] });
+  });
+
+  it.each(["codex", "claude"])("keeps an expired %s base's row with Sign In", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await f.controller.useForBots(added.id);
+    f.statuses.set(base, { state: "available", authenticated: false });
+    await f.controller.signedOut(base);
+    expect(await listed(f, base)).toMatchObject({ usage: [base, added.id], connections: [base, added.id], signIn: { [base]: "signed-out" } });
+  });
+
+  it.each(["codex", "claude"])("Remove takes an expired %s base's leftover row off both lists", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await f.controller.useForBots(added.id);
+    f.statuses.set(base, { state: "available", authenticated: false });
+    await f.controller.signedOut(base);
+    await f.controller.remove(base);
+    expect(await listed(f, base)).toMatchObject({ usage: [added.id], connections: [added.id], mainId: added.id });
+  });
+
+  it("hands Main on when a leftover signed-out Main is removed", async () => {
+    const f = await fixture(vi.fn());
+    const added = await f.add("codex");
+    f.statuses.set("codex", { state: "available", authenticated: false });
+    await f.controller.signedOut("codex");
+    await expect(f.controller.remove("codex", added.id)).resolves.toEqual({ state: "removed", destinationId: added.id });
+    expect(await listed(f, "codex")).toMatchObject({ usage: [added.id], connections: [added.id], mainId: added.id });
+  });
+
+  it("keeps a lone base's signed-out row, the engine's own signed-out state", async () => {
+    const f = await fixture(vi.fn());
+    await f.controller.remove("codex");
+    expect(await listed(f, "codex")).toMatchObject({ usage: ["codex"], connections: ["codex"], signIn: { codex: "signed-out" } });
+  });
+
+  it.each(["signed out", "expired"])("refuses Remove on a lone %s base, which it could not clear", async (how) => {
+    const f = await fixture(vi.fn());
+    if (how === "signed out") await f.controller.remove("codex");
+    else {
+      f.statuses.set("codex", { state: "available", authenticated: false });
+      await f.controller.signedOut("codex");
+    }
+    f.start.mockClear();
+    await expect(f.controller.remove("codex")).rejects.toMatchObject({ status: 409 });
+    expect(f.start).not.toHaveBeenCalled();
+    expect(await listed(f, "codex")).toMatchObject({ usage: ["codex"], connections: ["codex"], signIn: { codex: "signed-out" } });
+  });
+
+  it.each(["codex", "claude"])("keeps the Sign In row of a later %s login that expires after an earlier Sign Out", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await f.controller.useForBots(added.id);
+    await f.controller.remove(base);
+    // Another login lands on the base outside Wink; the next start confirms it.
+    f.statuses.delete(base);
+    const accounts = new core!.AccountService(f.dir, () => f.bases);
+    const registry = new ProviderRegistry(f.drivers);
+    registries.push(registry);
+    await registry.load(instanceConfigs({ instances: f.bases }, accounts.snapshot));
+    const controller = new lifecycle!.AccountLifecycle(accounts, registry, {
+      reload: async () => {}, referenced: async () => false, invalidate: vi.fn(), changed: vi.fn(), configBusy: () => false,
+    });
+    controllers.push(controller);
+    await registry.describe({ refresh: true });
+    await vi.waitFor(() => expect(accounts.list().find((row) => row.id === base)?.userSignedOut).toBeUndefined());
+    f.statuses.set(base, { state: "available", authenticated: false });
+    await controller.signedOut(base);
+    expect(await listed({ ...f, accounts, registry, controller }, base, accounts)).toMatchObject({ usage: [base, added.id], signIn: { [base]: "signed-out" } });
+  });
+
+  it.each([
+    ["codex", "signs out", "refresh"], ["claude", "signs out", "rescan"], ["codex", "hands Main on", "rescan"],
+  ] as const)("lists a later %s login without a restart after the base %s, on a %s, and keeps its Sign In row when it expires", async (base, how, probe) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    if (how === "hands Main on") await f.controller.remove(base, added.id);
+    else {
+      await f.controller.useForBots(added.id);
+      await f.controller.remove(base);
+    }
+    expect((await listed(f, base)).usage).toEqual([added.id]);
+    // Another login lands on the base outside Wink while Wink stays open.
+    f.statuses.delete(base);
+    await f.registry.describe({ [probe]: true });
+    expect(await listed(f, base)).toMatchObject({ usage: [base, added.id], connections: [base, added.id] });
+    expect(f.accounts.list().find((row) => row.id === base)?.userSignedOut).toBeUndefined();
+    f.statuses.set(base, { state: "available", authenticated: false });
+    await f.controller.signedOut(base);
+    expect(await listed(f, base)).toMatchObject({ usage: [base, added.id], signIn: { [base]: "signed-out" } });
+  });
+
+  it("lists the base again once it signs back in", async () => {
+    const f = await fixture(vi.fn());
+    const added = await f.add("codex");
+    await f.controller.useForBots(added.id);
+    await f.controller.remove("codex");
+    f.statuses.delete("codex");
+    await f.controller.signIn("codex", false, "pc:");
+    await f.controller.settled("codex");
+    expect(f.registry.accountAvailable("codex")).toBe(true);
+    f.statuses.set("codex", { state: "available", authenticated: false });
+    await f.controller.signedOut("codex");
+    expect(await listed(f, "codex")).toMatchObject({ usage: ["codex", added.id], signIn: { codex: "signed-out" } });
   });
 });
 

@@ -369,6 +369,18 @@ describe("usage board", () => {
     expect(JSON.stringify(await s.board.handle("/api/usage/board"))).not.toContain(local);
   });
 
+  it("counts a ready sign-in another login replaced, with neither login on the board", async () => {
+    const s = setup();
+    s.rows()[0].status = { state: "available", authenticated: true, account: "first@example.test" };
+    s.board.touch();
+    expect(account(await s.board.read()).login).toBeUndefined();
+    s.rows()[0].status = { state: "available", authenticated: true, account: "second@example.test" };
+    s.board.touch();
+    const value = await s.board.read();
+    expect(account(value)).toMatchObject({ signIn: "ready", login: 1 });
+    expect(JSON.stringify(value)).not.toMatch(/first@|second@/);
+  });
+
   it("answers full after an account is removed or signs in as someone else", async () => {
     const s = setup();
     s.accept(added, report());

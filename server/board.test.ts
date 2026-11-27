@@ -11,6 +11,7 @@ import { BOARD_DIR, BOARD_USER, boardPostId, createBoard, errorSig, mergeBoardPo
 import { createBoardCalls, type BoardCalls } from "./board-calls.ts";
 import { createBoardRoutes } from "./board-routes.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { olderCall } from "./testing/older-call.ts";
 import { CONFLICT_NOTICE_V2 } from "./thread-sync.ts";
 
 const temps = createTempDirs();
@@ -438,11 +439,11 @@ describe("a post written after its twin was deleted", () => {
       if (mode === "Drive sync") for (const side of [a, b, a, b]) side.board.sync(folder, ids);
     };
     const calls = createBoardCalls({ board: a.board, projectOf: () => "wink", room: () => false });
-    const first = calls.called("bot-1", "t1", BLOCKER)!;
+    const first = olderCall(a.board, "bot-1", "t1", BLOCKER);
     sync();
     a.board.remove(first.id);
     sync();
-    const again = calls.called("bot-1", "t1", BLOCKER)!;
+    const again = olderCall(a.board, "bot-1", "t1", BLOCKER);
     expect(again.id).not.toBe(first.id);
     sync();
     expect(a.board.list().map((post) => post.id)).toEqual([again.id]);
@@ -455,11 +456,10 @@ describe("a post written after its twin was deleted", () => {
 
   it("a repeat call while the post is live still joins it", () => {
     const { board } = home("pc-a");
-    const calls = createBoardCalls({ board, projectOf: () => "wink", room: () => false });
-    const first = calls.called("bot-1", "t1", BLOCKER)!;
+    const first = olderCall(board, "bot-1", "t1", BLOCKER);
     board.remove(first.id);
-    const second = calls.called("bot-1", "t1", BLOCKER)!;
-    expect(calls.called("bot-1", "t1", BLOCKER)!.id).toBe(second.id);
+    const second = olderCall(board, "bot-1", "t1", BLOCKER);
+    expect(olderCall(board, "bot-1", "t1", BLOCKER).id).toBe(second.id);
     expect(board.list()).toHaveLength(1);
   });
 
@@ -514,7 +514,7 @@ describe("every delete case: nothing deleted that should live, nothing live that
   type Outcome = { live: Partial<BoardPost>[]; dead: string[]; on?: Pc[] };
   const tip = (pc: Pc, title: string, parent?: BoardPost, author = "carbon") =>
     pc.board.post({ author_bot_id: author, kind: "tip", title, body: title, parent_id: parent?.id ?? null, source_ref: `${author === BOARD_USER ? "reply:" : "tool:tc:"}${title}` });
-  const call = (pc: Pc) => pc.calls.called("bot-1", "t1", ISSUE)!;
+  const call = (pc: Pc) => olderCall(pc.board, "bot-1", "t1", ISSUE);
   const clear = (pc: Pc, note: string) => pc.calls.cleared("t1", [ISSUE], [], note).map((post) => post.id);
   // a call as builds before the digest ref wrote it, the whole note in its ref
   const oldCall = (pc: Pc, episode: number) =>

@@ -4843,7 +4843,7 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-caret, .animate-msg-in, .animate-pop-in, .animate-panel-in, .animate-fade-in { animation: none; }
+  .animate-caret, .animate-msg-in, .animate-pop-in, .animate-panel-in, .animate-fade-in, .animate-step-in { animation: none; }
   .thinking-sheen { display: none; }
   .orbit-ring { display: none; }
   .turn-mascot-in, .turn-mascot-out { animation: none; }

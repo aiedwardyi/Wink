@@ -1,5 +1,5 @@
-// Bot calls feed the Board: an engine call leaves a stuck post, the bot clearing that blocker with a note solves it, and a later
-// bot with the same blocker, or about to ask the user a plain fact, gets the fix instead. No model calls.
+// Bot calls and the Board: a call reaches the user, never the Forum. The bot clearing a blocker an older build posted solves that post,
+// and a later bot with the same blocker, or about to ask the user a plain fact, gets the fix instead. No model calls.
 import { createHash } from "node:crypto";
 
 import { BOARD_REF_MAX, boardLine, boardPostId, errorSig, type Board, type BoardPost } from "./board.ts";
@@ -8,8 +8,8 @@ import type { TaskResumePacket } from "./task-state.ts";
 
 type Blocker = TaskResumePacket["blockers"][number];
 type Offer = { botId: string; key: string; postIds: string[] };
-export type ForumHold = { kind: "ask" | "call"; botId: string; threadId: string; postIds: string[] };
-/** One line per hold in the data folder, read by scripts/forum-replay.ts. */
+export type ForumHold = { kind: "ask" | "call" | "recall" | "helped" | "missed"; botId: string; threadId: string; postIds: string[] };
+/** One line per hold or recall in the data folder, then its outcome: helped, or missed when the same blocker comes back. */
 export const FORUM_HOLDS_FILE = "forum-holds.ndjson";
 
 /** At most this many posts ride back to a held call (~200 tokens). */
@@ -25,13 +25,24 @@ const closable = (blocker: Blocker) => forumKind(blocker) || blocker.kind === "l
 const keyOf = (blocker: Blocker) => `${blocker.kind}\n${blocker.note}`;
 const callRef = (threadId: string) => `call:${threadId}:`;
 
+/** The project's solved fixes for a query; ask adds the word floor the ask hold and recall share. */
+export const solvedMatches = (board: Board, projectId: string, query: string, ask = false) => board.search({
+  query,
+  errorSig: errorSig(query),
+  projectId,
+  minShare: MIN_SHARE,
+  ...(ask ? { sigRanksOnly: true, minHits: ASK_MIN_HITS } : {}),
+  limit: Number.POSITIVE_INFINITY,
+  withoutRoom: true,
+}).filter(solvedFix);
+
 export interface BoardCallDeps {
   board: Board;
   /** The thread's project, as a folder name; "" when it has none. */
   projectOf(threadId: string): string;
   /** True on a turn other people share (a group, a hosted or joined room): nothing private is offered, posted or captured there. */
   room(threadId: string): boolean;
-  /** Each hold, for the replay: ids only, never the question or blocker. */
+  /** Each hold and outcome, for the replay and SIM: ids only, never the question or blocker. */
   held?(hold: ForumHold): void;
 }
 
@@ -40,15 +51,7 @@ export function createBoardCalls(deps: BoardCallDeps) {
   /** Per thread and bot, kept past turn end: whether the last eligible ask was held, and every post shown. */
   const asked = new Map<string, { held: boolean; postIds: Set<string> }>();
 
-  const search = (threadId: string, query: string, ask = false) => deps.board.search({
-    query,
-    errorSig: errorSig(query),
-    projectId: deps.projectOf(threadId),
-    minShare: MIN_SHARE,
-    ...(ask ? { sigRanksOnly: true, minHits: ASK_MIN_HITS } : {}),
-    limit: Number.POSITIVE_INFINITY,
-    withoutRoom: true,
-  }).filter(solvedFix);
+  const search = (threadId: string, query: string, ask = false) => solvedMatches(deps.board, deps.projectOf(threadId), query, ask);
   /** The episode's post refs: the full-note ref older calls posted under, then the digest of the whole blocker a new post takes. */
   const episodeRefs = (threadId: string, blocker: Blocker, episode: number) => {
     const legacy = `${callRef(threadId)}${episode}:${blocker.kind}:${blocker.note}`;
@@ -72,18 +75,33 @@ export function createBoardCalls(deps: BoardCallDeps) {
       const found: BoardPost[] = [];
       for (const blocker of after) {
         const key = keyOf(blocker);
-        if (blocker.kind !== "engine" || had.has(key)) {
+        const old = had.has(key);
+        if (blocker.kind !== "engine" || (old && !offered.some((offer) => offer.botId === botId && !offer.key))) {
           kept.push(blocker);
           continue;
         }
-        const tried = offered.findIndex((offer) => offer.botId === botId && offer.key === key);
+        const tried = old ? -1 : offered.findIndex((offer) => offer.botId === botId && offer.key === key);
         if (tried >= 0) {
-          offered.splice(tried, 1);
+          const [miss] = offered.splice(tried, 1);
+          deps.held?.({ kind: "missed", botId, threadId, postIds: miss!.postIds });
+          kept.push(blocker);
+          continue;
+        }
+        const matches = search(threadId, blocker.note);
+        // a fix recall showed before the turn already had its try, also on a blocker the turn started with
+        const recalled = offered.findIndex((offer) => offer.botId === botId && !offer.key && matches.some((post) => offer.postIds.includes(post.id)));
+        if (recalled >= 0) {
+          const [miss] = offered.splice(recalled, 1);
+          deps.held?.({ kind: "missed", botId, threadId, postIds: miss!.postIds });
+          kept.push(blocker);
+          continue;
+        }
+        if (old) {
           kept.push(blocker);
           continue;
         }
         // Held only with a fix the notice carries; past the budget the blocker calls.
-        const posts = search(threadId, blocker.note).slice(0, BOARD_HITS);
+        const posts = matches.slice(0, BOARD_HITS);
         const fresh = posts.filter((post) => !found.some((seen) => seen.id === post.id)).slice(0, BOARD_HITS - found.length);
         const shown = posts.filter((post) => fresh.includes(post) || found.some((seen) => seen.id === post.id));
         if (!shown.length) {
@@ -124,18 +142,12 @@ export function createBoardCalls(deps: BoardCallDeps) {
       deps.held?.({ kind: "ask", botId, threadId, postIds: posts.map((post) => post.id) });
       return `Not asked yet: the Forum may answer this:\n${posts.map((post) => boardLine(post, HIT_CHARS)).join("\n")}\nIf it answers you, close this question with ask_user close:true. If not, it posts when your turn ends.`;
     },
-    /** A call went out: an engine blocker becomes an open stuck post, a fresh one once the last call was solved. */
-    called(botId: string, threadId: string, blocker: Blocker): BoardPost | undefined {
-      if (deps.room(threadId) || !forumKind(blocker)) return undefined;
-      return deps.board.post({
-        author_bot_id: botId,
-        kind: "stuck",
-        title: blocker.note,
-        body: blocker.note,
-        error_sig: errorSig(blocker.note),
-        project_id: deps.projectOf(threadId),
-        source_ref: currentRef(threadId, blocker),
-      });
+    /** The bot's newest open Stuck post on this thread, named on each task write until a fix reply under it solves it. */
+    ownStuck(botId: string, threadId: string): string {
+      if (deps.room(threadId)) return "";
+      const refs = [`tool:${threadId}:`, callRef(threadId)];
+      const own = deps.board.list().find((post) => post.author_bot_id === botId && post.kind === "stuck" && post.status === "open" && post.parent_id === null && refs.some((ref) => post.source_ref.startsWith(ref)));
+      return own ? `Your Forum post ${own.id} is still open. Once it is solved, reply with board_post kind fix and parent_id ${own.id}.` : "";
     },
     /** The bot cleared the one blocker it called on, with a note: that note is the fix. The user's chat is never the fix. */
     cleared(threadId: string, before: readonly Blocker[], after: readonly Blocker[], note = ""): BoardPost[] {
@@ -148,13 +160,23 @@ export function createBoardCalls(deps: BoardCallDeps) {
       // one note cannot say which of several calls it fixed
       return open.length === 1 ? [deps.board.solve(open[0]!.id, note)!] : [];
     },
+    /** A fix recall showed before a turn, scored like a held call. */
+    recalled(botId: string, threadId: string, postIds: string[]): void {
+      if (deps.room(threadId)) return;
+      offers.set(threadId, [...(offers.get(threadId) ?? []), { botId, key: "", postIds }]);
+      deps.held?.({ kind: "recall", botId, threadId, postIds });
+    },
     /** A turn that held a Board fix and ended without calling: the fix helped. */
     turnEnded(threadId: string, ok: boolean): void {
       const offered = offers.get(threadId);
       if (!offered) return;
       offers.delete(threadId);
       if (!ok) return;
-      for (const offer of offered) deps.board.helped(offer.postIds, offer.botId);
+      for (const offer of offered) {
+        // a recall came before any failure, so it earns no Helped on the post
+        if (offer.key) deps.board.helped(offer.postIds, offer.botId);
+        deps.held?.({ kind: "helped", botId: offer.botId, threadId, postIds: offer.postIds });
+      }
     },
   };
 }
