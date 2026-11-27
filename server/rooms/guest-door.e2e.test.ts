@@ -972,6 +972,7 @@ describe("bots in two homes hand work to each other", () => {
       },
       connectorThread: () => ({}),
       botOutputRoots: () => [folder],
+      readOnlyTurn: () => true,
       captureRoomPicture: (_bot: BotRecord, thread: string) => home.turns.capturePicture(thread),
     } as unknown as Parameters<typeof createInternalRoutes>[0]);
     const res = { writeHead: vi.fn(), end: vi.fn() };

@@ -81,7 +81,7 @@ describe("file scope follows the turn the token belongs to", () => {
   it("the chat's own working turn still records any local file", async () => {
     const result = await post("taskState", ["bot-b", "chat-b"], { fromBotId: "bot-b", fromThreadId: "chat-b", artifacts: [{ ref: outside, label: "x" }] });
     expect(result.status).toBe(200);
-    expect(artifactsOf("chat-b")).toEqual([realpathSync.native(outside)]);
+    expect(artifactsOf("chat-b")).toEqual([realpathSync(outside)]);
   });
 
   it("the boot token can still write for a named chat", async () => {
