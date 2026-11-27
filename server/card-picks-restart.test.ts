@@ -348,9 +348,10 @@ describe("every way to answer a card files it under that card", () => {
     { revise: "an edit of the first quote", ahead: 0 },
     // the first answer's PC clock ran ahead of the server that stamps the edit
     { revise: "an edit of the first quote", ahead: 90 * MINUTE },
+    { revise: "two edits of the first quote", ahead: 90 * MINUTE },
   ])("files $revise of an answered card as its answer now (first clock ahead $ahead ms)", async ({ revise, ahead }) => {
     const { ask, send, settle, restarted, branch } = setup();
-    const card = ask("What database should billing use?", ["SQLite", "Postgres"]);
+    const card = ask("What database should billing use?", ["SQLite", "Postgres", "MySQL"]);
     // a newer card makes the reply name its question
     ask("Which theme should billing use?", ["Light", "Dark"]);
     const first = send(`${answerPrefix(card)}SQLite`, { actedAt: Date.now() - 2 * MINUTE + ahead });
@@ -358,9 +359,14 @@ describe("every way to answer a card files it under that card", () => {
     if (revise === "a second quote") send(`${answerPrefix(card)}Postgres`);
     else branch(first.id, `${answerPrefix(card)}Postgres`);
     await settle();
+    const latest = revise === "two edits of the first quote" ? "MySQL" : "Postgres";
+    if (latest === "MySQL") {
+      branch(first.id, `${answerPrefix(card)}MySQL`);
+      await settle();
+    }
     const { prompt, picks } = await restarted();
-    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", card.id]]);
-    expect(`${prompt}\n`).toContain("): Postgres\n");
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([[latest, card.id]]);
+    expect(`${prompt}\n`).toContain(`): ${latest}\n`);
     expect(prompt).not.toContain("SQLite");
   });
 

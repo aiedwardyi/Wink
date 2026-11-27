@@ -23,7 +23,7 @@ export type ReplyPictures = PictureTurn & {
   answer?: string;
   /** the card's own option the reply picks, word for word */
   choice?: string;
-  /** an edit's newest replaced row time: the edit is newer, whatever that row's clock said */
+  /** when the newest row an edit replaces took effect: the edit is newer, whatever that row's clock said */
   edits?: number;
 };
 type PickSource = Partial<ReplyPictures> & { id?: string; at?: number; thread?: string; files?: string[] };
@@ -178,7 +178,8 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
     }
     // an edit sits on the parent of the user's rows it replaces
     const replaced = messages.slice(0, i).filter((row, j) => sentByPerson(row) && parent(j) === parent(i));
-    if (replaced.length) reply.edits = Math.max(...replaced.map((row) => row.actedAt ?? row.at));
+    // each earlier edit took effect after the rows it replaced, so a later edit is newer still
+    if (replaced.length) reply.edits = replaced.reduce((after, row) => Math.max(row.actedAt ?? row.at, after + 1), -Infinity);
     found.set(answer.id, reply);
   }
   return found;
