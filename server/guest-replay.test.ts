@@ -30,6 +30,7 @@ import { isRecoveringPacket, lastUserInstruction, unsettledRequest } from "./tas
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket } from "./task-state-fold.ts";
 import * as turns from "./turn-context.ts";
 import { currentTurnTrace, tracePart } from "./turn-timing.ts";
+import { retiredPickLines } from "./workspace.ts";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 function section(from: string, to: string): string {
@@ -169,7 +170,7 @@ const rig = async () => {
       graceInputs: {}, summaryGrace: {}, summarySkipped: false, codexHistory: false, logSummaryWait: () => {},
       seed: {}, systemSeed: undefined, systemSeeds: { set: () => ({}) },
       pendingInterruptThreads: { started: () => {} }, effort: undefined, leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(),
-      joinRunningTurn, guestTurnInput, runningTurnIdByThread: new Map(), readOnly: opts.readOnly === true,
+      joinRunningTurn, guestTurnInput, runningTurnIdByThread: new Map(), readOnly: opts.readOnly === true, retiredPickLines,
     });
     expect(await recorder.until((e) => e.type === "turn.completed" && e.threadId === threadId)).toMatchObject({ ok: true });
     const sent = sendTurn.mock.calls.at(-1)![0] as SendTurnInput;
