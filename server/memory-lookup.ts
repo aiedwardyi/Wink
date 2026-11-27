@@ -34,6 +34,9 @@ export const RECALL_HEADER = "[Wink recall: past notes, may be unrelated or outd
 
 const BUDGET_MS = 25;
 const MAX_ROWS = 2;
+// within a tier: bm25 is negative, so an older row gives up this much text relevance a day (scripts/recall-rank-sweep.ts)
+export const RECENCY_PER_DAY = 0.03;
+const DAY_MS = 86_400_000;
 const MAX_CHARS = 1_400;
 const PIECE_MAX = 700;
 const MAX_CORPUS_BYTES = 2 * 1024 * 1024;
@@ -648,8 +651,10 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     if (over()) return [];
     if (!passed.length) return [];
 
+    const today = Date.parse(localDay(now()));
+    const key = (hit: RecallHit) => hit.score + (RECENCY_PER_DAY * Math.max(0, today - Date.parse(hit.date))) / DAY_MS;
     const newest = new Map<string, RecallHit>();
-    for (const hit of passed) if (!newest.has(hit.topic)) newest.set(hit.topic, hit);
+    for (const hit of passed.toSorted((a, b) => key(a) - key(b))) if (!newest.has(hit.topic)) newest.set(hit.topic, hit);
     const mark = sessionMark(botId, threadId, session);
     const unseen = [...newest.values()].filter((hit) => !mark.rows.has(hit.key)).sort((a, b) => a.tier - b.tier);
     if (!unseen.length) {

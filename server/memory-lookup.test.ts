@@ -204,6 +204,21 @@ describe("corpus", () => {
     expect(note).not.toContain("Tuesdays");
   });
 
+  it("ranks the newest of rows the words tie on first", async () => {
+    const botId = `bot-${randomUUID()}`;
+    // a held-out case of scripts/recall-rank-sweep.ts
+    sideFile(botId, "juniper.md", [
+      "- Juniper release train checklist: meadow harvest hazel dune before each run (2026-05-09), yarn lagoon",
+      "- Old plan for the juniper release train was the north desk (2026-06-10), harvest",
+      "- Juniper release train: Friday evening, set 2026-10-22, hazel violin dune harvest tulip bramble lagoon parcel",
+      "- Juniper release train came up in the zinc review, no change (2026-04-16), garden",
+      "- Juniper release train: the vendor in town, confirmed 2026-11-17, kayak hazel lunch canyon",
+      "- Old plan for the juniper release train was the north desk (2026-06-16), bramble glacier canyon kiosk meadow walnut jasmine kayak",
+    ].join("\n"));
+    const { lookup } = await lookupFor(FILLER, { botId, now: () => Date.parse("2026-11-27T12:00:00") });
+    expect(ask(lookup, botId, "did we settle the juniper release train")[0]).toContain("the vendor in town");
+  });
+
   it("keeps goals noted on different days as their own topics", async () => {
     const { botId, lookup } = await lookupFor(`${FILLER}\n- Goal: Glasses v1 is a CEO meeting tool: person brief (noted 11-01)\n- Goal: Korean lessons twice a week before the Seoul trip (noted 11-02)\n`);
     expect(ask(lookup, botId, "glasses CEO meeting tool person brief")[0]).toContain("Glasses v1");
