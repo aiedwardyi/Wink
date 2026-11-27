@@ -625,6 +625,27 @@ describe("send path wiring", () => {
     return { prompt: run(scope), take };
   };
 
+  it.each([8, 110])("recalls the two inspection notes from %i competing rows", async (count) => {
+    const unrelated = Array.from({ length: Math.max(240, count * 22) }, (_, n) => `- Parcel ${n} | post office reminder`);
+    const crowded = Array.from({ length: count }, (_, n) => n % 2
+      ? `| Cedar reference ${n} | ridge ridge ridge | inspection inspection inspection |`
+      : `| Inspection ridge cedar ${n} | inspection ridge cedar |`);
+    const notes = [
+      ...unrelated,
+      ...crowded,
+      "| Cedar ridge inspection schedule | Tuesday at 9 with the building manager |",
+      "| Cedar ridge inspection contact | Call Maple Office to get access to the roof |",
+    ];
+    const { botId, lookup } = await lookupFor(notes.join("\n"));
+    const { prompt } = turn(undefined, "claudeAgent", [], {
+      bot: { id: botId }, memoryLookup: lookup, text: "What did we save for the Cedar Ridge inspection?",
+    });
+    expect(prompt).toContain("Tuesday at 9 with the building manager");
+    expect(prompt).toContain("Call Maple Office to get access to the roof");
+    expect(prompt).not.toContain("Cedar reference");
+    expect(prompt).not.toContain("Inspection ridge cedar");
+  });
+
   it.each(["claudeAgent", "codex", "acp", "antigravity"])("runs on a typed turn on %s", (kind) => {
     const { prompt, take } = turn(undefined, kind);
     expect(take).toHaveBeenCalledWith("b1", "t1", "c1", "typed words");

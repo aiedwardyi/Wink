@@ -41,6 +41,7 @@ const MAX_TERMS = 8;
 // longer than any word worth finding, and the shape of an undetected key
 const MAX_WORD = 32;
 const HIT_LIMIT = 30;
+const CROWDED_HIT_LIMIT = 128;
 const NEAR_WORDS = 10;
 const MIN_COVER = 0.5;
 const RARE_IDF = 3;
@@ -68,7 +69,7 @@ const yieldLoop = () => new Promise((resolve) => setImmediate(resolve));
 export type NoteFile = { source: string; tier: 0 | 1; text: string; mtime: number; firstLine?: number };
 type Piece = { key: string; ref: string; source: string; tier: 0 | 1; date: string; topic: string; title: string[]; text: string; tokens: string[] };
 export type RecallHit = Piece & { score: number };
-type Terms = { list: string[]; groups: string[][] };
+type Terms = { list: string[]; groups: string[][]; order: string[] };
 
 export interface RecallIndex {
   /** extra: text whose words count only when the notes have them */
@@ -190,6 +191,31 @@ function hasNearPair(positions: number[][]): boolean {
     first.some((x) => second.some((y) => Math.abs(x - y) <= NEAR_WORDS))));
 }
 
+function fieldRank(hit: RecallHit, found: Map<string, number>, weights: number[], pairs: Map<string, number>) {
+  const fields = hit.text.split(/[|;]|:\s+/);
+  let cover = 0;
+  let phrases = 0;
+  for (const tokens of fields.length === 1 ? [hit.tokens] : fields.map(words)) {
+    let mask = 0;
+    let overlaps = 0;
+    let previous = "";
+    for (const token of tokens) {
+      const matched = found.get(token) ?? 0;
+      mask |= matched;
+      if (skipped(token)) continue;
+      if (previous && matched) overlaps |= pairs.get(`${previous} ${token}`) ?? 0;
+      previous = matched ? token : "";
+    }
+    const fieldCover = weights.reduce((sum, weight, group) => sum + (mask & (1 << group) ? weight : 0), 0);
+    const fieldPhrases = bits(overlaps);
+    if (fieldCover > cover || (fieldCover === cover && fieldPhrases > phrases)) {
+      cover = fieldCover;
+      phrases = fieldPhrases;
+    }
+  }
+  return { hit, cover, phrases };
+}
+
 export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> {
   const parsed = files.flatMap(piecesOfFile);
   const latest = new Map<string, string>();
@@ -205,7 +231,7 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
     if ((index + 1) % YIELD_EVERY === 0) await yieldLoop();
   }
   db.exec("COMMIT");
-  const search = db.prepare(`SELECT rowid AS id, bm25(notes) AS score FROM notes WHERE notes MATCH ? ORDER BY bm25(notes), rowid LIMIT ${HIT_LIMIT}`);
+  const search = db.prepare(`SELECT rowid AS id, bm25(notes) AS score FROM notes WHERE notes MATCH ? ORDER BY bm25(notes), rowid LIMIT ${CROWDED_HIT_LIMIT}`);
 
   const documents = new Map<string, number>();
   for (const row of rows) for (const word of new Set(row.flatMap((piece) => piece.tokens))) documents.set(word, (documents.get(word) ?? 0) + 1);
@@ -302,7 +328,7 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
       }
       const base = [...new Set([...all, ...known].filter((word) => !skipped(word) && !parts.has(word) && !/^\d+$/.test(word) && word.length <= MAX_WORD))];
       const list = [...base, ...joined].sort((a, b) => idf(b) - idf(a)).slice(0, MAX_TERMS);
-      return { list, groups: list.map((term) => repair(term, expired)) };
+      return { list, groups: list.map((term) => repair(term, expired)), order: all.length ? all : known };
     },
     possible(terms) {
       const { list, groups } = terms;
@@ -339,7 +365,7 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
       const whole = inNotes.reduce((sum, options) => sum + weight(options), 0);
       const weights = inNotes.map(weight);
       const found = matched.get(terms) ?? groupBits(inNotes);
-      return hits.filter((hit) => {
+      const passed = hits.filter((hit) => {
         if (!hit.title.some((token) => found.has(token))) return false;
         const at = inNotes.map((): number[] => []);
         for (const [position, token] of hit.tokens.entries()) {
@@ -351,6 +377,23 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
         const rare = at.some((list, group) => list.length && weights[group]! >= rareBar);
         return positions.length >= 2 && rare && cover / whole >= MIN_COVER && hasNearPair(positions);
       });
+      if (passed.length <= MAX_ROWS && hits.length <= HIT_LIMIT) return passed;
+
+      const pairs = new Map<string, number>();
+      let previous = "";
+      for (const word of terms.order) {
+        if (skipped(word)) continue;
+        const group = list.indexOf(previous);
+        if (group >= 0 && word !== previous && list.includes(word)) pairs.set(`${previous} ${word}`, 1 << group);
+        previous = word;
+      }
+      const shortlisted = hits.length > HIT_LIMIT ? new Set(hits.slice(0, HIT_LIMIT)) : undefined;
+      // A row outside the usual search window needs an exact phrase in its best field.
+      return passed.map((hit) => fieldRank(hit, found, weights, pairs))
+        .filter(({ hit, phrases }) => !shortlisted || phrases > 0 || shortlisted.has(hit))
+        .sort((a, b) => b.cover - a.cover || b.phrases - a.phrases)
+        .slice(0, HIT_LIMIT)
+        .map(({ hit }) => hit);
     },
     close: () => db.close(),
   };
