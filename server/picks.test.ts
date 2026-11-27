@@ -216,6 +216,15 @@ describe("card answers", () => {
     expect(applyPicks(typed, [tap("q1", "a2", "Which database?", "Postgres", at(26, 11))])).toBeNull();
   });
 
+  it("keeps a typed card answer that replaced a typed pick current through a merge", () => {
+    const typed = applyPicks("", [pick("Which database?", "SQLite", "SQLite", at(26, 10), { binding: { at: at(26, 10), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never })])!.text;
+    const revised = applyPicks(typed, [{ ...tap("q1", "a2", "Which database?", "Postgres", at(26, 11)), typed: true } as PickChange])!.text;
+    for (const merged of [mergeTimelines(revised, revised)!, mergeTimelines(typed, revised)!, mergeTimelines(revised, typed)!]) {
+      expect(currentPicks(merged).map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", "q1"]]);
+    }
+    expect(applyPicks(revised, [tap("q1", "a3", "Which database?", "SQLite", at(26, 12))])).toBeNull();
+  });
+
   it("shows a pick an older build marked retired, and keeps the line on file", () => {
     const text = "# Decision timeline\n\n## 2026-11-18 17:32 | memory audit fix timing | current\n- Picked: Fix tonight\n- Retired: 2026-11-19\n";
     expect(picksBlock(text)).toContain("memory audit fix timing (11-18): Fix tonight");

@@ -284,8 +284,10 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
         id, key, picked,
         over: (change.over ?? []).map((option) => clip(option, PICKED_MAX).replace(/;/g, ",")).filter(Boolean),
         overPictures: card.overPictures, said: flat(change.said), files: card.files, tweaks: [], extra: [],
-        tapped: true, thread: card.thread, messageId: card.messageId, questionId: card.questionId, binding: "verified", at: change.at,
+        thread: card.thread, messageId: card.messageId, questionId: card.questionId, binding: "verified", at: change.at,
       };
+      // an answer that takes a typed pick's place is typed too, so a press never beats it here or in a merge
+      if (!typedPick) entry.tapped = true;
       if (card.picture) entry.picture = card.picture;
       entries.push(entry);
       follow(key);
@@ -535,7 +537,7 @@ export function pickKeysList(text: string | null | undefined): string {
 
 function pickLine(entry: PickEntry): string {
   // a card answer's follow-up is the user's words on it, shown whole: its last words can hold the pick back
-  const shown = entry.tweaks.slice(-TWEAKS_SHOWN).map(({ at, said }) => `"${cardOf(entry) ? said : clip(said, TWEAK_SHOWN_MAX)}" (${monthDay(at)})`);
+  const shown = entry.tweaks.slice(-TWEAKS_SHOWN).map(({ at, said }) => `"${questionOf(entry) ? said : clip(said, TWEAK_SHOWN_MAX)}" (${monthDay(at)})`);
   const earlier = entry.tweaks.length - shown.length;
   const tweaks = shown.length ? ` + tweaks: ${shown.join(", ")}${earlier ? ` (+${earlier} earlier in memory/${PICKS_FILE})` : ""}` : "";
   const head = `- ${pickHead(entry)}${entry.picture ? ` (${entry.picture.path})` : ""}`;
