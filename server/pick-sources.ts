@@ -144,13 +144,13 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
     for (let at = i; at >= 0; at = parent(at)) path.push(messages[at]!);
     return path.reverse();
   };
-  // a reply with no card id answers the newest card on its branch it quotes, answered before or not, else a question with no buttons its branch closes with it
+  // a reply with no card id answers the newest card on its branch it quotes, answered before or not, else a card its branch closes with it: one with no buttons by any words, else by an option's whole text, as a tap sends it
   const chatCard = (answer: Message, path: readonly Message[]) => {
     if (answer.answersCard) return undefined;
     const text = answer.text ?? "";
     const quoted = text.startsWith("Re: “") ? path.findLast((row) => row !== answer && isQuestionCard(row) && text.startsWith(answerPrefix(row))) : undefined;
     if (quoted) return quoted.id;
-    for (const [card, state] of askStates(path)) if (state.state === "answered" && state.by === answer && !card.card?.options?.length) return card.id;
+    for (const [card, state] of askStates(path)) if (state.state === "answered" && state.by === answer && (!card.card?.options?.length || card.card.options.includes(text.trim()))) return card.id;
     return undefined;
   };
   for (let i = messages.length - 1; i >= 0 && wanted.size; i -= 1) {

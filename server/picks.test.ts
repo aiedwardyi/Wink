@@ -523,3 +523,147 @@ describe("all picks in the system prompt", () => {
     }
   });
 });
+
+describe("typed card answers", () => {
+  // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+  const answer = (messageId: string, picked: string, when: number, typed: boolean) =>
+    pick("Which database?", picked, picked, when, { tapped: true, typed, binding: { at: when, messageId, questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never });
+
+  it("never lets a later press replace a typed card answer, here or through a merge", () => {
+    const typed = applyPicks("", [answer("a1", "Postgres", at(26, 10), true)])!.text;
+    expect(typed).toContain("- Typed: yes\n");
+    expect(typed).not.toContain("- Tapped: yes");
+    expect(applyPicks(typed, [answer("a2", "MySQL", at(26, 11), false)])).toBeNull();
+    const pressed = applyPicks("", [answer("a2", "MySQL", at(26, 11), false)])!.text;
+    for (const merged of [mergeTimelines(typed, pressed)!, mergeTimelines(pressed, typed)!]) {
+      expect(currentPicks(merged).map(({ picked, typed }) => [picked, typed])).toEqual([["Postgres", true]]);
+      expect(mergeTimelines(merged, pressed)).toBe(merged);
+    }
+  });
+
+  it("lets a newer typed answer replace a press on its card, and a press of the same option it types becomes typed", () => {
+    const pressed = applyPicks("", [answer("a1", "MySQL", at(26, 10), false)])!.text;
+    expect(currentPicks(applyPicks(pressed, [answer("a2", "Postgres", at(26, 11), true)])!.text).map(({ picked, typed }) => [picked, typed])).toEqual([["Postgres", true]]);
+    const retyped = applyPicks(pressed, [answer("a2", "MySQL", at(26, 11), true)])!.text;
+    expect(applyPicks(retyped, [answer("a3", "Postgres", at(26, 12), false)])).toBeNull();
+  });
+
+  it("keeps a typed card answer beside a later typed answer to another question under its key", () => {
+    const card = applyPicks("", [answer("a1", "Postgres", at(26, 10), true)])!.text;
+    // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+    const other = pick("Which database?", "SQLite", "Use SQLite for the desktop cache", at(26, 11), { binding: { at: at(26, 11), messageId: "a2", questionId: "q2", thread: "t1", files: [], overPictures: [], named: true } as never });
+    const text = applyPicks(card, [other])!.text;
+    expect(currentPicks(text).map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", "q1"], ["SQLite", "q2"]]);
+    expect(currentPicks(mergeTimelines(card, text)).map(({ picked }) => picked)).toEqual(["Postgres", "SQLite"]);
+  });
+
+  // written by review-base's applyPicks: taps, a revised tap, typed and unbound picks, a tweak, a goal and a legacy line
+  const older = `# Decision timeline
+
+The user's picks in their own words, oldest first. Auto Notes writes this file from the chat; bots read it and never edit it. A newer pick on the same question replaces the old one, which stays here struck out with a pointer to the newer pick. A tweak adds to the pick it changes. Only current picks load into the bot's prompt.
+
+## 2026-11-20 | forum look | replaced by 2026-11-22 09:00
+- Picked: ~~C - Reddit cards~~
+- Said: "go with c"
+- Binding: unbound
+
+## 2026-11-21 10:00 | Which theme? | replaced by 2026-11-21 11:00
+- Picked: ~~Dark~~
+- Said: "Dark"
+- At: 1795222800000
+- Tapped: yes
+- Thread: t1
+- Message: a1
+- Question: q1
+- Binding: verified
+
+## 2026-11-21 11:00 | Which theme? | current
+- Picked: Light
+- Said: "Light"
+- At: 1795226400000
+- Tapped: yes
+- Thread: t1
+- Message: a2
+- Question: q1
+- Binding: verified
+
+## 2026-11-22 09:00 | forum look | current
+- Picked: B - tiles
+- Over: C - Reddit cards
+- Said: "actually b"
+- At: 1795305600000
+- Thread: t1
+- Message: a3
+- Question: q2
+- Binding: verified
+- Tweak 2026-11-22 09:05: "make the tiles a bit smaller"
+
+## 2026-11-23 14:00 | Signing service | replaced by 2026-11-23 15:00
+- Picked: ~~Cloud signing~~
+- Said: "Cloud signing"
+- At: 1795410000000
+- Tapped: yes
+- Thread: t1
+- Message: a4
+- Question: q3
+- Binding: verified
+
+## 2026-11-23 15:00 | Signing service | current
+- Picked: Local signing
+- Said: "Use Local signing for desktop builds"
+- At: 1795413600000
+- Thread: t1
+- Message: a5
+- Question: q4
+- Binding: verified
+
+## 2026-11-24 10:00 | Which database? | replaced by 2026-11-24 11:00
+- Picked: ~~SQLite~~
+- Said: "SQLite"
+- At: 1795482000000
+- Tapped: yes
+- Thread: t1
+- Message: a6
+- Question: q5
+- Binding: verified
+
+## 2026-11-24 11:00 | Which database? | current
+- Picked: Postgres
+- Said: "Postgres please"
+- At: 1795485600000
+- Thread: t1
+- Message: a7
+- Question: q5
+- Binding: verified
+
+## 2026-11-24 12:00 | Glasses v1 | current
+- Picked: CEO meeting tool: person brief + top 3 competitors
+- Kind: goal
+
+## 2026-11-01 | release channel | replaced by 2026-11-25 09:00
+- Picked: ~~Release channel: stable~~
+
+## 2026-11-25 09:00 | release channel | current
+- Picked: Beta
+- Said: "beta for now"
+
+## 2026-11-25 10:00 | Where should missing values appear? | current
+- Picked: Last
+- Said: "Last"
+- At: 1795568400000
+- Tapped: yes
+- Thread: t1
+- Message: a8
+- Question: q6
+- Binding: verified
+`;
+
+  it("reads a picks file an older build wrote byte for byte, in the same order", () => {
+    expect(renderTimeline(parseTimeline(older))).toBe(older);
+    expect(parseTimeline(older).entries.some(({ typed }) => typed)).toBe(false);
+    expect(currentPicks(older).map(({ key, picked }) => [key, picked])).toEqual([
+      ["Which theme?", "Light"], ["forum look", "B - tiles"], ["Signing service", "Local signing"], ["Which database?", "Postgres"], ["release channel", "Beta"], ["Where should missing values appear?", "Last"],
+    ]);
+    expect(picksBlock(older)).toBe("Open goals the user set, in their words: build toward each until they finish or drop it, then call pin_goal with done.\n- Glasses v1 (11-24): CEO meeting tool: person brief + top 3 competitors\n\nCurrent picks, newest first: the user's own, each beating older notes unless they changed it since. Build from a pick's picture plus its tweaks, never a new option. History: memory/decisions.md (Auto Notes writes it; never edit).\n- Where should missing values appear? (11-25): Last\n- release channel (11-25): Beta\n- Which database? (11-24): Postgres\n- Signing service (11-23): Local signing\n- forum look (11-22): B - tiles + tweaks: \"make the tiles a bit smaller\" (11-22)\n- Which theme? (11-21): Light");
+  });
+});

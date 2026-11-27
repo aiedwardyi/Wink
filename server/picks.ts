@@ -35,7 +35,7 @@ const DONE = "Done";
 const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2}\.\d{3})?)?(?: \(\d+\))?`;
 const ENTRY = new RegExp(String.raw`^## (${ID}) \| (.+?) \| (?:current|replaced by (${ID}))\s*$`);
 const TWEAK = new RegExp(String.raw`^- Tweak (${ID}): "(.*)"\s*$`);
-const FIELD = /^- (Picked|Kind|Done|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Thread|Message|Question|Binding): ?(.*?)\s*$/;
+const FIELD = /^- (Picked|Kind|Done|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Typed|Thread|Message|Question|Binding): ?(.*?)\s*$/;
 const SEPARATOR = "; ";
 /** An option's letter or number before its words, like "C - Reddit cards". */
 export const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
@@ -60,6 +60,8 @@ export type PickEntry = {
   said?: string;
   /** Picked by tapping a card; a typed pick on the question always beats it. */
   tapped?: boolean;
+  /** A card's own answer in the user's typed words: kept apart from other questions like a tap, never beaten by one. */
+  typed?: boolean;
   files: string[];
   /** The task or room that holds the source messages and links its files. */
   thread?: string;
@@ -122,7 +124,7 @@ const slotOf = (entry: { kind?: string; key: string }) => `${entry.kind === "goa
 // a verified tap's card: its answers replace each other and never another card's, whatever the keys
 const cardSlot = ({ thread, questionId }: { thread?: string; questionId?: string }) => `card\0${thread}\0${questionId}`;
 const questionOf = (entry: PickEntry) => (entry.binding === "verified" && entry.thread && entry.questionId && entry.questionId !== entry.messageId ? cardSlot(entry) : undefined);
-const cardOf = (entry: PickEntry) => (entry.tapped ? questionOf(entry) : undefined);
+const cardOf = (entry: PickEntry) => (entry.tapped || entry.typed ? questionOf(entry) : undefined);
 const apart = (answer: PickEntry, other: PickEntry) => Boolean(cardOf(answer) && questionOf(other) && questionOf(other) !== cardOf(answer));
 
 const stems = (text: string) => new Set(pickKey(text).split(" ").filter((word) => word.length >= 3).map((word) => word.slice(0, 4)));
@@ -171,6 +173,7 @@ export function parseTimeline(text: string): Timeline {
     else if (field === "Files") entry.files = list(value);
     else if (field === "Source" && /^[a-f0-9]{64}$/.test(value)) entry.source = value;
     else if (field === "Tapped" && value === "yes") entry.tapped = true;
+    else if (field === "Typed" && value === "yes") entry.typed = true;
     else if (field === "Thread" && /^[\w-]+$/.test(value)) entry.thread = value;
     else if (field === "Message" && /^[\w-]+$/.test(value)) entry.messageId = value;
     else if (field === "Question" && /^[\w-]+$/.test(value)) entry.questionId = value;
@@ -197,6 +200,7 @@ export function renderTimeline({ head, entries }: Timeline): string {
       ...(entry.source ? [`- Source: ${entry.source}`] : []),
       ...(entry.at === undefined ? [] : [`- At: ${entry.at}`]),
       ...(entry.tapped ? ["- Tapped: yes"] : []),
+      ...(entry.typed ? ["- Typed: yes"] : []),
       ...(entry.thread ? [`- Thread: ${entry.thread}`] : []),
       ...(entry.messageId ? [`- Message: ${entry.messageId}`] : []),
       ...(entry.questionId ? [`- Question: ${entry.questionId}`] : []),
@@ -246,7 +250,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
       const picked = flat(change.picked);
       // one answer per tap, however many keys the note-taker files it under
       if (!picked || entries.some((entry) => entry.thread === card.thread && entry.messageId === card.messageId)) continue;
-      const pressed = entries.findLast((entry) => !entry.replacedBy && !entry.kind && cardOf(entry) === own);
+      const pressed = entries.findLast((entry) => !entry.replacedBy && !entry.kind && entry.tapped && cardOf(entry) === own);
       // a typed pick on this card beats a press of its options; a newer typed answer to the card replaces it
       const typedPick = pressed ? undefined : entries.findLast((entry) => !entry.replacedBy && !entry.kind && !entry.tapped && questionOf(entry) === own);
       if (typedPick && !change.typed) continue;
@@ -262,6 +266,10 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
         // the same option tapped again renews the answer as of now
         if (flat(mine.picked) === picked) {
           mine.at = change.at;
+          if (change.typed && mine.tapped) {
+            delete mine.tapped;
+            mine.typed = true;
+          }
           retyped = true;
           follow(mine.key);
           continue;
@@ -286,8 +294,9 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
         overPictures: card.overPictures, said: flat(change.said), files: card.files, tweaks: [], extra: [],
         thread: card.thread, messageId: card.messageId, questionId: card.questionId, binding: "verified", at: change.at,
       };
-      // an answer that takes a typed pick's place is typed too, so a press never beats it here or in a merge
-      if (!typedPick) entry.tapped = true;
+      // a typed answer is never beaten by a press, here or in a merge
+      if (change.typed) entry.typed = true;
+      else entry.tapped = true;
       if (card.picture) entry.picture = card.picture;
       entries.push(entry);
       follow(key);
@@ -479,6 +488,7 @@ export function mergeTimelines(a: string, b: string): string | null {
         delete both.tapped;
         both.at = entry.at;
       }
+      if (entry.typed && !both.tapped) both.typed = true;
       merged.set(key, both);
     }
   }
@@ -511,9 +521,13 @@ export function mergeTimelines(a: string, b: string): string | null {
     }
     // a card's newest answer replaces only that card's last one; another question's answer under the same key stays beside it
     const answer = card ? answers.get(card) : undefined;
+    if (entry.tapped && answer?.typed && !answer.replacedBy) {
+      entry.replacedBy = answer.id;
+      continue;
+    }
     if (card) answers.set(card, entry);
     if (answer && !answer.replacedBy) answer.replacedBy = id;
-    else if (before && !(card && before.tapped)) before.replacedBy = id;
+    else if (before && !(card && (before.tapped || before.typed))) before.replacedBy = id;
     current.set(slotOf(entry), entry);
   }
   const head = [...new Set(timelines.flatMap(({ head }) => timelineHead(head).split("\n")))].join("\n");

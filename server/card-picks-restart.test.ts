@@ -222,6 +222,30 @@ describe("every way to answer a card files it under that card", () => {
     expect(`${prompt}\n`).toContain(": Cloud signing\n");
   });
 
+  it.each([{ staysOpen: true, sent: "Postgres" }, { staysOpen: false, sent: "Postgres" }, { staysOpen: true, sent: "  Postgres\n" }])("files a typed exact option like a tap of it (stays open $staysOpen)", async ({ staysOpen, sent }) => {
+    const { send, settle, answeredBy, restarted, post } = setup();
+    const asked: NonNullable<Message["card"]> = { title: "Ask", subtitle: "Which database should the reporting service use?", options: ["Postgres", "MySQL"], askUser: true };
+    if (staysOpen) asked.staysOpen = true;
+    const card = post({ role: "bot", kind: "options", card: asked });
+    const reply = send(sent, { sendId: "send-1" });
+    expect(answeredBy(card)).toBe(reply.id);
+    await settle();
+    const { replay, prompt, picks } = await restarted();
+    expect(replay).not.toContain("Postgres");
+    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId])).toEqual([["Postgres", card.id, reply.id]]);
+    expect(`${prompt}\n`).toMatch(/- Which database should the reporting service use\? \(\d\d-\d\d\): Postgres\n/);
+  });
+
+  it.each(["postgres", "Postgres please", "B", "the first one"])("leaves a typed %s that is not an option's whole text to the notes", async (sent) => {
+    const { send, settle, answeredBy, restarted, post } = setup();
+    const card = post({ role: "bot", kind: "options", card: { title: "Ask", subtitle: "Which database should the reporting service use?", options: ["Postgres", "MySQL"], askUser: true } });
+    const reply = send(sent);
+    expect(answeredBy(card)).toBe(reply.id);
+    await settle();
+    const { picks } = await restarted();
+    expect(picks).toEqual([]);
+  });
+
   it.each([
     { options: ["Last", "First"], tap: "Last" },
     { options: ["Last", "First"], tap: "First" },
@@ -276,10 +300,10 @@ describe("every way to answer a card files it under that card", () => {
     expect(`${prompt}\n`).toContain(`): ${filed}\n`);
   });
 
-  it.each([{ helper: true }, { helper: false }])("keeps a card tap and a later typed decision on another question under the same key (helper note $helper)", async ({ helper }) => {
+  it.each([true, false].flatMap((helper) => ["tap", "typed", "quoted"].map((how) => ({ helper, how }))))("keeps a card answer ($how) and a later typed decision on another question under the same key (helper note $helper)", async ({ helper, how }) => {
     const { ask, send, settle, restarted, post } = setup();
     const card = ask("Which signing service should we use for mobile builds?", ["Cloud signing", "Manual signing"]);
-    const tap = send("Cloud signing", { answersCard: card.id, actedAt: Date.now() - 2 * MINUTE });
+    const tap = send(how === "quoted" ? `${answerPrefix(card)}Cloud signing` : "Cloud signing", { answersCard: how === "tap" ? card.id : undefined, actedAt: Date.now() - 2 * MINUTE });
     await settle(...(helper ? [{ kind: "decision", key: "Signing service", fact: "Cloud signing", quote: "Cloud signing", message_id: tap.id, question_id: card.id }] : []));
     const asked = post({ role: "bot", kind: "text", text: "Which signing service should we use for desktop builds? Local signing or unsigned?" });
     const typed = send("Use Local signing for desktop builds");
@@ -288,6 +312,19 @@ describe("every way to answer a card files it under that card", () => {
     expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Cloud signing", card.id], ["Local signing", asked.id]]);
     expect(`${prompt}\n`).toContain("): Cloud signing\n");
     expect(`${prompt}\n`).toContain("): Local signing\n");
+  });
+
+  it.each(["typed", "quoted"])("keeps a %s card answer over a later press of another option after restart", async (how) => {
+    const { send, settle, restarted, post } = setup();
+    const card = post({ role: "bot", kind: "options", card: { title: "Ask", subtitle: "Which database should the reporting service use?", options: ["Postgres", "MySQL"], askUser: true } });
+    send(how === "quoted" ? `${answerPrefix(card)}Postgres` : "Postgres", { actedAt: Date.now() - 2 * MINUTE });
+    await settle();
+    send("MySQL", { answersCard: card.id, actedAt: Date.now() - MINUTE });
+    await settle();
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", card.id]]);
+    expect(`${prompt}\n`).toMatch(/\): Postgres\n/);
+    expect(prompt).not.toContain("MySQL");
   });
 
   it("keeps a later condition on a long card answer, both whole in the prompt", async () => {
