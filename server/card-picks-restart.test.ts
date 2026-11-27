@@ -1,14 +1,16 @@
 import { mkdirSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { answerPrefix, askStates } from "../shared/open-question.ts";
 import { DATA_DIR } from "./config.ts";
 import { prepareModelContext } from "./context-compaction.ts";
 import { createMemoryPass } from "./memory-pass.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { Store } from "./store.ts";
+import { currentPicks, PICKS_FILE } from "./picks.ts";
 import { removeTestData } from "./testing/test-home.ts";
 import { buildTurnContext, shouldRecycleProviderSession } from "./turn-context.ts";
-import { memorySystemPrompt } from "./workspace.ts";
+import { memorySystemPrompt, readMemoryTopic } from "./workspace.ts";
 
 const MINUTE = 60_000;
 
@@ -88,5 +90,40 @@ describe("card picks survive a session restart", () => {
     expect(prompt).not.toContain("Ship tonight?");
     expect(prompt).not.toContain("Neon pink");
     expect(memorySystemPrompt(other.id)).toMatch(/- Which accent color\? \(\d\d-\d\d\): Neon pink/);
+  });
+  const copy = 'Use "Your draft is saved on this device. You can close this window and return when you are ready to finish."';
+  it.each([
+    { name: "a typed quoted reply", question: "Which wood should the bookshelf use?", options: ["Use red oak", "Skip"], answer: "Use red oak", send: "typed" },
+    { name: "a spoken quoted reply", question: "Restart at 8:15 PM instead?", options: ["Yes, 8:15 PM"], answer: "Yeah, that's better.", send: "spoken" },
+    { name: "a tapped choice holding a long quote", question: "Which message should appear when a draft is saved?", options: [copy, "Skip"], answer: copy, send: "tap" },
+    // the letter reads clean; the option it names holds a password, only partly masked by the text redactor
+    { name: "a tapped letter naming a secret option", question: "Which wifi should the kiosk join?", options: ["A) Wi-Fi password: Tr0ub4dor&3xQ", "B) Guest network"], answer: "A", send: "tap", secret: "Wi-Fi password" },
+  ])("files $name under the card the chat says it answers, in its whole words", async ({ question, options, answer, send, secret }) => {
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-opus-5-5" }));
+    const pass = createMemoryPass({ store, dataDir: DATA_DIR, generate: () => async () => "[]", enabled: () => true, busy: () => false });
+    const bot = store.createBot({}, { seedMessages: false });
+    const card = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: { title: "Pick", subtitle: question, options, askUser: true, staysOpen: true } });
+    // a newer card makes the reply name its question
+    if (send === "typed") store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: { title: "Pick", subtitle: "Where should the sample go?", options: ["By the window", "On the desk"], askUser: true, staysOpen: true } });
+    const sent = store.appendMessage(bot.threadId, {
+      role: "user", kind: "text", actedAt: Date.now() - MINUTE,
+      text: send === "tap" ? answer : answerPrefix(card) + answer,
+      ...(send === "tap" ? { answersCard: card.id } : send === "spoken" ? { call: { id: "c-0123456789ab", ask: true as const }, sendId: "send-1" } : {}),
+    });
+    const messages = store.messagesFor(bot.threadId);
+    if (send !== "tap") expect(askStates(messages).get(messages.find((message) => message.id === card.id)!)).toMatchObject({ state: "answered", by: { id: sent.id } });
+    pass.onSettled(bot.id, bot.threadId, true);
+    await pass.idle();
+    pass.dispose();
+    const filed = readMemoryTopic(bot.id, PICKS_FILE) ?? "";
+    const prompt = memorySystemPrompt(bot.id);
+    if (secret) {
+      expect(currentPicks(filed).some((entry) => entry.questionId === card.id)).toBe(false);
+      expect(filed).not.toContain(secret);
+      expect(prompt).not.toContain(secret);
+      return;
+    }
+    expect(currentPicks(filed).find((entry) => entry.questionId === card.id)?.picked).toBe(answer);
+    expect(`${prompt}\n`).toContain(`: ${answer}\n`);
   });
 });

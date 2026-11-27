@@ -1,5 +1,7 @@
 import { basename, join } from "node:path";
 
+import { answerPrefix, askStates } from "../shared/open-question.ts";
+
 import { LABELED, pickKey, type PickEntry, type Picture } from "./picks.ts";
 import type { Message } from "./store.ts";
 
@@ -13,7 +15,13 @@ const CONFIRMATION = /^(?:option\s+)?[a-z1-9]\s+it is\b[^?]*$/i;
 
 export type ShownPicture = Picture & { original?: string };
 type PictureTurn = { questionId: string; context?: string; options?: string[]; pictures: ShownPicture[] };
-export type ReplyPictures = PictureTurn & { prior?: PictureTurn & { kind: "preview" | "correction" }; previousAnswerId?: string; invalidCard?: boolean; question?: string };
+export type ReplyPictures = PictureTurn & {
+  prior?: PictureTurn & { kind: "preview" | "correction" }; previousAnswerId?: string; invalidCard?: boolean; question?: string;
+  /** the card the reply answers, by its id or as the chat reads a quoted reply */
+  cardId?: string;
+  /** the card's own option the reply picks, word for word */
+  choice?: string;
+};
 type PickSource = Partial<ReplyPictures> & { id?: string; at?: number; thread?: string; files?: string[] };
 type PickClaim = {
   key: string; picked: string; over: string[]; messageId?: string | null; questionId?: string | null; at?: number; thread?: string;
@@ -78,10 +86,19 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
     const index = id === undefined ? i - 1 : id ? byId.get(id) ?? -1 : -1;
     return index < i ? index : -1;
   };
+  // a quoted reply with no card id answers the card the chat closes with it
+  let quotedBy: Map<string, Message> | undefined;
+  const quotedCard = (answer: Message) => {
+    if (answer.answersCard || !answer.text?.startsWith("Re: “")) return undefined;
+    const closed = quotedBy ??= new Map([...askStates(messages)].flatMap(([card, state]) => state.state === "answered" && state.by?.id ? [[state.by.id, card] as const] : []));
+    const card = closed.get(answer.id);
+    return card && answer.text.startsWith(answerPrefix(card)) ? card.id : undefined;
+  };
   for (let i = messages.length - 1; i >= 0 && wanted.size; i -= 1) {
     const answer = messages[i]!;
     if (!wanted.delete(answer.id)) continue;
-    const card = answer.answersCard ? byId.get(answer.answersCard) : undefined;
+    const cardId = answer.answersCard ?? quotedCard(answer);
+    const card = cardId ? byId.get(cardId) : undefined;
     const answered = card !== undefined && card < i && isQuestionCard(messages[card]!) ? messages[card] : undefined;
     const { turn, previous } = botTurn(messages, answered ? card! : parent(i), parent);
     const current = picturesIn(turn, attachments, answered) ?? { questionId: answer.id, pictures: [] };
@@ -89,7 +106,15 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
     const preview = current.pictures.length > 0 && PREVIEW_REQUEST.test(previousAnswer?.text?.trim() ?? "");
     const correction = !current.pictures.length && !current.options?.length && (!current.context || CONFIRMATION.test(current.context)) && CORRECTION.test(answer.text?.trim() ?? "");
     const prior = previousAnswer && !answered && (preview || correction) ? picturesIn(botTurn(messages, parent(previous), parent).turn, attachments) : undefined;
-    found.set(answer.id, { ...current, prior: prior && { ...prior, kind: preview ? "preview" : "correction" }, previousAnswerId: previousAnswer?.id, invalidCard: Boolean(answer.answersCard && !answered), question: answered?.card?.subtitle });
+    const reply: ReplyPictures = { ...current, prior: prior && { ...prior, kind: preview ? "preview" : "correction" }, previousAnswerId: previousAnswer?.id, invalidCard: Boolean(answer.answersCard && !answered), question: answered?.card?.subtitle };
+    if (answered) {
+      reply.cardId = answered.id;
+      const text = answer.text ?? "";
+      const said = (text.startsWith(answerPrefix(answered)) ? text.slice(answerPrefix(answered).length) : text).trim();
+      const choice = answered.card?.options?.find((option) => option.trim() === said);
+      if (choice) reply.choice = choice.trim();
+    }
+    found.set(answer.id, reply);
   }
   return found;
 }

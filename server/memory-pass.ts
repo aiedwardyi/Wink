@@ -170,11 +170,12 @@ export function withoutBlocks(text: string): string {
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
 }
 
-export function userTyping(text: string, dropSensitive = true, keepImages = false): string {
+/** keepQuotes: the text is a card's own option, so a long quote in it is the choice, not a paste. */
+export function userTyping(text: string, dropSensitive = true, keepImages = false, keepQuotes = false): string {
   const typed = withoutBlocks(text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : ""));
   // the whole message: a label and its value can sit in different paragraphs
   if (dropSensitive && secretValue(typed)) return "";
-  const unwrapped = typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
+  const unwrapped = keepQuotes ? typed : typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
   const kept = unwrapped
     .split(/\n\s*\n/)
     .filter((paragraph) => paragraph.length <= 400 && paragraph.split("\n").length <= 6)
@@ -619,7 +620,7 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
       // a tap is the user's exact choice, saved in its own words: the note names its key and context, never its answer, and a note that misses its card leaves it to code
       const tap = source.tap && source.id ? tapChoice(source) : undefined;
       if (tap !== undefined) {
-        if (!binding || binding.messageId !== source.id || binding.questionId !== source.questionId || answered.has(source.id) || !tap || secretValue(tapAnswer(source))) return null;
+        if (!binding || binding.messageId !== source.id || binding.questionId !== source.questionId || answered.has(source.id) || !tap || secretValue(tapAnswer(source)) || secretValue(tap)) return null;
         answered.add(source.id);
       }
       if (binding) cardKeys.set(binding.questionId, thing);
@@ -686,7 +687,8 @@ function cardAnswers(sources: UserLine[], answered: Set<string>, keys: Map<strin
     const question = source.question?.replace(/\s+/g, " ").trim();
     const said = tapAnswer(source);
     const picked = tapChoice(source);
-    if (!source.tap || !source.id || answered.has(source.id) || !question || !said || secretValue(question) || secretValue(said)) return [];
+    // screened on the value filed too: a letter's option was not in the typed text
+    if (!source.tap || !source.id || answered.has(source.id) || !question || !said || secretValue(question) || secretValue(said) || secretValue(picked)) return [];
     const binding = validatePickBinding({ key: question, picked, over: [] }, source);
     if (!binding) return [];
     const held = (key: string) => [...keys].some(([id, other]) => id !== binding.questionId && pickKey(other) === pickKey(key))
@@ -1108,13 +1110,15 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     if (!generate) return;
     const messages = deps.store.messagesFor(sourceThread(threadId));
     const rows = pendingRows(messages, ids);
-    const typed = ids.flatMap((id) => {
-      const row = rows.get(id);
+    const eligible = ids.filter((id) => eligibleRow(rows.get(id)));
+    const replies = replyTurns(messages, eligible, join(deps.dataDir, "attachments"));
+    const typed = eligible.flatMap((id) => {
+      const row = rows.get(id)!;
+      const reply = replies.get(id);
       // a pasted tag cannot open or close a prompt block
-      const text = eligibleRow(row) ? userTyping(row.text).replace(CONTEXT_TAGS, " ").trim() : "";
-      return text ? [{ id, text, at: row!.actedAt ?? row!.at, tap: Boolean(row!.answersCard), files: attachedImages(row!.text ?? "") }] : [];
+      const text = userTyping(row.text!, true, false, reply?.choice !== undefined).replace(CONTEXT_TAGS, " ").trim();
+      return text ? [{ id, text, at: row.actedAt ?? row.at, tap: Boolean(row.answersCard || reply?.cardId), files: attachedImages(row.text ?? "") }] : [];
     });
-    const replies = replyTurns(messages, typed.map(({ id }) => id), join(deps.dataDir, "attachments"));
     const lines = typed.sort((a, b) => a.at - b.at).map(({ id, text, at, tap, files }) => {
       const line: UserLine = { id, text, at, thread: sourceThread(threadId) };
       if (tap) line.tap = true;
