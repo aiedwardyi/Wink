@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyPicks, currentPicks, mergeTimelines, picksBlock, retiredLines, retirePicks } from "./picks.ts";
+import { applyPicks, currentPicks, mergeTimelines, picksBlock, retiredLines, retireProof, retirePicks, TURN_WORDS } from "./picks.ts";
 import { withSystemChanges } from "./turn-context.ts";
 
 const NOW = new Date("2026-11-26T12:00:00").getTime();
@@ -23,8 +23,40 @@ const TIMELINE = [
   ...entry("2026-11-23 13:39", "Web reading fix needs one more round (~1-2 h). Release 1....", "Yes, release now (my pick)", "- Tapped: yes"),
   ...entry("2026-11-26 09:10", "Ship the Gemini fix tonight?", "Yes (my pick)", "- Tapped: yes"),
 ].join("\n");
-const STANDING = ["site default theme", "memory list cap", "Mac download in releases", "instant PC-to-PC sync now", "shared Forum for all bots", "fresh-bot test accounts", "Also add Sign Out", "Ship the Gemini fix tonight?"];
-const ONE_OFFS = ["Timeline demo: merge now", "Memory audit fix timing", "Work PC second lane", "getwinkdev account use", "Web reading fix"];
+const STANDING = ["site default theme", "memory list cap", "Mac download in releases", "instant PC-to-PC sync now", "shared Forum for all bots", "fresh-bot test accounts", "Also add Sign Out", "Ship the Gemini fix tonight?", "Timeline demo: merge now", "Memory audit fix timing", "Work PC second lane", "getwinkdev account use"];
+const ONE_OFFS = ["Web reading fix"];
+const WEB_FIX = "Web reading fix needs one more round (~1-2 h). Release 1....";
+const VERBS = ["run", "send", "ship", "deploy", "merge", "release", "publish", "post", "build", "fix", "push", "restart", "update", "test", "check", "clean", "delete", "review", "start", "do"];
+const ANCHORS: [string, 0 | 1][] = [["now", 0], ["right now", 0], ["today", 0], ["tonight", 0], ["this morning", 0], ["this afternoon", 0], ["this evening", 0], ["tomorrow", 1], ["tomorrow morning", 1], ["tomorrow night", 1]];
+const KEEP: string[] = [
+  // gate A to I wordings
+  "Every day after 13:30", "Yes", "Wait, ping me (my pick)", "Wait for my approval", "Always require approval", "Deploy only after it merges",
+  "Not now, wait for my approval", "Never page me after 18:00", "Hold until I confirm", "Wait for a manual release",
+  "From today, use dark mode as the default", "Use the sign-in flow from PR #41 as the default", "Hold for signoff on PR #43", "Not now, ship next week", "Ship next Friday, not today",
+  "Use the layout from PR #41 for all new workspaces", "Send the survey one week after today", "Send the survey two weeks from today",
+  "Send the finished release notes to everyone on the project mailing list and include the updated schedule, but wait for my approval before sending.",
+  "A - Send the release notes, but wait for my approval before sending.", "A - Send the release notes", "C#", "Ship with PR #41", "Release on merge",
+  "After PR #41 and #42 merge", "After PR 41 and PR 43 merge", "Close it once PR #41 merges", "Close the beta task after PR #41 and PR #43 merge",
+  // the teacher's own picks
+  '175 MB cap today - "175 MB is faster" pick, recommended', "Start now - follow-up starts today, not 11-20", "Yes - build the timeline canvas once tonight's update is out",
+  "Merge the Timeline demo now, since time is short", "Yes - fix tonight, in tonight's 21:00 update", "Yes - after 13:30", "Park it for now", "Samurai Ink, not Warp",
+  "Yes - $99/yr Apple developer account (my pick)", "up.codex.today and getwinkdev subs", "Yes (my pick)", "Build it (my pick)", "Merge + deploy (my pick)",
+  "Also use the getwinkdev abd rocknblock subs asap. They expire today", "Use dark mode from today onward", "Use the home server starting today", "Start using dark mode today",
+  // outside the grammar
+  "Fix the one two three four five six tonight", "Run the 2 checks tonight", "Run the sign-in checks tonight", "Run tonight's checks", "Tonight, then again tomorrow", "오늘 밤",
+  "Merge PR 41 and 42", "Merge PR #41 tonight", "Merge PR #41 after #42", "Merge it after PR #41", "Land the fix",
+];
+const DUE: [string, 0 | 1][] = [
+  ["Tonight", 0], ["Run the checks tonight", 0], ["Review the release notes tonight", 0], ["Build the Forum rename and text fixes now", 0], ["Yes, release now (my pick)", 0], ["Yes - build it now", 0],
+  ["B - Tonight.", 0], ["Tonight (my pick)", 0], ["tonight!", 0], ["Option C: run the checks tomorrow night", 1], ["OK, deploy tomorrow morning", 1], ["Go ahead - ship it this evening", 0],
+  ["Do it now", 0], ["Sure: fix it right now", 0], ["Fix the one two three four five tonight", 0], ["Tomorrow", 1],
+];
+const MERGES: [string, { repo?: string; number: number }[]][] = [
+  ["Merge PR #41", [{ number: 41 }]], ["Merge PR #41 and #42", [{ number: 41 }, { number: 42 }]], ["Merge PR 2194 once CI is green", [{ number: 2194 }]], ["Yes, merge PR 2194", [{ number: 2194 }]],
+  ["Merge PR #41 after review", [{ number: 41 }]], ["Merge PR #41 and PR #43", [{ number: 41 }, { number: 43 }]], ["Merge PR #41 and #41", [{ number: 41 }]],
+  ["Yes, merge PR #41, #42 + acme/web#7", [{ number: 41 }, { number: 42 }, { repo: "acme/web", number: 7 }]],
+  ["Ship https://github.com/Acme/Web/pull/9 when checks pass", [{ repo: "acme/web", number: 9 }]], ["B - Land #12 (my pick)", [{ number: 12 }]],
+];
 
 describe("retiring finished one-off picks", () => {
   const retired = retirePicks(TIMELINE, NOW)!;
@@ -39,7 +71,7 @@ describe("retiring finished one-off picks", () => {
   it("keeps each retired pick on file, marked with the day", () => {
     expect(currentPicks(retired).filter((pick) => pick.retired).map((pick) => [pick.key, pick.retired])).toEqual(ONE_OFFS.map((key) => [expect.stringContaining(key), "2026-11-26"]));
     expect(retired.match(/^- Retired: 2026-11-26$/gm)).toHaveLength(ONE_OFFS.length);
-    expect(retired).toContain("- Picked: Merge the Timeline demo now, since time is short");
+    expect(retired).toContain("- Picked: Yes, release now (my pick)");
     expect(retirePicks(retired, NOW)).toBeNull();
     // the question's "tonight" never dates the answer
     expect(retirePicks(retired, NOW + 86_400_000)).toBeNull();
@@ -48,33 +80,33 @@ describe("retiring finished one-off picks", () => {
   it("retires a pick whose PRs done() finds merged", () => {
     const text = ["# Decision timeline", "", ...entry("2026-11-25 10:00", "Card picks fix", "Merge PR 2194 once CI is green")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();
-    expect(picksBlock(retirePicks(text, NOW, (pick) => pick.picked.includes("PR 2194")))).toBe("");
+    expect(picksBlock(retirePicks(text, NOW, (_, prs) => prs.some(({ number }) => number === 2194)))).toBe("");
   });
 
   it("brings a retired pick back when the user tweaks it", () => {
-    const tweaked = applyPicks(retired, [{ kind: "tweak", at: NOW, key: "Work PC second lane for checks", said: "keep the work PC lane every day" }])!.text;
-    expect(picksBlock(tweaked)).toContain("Work PC second lane for checks");
+    const tweaked = applyPicks(retired, [{ kind: "tweak", at: NOW, key: WEB_FIX, said: "keep a release lane every day" }])!.text;
+    expect(picksBlock(tweaked)).toContain("keep a release lane every day");
   });
 
   it("dates a pick retyped on a later day by when it was last confirmed", () => {
-    const text = ["# Decision timeline", "", ...entry("2026-11-25 20:00", "Which lane?", "Work PC tonight", `- At: ${new Date("2026-11-26T09:00:00").getTime()}`, "- Binding: verified")].join("\n");
+    const text = ["# Decision timeline", "", ...entry("2026-11-25 20:00", "Which lane?", "Run the checks tonight", `- At: ${new Date("2026-11-26T09:00:00").getTime()}`, "- Binding: verified")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();
   });
 
   it("brings a retired pick back when the user confirms it again", () => {
     // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
-    const tapped = applyPicks("", [{ kind: "pick", key: "Which lane?", picked: "Work PC tonight", said: "Work PC tonight", tapped: true, at: new Date("2026-11-25T20:00:00").getTime(), binding: { at: new Date("2026-11-25T20:00:00").getTime(), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
+    const tapped = applyPicks("", [{ kind: "pick", key: "Which lane?", picked: "Run the checks tonight", said: "Run the checks tonight", tapped: true, at: new Date("2026-11-25T20:00:00").getTime(), binding: { at: new Date("2026-11-25T20:00:00").getTime(), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
     const old = retirePicks(tapped, NOW)!;
-    const typed = applyPicks(old, [{ kind: "pick", key: "Which lane?", picked: "Work PC tonight", said: "Work PC tonight again", at: NOW, binding: { at: NOW, messageId: "a2", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
-    expect(picksBlock(typed)).toContain("Work PC");
+    const typed = applyPicks(old, [{ kind: "pick", key: "Which lane?", picked: "Run the checks tonight", said: "Run the checks tonight again", at: NOW, binding: { at: NOW, messageId: "a2", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
+    expect(picksBlock(typed)).toContain("Run the checks tonight");
   });
 
   it("keeps a renewed confirmation over a retired copy through a sync merge", () => {
     // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
-    const tapped = applyPicks("", [{ kind: "pick", key: "Which lane?", picked: "Work PC tonight", said: "Work PC tonight", tapped: true, at: new Date("2026-11-25T20:00:00").getTime(), binding: { at: new Date("2026-11-25T20:00:00").getTime(), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
+    const tapped = applyPicks("", [{ kind: "pick", key: "Which lane?", picked: "Run the checks tonight", said: "Run the checks tonight", tapped: true, at: new Date("2026-11-25T20:00:00").getTime(), binding: { at: new Date("2026-11-25T20:00:00").getTime(), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
     const old = retirePicks(tapped, NOW)!;
-    const typed = applyPicks(old, [{ kind: "pick", key: "Which lane?", picked: "Work PC tonight", said: "Work PC tonight again", at: NOW, binding: { at: NOW, messageId: "a2", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
-    for (const merged of [mergeTimelines(old, typed)!, mergeTimelines(typed, old)!]) expect(picksBlock(merged)).toContain("Work PC");
+    const typed = applyPicks(old, [{ kind: "pick", key: "Which lane?", picked: "Run the checks tonight", said: "Run the checks tonight again", at: NOW, binding: { at: NOW, messageId: "a2", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never }])!.text;
+    for (const merged of [mergeTimelines(old, typed)!, mergeTimelines(typed, old)!]) expect(picksBlock(merged)).toContain("Run the checks tonight");
   });
 
   it("keeps a choice that starts today rather than ends today", () => {
@@ -129,7 +161,7 @@ describe("retiring finished one-off picks", () => {
   });
 
   it("keeps a dated pick while a PR it waits on is open", () => {
-    const text = ["# Decision timeline", "", ...entry("2026-11-24 10:00", "Deploy after PR #42 merges?", "Tonight", "- Tapped: yes")].join("\n");
+    const text = ["# Decision timeline", "", ...entry("2026-11-24 10:00", "Deploy after PR #42 merges?", "Deploy tonight once PR #42 merges", "- Tapped: yes"), ...entry("2026-11-24 10:01", "Merge?", "Merge PR #42", "- Tapped: yes")].join("\n");
     expect(retirePicks(text, NOW, () => null)).toBeNull();
   });
 
@@ -162,10 +194,11 @@ describe("retiring finished one-off picks", () => {
   it("retires a one-off once its day passed or every PR its answer names merged", () => {
     const text = ["# Decision timeline", "",
       ...entry("2026-11-24 10:00", "When should we archive the demo?", "Tonight", "- Tapped: yes"),
-      ...entry("2026-11-24 10:01", "When do we close the beta task?", "Close the beta task after PR #41 and PR #43 merge", "- Tapped: yes"),
+      ...entry("2026-11-24 10:01", "When do we close the beta task?", "Merge PR #41 and PR #43", "- Tapped: yes"),
       ...entry("2026-11-24 10:02", "Which test accounts?", "up.codex.today and getwinkdev subs"),
+      ...entry("2026-11-24 10:03", "When do we close the release task?", "Close the beta task after PR #41 and PR #43 merge", "- Tapped: yes"),
     ].join("\n");
-    expect(currentPicks(retirePicks(text, NOW, (pick) => pick.picked.includes("PR #41"))).filter((pick) => pick.retired).map(({ picked }) => picked)).toEqual(["Tonight", "Close the beta task after PR #41 and PR #43 merge"]);
+    expect(currentPicks(retirePicks(text, NOW, () => true)).filter((pick) => pick.retired).map(({ picked }) => picked)).toEqual(["Tonight", "Merge PR #41 and PR #43"]);
   });
 
   it("dates a pick confirmed again after its last tweak by the confirmation", () => {
@@ -174,7 +207,7 @@ describe("retiring finished one-off picks", () => {
     const bound = (messageId: string, at: number) => ({ at, messageId, questionId: "q1", thread: "t1", files: [], overPictures: [], named: true }) as never;
     const key = "When should we run checks?";
     const picked = "Run the checks tonight";
-    const initial = applyPicks("", [{ kind: "pick", at: first, key, picked, said: picked, tapped: true, binding: bound("a1", first) }, { kind: "tweak", at: first + 60_000, key, said: "Include the signing checks tonight" }])!.text;
+    const initial = applyPicks("", [{ kind: "pick", at: first, key, picked, said: picked, tapped: true, binding: bound("a1", first) }, { kind: "tweak", at: first + 60_000, key, said: "Run the signing checks tonight" }])!.text;
     const archived = retirePicks(initial, NOW)!;
     expect(picksBlock(archived)).toBe("");
     const confirmed = applyPicks(archived, [{ kind: "pick", at: NOW, key, picked, said: picked, binding: bound("a2", NOW) }])!.text;
@@ -231,7 +264,79 @@ describe("retiring finished one-off picks", () => {
 
   it("sends no removal for the block header when the last pick retires", () => {
     const at = (day: string) => new Date(`2026-11-${day}T09:00:00`).getTime();
-    const lone = applyPicks("", [{ kind: "pick", key: "Demo lane", picked: "Use it tonight", said: "Use it tonight", at: at("20") }])!.text;
+    const lone = applyPicks("", [{ kind: "pick", key: "Demo lane", picked: "Run it tonight", said: "Run it tonight", at: at("20") }])!.text;
     expect(withSystemChanges("hi", `Rules.\n${picksBlock(lone)}`, "Rules.", undefined, retiredLines(retirePicks(lone, at("24"))))).toBe("hi");
+  });
+});
+
+describe("the retire proof", () => {
+  it.each(KEEP)("keeps %j", (words) => {
+    expect(retireProof(words)).toBeNull();
+  });
+
+  it.each(DUE)("dates %j", (words, dueIn) => {
+    expect(retireProof(words)).toEqual({ dueIn });
+  });
+
+  it.each(MERGES)("merges %j", (words, prs) => {
+    expect(retireProof(words)).toEqual({ prs });
+  });
+
+  it.each(ANCHORS)("dates %j alone and after each verb", (anchor, dueIn) => {
+    for (const words of [anchor, `yes, ${anchor}`, ...VERBS.map((verb) => `${verb} it ${anchor}`)]) expect(retireProof(words)).toEqual({ dueIn });
+  });
+
+  it("keeps a short one-off that holds any turn word", () => {
+    for (const word of ["not", "no", "never", "until", "after", "before", "if", "once", "when", "from", "every", "each", "next", "later", "week", "weeks", "month", "months", "day", "days", "wait", "hold"]) expect(TURN_WORDS).toContain(word);
+    expect(retireProof("Run the checks tonight")).toEqual({ dueIn: 0 });
+    for (const word of TURN_WORDS) {
+      expect(retireProof(`Run the ${word} checks tonight`)).toBeNull();
+      expect(retireProof(`Ship it ${word} now`)).toBeNull();
+    }
+  });
+});
+
+describe("retiring only on proof", () => {
+  const timeline = (...entries: string[][]) => ["# Decision timeline", "", ...entries.flat()].join("\n");
+  const retiredOf = (text: string | null) => currentPicks(text).filter((pick) => pick.retired).map(({ picked }) => picked);
+
+  it("keeps a standing cap that names today", () => {
+    const text = timeline(entry("2026-11-18 11:00", "Memory leak cap size", '175 MB cap today - "175 MB is faster" pick, recommended'));
+    expect(retirePicks(text, NOW, () => true)).toBeNull();
+  });
+
+  it("keeps a task due after today, and a choice that merely cites a merged PR", () => {
+    const text = timeline(
+      entry("2026-11-26 10:00", "When should the survey go out?", "Send the survey one week after today", "- Tapped: yes"),
+      entry("2026-11-24 10:00", "Which layout for new workspaces?", "Use the layout from PR #41 for all new workspaces", "- Tapped: yes"),
+    );
+    expect(retirePicks(text, NOW + 86_400_000, () => true)).toBeNull();
+  });
+
+  it("retires a merge once its PR merged, whatever it waited on", () => {
+    const text = timeline(entry("2026-11-24 10:00", "When should we merge?", "Merge PR #41 after review", "- Tapped: yes"));
+    expect(retiredOf(retirePicks(text, NOW, () => true))).toEqual(["Merge PR #41 after review"]);
+  });
+
+  it("asks done() about every PR the answer lists, since the answer was given", () => {
+    const seen: unknown[] = [];
+    const text = timeline(entry("2026-11-24 10:00", "Merge?", "Merge PR #41 and #42", "- Tapped: yes"), entry("2026-11-24 10:01", "Release?", "Release after PR #43 merges"));
+    expect(retirePicks(text, NOW, (pick, prs, since) => (seen.push([pick.key, prs, since]), null))).toBeNull();
+    expect(seen).toEqual([["Merge?", [{ number: 41 }, { number: 42 }], new Date("2026-11-24T10:00").getTime()]]);
+  });
+
+  it("proves from a newer tweak alone, so one without proof keeps a dated pick", () => {
+    const text = timeline(entry("2026-11-24 10:00", "Checks", "Run the checks tonight", '- Tweak 2026-11-24 11:00: "include the signing checks"'));
+    expect(retirePicks(text, NOW)).toBeNull();
+    const merge = timeline(entry("2026-11-24 10:00", "Merge?", "Merge PR #41", '- Tweak 2026-11-24 11:00: "also deploy it to staging"'));
+    expect(retirePicks(merge, NOW, () => true)).toBeNull();
+  });
+
+  it("never proves from the question or an option the answer beat", () => {
+    const text = timeline(
+      entry("2026-11-24 10:00", "Run the checks tonight?", "Yes", "- Over: Run them tonight", "- Tapped: yes"),
+      entry("2026-11-24 10:01", "Merge PR #41 now?", "Sure (my pick)", "- Over: Merge PR #41", "- Tapped: yes"),
+    );
+    expect(retirePicks(text, NOW, () => true)).toBeNull();
   });
 });

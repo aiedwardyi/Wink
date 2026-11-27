@@ -16,7 +16,7 @@ const NOT_REPO = /not a git repository/i;
 const REASON_MAX = 120;
 const viewSchema = z.object({ state: z.enum(["OPEN", "MERGED", "CLOSED"]), mergedAt: z.string().nullish() });
 
-type Pr = { repo?: string; number: number };
+export type Pr = { repo?: string; number: number };
 type Check = { at: number; state: "merged" | "open" | "missing" | "failed"; reason?: string; mergedAt?: number };
 export type MergedPr = Pr & { mergedAt?: number };
 
@@ -38,6 +38,19 @@ export function refPrs(ref: string | undefined): Pr[] {
     .replace(REPO_PR, (_, repo: string, number: string) => add({ repo: repo.toLowerCase(), number: Number(number) }));
   for (const match of rest.matchAll(PR_REF)) add({ number: Number(match[1]) });
   return prs;
+}
+
+const whole = (pattern: RegExp) => new RegExp(`^(?:${pattern.source})$`, "i");
+const ONE_URL = whole(PR_URL);
+const ONE_REPO = whole(REPO_PR);
+const ONE_REF = whole(PR_REF);
+
+/** The one PR a whole phrase names, by URL, owner/repo#n, "PR n" or "#n"; null for anything else. */
+export function prRef(text: string): Pr | null {
+  const linked = ONE_URL.exec(text) ?? ONE_REPO.exec(text);
+  if (linked) return { repo: linked[1]!.toLowerCase(), number: Number(linked[2]) };
+  const bare = ONE_REF.exec(text) ?? /^#(\d{1,6})$/.exec(text);
+  return bare ? { number: Number(bare[1]) } : null;
 }
 
 /** The first PR an ask's ref names; null for any other ref. */

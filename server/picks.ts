@@ -1,6 +1,7 @@
 // The user's picks, one timeline per bot in memory/decisions.md: plain markdown, oldest first.
 import { createHash } from "node:crypto";
 import { entryTime, pickStamp } from "../shared/timeline-time.ts";
+import { prRef, type Pr } from "./ask-prs.ts";
 import { holdSources, sharedSources, type PickBinding } from "./pick-sources.ts";
 
 export const PICKS_FILE = "decisions.md";
@@ -646,40 +647,57 @@ export function currentOnly(text: string): string {
     .join("\n");
 }
 
-// a word that dates the action to the day it was said; "for now" and "from now on" do not
-const DATED = /(?<![\w.@])(?:tonight|today|right now|after \d{1,2}:\d{2})\b|(?<![\w.@]|\b(?:for|from) )now\b(?! on\b)|(?<![\w.@]|\bfrom )tomorrow\b/i;
-// a tweak is the user's raw words, so it dates the pick only by these
-const DATED_SAID = /(?<![\w.@])(?:tonight|expires? today|right now|after \d{1,2}:\d{2})\b/i;
-// a standing rule or default has no day it is done, whatever day or PR starts it
-const STANDING = /\b(?:defaults?|standard|rule|policy|always|every|each|daily|nightly|weekly|monthly|whenever|forever|permanent(?:ly)?|onwards?|going forward|from (?:now|today|tomorrow)|starting|(?:mon|tues|wednes|thurs|fri|satur|sun)days)\b/i;
-// an answer held for someone, put off to a later day, or a ban stays until the user says otherwise
-const HELD = /\b(?:hold|pause|park|freeze|block|until|pending|later|next|someday|eventually|never|stop)\b|\b(?:wait|approv|confirm|sign[- ]?off|review|postpon|defer|delay|reschedul)/i;
-// a negation cancels the day its clause names, "not today", and keeps a ban from finishing when a PR merges
-const NEGATED = /\b(?:not|no|never|don['’]?t|do not)\b|n['’]t\b/i;
-const CLAUSE = /[,;!?()\u2013\u2014]|[.:](?=\s|$)|\s-\s/;
-const datesIt = (text: string, words: RegExp) => text.split(CLAUSE).some((clause) => words.test(clause) && !NEGATED.test(clause));
+// A pick retires only when the user's newest words, whole, are a one-off due on a named day or a merge of named PRs; any other wording stays.
+const ACK = String.raw`(?:(?:yes|ok|okay|sure|go ahead|go|do it)\s*[,.!:;-]?\s+)?`;
+const VERB = "run|send|ship|deploy|merge|release|publish|post|build|fix|push|restart|update|test|check|clean|delete|review|start|do";
+/** Words that make a one-off conditional, recurring, standing or put off, so its day never ends it. */
+export const TURN_WORDS = [
+  "not", "no", "never", "but", "until", "till", "unless", "after", "before", "if", "once", "when", "whenever", "since", "from", "only",
+  "every", "each", "always", "daily", "nightly", "weekly", "monthly", "forever", "permanently", "onward", "onwards", "going", "starting",
+  "default", "defaults", "rule", "policy", "standard", "keep", "keeping", "use", "using",
+  "next", "later", "day", "days", "week", "weeks", "month", "months", "year", "years", "wait", "hold", "pause",
+  "approve", "approved", "approval", "confirm", "confirmed", "signoff",
+];
+const DUE = new RegExp(String.raw`^${ACK}(?:(?:${VERB})(?:\s+(?!(?:${TURN_WORDS.join("|")})\b)[a-z]+){0,6}\s+)?(?:right now|now|today|tonight|this (?:morning|afternoon|evening)|(tomorrow)(?: morning| night)?)$`);
+const MERGE = new RegExp(String.raw`^${ACK}(?:merge|ship|land)\s+(.+?)(?:\s+(?:after|once|when)(?:\s+[a-z]+){1,3})?$`);
 
-/** Marks current picks that are finished one-offs as retired today, only on proof: the pick's newest words (the answer or its latest confirmation, else its newest tweak) date the action to a day now past, or done() says every PR its answer names merged since. null from done() is a PR still open or unread. A standing rule or default, a hold, a postponement or a ban stays. Null when none. */
-export function retirePicks(text: string, now: number, done: (entry: PickEntry) => boolean | null = () => false): string | null {
+/** What proves a pick finished, from the whole of the user's words: a day it is due (0 today, 1 tomorrow), or the PRs it says to merge. Null for anything else. */
+export function retireProof(words: string): { dueIn: 0 | 1 } | { prs: Pr[] } | null {
+  const said = flat(words).replace(LABELED, "").replace(/\s*\(my pick\)$/i, "").replace(/[.!]$/, "").toLowerCase();
+  const due = DUE.exec(said);
+  if (due) return { dueIn: due[1] ? 1 : 0 };
+  const merge = MERGE.exec(said);
+  if (!merge) return null;
+  const prs: Pr[] = [];
+  for (const part of merge[1]!.split(/\s*[,+]\s*|\s+and\s+/)) {
+    const pr = prRef(part);
+    if (!pr) return null;
+    if (!prs.some((seen) => seen.repo === pr.repo && seen.number === pr.number)) prs.push(pr);
+  }
+  return { prs };
+}
+
+/** Marks current picks that are finished one-offs as retired today, only on proof in their newest words (the answer as last confirmed, or a newer tweak): a due day now past, or done() finding every PR it says to merge merged since then. null from done() is a PR still open or unread. Null when none retire. */
+export function retirePicks(text: string, now: number, done: (entry: PickEntry, prs: Pr[], since: number) => boolean | null = () => false): string | null {
   const timeline = parseTimeline(text);
   const today = pickStamp(now).slice(0, 10);
   let retired = 0;
   for (const entry of timeline.entries) {
     if (entry.replacedBy || entry.kind || entry.retired) continue;
-    const answer = [entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n");
-    if (STANDING.test(`${entry.key}\n${answer}`) || HELD.test(answer)) continue;
-    const finished = done(entry);
-    if (finished === null) continue;
     // a delayed batch can append an older tweak after a newer one
     const tweak = entry.tweaks.reduce<Tweak | undefined>((newest, each) => (!newest || each.at >= newest.at ? each : newest), undefined);
     const picked = entryTime(entry);
-    const due = new Date(picked);
-    if (/\btomorrow\b/i.test(entry.picked)) due.setDate(due.getDate() + 1);
-    // the newest words date it: a confirmation after the last tweak renews the answer's own day; the question and the options it beat never do
-    const day = tweak && tweak.at >= pickStamp(picked)
-      ? datesIt(tweak.said, DATED_SAID) && tweak.at.slice(0, 10)
-      : datesIt(entry.picked, DATED) && pickStamp(due.getTime()).slice(0, 10);
-    if (!(finished && !NEGATED.test(answer)) && !(day && day < today)) continue;
+    // a tweak since the answer's last confirmation replaces its proof; the question and the options it beat never prove
+    const [words, since] = tweak && tweak.at >= pickStamp(picked) ? [tweak.said, entryTime({ id: tweak.at })] : [entry.picked, picked];
+    const proof = retireProof(words);
+    if (!proof) continue;
+    if ("prs" in proof) {
+      if (done(entry, proof.prs, since) !== true) continue;
+    } else {
+      const due = new Date(since);
+      due.setDate(due.getDate() + proof.dueIn);
+      if (pickStamp(due.getTime()).slice(0, 10) >= today) continue;
+    }
     entry.retired = today;
     retired += 1;
   }

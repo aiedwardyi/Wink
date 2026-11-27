@@ -2,14 +2,14 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
-import { refPrs, type MergedPr } from "./ask-prs.ts";
+import type { MergedPr, Pr } from "./ask-prs.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { AGY_TEXT_MODEL, exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
 import { isSignOut } from "./drivers/signout.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
-import { applyPicks, currentPicks, entryTime, KEY_MAX, LABELED, parseTimeline, PICKS_FILE, pickKey, pickKeysList, retirePicks, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
+import { applyPicks, currentPicks, KEY_MAX, LABELED, parseTimeline, PICKS_FILE, pickKey, pickKeysList, retirePicks, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { loadProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
 import { redactRoomMemory, redactSecretsInText } from "./redact.ts";
@@ -37,8 +37,6 @@ const MAX_PENDING = 200;
 const QUOTE_MAX = 120;
 const FACT_MAX = 200;
 const DECISION_MAX = 100;
-// every number in "PR #41 and #42", "PRs 41, 42" or "#41"
-const PR_LIST = /(?:\bPRs?\s*#?|#)\d+(?:\s*(?:,|&|\/|\band\b|\bor\b)\s*#?\d+)*/gi;
 const CONTEXT_MAX = 400;
 const OPTIONS_MAX = 6;
 const SHORT_ANSWER = 6;
@@ -803,19 +801,12 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     return room ? deps.store.groupByThread(room[1])?.memberIds?.includes(room[0]) ? deps.store.bot?.(room[0]) : undefined : deps.store.botByThread(key);
   };
   const busy = (botId: string, key: string) => deps.busy(botId, sourceThread(key));
-  // every PR the pick names merged after it was picked, and its answer names one; null while one is unread or open
-  const prsMerged = (botId: string, threadId: string, entry: PickEntry) => {
-    const ref = [entry.key, entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n");
-    const prs = refPrs(ref);
-    if (!prs.length || !deps.merged) return false;
-    // "PR #41 and #42": a PR the reader missed keeps the pick
-    if ([...ref.matchAll(PR_LIST)].some(([list]) => list.match(/\d+/g)!.some((number) => !prs.some((pr) => pr.number === Number(number))))) return null;
-    const checked = deps.merged(botId, threadId, ref, true);
+  // every PR the answer says to merge merged after the user said it; null while one is unread or open
+  const prsMerged = (botId: string, threadId: string, prs: readonly Pr[], since: number) => {
+    if (!deps.merged) return false;
+    const checked = deps.merged(botId, threadId, prs.map(({ repo, number }) => (repo ? `${repo}#${number}` : `PR ${number}`)).join(", "), true);
     if (!checked) return null;
-    // a tweak after the merge is work the merge did not finish
-    const since = Math.max(entryTime(entry), ...entry.tweaks.map(({ at }) => entryTime({ id: at })));
-    // a PR only the question or a beaten option names may hold the pick, never finish it
-    return refPrs([entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n")).length > 0 && checked.every((pr) => (pr.mergedAt ?? 0) > since);
+    return prs.every((pr) => checked.some((one) => one.repo === pr.repo && one.number === pr.number && (one.mergedAt ?? 0) > since));
   };
 
   let claim = false;
@@ -953,7 +944,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       return done(threadId, batch.ids);
     }
     // before MEMORY.md drops a replaced decision line, so a failed write never loses it; a retry lands each pick once
-    const sweep = (text: string) => retirePicks(text, now(), (entry) => prsMerged(botId, entry.thread ?? threadId, entry));
+    const sweep = (text: string) => retirePicks(text, now(), (entry, prs, since) => prsMerged(botId, entry.thread ?? threadId, prs, since));
     // swept first too, so a card asking a finished pick's question again finds it retired
     const swept = changes.length ? sweep(timeline) : null;
     const landed = changes.length ? applyPicks(swept ?? timeline, changes) : null;

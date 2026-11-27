@@ -629,14 +629,14 @@ describe("decision timeline", () => {
       pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged: (_bot, _thread, ref) => (ref.includes("42") ? null : [{ number: 41, mergedAt: Date.now() }]) });
       const ask = (subtitle: string, options: string[]) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Release", subtitle, options, askUser: true } });
       answer(ask("Which release rule takes effect after PR #41 merges?", ["Always require approval", "No approval"]), "Always require approval");
-      answer(ask("Deploy after PR #42 merges?", ["Tonight", "Next week"]), "Tonight");
+      answer(ask("Deploy after PR #42 merges?", ["Deploy tonight once PR #42 merges", "Next week"]), "Deploy tonight once PR #42 merges");
       reply();
       await settle();
       vi.setSystemTime(NOW + 2 * 24 * 60 * MINUTE);
       answer(ask("Which label color?", ["Mint", "Orange"]), "Mint");
       reply();
       await settle();
-      expect(currentPicks(timeline()).map(({ picked, retired }) => [picked, Boolean(retired)])).toEqual([["Always require approval", false], ["Tonight", false], ["Mint", false]]);
+      expect(currentPicks(timeline()).map(({ picked, retired }) => [picked, Boolean(retired)])).toEqual([["Always require approval", false], ["Deploy tonight once PR #42 merges", false], ["Mint", false]]);
     });
 
     it("keeps a card pick live while any PR it names is unread or open", async () => {
@@ -644,8 +644,8 @@ describe("decision timeline", () => {
       pass.dispose();
       pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged });
       const ask = (subtitle: string, choice: string) => answer(store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Close", subtitle, options: [choice, "No"], askUser: true } }), choice);
-      ask("When should packing close?", "After PR #41 and #42 merge");
-      ask("When should delivery close?", "After PR 41 and PR 43 merge");
+      ask("When should packing close?", "Merge PR #41 and #42");
+      ask("When should delivery close?", "Merge PR 41 and PR 43");
       reply();
       await settle();
       expect(currentPicks(timeline()).map(({ key, retired }) => [key, Boolean(retired)])).toEqual([["When should packing close?", false], ["When should delivery close?", true]]);
@@ -725,9 +725,19 @@ describe("decision timeline", () => {
       answer(ask("What is the release policy after PR #41 merges?", ["Wait for a manual release", "Release on merge"]), "Wait for a manual release");
       answer(ask("Close the audit after PR #41 merges?", ["Yes", "No"]), "Yes");
       answer(ask("When should the packing close?", ["Close it once PR #41 merges", "Keep it open"]), "Close it once PR #41 merges");
+      answer(ask("When should we merge?", ["Merge PR #41 after review", "Leave it"]), "Merge PR #41 after review");
       reply();
       await settle();
-      expect(currentPicks(timeline()).map(({ picked, retired }) => [picked, Boolean(retired)])).toEqual([["Hold until I confirm", false], ["Wait for a manual release", false], ["Yes", false], ["Close it once PR #41 merges", true]]);
+      expect(currentPicks(timeline()).map(({ picked, retired }) => [picked, Boolean(retired)])).toEqual([["Hold until I confirm", false], ["Wait for a manual release", false], ["Yes", false], ["Close it once PR #41 merges", false], ["Merge PR #41 after review", true]]);
+    });
+
+    it("keeps a merge pick whose PR merged before the user chose it", async () => {
+      pass.dispose();
+      pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged: () => [{ number: 41, mergedAt: Date.now() - 24 * 60 * MINUTE }] });
+      answer(store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Merge", subtitle: "Merge PR #41?", options: ["Merge PR #41", "No"], askUser: true } }), "Merge PR #41");
+      reply();
+      await settle();
+      expect(currentPicks(timeline()).map(({ picked, retired }) => [picked, Boolean(retired)])).toEqual([["Merge PR #41", false]]);
     });
   });
 
