@@ -488,6 +488,172 @@ describe("dreaming, dry", () => {
       expect(history()).toBe("");
     });
 
+    const approve = (undo: boolean, id = plans()[0]!.runId) => start().dream.fix(bot, id, `note:${sha8(OLD)}`, undo);
+
+    it("keeps one OK per item across two windows and a reload, and Undo keeps a later edit", async () => {
+      await quiet();
+      const id = plans()[0]!.runId;
+      const a = start().dream;
+      const b = start().dream;
+      const target = `note:${sha8(OLD)}`;
+      expect(a.fix(bot, id, target, false).ok).toBe(true);
+      expect(b.fix(bot, id, target, false)).toEqual({ ok: false, error: "done" });
+      const extra = "- Other edit after the OK 🌱\r\n";
+      writeMemoryFile(bot, extra + memoryFileRaw(bot));
+      expect(approve(true, id).ok).toBe(true);
+      expect(Buffer.compare(Buffer.from(memoryFileRaw(bot)), Buffer.from(extra + raw))).toBe(0);
+      expect(b.fix(bot, id, target, true)).toEqual({ ok: false, error: "undone" });
+    });
+
+    it("refuses an OK on an older plan and on a bot set to live", async () => {
+      await quiet();
+      const id = plans()[0]!.runId;
+      setMode({ [bot]: "live" });
+      expect(approve(false, id)).toEqual({ ok: false, error: "no-run" });
+      setMode({ [bot]: "dry" });
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(plans()[0]!.runId).not.toBe(id);
+      expect(approve(false, id)).toEqual({ ok: false, error: "not-newest" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+    });
+
+    it("never puts a fix back for an OK that arrives after its Undo", async () => {
+      await quiet();
+      const id = plans()[0]!.runId;
+      expect(approve(false, id).ok).toBe(true);
+      expect(approve(true, id).ok).toBe(true);
+      vi.setSystemTime(Date.now() + 1000);
+      expect(approve(false, id)).toEqual({ ok: false, error: "undone" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+      expect(history().split(" (run ").length - 1).toBe(1);
+    });
+
+    it("keeps both lines when the fixed line was copied under another heading before Undo", async () => {
+      await quiet();
+      expect(approve(false).ok).toBe(true);
+      const edited = memoryFileRaw(bot).replace(NEW, `${NEW}\r\n## Moved note\r\n${NEW}`);
+      writeMemoryFile(bot, edited);
+      expect(approve(true)).toEqual({ ok: false, error: "conflict" });
+      expect(memoryFileRaw(bot)).toBe(edited);
+    });
+
+    it("leaves an identical line under another heading alone when the fixed line was edited by hand", async () => {
+      writeMemoryFile(bot, `${raw}## Other project\r\n${NEW}\r\n`);
+      await quiet();
+      expect(approve(false).ok).toBe(true);
+      const edited = memoryFileRaw(bot).replace(NEW, "- Hand edited after OK");
+      writeMemoryFile(bot, edited);
+      expect(approve(true)).toEqual({ ok: false, error: "conflict" });
+      expect(memoryFileRaw(bot)).toBe(edited);
+    });
+
+    it("undoes the fixed line, not an identical line under another heading", async () => {
+      writeMemoryFile(bot, `${raw}## Other project\r\n${NEW}\r\n`);
+      await quiet();
+      expect(approve(false).ok).toBe(true);
+      expect(approve(true).ok).toBe(true);
+      expect(memoryFileRaw(bot)).toBe(`${raw}## Other project\r\n${NEW}\r\n`);
+    });
+
+    it("refuses an OK once the note moved under a pinned heading and took a line under it", async () => {
+      await quiet();
+      const edited = raw.replace(OLD, `## Pinned decisions\r\n${OLD}\r\n  additional detail`);
+      writeMemoryFile(bot, edited);
+      expect(approve(false)).toEqual({ ok: false, error: "changed" });
+      expect(memoryFileRaw(bot)).toBe(edited);
+      const child = raw.replace(OLD, `${OLD}\r\n  additional detail`);
+      writeMemoryFile(bot, child);
+      expect(approve(false)).toEqual({ ok: false, error: "changed" });
+      expect(memoryFileRaw(bot)).toBe(child);
+    });
+
+    it("saves the plan's record of a fix before MEMORY.md changes", async () => {
+      await quiet();
+      const atomic = await import("./atomic.ts");
+      const original = atomic.writeFileAtomic;
+      const seen: string[] = [];
+      const spy = vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, ...rest) => {
+        if (String(path).endsWith("plan.json")) seen.push(memoryFileRaw(bot));
+        original(path, ...rest);
+      });
+      expect(approve(false).ok).toBe(true);
+      expect(approve(true).ok).toBe(true);
+      spy.mockRestore();
+      expect(seen).toEqual([raw, raw.replace(OLD, NEW)]);
+    });
+
+    it("takes the archive back and keeps the OK when the plan cannot be saved", async () => {
+      await quiet();
+      const id = plans()[0]!.runId;
+      const atomic = await import("./atomic.ts");
+      const original = atomic.writeFileAtomic;
+      const spy = vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, ...rest) => {
+        if (String(path).endsWith("plan.json")) throw new Error("plan write failed");
+        original(path, ...rest);
+      });
+      expect(() => approve(false, id)).toThrow("plan write failed");
+      spy.mockRestore();
+      expect(memoryFileRaw(bot)).toBe(raw);
+      expect(history()).not.toContain(OLD);
+      expect(plans()[0]!.fixes!.items[0]!.done).toBeUndefined();
+      expect(approve(false, id).ok).toBe(true);
+      expect(approve(true, id).ok).toBe(true);
+      expect(memoryFileRaw(bot)).toBe(raw);
+    });
+
+    it("takes the plan and archive back when MEMORY.md cannot be saved", async () => {
+      await quiet();
+      const workspace = await import("./workspace.ts");
+      const spy = vi.spyOn(workspace, "saveMemoryFile").mockImplementation(() => {
+        throw new Error("memory write failed");
+      });
+      expect(() => approve(false)).toThrow("memory write failed");
+      spy.mockRestore();
+      expect(memoryFileRaw(bot)).toBe(raw);
+      expect(history()).not.toContain(OLD);
+      expect(plans()[0]!.fixes!.items[0]!.done).toBeUndefined();
+      expect(approve(false).ok).toBe(true);
+    });
+
+    it("offers a newer correction in place of the waiting fix it supersedes", async () => {
+      await quiet();
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)?.by).toBe(NEW);
+      const update = NEW.replace("March", "April");
+      typed.set("t1", [said("newer", Date.now() + 1000, "The main account plan ends in April now, not in March.")]);
+      generator = flags([{ note: line(OLD), quote: "ends in April now", fix: update }]);
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      const offered = plans()[0]!.fixes!.items.filter((item) => item.text === OLD);
+      expect(offered.map((item) => [item.by, item.evidence.message])).toEqual([[update, "newer"]]);
+    });
+
+    it("does no wrong-note work when a turn settles, only once the bot is idle", async () => {
+      const count = () => generate.mock.calls.filter(([prompt]) => prompt.includes("<pairs>")).length;
+      sleep.onSettled(bot);
+      const atSettlement = count();
+      await quiet(SLEEP_IDLE_MS - 1);
+      const beforeIdle = count();
+      await quiet(1);
+      expect([atSettlement, beforeIdle, count()]).toEqual([0, 0, 1]);
+    });
+
+    it("changes exactly one line when one of two fixes gets its OK", async () => {
+      const second = "- The app uses a blue theme (noted 2026-11-20)";
+      const two = `${raw}${second}\r\n`;
+      writeMemoryFile(bot, two);
+      typed.get("t1")!.push(said("m3", NOW - DAY + 120_000, "For the app theme use green, not blue, from now on."));
+      generator = flags([
+        { note: line(OLD), quote: "It lasts till march", fix: NEW },
+        { note: `L${two.split("\r\n").indexOf(second) + 1}`, quote: "use green, not blue", fix: second.replace("blue", "green") },
+      ]);
+      await quiet();
+      expect(plans()[0]!.fixes!.items.filter((item) => !item.listOnly).map((item) => item.text).sort()).toEqual([OLD, second].sort());
+      expect(approve(false).ok).toBe(true);
+      expect(memoryFileRaw(bot)).toBe(two.replace(OLD, NEW));
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === second)?.done).toBeUndefined();
+    });
+
     it("checks no owner line for a bot set to live", async () => {
       setMode({ [bot]: "live" });
       await quiet();

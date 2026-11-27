@@ -149,8 +149,89 @@ describe("wrong-note check", () => {
     const swapped = applyFix(raw, item)!;
     expect(swapped.text).toBe(raw.replace(TRAPS.plan, item.by));
     expect(swapped).toMatchObject({ line: 3, cr: true });
-    expect(undoFix(swapped.text, { ...item, done: { at: 1, line: swapped.line, cr: swapped.cr, id: "x" } })).toBe(raw);
+    const { text, ...placed } = swapped;
+    expect(undoFix(text, { ...item, done: { at: 1, id: "x", ...placed } })).toEqual({ text: raw });
     expect(applyFix(raw + TRAPS.plan + "\n", item)).toBeNull();
-    expect(undoFix(raw, { ...item, done: { at: 1, line: 3, cr: true, id: "x" } })).toBeNull();
+    expect(undoFix(raw, { ...item, done: { at: 1, id: "x", ...placed } })).toEqual({ error: "changed" });
+  });
+});
+
+describe("what a fix takes as the owner's word", () => {
+  const run = async (note: string, owner: string, quote: string, fix: string) => {
+    const raw = SAFETY_MEMORY + note + "\n";
+    const generate: NoteGenerator = async (prompt) => {
+      const wrong = prompt.split(/(?=^PAIR$)/m).flatMap((block) => {
+        const match = /^PAIR\n(L\d+) \(written [^)]*\): ([^\n]+)\n(M\d+) /m.exec(block);
+        return match && match[2] === note ? [{ note: match[1]!, message: match[3]!, quote, fix }] : [];
+      });
+      return JSON.stringify({ wrong });
+    };
+    return (await checkWrong({ raw, rows: [row("evidence", time(24, 12), owner)], saved: [], judges: { claude: generate, gemini: generate }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items;
+  };
+  const listed = (items: Awaited<ReturnType<typeof run>>) => items.map((item) => item.listOnly);
+
+  it("offers only a hand edit for a note with no stamp", async () => {
+    expect(listed(await run("- The main account plan ends in January", "The main account plan now lasts till March, not January.", "lasts till March", "- The main account plan ends in March"))).toEqual([true]);
+  });
+
+  it("takes no event day inside a note with no stamp as the day it was written", async () => {
+    expect(listed(await run("- The studio tour on 2026-11-10 used the blue entrance", "The studio tour used the green entrance, not the blue one.", "used the green entrance", "- The studio tour on 2026-11-10 used the green entrance"))).toEqual([true]);
+  });
+
+  it("offers only a hand edit for a standing instruction", async () => {
+    expect(listed(await run("- Use the blue theme for every screen (noted 2026-11-20)", "Use the green theme for every screen now, not the blue theme.", "Use the green theme", "- Use the green theme for every screen (noted 2026-11-20)"))).toEqual([true]);
+  });
+
+  it("keeps a note about one day's event when the owner talks about another day's", async () => {
+    expect(await run("- The studio tour on 2026-11-10 used the blue entrance (noted 2026-11-11)", "On 2026-11-24 the studio tour will use the green entrance, not blue.", "use the green entrance", "- The studio tour on 2026-11-10 used the green entrance (noted 2026-11-11)")).toEqual([]);
+  });
+
+  it("takes no words the owner quotes from someone else", async () => {
+    const note = "- The main account plan ends in January (noted 2026-11-20)";
+    expect(listed(await run(note, "The plan for the main account lasts till March now, not January.", "lasts till March now", "- The main account plan ends in March (noted 2026-11-20)"))).toEqual([false]);
+    expect(await run(note, 'My designer said "the plan for the main account lasts till March now" but I have not checked.', "lasts till March now", "- The main account plan ends in March (noted 2026-11-20)")).toEqual([]);
+    expect(await run(note, "My designer said “it lasts till March” today.", "it lasts till March", "- The main account plan ends in March (noted 2026-11-20)")).toEqual([]);
+  });
+
+  it("archives the quote as the owner typed it, not as a judge spelled it", async () => {
+    const items = await run("- The main account plan ends in January (noted 2026-11-20)", "For the main account plan, It lasts  till March and that is my main account.", "it lasts till march", "- The main account plan ends in March (noted 2026-11-20)");
+    expect(items.map((item) => [item.listOnly, item.evidence.quote])).toEqual([[false, "It lasts  till March"]]);
+  });
+
+  it("reads only the owner's typed rows in the bot's own chats", async () => {
+    const { insertMessage, typedSince } = await import("./message-db.ts");
+    const { ownerRows } = await import("./dream-wrong.ts");
+    const { ownerChats } = await import("./one-mind.ts");
+    // SAFETY: ownerChats reads only threadId and tasks' threadId.
+    const chats = ownerChats({ threadId: "one", tasks: [{ threadId: "one" }, { threadId: "room-side" }, { threadId: "routine" }] } as never, new Set(["room-side", "routine"]));
+    const base = { role: "user", kind: "text", at: 100, text: "An ordinary playground remark." } as const;
+    for (const thread of ["one", "routine", "other-bot"]) insertMessage(thread, { ...base, id: thread });
+    insertMessage("room-side", { ...base, id: "room-side", guest: true });
+    for (const patch of [{ id: "bot", role: "bot" }, { id: "helper-note", kind: "note" }, { id: "peer", from: { botId: "peer", name: "Peer", color: "blue" } }, { id: "wrapped", text: '<pasted-text index="1">\nA calendar remark.\n</pasted-text>' }, { id: "quoted-block", text: "> A calendar remark." }, { id: "queued", queued: true }, { id: "old", at: 50 }]) {
+      // SAFETY: each patch is one stored-row variant the check must skip.
+      insertMessage("one", { ...base, ...patch } as never);
+    }
+    expect(chats.flatMap((thread) => ownerRows(thread, typedSince(thread, 50, "memory.save"), 50)).map((each) => each.id)).toEqual(["one"]);
+  });
+});
+
+describe("pairing limits", () => {
+  it("keeps the whole prompt inside 32 KB, line breaks included", () => {
+    const pairs = Array.from({ length: 30 }, (_, index) => ({
+      note: { text: "- A documented fact " + "x".repeat(920), at: index, section: 0, alone: true, date: "2026-11-10" },
+      row: row(`m${index}`, time(24, 9), "A regular reading of the note."), sentence: "A regular reading of the note.", turning: 0, score: 1,
+    }));
+    const extra = 32 * 1024 - Buffer.byteLength(wrongPrompt(pairs, TODAY).prompt) + 1;
+    expect(extra).toBeGreaterThan(0);
+    pairs[29]!.note.text += "y".repeat(extra);
+    expect(Buffer.byteLength(wrongPrompt(pairs, TODAY).prompt)).toBeLessThanOrEqual(32 * 1024);
+  });
+
+  it("pairs a clear correction when a bot has only one or two notes", async () => {
+    const notes = "- Prefers a blue theme for the app (noted 2026-11-20)\n";
+    const owner = row("theme", time(24, 9), "I want a green theme in the app now, not blue.");
+    const counts: number[] = [];
+    for (const raw of [notes, notes + "- Prefers apple juice (noted 2026-11-21)\n", notes + "- Prefers apple juice (noted 2026-11-21)\n- Drinks tea (noted 2026-11-22)\n"]) counts.push((await wrongPairs(raw, fixTargets(raw), [owner])).length);
+    expect(counts.every((count) => count > 0)).toBe(true);
   });
 });

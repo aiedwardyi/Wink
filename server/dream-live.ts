@@ -6,7 +6,7 @@ import { z } from "zod";
 
 import { DREAMED_FILE, dreamedPath, fixedEntry, markUndone } from "./dream-archive.ts";
 import type { DreamJudges } from "./dream-judge.ts";
-import { applyFix, checkWrong, ownerRows, savedNotes, undoFix, type FixItem, type JudgeLog, type OwnerRow, type SavedNotes } from "./dream-wrong.ts";
+import { applyFix, checkWrong, ownerRows, savedNotes, undoFix, type FixDone, type FixItem, type JudgeLog, type OwnerRow, type SavedNotes } from "./dream-wrong.ts";
 import { closedAskLine, refPrs, stepLeft, withClosed, type MergedPr } from "./ask-prs.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { cleanerSkip, runIdOf, sha8 } from "./memory-clean.ts";
@@ -48,7 +48,7 @@ const fixItemSchema = z.object({
   why: z.literal("wrong"),
   listOnly: z.boolean(),
   evidence: z.object({ thread: z.string(), message: z.string(), at: z.number(), quote: z.string() }),
-  done: z.object({ at: z.number(), line: z.number(), cr: z.boolean(), id: z.string(), undoneAt: z.number().optional() }).optional(),
+  done: z.object({ at: z.number(), line: z.number(), cr: z.boolean(), nth: z.number(), count: z.number(), heading: z.string(), id: z.string(), undoneAt: z.number().optional() }).optional(),
 });
 const planSchema = z.object({
   runId: z.string(),
@@ -71,7 +71,7 @@ export type DreamAsks = DreamPlan["asks"];
 export type DryNotes = { state: (typeof NOTES_STATES)[number]; moves: Move[] };
 export type DreamFixes = NonNullable<DreamPlan["fixes"]>;
 export type DryFixes = DreamFixes & { pairs?: number; bytes?: number; judges?: Partial<Record<keyof DreamJudges, JudgeLog>>; reason?: string };
-export type FixResult = { ok: true; revision: string } | { ok: false; error: "no-run" | "not-newest" | "no-item" | "list-only" | "done" | "undone" | "changed" | "busy" };
+export type FixResult = { ok: true; revision: string } | { ok: false; error: "no-run" | "not-newest" | "no-item" | "list-only" | "done" | "undone" | "changed" | "conflict" | "busy" };
 
 export interface DreamLiveDeps {
   dataDir: string;
@@ -221,10 +221,10 @@ export function createDreamLive(deps: DreamLiveDeps) {
     }
   }
 
-  // the last plan's fixes stay listed until their line ages out, OK'd or not; a waiting one goes once its note changed
+  // the last plan's fixes stay listed until their line ages out, OK'd or not; a waiting one goes once its note changed or a newer check fixed it again
   function carried(botId: string, at: number, found: readonly FixItem[]): FixItem[] {
     const raw = memoryFileRaw(botId).split("\n").map((line) => line.replace(/\r$/, ""));
-    const kept = (plans(botId)[0]?.fixes?.items ?? []).filter((item) => item.evidence.at > at - RUN_KEEP_MS && (item.done || raw.some((line) => `note:${sha8(line)}` === item.target)));
+    const kept = (plans(botId)[0]?.fixes?.items ?? []).filter((item) => item.evidence.at > at - RUN_KEEP_MS && (item.done || (raw.some((line) => `note:${sha8(line)}` === item.target) && !found.some((each) => each.target === item.target))));
     return [...kept, ...found.filter((item) => !kept.some((each) => each.target === item.target))];
   }
 
@@ -259,40 +259,52 @@ export function createDreamLive(deps: DreamLiveDeps) {
     if (!item) return { ok: false, error: "no-item" };
     const raw = memoryFileRaw(botId);
     const at = now();
+    const write = () => writeFileAtomic(join(botDir(botId), runId, "plan.json"), `${JSON.stringify(newest, null, 2)}\n`, { mode: 0o600 });
+    // the plan says what changed before MEMORY.md does, so a line that changed always has its Undo; a save that fails takes the plan back
+    const stage = (next: FixDone, text: string) => {
+      const before = item.done;
+      item.done = next;
+      write();
+      let saved = false;
+      try {
+        saved = !saveMemoryFile(botId, text, rawRevision(raw)).conflict;
+      } finally {
+        if (!saved) {
+          item.done = before;
+          write();
+        }
+      }
+      return saved;
+    };
     if (!undo) {
       if (item.listOnly) return { ok: false, error: "list-only" };
-      if (item.done && item.done.undoneAt === undefined) return { ok: false, error: "done" };
+      // once undone an item stays undone: a late OK from another window never puts the fix back
+      if (item.done) return { ok: false, error: item.done.undoneAt === undefined ? "done" : "undone" };
       const swapped = applyFix(raw, item);
       if (!swapped) return { ok: false, error: "changed" };
+      const { text, ...placed } = swapped;
       const id = sha8(`${runId}\0${target}\0${at}`);
-      // the archive first: a save that fails takes its record back
-      const unarchive = appendArchive(dreamedPath(botId), fixedEntry(id, item, swapped.line, at));
-      let conflict: boolean;
+      const unarchive = appendArchive(dreamedPath(botId), fixedEntry(id, item, placed.line, at));
+      let saved = false;
       try {
-        conflict = saveMemoryFile(botId, swapped.text, rawRevision(raw)).conflict;
-      } catch (error) {
-        unarchive();
-        throw error;
+        saved = stage({ at, id, ...placed }, text);
+      } finally {
+        if (!saved) unarchive();
       }
-      if (conflict) {
-        unarchive();
-        return { ok: false, error: "busy" };
-      }
-      item.done = { at, line: swapped.line, cr: swapped.cr, id };
+      if (!saved) return { ok: false, error: "busy" };
     } else {
       if (!item.done || item.done.undoneAt !== undefined) return { ok: false, error: "undone" };
       const back = undoFix(raw, item);
-      if (back === null) return { ok: false, error: "changed" };
-      if (saveMemoryFile(botId, back, rawRevision(raw)).conflict) return { ok: false, error: "busy" };
+      if ("error" in back) return { ok: false, error: back.error };
+      const { id } = item.done;
+      if (!stage({ ...item.done, undoneAt: at }, back.text)) return { ok: false, error: "busy" };
       try {
         const path = dreamedPath(botId);
-        writeFileAtomic(path, markUndone(readFileSync(path, "utf8"), item.done.id, at), { mode: 0o600 });
+        writeFileAtomic(path, markUndone(readFileSync(path, "utf8"), id, at), { mode: 0o600 });
       } catch {
         // the line is back either way; the heading only says so
       }
-      item.done = { ...item.done, undoneAt: at };
     }
-    writeFileAtomic(join(botDir(botId), runId, "plan.json"), `${JSON.stringify(newest, null, 2)}\n`, { mode: 0o600 });
     return { ok: true, revision: readMemoryFile(botId).revision };
   }
 

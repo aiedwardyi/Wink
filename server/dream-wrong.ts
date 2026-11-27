@@ -23,6 +23,10 @@ const TURN_WEIGHT = [1, 1.25, 1.5];
 const CLAUSE = /[,;.!?\n]+|\s(?:and|but|or|so)\s|\s-\s/;
 const PROMPT_TAGS = /<\/?(?:pairs|pair|note|line)\b[^>]*>/gi;
 const BULLET = /^([-*+])\s/;
+// someone else's words inside the owner's line
+const SPOKEN = /"[^"\n]+"|“[^”\n]+”|「[^」\n]+」|«[^»\n]+»/g;
+// an instruction that holds from now on, not a fact a newer line can turn
+const STANDING = /^(?:use|reply|answer|write|keep|call|ask|send|show|put|add|avoid|prefer|check|run|make|give|start|stop|treat)\b|\b(?:every|each time|whenever|from now on|by default)\b/i;
 
 export type OwnerRow = { thread: string; id: string; at: number; text: string };
 /** When Auto Notes saved a batch of notes, and what its receipt says it saved. */
@@ -30,9 +34,10 @@ export type SavedNotes = { at: number; text: string };
 export type FixItem = {
   op: "fix"; target: string; text: string; by: string; why: "wrong"; listOnly: boolean;
   evidence: { thread: string; message: string; at: number; quote: string };
-  /** set once the user OKs it: where the new line went and the old line's ending, so Undo puts the old bytes back */
-  done?: { at: number; line: number; cr: boolean; id: string; undoneAt?: number };
+  /** set once the user OKs it: where the new line went, which copy of it, the heading above it and the old line's ending, so Undo puts the old bytes back on that line only */
+  done?: FixDone;
 };
+export type FixDone = { at: number; line: number; cr: boolean; nth: number; count: number; heading: string; id: string; undoneAt?: number };
 export type JudgeLog = { input: number; output: number; ms: number };
 type Pair = { note: NoteLine; row: OwnerRow; sentence: string; turning: number; score: number };
 type Wrong = { note: string; message: string; quote: string; fix: string };
@@ -85,7 +90,7 @@ export async function wrongPairs(raw: string, notes: ReadonlyMap<number, NoteLin
   const noteWords = new Map([...notes.values()].map((line) => [line.at, content(line.text)]));
   const counts = new Map<string, number>();
   for (const words of noteWords.values()) for (const word of words) counts.set(word, (counts.get(word) ?? 0) + 1);
-  const idf = (word: string) => Math.log(notes.size / (1 + (counts.get(word) ?? 0)));
+  const idf = (word: string) => Math.log(1 + notes.size / (1 + (counts.get(word) ?? 0)));
   // how much of the note's subject the clause names, rare shared words weighing most; doubled when a turning word sits within 3 words of one, as in "groups not rooms"
   const overlap = (clause: string, note: NoteLine, groups: string[][]) => {
     const said = new Set([...content(clause), ...groups.filter((options) => !recallSkipped(options[0]!)).flat().map(stem)]);
@@ -167,8 +172,8 @@ export function wrongPrompt(pairs: readonly Pair[], today: string) {
     if (refs.size >= WRONG_PAIRS_MAX) break;
     const ref = `M${refs.size + 1}`;
     const block = `PAIR\nL${pair.note.at + 1} (written ${noted(pair.note, today) ?? "unknown"}): ${clean(pair.note.text)}\n${ref} (${pickStamp(pair.row.at).slice(0, 16)}): ${clean(excerpt(pair))}\n`;
-    if (size + Buffer.byteLength(block) > WRONG_PROMPT_MAX) continue;
-    size += Buffer.byteLength(block);
+    if (size + Buffer.byteLength(block) + 1 > WRONG_PROMPT_MAX) continue;
+    size += Buffer.byteLength(block) + 1;
     body.push(block);
     refs.set(ref, pair);
   }
@@ -204,6 +209,19 @@ export function fixLine(old: string, by: string): string {
   return mark && !BULLET.test(line) ? `${mark} ${line}` : line;
 }
 
+/** Only a hand edit: no stamp to order it by, lines under it, a line no judge may move, or a standing instruction. */
+export function handOnly(note: NoteLine, all: readonly string[]): boolean {
+  return !note.date || !note.alone || neverMoves(note, all) || STANDING.test(body(note.text));
+}
+
+// the quote as the owner typed it: quotes() folds case and spacing; none when it sits in someone else's quoted words
+function typedSpan(text: string, quote: string): string | null {
+  const found = new RegExp(quote.trim().split(/\s+/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+"), "iu").exec(text);
+  if (!found) return null;
+  const end = found.index + found[0].length;
+  return [...text.matchAll(SPOKEN)].some((spoken) => spoken.index < end && found.index < spoken.index + spoken[0].length) ? null : found[0];
+}
+
 export type Rejected = { note: number; message: string; why: string };
 export type WrongContext = { all: readonly string[]; today: string; written(note: NoteLine): number | undefined };
 
@@ -237,15 +255,25 @@ export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: Readon
       no("row not after the note");
       continue;
     }
-    const quote = lowWords(one.quote).length <= lowWords(other.quote).length ? one.quote : other.quote;
+    const quote = typedSpan(row.text, lowWords(one.quote).length <= lowWords(other.quote).length ? one.quote : other.quote);
+    if (!quote) {
+      no("quote is not the owner's own typing");
+      continue;
+    }
+    const days = writtenDays(note.text, context.today);
+    const said = writtenDays(row.text, context.today);
+    if (days.length && said.length && !said.some((each) => days.includes(each))) {
+      no("row is about another day's event");
+      continue;
+    }
     const by = [one.fix, other.fix].map((fix) => fixLine(note.text, fix)).find((fix) => body(fix) && fix !== note.text && factsSurvive(fix, [note.text, row.text]) && redactRoomMemory(fix) === fix);
     if (!by || redactRoomMemory(note.text) !== note.text) {
       no("fix not grounded in the old line and the quote");
       continue;
     }
     items.push({
-      op: "fix", target: `note:${sha8(note.text)}`, text: note.text, by, why: "wrong", listOnly: !written || !note.alone || neverMoves(note, context.all),
-      evidence: { thread: row.thread, message: row.id, at: row.at, quote: quote.trim() },
+      op: "fix", target: `note:${sha8(note.text)}`, text: note.text, by, why: "wrong", listOnly: handOnly(note, context.all),
+      evidence: { thread: row.thread, message: row.id, at: row.at, quote },
     });
   }
   return { items, rejected };
@@ -294,23 +322,33 @@ export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]
   return { state: "checked", ...base, items: planWrong(a.value, b.value, refs, { all, today: input.today, written: writtenAt(input.saved) }).items };
 }
 
-/** raw with the note's one line swapped for its fix, its own line ending kept; null unless the line is there exactly once. */
-export function applyFix(raw: string, item: Pick<FixItem, "target" | "by">): { text: string; line: number; cr: boolean } | null {
+// the lines that read as the fix, and the heading above one
+const copies = (lines: readonly string[], by: string) => lines.flatMap((line, index) => (plain(line) === by ? [index] : []));
+const headingAbove = (lines: readonly string[], at: number) => lines.slice(0, at).map(plain).findLast((line) => line.startsWith("#")) ?? "";
+
+/** raw with the note's one line swapped for its fix, its own line ending kept; null unless the line is there exactly once and still takes an OK. */
+export function applyFix(raw: string, item: Pick<FixItem, "target" | "by">): ({ text: string } & Omit<FixDone, "at" | "id" | "undoneAt">) | null {
   const lines = raw.split("\n");
   const at = lines.flatMap((line, index) => (`note:${sha8(plain(line))}` === item.target ? [index] : []));
   if (at.length !== 1) return null;
+  // the line may have moved under a pinned heading or taken lines under it since it was listed
+  const note = fixTargets(raw).get(at[0]!);
+  if (!note || handOnly(note, lines.map(plain))) return null;
   const cr = lines[at[0]!]!.endsWith("\r");
   lines[at[0]!] = item.by + (cr ? "\r" : "");
-  return { text: lines.join("\n"), line: at[0]!, cr };
+  const same = copies(lines, item.by);
+  return { text: lines.join("\n"), line: at[0]!, cr, nth: same.indexOf(at[0]!), count: same.length, heading: headingAbove(lines, at[0]!) };
 }
 
-/** raw with the fixed line back to the old one, byte for byte: the copy of the fix nearest where it went; null when the fix is gone. */
-export function undoFix(raw: string, item: Pick<FixItem, "text" | "by" | "done">): string | null {
-  if (!item.done) return null;
-  const { line, cr } = item.done;
+/** raw with the fixed line back to the old one, byte for byte; changed when no line reads as the fix, conflict when which one is ours is unclear, so every copy stays. */
+export function undoFix(raw: string, item: Pick<FixItem, "text" | "by" | "done">): { text: string } | { error: "changed" | "conflict" } {
+  if (!item.done) return { error: "changed" };
   const lines = raw.split("\n");
-  const at = lines.flatMap((each, index) => (plain(each) === item.by ? [index] : [])).sort((p, q) => Math.abs(p - line) - Math.abs(q - line))[0];
-  if (at === undefined) return null;
-  lines[at] = item.text + (cr ? "\r" : "");
-  return lines.join("\n");
+  const same = copies(lines, item.by);
+  if (!same.length) return { error: "changed" };
+  const at = same[item.done.nth];
+  // a copy came or went since the OK, or ours moved under another heading
+  if (same.length !== item.done.count || at === undefined || headingAbove(lines, at) !== item.done.heading) return { error: "conflict" };
+  lines[at] = item.text + (item.done.cr ? "\r" : "");
+  return { text: lines.join("\n") };
 }

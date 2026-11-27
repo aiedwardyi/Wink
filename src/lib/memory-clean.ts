@@ -24,7 +24,7 @@ export type DreamPr = { repo?: string; number: number; mergedAt: number };
 export type DreamFix = {
   op: "fix"; target: string; text: string; by: string; why: "wrong"; listOnly: boolean;
   evidence: { thread: string; message: string; at: number; quote: string };
-  done?: { at: number; line: number; cr: boolean; id: string; undoneAt?: number };
+  done?: { at: number; line: number; cr: boolean; nth: number; count: number; heading: string; id: string; undoneAt?: number };
 };
 export type DreamRun = {
   mode: "dry";

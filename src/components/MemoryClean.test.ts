@@ -52,7 +52,7 @@ describe("cleanup copy", () => {
   it("lists a fix with the owner's words, OK on a waiting one, Undo on a done one, none on a rule", async () => {
     const onFix = vi.fn();
     const fix = (target: string, extra: Partial<DreamFix> = {}) => ({ op: "fix" as const, target, text: "- Plan ends in January (noted 2026-11-20)", by: "- Plan ends in March (noted 2026-11-20)", why: "wrong" as const, listOnly: false, evidence: { thread: "t", message: "m", at: new Date(2026, 10, 24).getTime(), quote: "It lasts till march" }, ...extra });
-    const items = [fix("note:a"), fix("note:b", { listOnly: true }), fix("note:c", { done: { at: 1, line: 3, cr: false, id: "x" } }), fix("note:d", { done: { at: 1, line: 3, cr: false, id: "y", undoneAt: 2 } })];
+    const items = [fix("note:a"), fix("note:b", { listOnly: true }), fix("note:c", { done: { at: 1, line: 3, cr: false, nth: 0, count: 1, heading: "", id: "x" } }), fix("note:d", { done: { at: 1, line: 3, cr: false, nth: 0, count: 1, heading: "", id: "y", undoneAt: 2 } })];
     const dream = { mode: "dry" as const, notes: { state: "checked" as const, items: [] }, asks: { threads: 1, skipped: 0, unchecked: 0, items: [] }, fixes: { state: "checked" as const, through: run.at, items }, runUntil: run.at, dropUntil: run.at };
     await mount(createElement(MemoryCleanRow, { run: { ...run, dream }, onUndo: vi.fn(), onFix }));
     expect(host.textContent).toContain("Would move 0 notes, fix 2 notes and close 0 to-dos.");
