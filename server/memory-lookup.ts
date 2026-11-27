@@ -34,9 +34,8 @@ export const RECALL_HEADER = "[Wink recall: past notes, may be unrelated or outd
 
 const BUDGET_MS = 25;
 const MAX_ROWS = 2;
-// within a tier: bm25 is negative, so an older row gives up this much text relevance a day (scripts/recall-rank-sweep.ts)
-export const RECENCY_PER_DAY = 0.03;
-const DAY_MS = 86_400_000;
+// within a tier, rows this close to the best text relevance are near-ties and the newest of them leads (scripts/recall-rank-sweep.ts)
+export const NEAR_TIE = 0.15;
 const MAX_CHARS = 1_400;
 const PIECE_MAX = 700;
 const MAX_CORPUS_BYTES = 2 * 1024 * 1024;
@@ -359,6 +358,16 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
   };
 }
 
+/** Tier first, so a topic keeps its highest tier's row; then text relevance, where only a near-tie with the tier's best goes to the newest. */
+export function rankHits(hits: readonly RecallHit[], today: string, tie = NEAR_TIE): RecallHit[] {
+  const best = new Map<number, number>();
+  for (const hit of hits) best.set(hit.tier, Math.min(best.get(hit.tier) ?? 0, hit.score));
+  // bm25 is negative, so a near-tie scores at least (1 - tie) of the best
+  const near = (hit: RecallHit) => hit.score <= best.get(hit.tier)! * (1 - tie);
+  const day = (hit: RecallHit) => (hit.date < today ? hit.date : today);
+  return hits.toSorted((a, b) => a.tier - b.tier || Number(near(b)) - Number(near(a)) || (near(a) ? day(b).localeCompare(day(a)) : 0) || a.score - b.score);
+}
+
 export interface MemoryLookupDeps {
   dataDir: string;
   notesPath: (botId: string) => string | undefined;
@@ -651,12 +660,10 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     if (over()) return [];
     if (!passed.length) return [];
 
-    const today = Date.parse(localDay(now()));
-    const key = (hit: RecallHit) => hit.score + (RECENCY_PER_DAY * Math.max(0, today - Date.parse(hit.date))) / DAY_MS;
     const newest = new Map<string, RecallHit>();
-    for (const hit of passed.toSorted((a, b) => key(a) - key(b))) if (!newest.has(hit.topic)) newest.set(hit.topic, hit);
+    for (const hit of rankHits(passed, localDay(now()))) if (!newest.has(hit.topic)) newest.set(hit.topic, hit);
     const mark = sessionMark(botId, threadId, session);
-    const unseen = [...newest.values()].filter((hit) => !mark.rows.has(hit.key)).sort((a, b) => a.tier - b.tier);
+    const unseen = [...newest.values()].filter((hit) => !mark.rows.has(hit.key));
     if (!unseen.length) {
       entry.reason = "shown";
       return [];

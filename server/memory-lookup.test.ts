@@ -64,6 +64,7 @@ async function lookupFor(notes: string | undefined, options: Partial<MemoryLooku
 }
 
 const ask = (lookup: MemoryLookup, botId: string, text: string, cursor?: string, threadId = "t1") => lookup.take(botId, threadId, cursor, text);
+const rowsOf = (note: string[]) => note[0]?.split("\n").slice(1) ?? [];
 
 describe("retrieval replay", () => {
   const forms: Array<[string, RegExp]> = [
@@ -216,7 +217,34 @@ describe("corpus", () => {
       "- Old plan for the juniper release train was the north desk (2026-06-16), bramble glacier canyon kiosk meadow walnut jasmine kayak",
     ].join("\n"));
     const { lookup } = await lookupFor(FILLER, { botId, now: () => Date.parse("2026-11-27T12:00:00") });
-    expect(ask(lookup, botId, "did we settle the juniper release train")[0]).toContain("the vendor in town");
+    expect(rowsOf(ask(lookup, botId, "did we settle the juniper release train"))[0]).toContain("the vendor in town");
+  });
+
+  it.each([
+    ["cobalt.md", "where is the cobalt backup drive stored", "locked cabinet", [
+      "- Cobalt backup drive: stored in the locked cabinet beside the printer (2026-03-12)",
+      "- Bought a spare cable for the cobalt backup drive (2026-11-20)",
+      "- Updated the inventory sheet for the cobalt backup drive (2026-11-24)",
+    ]],
+    ["juniper.md", "who approves juniper invoices", "Mara in finance", [
+      "- Juniper invoices: Mara in finance approves them (2026-05-04)",
+      "- Changed the font on the juniper invoice form (2026-11-18)",
+      "- Added a step to the juniper invoice checklist (2026-11-23)",
+    ]],
+  ])("keeps a clear text lead first over newer passing mentions in %s", async (name, question, answer, rows) => {
+    const botId = `bot-${randomUUID()}`;
+    sideFile(botId, name, rows.join("\n"));
+    const { lookup } = await lookupFor(FILLER, { botId, now: () => Date.parse("2026-11-27T12:00:00") });
+    const shown = rowsOf(ask(lookup, botId, question));
+    expect(shown).toHaveLength(2);
+    expect(shown[0]).toContain(answer);
+  });
+
+  it("shows the bot's own note over a shared note on the same topic and day", async () => {
+    const botId = `bot-${randomUUID()}`;
+    sideFile(botId, "harbor.md", "- Harbor pickup: the east depot by the loading bay, after the morning shift wraps and the trucks leave (2026-11-20)\n");
+    const { lookup } = await lookupFor(`${FILLER}\n- Harbor pickup: Pier Nine, harbor pickup gate (2026-11-20)\n`, { botId, now: () => Date.parse("2026-11-27T12:00:00") });
+    expect(rowsOf(ask(lookup, botId, "where is the harbor pickup"))[0]).toContain("the east depot");
   });
 
   it("keeps goals noted on different days as their own topics", async () => {

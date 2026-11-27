@@ -1,5 +1,5 @@
-// Recall rank sweep: seeded note copies with known answer rows, through the real index, gate and pick, with the same-tier order
-// swept over text relevance plus recency. Train picks the weight; held-out (fresh topics, similar distractors, no-match asks)
+// Recall rank sweep: seeded note copies with known answer rows, through the real index, gate and pick, with the near-tie band
+// swept, inside which the newest row leads. Train picks the band; held-out (fresh topics, similar distractors, no-match asks)
 // scores it against the app's own pick. Notes are synthetic; writes only to a temp folder, used as HOME and data dir.
 // node --experimental-strip-types scripts/recall-rank-sweep.ts [--json <summary.json>]
 // Wrong scope: another bot's copy of the rows. Superseded: an older row under the answer's own label. Stale: an older value
@@ -16,7 +16,7 @@ const root = join(temp, "kit");
 // before any server module loads: its data dir and home are read at import
 process.env.HOME = process.env.USERPROFILE = temp;
 process.env.OMB_DATA_DIR = join(root, "arms", "cued-after", "data");
-const { buildRecallIndex, createMemoryLookup, RECENCY_PER_DAY, searchable } = await import("../server/memory-lookup.ts");
+const { buildRecallIndex, createMemoryLookup, NEAR_TIE, rankHits, searchable } = await import("../server/memory-lookup.ts");
 const { userTyping } = await import("../server/memory-pass.ts");
 const { DATA_DIR } = await import("../server/config.ts");
 const { prepareArm } = await import("./dream-practice.ts");
@@ -25,7 +25,7 @@ const json = process.argv.indexOf("--json");
 const DAY = 86_400_000;
 const MAX_ROWS = 2;
 const MAX_CHARS = 1_400;
-const BETAS = [0, 0.002, 0.005, 0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 1, 2];
+const TIES = [0, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5];
 const REPS = 20;
 // rows of unrelated notes per file, two files: a modest bot's notes, so a word in a handful of rows is rare
 const FILLER = 150;
@@ -33,7 +33,6 @@ const FILLER = 150;
 const localDay = (at: number) => new Date(at).toLocaleDateString("sv-SE");
 const today = localDay(Date.now());
 const ago = (days: number) => localDay(Date.parse(`${today}T12:00:00`) - days * DAY);
-const ageOf = (date: string) => Math.max(0, Date.parse(today) - Date.parse(date)) / DAY;
 const cap = (word: string) => word[0]!.toUpperCase() + word.slice(1);
 
 function random(seed: number) {
@@ -168,12 +167,11 @@ const refOf = (item: Case, row: string) => {
   throw new Error(`${item.id}: row not seeded`);
 };
 
-// the app's pick after the gate, with the same-tier order keyed on text relevance plus beta per day of age
-function pick(passed: RecallHit[], beta: number): RecallHit[] {
-  const ordered = passed.toSorted((a, b) => a.score + beta * ageOf(a.date) - (b.score + beta * ageOf(b.date)));
+// the app's pick after the gate, with the near-tie band at tie
+function pick(passed: RecallHit[], tie: number): RecallHit[] {
   const newest = new Map<string, RecallHit>();
-  for (const hit of ordered) if (!newest.has(hit.topic)) newest.set(hit.topic, hit);
-  const unseen = [...newest.values()].sort((a, b) => a.tier - b.tier);
+  for (const hit of rankHits(passed, today, tie)) if (!newest.has(hit.topic)) newest.set(hit.topic, hit);
+  const unseen = [...newest.values()];
   const picked: RecallHit[] = [];
   let chars = 0;
   for (const hit of unseen) {
@@ -222,14 +220,14 @@ async function score(item: Case): Promise<Scored> {
   return { item, passed, app, ms };
 }
 
-function tally(rows: Scored[], beta: number) {
+function tally(rows: Scored[], tie: number) {
   let hits = 0;
   let bad = 0;
   let stale = 0;
   let falseRecall = 0;
   const positives = rows.filter((row) => row.item.kind === "positive");
   for (const { item, passed } of rows) {
-    const shown = pick(passed, beta).map((hit) => hit.ref);
+    const shown = pick(passed, tie).map((hit) => hit.ref);
     if (item.kind === "miss") {
       if (shown.length) falseRecall++;
       continue;
@@ -247,24 +245,24 @@ try {
   for (const item of cases(TRAIN)) train.push(await score(item));
   const held: Scored[] = [];
   for (const item of cases(HELD)) held.push(await score(item));
-  const off = [...train, ...held].filter((row) => JSON.stringify(row.app) !== JSON.stringify(pick(row.passed, RECENCY_PER_DAY).map((hit) => hit.ref)));
+  const off = [...train, ...held].filter((row) => JSON.stringify(row.app) !== JSON.stringify(pick(row.passed, NEAR_TIE).map((hit) => hit.ref)));
   if (off.length) throw new Error(`the sweep's pick differs from the app's on ${off.map((row) => row.item.id).join(", ")}`);
-  const grid = BETAS.map((beta) => ({ beta, train: tally(train, beta), held: tally(held, beta) }));
-  const winner = [...grid].sort((a, b) => b.train.hits - a.train.hits || a.train.wrongScopeOrSuperseded - b.train.wrongScopeOrSuperseded || a.train.staleShown - b.train.staleShown || a.beta - b.beta)[0]!;
-  const app = { beta: RECENCY_PER_DAY, train: tally(train, RECENCY_PER_DAY), held: tally(held, RECENCY_PER_DAY) };
+  const grid = TIES.map((tie) => ({ tie, train: tally(train, tie), held: tally(held, tie) }));
+  const winner = [...grid].sort((a, b) => b.train.hits - a.train.hits || a.train.wrongScopeOrSuperseded - b.train.wrongScopeOrSuperseded || a.train.staleShown - b.train.staleShown || a.tie - b.tie)[0]!;
+  const app = { tie: NEAR_TIE, train: tally(train, NEAR_TIE), held: tally(held, NEAR_TIE) };
   const ms = held.flatMap((row) => row.ms);
   const summary = {
     today,
     parity: { cases: train.length + held.length, mismatches: 0 },
     app,
     winner,
-    change: winner.beta !== app.beta && winner.held.hits > app.held.hits && winner.held.wrongScopeOrSuperseded === 0 && winner.held.falseRecall === 0,
+    change: winner.tie !== app.tie && winner.held.hits > app.held.hits && winner.held.wrongScopeOrSuperseded === 0 && winner.held.falseRecall === 0,
     lookupMs: { p50: Number(pct(ms, 0.5).toFixed(3)), p95: Number(pct(ms, 0.95).toFixed(3)), max: Number(Math.max(...ms).toFixed(3)) },
     grid,
   };
   if (json > 0 && process.argv[json + 1]) writeFileSync(process.argv[json + 1]!, `${JSON.stringify(summary, null, 1)}\n`);
   const line = (side: ReturnType<typeof tally>) => `${side.hits}/${side.of} bad ${side.wrongScopeOrSuperseded} stale ${side.staleShown} false ${side.falseRecall}/${side.misses} crowded ${side.crowded}`;
-  console.log(JSON.stringify({ ...summary, grid: grid.map((row) => `${row.beta}: train ${line(row.train)} | held ${line(row.held)}`) }, null, 2));
+  console.log(JSON.stringify({ ...summary, grid: grid.map((row) => `${row.tie}: train ${line(row.train)} | held ${line(row.held)}`) }, null, 2));
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
