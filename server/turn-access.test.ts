@@ -98,7 +98,8 @@ describe("every engine states what it may do", () => {
   const dumpDir = (engine: Engine) => join(home, "dumps", engine);
   const files = (engine: Engine) => {
     const dir = dumpDir(engine);
-    return existsSync(dir) ? readdirSync(dir).map((file) => ({ file, text: readFileSync(join(dir, file), "utf8") })) : [];
+    // fake-claude writes dump.json.<pid>.tmp then renames it, so a listing can name a file that is gone by the read
+    return existsSync(dir) ? readdirSync(dir).filter((file) => !file.endsWith(".tmp")).map((file) => ({ file, text: readFileSync(join(dir, file), "utf8") })) : [];
   };
   const sendAndRead = async (engine: Engine, path: string, text: string) => {
     removeTestData(dumpDir(engine));
