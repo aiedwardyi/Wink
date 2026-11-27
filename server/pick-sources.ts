@@ -17,8 +17,10 @@ export type ShownPicture = Picture & { original?: string };
 type PictureTurn = { questionId: string; context?: string; options?: string[]; pictures: ShownPicture[] };
 export type ReplyPictures = PictureTurn & {
   prior?: PictureTurn & { kind: "preview" | "correction" }; previousAnswerId?: string; invalidCard?: boolean; question?: string;
-  /** the card the reply answers, by its id or as the chat reads a quoted reply */
+  /** the card the reply answers, by its id or as the chat reads the reply */
   cardId?: string;
+  /** the reply's own words, without the question it quotes */
+  answer?: string;
   /** the card's own option the reply picks, word for word */
   choice?: string;
 };
@@ -71,7 +73,8 @@ function picturesIn(turn: Message[], attachments: string, answered?: Message): P
   const questionId = question?.id ?? lastScreen;
   if (!questionId) return undefined;
   const card = question?.card;
-  const context = [answered ? card?.subtitle : reply?.text ?? card?.subtitle, ...(card?.options ?? [])].filter(Boolean).join("\n");
+  // a question with no buttons can lean on the bot's words before it, as an unanswered one does
+  const context = [answered && card?.options?.length ? card.subtitle : reply?.text ?? card?.subtitle, ...(card?.options ?? [])].filter(Boolean).join("\n");
   return { questionId, context, options: card?.options, pictures: pictures.slice(-PICTURES_MAX) };
 }
 
@@ -84,18 +87,18 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
     const index = id === undefined ? i - 1 : id ? byId.get(id) ?? -1 : -1;
     return index < i ? index : -1;
   };
-  // a quoted reply with no card id answers the card the chat closes with it
-  let quotedBy: Map<string, Message> | undefined;
-  const quotedCard = (answer: Message) => {
-    if (answer.answersCard || !answer.text?.startsWith("Re: “")) return undefined;
-    const closed = quotedBy ??= new Map([...askStates(messages)].flatMap(([card, state]) => state.state === "answered" && state.by?.id ? [[state.by.id, card] as const] : []));
+  // a reply with no card id answers the card the chat closes with it: one it quotes, or a question with no buttons
+  let closedBy: Map<string, Message> | undefined;
+  const chatCard = (answer: Message) => {
+    if (answer.answersCard) return undefined;
+    const closed = closedBy ??= new Map([...askStates(messages)].flatMap(([card, state]) => state.state === "answered" && state.by?.id ? [[state.by.id, card] as const] : []));
     const card = closed.get(answer.id);
-    return card && answer.text.startsWith(answerPrefix(card)) ? card.id : undefined;
+    return card && (answer.text?.startsWith(answerPrefix(card)) || !card.card?.options?.length) ? card.id : undefined;
   };
   for (let i = messages.length - 1; i >= 0 && wanted.size; i -= 1) {
     const answer = messages[i]!;
     if (!wanted.delete(answer.id)) continue;
-    const cardId = answer.answersCard ?? quotedCard(answer);
+    const cardId = answer.answersCard ?? chatCard(answer);
     const card = cardId ? byId.get(cardId) : undefined;
     const answered = card !== undefined && card < i && isQuestionCard(messages[card]!) ? messages[card] : undefined;
     const { turn, previous } = botTurn(messages, answered ? card! : parent(i), parent);
@@ -109,6 +112,7 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
       reply.cardId = answered.id;
       const text = answer.text ?? "";
       const said = (text.startsWith(answerPrefix(answered)) ? text.slice(answerPrefix(answered).length) : text).trim();
+      reply.answer = said;
       const choice = answered.card?.options?.find((option) => option.trim() === said);
       if (choice) reply.choice = choice.trim();
     }

@@ -238,7 +238,8 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     if (change.kind === "pick" && change.tapped && card) {
       // a verified tap is the user's answer to its own card, apart from every other card whatever their keys
       const own = cardSlot(card);
-      const picked = clip(change.picked, PICKED_MAX);
+      // the user's whole answer, never cut: its last words can hold it back
+      const picked = flat(change.picked);
       // one answer per tap, however many keys the note-taker files it under
       if (!picked || entries.some((entry) => entry.thread === card.thread && entry.messageId === card.messageId)) continue;
       const mine = entries.findLast((entry) => !entry.replacedBy && !entry.kind && cardOf(entry) === own);
@@ -254,8 +255,8 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
           continue;
         }
       } else {
-        // a typed pick on the question beats any tap
-        if (entries.some((entry) => !entry.replacedBy && slotOf(entry) === slot && !entry.tapped)) continue;
+        // a typed pick on this card beats its tap; another question's pick under the same key stays beside it
+        if (entries.some((entry) => !entry.replacedBy && slotOf(entry) === slot && !entry.tapped && entry.thread === card.thread && entry.questionId === card.questionId)) continue;
         for (let n = 2; entries.some((entry) => !entry.replacedBy && slotOf(entry) === slotOf({ key })); n += 1) key = `${clip(asked, KEY_MAX - ` (${n})`.length)} (${n})`;
         if (key !== asked) moved.set(slot, slotOf({ key }));
       }
@@ -271,7 +272,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
       const entry: PickEntry = {
         id, key, picked,
         over: (change.over ?? []).map((option) => clip(option, PICKED_MAX).replace(/;/g, ",")).filter(Boolean),
-        overPictures: card.overPictures, said: clip(change.said, SAID_MAX), files: card.files, tweaks: [], extra: [],
+        overPictures: card.overPictures, said: flat(change.said), files: card.files, tweaks: [], extra: [],
         tapped: true, thread: card.thread, messageId: card.messageId, questionId: card.questionId, binding: "verified", at: change.at,
       };
       if (card.picture) entry.picture = card.picture;
@@ -520,8 +521,11 @@ function pickLine(entry: PickEntry): string {
   const shown = entry.tweaks.slice(-TWEAKS_SHOWN).map(({ at, said }) => `"${clip(said, TWEAK_SHOWN_MAX)}" (${monthDay(at)})`);
   const earlier = entry.tweaks.length - shown.length;
   const tweaks = shown.length ? ` + tweaks: ${shown.join(", ")}${earlier ? ` (+${earlier} earlier in memory/${PICKS_FILE})` : ""}` : "";
-  const line = `- ${pickHead(entry)}${entry.picture ? ` (${entry.picture.path})` : ""}${tweaks}`;
-  return line.length > LINE_MAX ? `${line.slice(0, LINE_MAX - 3)}...` : line;
+  const head = `- ${pickHead(entry)}${entry.picture ? ` (${entry.picture.path})` : ""}`;
+  const line = `${head}${tweaks}`;
+  // a card answer shows whole; only its tweaks give way
+  const max = Math.max(LINE_MAX, head.length + 3);
+  return line.length > max ? `${line.slice(0, max - 3)}...` : line;
 }
 
 const pickHead = (entry: PickEntry) => (pickKey(entry.key) === pickKey(entry.picked) ? `${entry.picked} (${monthDay(entry.id)})` : `${entry.key} (${monthDay(entry.id)}): ${entry.picked}`);

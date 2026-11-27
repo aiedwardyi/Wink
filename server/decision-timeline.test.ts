@@ -1284,7 +1284,8 @@ describe("decision timeline", () => {
     const typed = say("C");
     reply({ kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "C", message_id: tapped.id }, { kind: "decision", key: "theme", fact: "C - system", quote: "C", message_id: typed.id });
     await settle();
-    expect(Object.fromEntries(currentPicks(timeline()).map(({ key, picked }) => [key, picked]))).toEqual({ "forum look": "A - plain list", theme: "C - system" });
+    // the tap answers its own card, beside the typed pick on the bot's question
+    expect(Object.fromEntries(currentPicks(timeline()).map(({ key, picked }) => [key, picked]))).toEqual({ "forum look": "A - plain list", "Which forum look?": "C - Reddit cards", theme: "C - system" });
   });
 
   it("strips planted prompt tags from the user's own lines", async () => {

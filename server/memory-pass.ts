@@ -7,7 +7,7 @@ import type { ProviderInstance } from "./contracts.ts";
 import { AGY_TEXT_MODEL, exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
 import { isSignOut } from "./drivers/signout.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
-import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
+import { offersOption, replyTurns, validatePickBinding, type PickBinding, type ReplyPictures } from "./pick-sources.ts";
 import { applyPicks, currentPicks, KEY_MAX, LABELED, parseTimeline, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { loadProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
@@ -165,13 +165,14 @@ export function withoutBlocks(text: string): string {
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
 }
 
-/** option: the text is a card's own option, kept whole: its quotes and blockquotes are the choice, not a paste. */
-export function userTyping(text: string, dropSensitive = true, keepImages = false, option = false): string {
+/** whole: a card answer, never cut for length: a card's own option keeps its quotes and blockquotes, a typed answer loses only pastes, code and the lines it quotes. */
+export function userTyping(text: string, dropSensitive = true, keepImages = false, whole?: "option" | "answer"): string {
   const attached = text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : "");
-  const typed = option ? attached : withoutBlocks(attached);
+  const typed = whole === "option" ? attached : withoutBlocks(attached);
   // the whole message: a label and its value can sit in different paragraphs
   if (dropSensitive && secretValue(typed)) return "";
-  if (option) return redactSecretsInText(typed.trim());
+  if (whole === "option") return redactSecretsInText(typed.trim());
+  if (whole === "answer") return redactSecretsInText(typed.split("\n").filter((line) => !line.trimStart().startsWith(">")).join("\n").trim());
   const unwrapped = typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
   const kept = unwrapped
     .split(/\n\s*\n/)
@@ -554,8 +555,7 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
   const seen = new Set<string>();
   const decided = new Set<string>();
   const taken = new Set<string>();
-  const answered = new Set<string>();
-  const cardKeys = new Map<string, string>();
+  const cardNotes = new Map<string, CardNote>();
   const accept = (fact: Fact): HeldNote | null => {
     const { kind, quote, replaces } = fact;
     const decision = kind === "decision";
@@ -604,7 +604,6 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
       // an older Auto Notes line on this question leaves MEMORY.md for the timeline, named by the note-taker or not
       const listed = replaceable(replaces, lines, claims) && (inSection(replaces) || legacyLine(thing, [replaces], taken) === replaces) && !taken.has(replaces) ? replaces : undefined;
       const target = listed ?? legacyLine(thing, lines, taken);
-      if (target) taken.add(target);
       const over = listOf(fact.over)
         .filter((option) => option.length <= DECISION_MAX && !secretLike(option) && pickKey(option) !== pickKey(line) && optionNamed(option, said, known, own))
         .slice(0, OPTIONS_MAX);
@@ -613,24 +612,24 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
         key: thing, picked: line, over, messageId: fact.message_id, questionId: fact.question_id, picture: fact.picture,
         overPictures: fact.over_pictures == null ? undefined : listOf(fact.over_pictures),
       }, bound, before, sources.filter((other) => other !== bound && (quoting.includes(other) || offersOption(other, line))));
-      const old = target ? NOTED.exec(target) : null;
-      // a tap is the user's exact choice, saved in its own words: the note names its key and context, never its answer, and a note that misses its card leaves it to code
-      const tap = source.tap && source.id ? tapChoice(source) : undefined;
-      if (tap !== undefined) {
-        if (!binding || binding.messageId !== source.id || binding.questionId !== source.questionId || answered.has(source.id) || !tap || secretValue(tapAnswer(source)) || secretValue(tap)) return null;
-        answered.add(source.id);
+      // a card answer is filed in code from the user's own words: a note bound to its card only names its key, the options it beat and the line it replaces
+      if (source.tap && source.id) {
+        if (binding?.messageId === source.id && binding.questionId === source.questionId && !cardNotes.has(source.id)) {
+          if (target) taken.add(target);
+          decided.add(squash(said));
+          cardNotes.set(source.id, { key: thing, over, binding, replaces: target });
+        }
+        return null;
       }
-      if (binding) cardKeys.set(binding.questionId, thing);
-      const picked = tap ?? line;
+      if (target) taken.add(target);
       seen.add(id);
       live.add(pickKey(thing));
       decided.add(squash(said));
-      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: binding?.at ?? source.at ?? 0, key: thing, picked, said: tap === undefined ? said : tapAnswer(source) };
+      const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: binding?.at ?? source.at ?? 0, key: thing, picked: line, said };
       if (source.id) pick.binding = binding ?? "unbound";
       if (over.length) pick.over = over;
-      if (source.tap && binding) pick.tapped = true;
-      if (target) pick.legacy = { day: old?.[2] ?? day(pick.at), line: old?.[1] ?? target.replace(/^\s*[-*+]\s+/, "") };
-      const note: Note = { line: tap === undefined ? named : `${thing}: ${tap}`, kind: "decision", pick };
+      if (target) pick.legacy = legacyPick(target, pick.at);
+      const note: Note = { line: named, kind: "decision", pick };
       if (target) note.replaces = target;
       return note;
     }
@@ -651,7 +650,7 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
   const order = facts.map((fact, index) => ({ fact, index })).sort((a, b) => rank(a.fact) - rank(b.fact));
   const kept = new Map(order.filter(({ fact }) => fact.kind === "decision").map(({ fact, index }) => [index, accept(fact)] as const));
   // a card answer filed in code is current before the tweaks, which may qualify it
-  const cards = cardAnswers(sources, answered, cardKeys, archived);
+  const cards = cardAnswers(sources, cardNotes, archived);
   for (const { pick } of cards) if (pick) live.add(pickKey(pick.key));
   for (const { fact, index } of order) if (fact.kind !== "decision") kept.set(index, accept(fact));
   const picked = (decision: boolean) => facts.flatMap((fact, index) => (fact.kind === "decision") === decision ? kept.get(index) ?? [] : []);
@@ -669,30 +668,52 @@ function questionKey(question: string, held: (key: string) => boolean): string {
 // what userTyping leaves of answerPrefix: the quote, or nothing once a long quote was cut
 const ANSWER_PREFIX = /^Re: (?:“[^\n]*”)?[ \t]*\n/;
 const tapAnswer = (source: UserLine) => source.text.replace(ANSWER_PREFIX, "").trim();
-// the option a card answer selects, in the card's own words when it is a bare letter or number naming one of them
+const PLACES = ["first", "second", "third", "fourth", "fifth"];
+const PLACE = /^(?:the\s+)?(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)(?:\s+(?:one|option|choice))?(?:,?\s+please)?[.!]?$/i;
+// the option a card answer points to, in the card's own words: by its letter or number, its place, or its name; a card with no buttons offers the options its question lists
 const tapChoice = (source: UserLine) => {
   const text = tapAnswer(source);
+  const options = source.options?.length ? source.options : labeledOptions(source.context);
   const label = /^(?:option\s+)?([a-z]|\d{1,2})[.)]?$/i.exec(text)?.[1]?.toLowerCase();
-  const named = label ? (source.options ?? []).filter((option) => LABELED.exec(option.trim())?.[1]?.toLowerCase() === label) : [];
+  const place = PLACE.exec(text)?.[1]?.toLowerCase();
+  const named = label ? options.filter((option) => LABELED.exec(option.trim())?.[1]?.toLowerCase() === label)
+    : place ? [options[place === "last" ? options.length - 1 : (PLACES.indexOf(place) + 1 || Number(place[0])) - 1]].filter((option) => option !== undefined)
+    : options.filter((option) => pickKey(option) === pickKey(text));
   return named.length === 1 ? named[0]!.replace(/\s+/g, " ").trim() : text;
 };
 
-/** Card answers the note-taker did not file, each a pick in the user's words; a card on file keeps its key, so a revised answer replaces the older one. */
-function cardAnswers(sources: UserLine[], answered: Set<string>, keys: Map<string, string>, archived: string): HeldNote[] {
+type CardNote = { key: string; over: string[]; binding: PickBinding; replaces?: string };
+
+const legacyPick = (target: string, at: number) => {
+  const old = NOTED.exec(target);
+  return { day: old?.[2] ?? day(at), line: old?.[1] ?? target.replace(/^\s*[-*+]\s+/, "") };
+};
+
+/** Every card answer, each a pick in the user's own words under its card; the note-taker's note on it adds only a key no other question holds, the options it beat and the line it replaces. */
+function cardAnswers(sources: UserLine[], noted: Map<string, CardNote>, archived: string): HeldNote[] {
   const entries = parseTimeline(archived).entries;
+  const keys = new Map<string, string>();
   return sources.flatMap((source) => {
     const question = source.question?.replace(/\s+/g, " ").trim();
     const said = tapAnswer(source);
     const picked = tapChoice(source);
     // screened on the value filed too: a letter's option was not in the typed text
-    if (!source.tap || !source.id || answered.has(source.id) || !question || !said || secretValue(question) || secretValue(said) || secretValue(picked)) return [];
-    const binding = validatePickBinding({ key: question, picked, over: [] }, source);
+    if (!source.tap || !source.id || !question || !said || secretValue(question) || secretValue(said) || secretValue(picked)) return [];
+    const note = noted.get(source.id);
+    const binding = note?.binding ?? validatePickBinding({ key: question, picked, over: [] }, source);
     if (!binding) return [];
     const held = (key: string) => [...keys].some(([id, other]) => id !== binding.questionId && pickKey(other) === pickKey(key))
       || entries.some((entry) => !entry.replacedBy && !entry.kind && entry.questionId !== binding.questionId && pickKey(entry.key) === pickKey(key));
-    const key = keys.get(binding.questionId) ?? entries.findLast((entry) => !entry.kind && entry.questionId === binding.questionId)?.key ?? questionKey(question, held);
+    // a card keeps the key it is filed under, so a revised answer replaces the older one
+    const key = keys.get(binding.questionId) ?? entries.findLast((entry) => !entry.kind && entry.questionId === binding.questionId)?.key
+      ?? (note && !held(note.key) ? note.key : questionKey(question, held));
     keys.set(binding.questionId, key);
-    return [{ line: `${key}: ${picked}`, kind: "decision", pick: { kind: "pick", at: binding.at, key, picked, said, binding, tapped: true } }];
+    const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: binding.at, key, picked, said, binding, tapped: true };
+    if (note?.over.length) pick.over = note.over;
+    if (note?.replaces) pick.legacy = legacyPick(note.replaces, pick.at);
+    const filed: HeldNote = { line: `${key}: ${picked}`, kind: "decision", pick };
+    if (note?.replaces) filed.replaces = note.replaces;
+    return [filed];
   });
 }
 
@@ -1095,7 +1116,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       const row = rows.get(id)!;
       const reply = replies.get(id);
       // a pasted tag cannot open or close a prompt block
-      const text = userTyping(row.text!, true, false, reply?.choice !== undefined).replace(CONTEXT_TAGS, " ").trim();
+      // a card answer is the user's own words after the question it quotes, whole
+      const text = userTyping(reply?.answer ?? row.text!, true, false, reply?.choice !== undefined ? "option" : reply?.answer !== undefined ? "answer" : undefined).replace(CONTEXT_TAGS, " ").trim();
       return text ? [{ id, text, at: row.actedAt ?? row.at, tap: Boolean(row.answersCard || reply?.cardId), files: attachedImages(row.text ?? "") }] : [];
     });
     const lines = typed.sort((a, b) => a.at - b.at).map(({ id, text, at, tap, files }) => {
