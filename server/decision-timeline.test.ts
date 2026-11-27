@@ -448,16 +448,16 @@ describe("decision timeline", () => {
       expect(timeline()).toBe("");
     });
 
-    it("retires a card pick once the PR it names merged after the tap", async () => {
+    it("retires a card pick once the PR its answer names merged after the tap", async () => {
       const merged = vi.fn(() => [{ number: 2194, mergedAt: Date.now() }]);
       pass.dispose();
       pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged });
-      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Merge", subtitle: "Merge PR 2194 once CI is green?", options: ["Yes", "No"], askUser: true } });
-      answer(card, "Yes");
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Merge", subtitle: "Merge PR 2194 once CI is green?", options: ["Yes, merge PR 2194", "No"], askUser: true } });
+      answer(card, "Yes, merge PR 2194");
       reply();
       await settle();
       expect(merged).toHaveBeenCalledWith(BOT, "t1", expect.stringContaining("PR 2194"), true);
-      expect(picks()).toEqual([["Merge PR 2194 once CI is green?", "Yes", card.id]]);
+      expect(picks()).toEqual([["Merge PR 2194 once CI is green?", "Yes, merge PR 2194", card.id]]);
       expect(timeline()).toMatch(/^- Retired: \d{4}-\d{2}-\d{2}$/m);
       expect(picksBlock(timeline())).toBe("");
     });
@@ -466,8 +466,8 @@ describe("decision timeline", () => {
       const mergedAt = Date.now() + MINUTE;
       pass.dispose();
       pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged: () => [{ number: 2194, mergedAt }] });
-      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Merge", subtitle: "Merge PR 2194 once CI is green?", options: ["Yes", "No"], askUser: true } });
-      answer(card, "Yes");
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Merge", subtitle: "Merge PR 2194 once CI is green?", options: ["Yes, merge PR 2194", "No"], askUser: true } });
+      answer(card, "Yes, merge PR 2194");
       reply();
       await settle();
       expect(picksBlock(timeline())).toBe("");
@@ -599,12 +599,91 @@ describe("decision timeline", () => {
       const merged = vi.fn((_bot: string, _thread: string, ref: string) => [41, 42, 43].filter((n) => ref.includes(String(n)) && n !== 42).map((number) => ({ number, mergedAt: Date.now() })));
       pass.dispose();
       pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged });
-      const ask = (subtitle: string) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Close", subtitle, options: ["Yes", "No"], askUser: true } });
-      answer(ask("Close packing after PR #41 and #42 merge?"), "Yes");
-      answer(ask("Close delivery after PR 41 and PR 43 merge?"), "Yes");
+      const ask = (subtitle: string, choice: string) => answer(store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Close", subtitle, options: [choice, "No"], askUser: true } }), choice);
+      ask("When should packing close?", "After PR #41 and #42 merge");
+      ask("When should delivery close?", "After PR 41 and PR 43 merge");
       reply();
       await settle();
-      expect(currentPicks(timeline()).map(({ key, retired }) => [key, Boolean(retired)])).toEqual([["Close packing after PR #41 and #42 merge?", false], ["Close delivery after PR 41 and PR 43 merge?", true]]);
+      expect(currentPicks(timeline()).map(({ key, retired }) => [key, Boolean(retired)])).toEqual([["When should packing close?", false], ["When should delivery close?", true]]);
+    });
+
+    it("replaces a tapped answer with a revision that only adds words to it", async () => {
+      const first = "A - Send the release notes";
+      const revised = `${first}, but wait for my approval before sending.`;
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Share", subtitle: "How should we share the release notes?", options: [first, "B - Save a draft"], askUser: true } });
+      answer(card, first);
+      reply();
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      answer(card, `Re: “How should we share the release notes?”\n${revised}`);
+      reply();
+      await settle();
+      expect(picks()).toEqual([["How should we share the release notes?", revised, card.id]]);
+      expect(memorySystemPrompt(BOT)).toContain("but wait for my approval before sending.");
+    });
+
+    it("replaces a tapped answer with one that differs only in symbols", async () => {
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Language", subtitle: "Which language for the desktop client?", options: ["C++", "C#"], askUser: true } });
+      answer(card, "C++");
+      reply();
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      answer(card, "Re: “Which language for the desktop client?”\nC#");
+      reply();
+      await settle();
+      expect(picks()).toEqual([["Which language for the desktop client?", "C#", card.id]]);
+    });
+
+    it("keeps three cards apart when their shortened questions collide twice", async () => {
+      const choices = ["Local signing", "Cloud signing", "Hardware signing"];
+      const cards: Message[] = [];
+      for (const [i, platform] of ["desktop", "mobile", "tablet"].entries()) {
+        cards.push(store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Signing", subtitle: `For the upcoming release, which signing service should we use for the ${platform} installer when distributing builds to our beta testers?`, options: choices, askUser: true } }));
+        answer(cards[i]!, choices[i]!);
+        reply();
+        await settle();
+      }
+      expect(picks().map(([, picked, question]) => [picked, question])).toEqual(choices.map((choice, i) => [choice, cards[i]!.id]));
+      for (const choice of choices) expect(picksBlock(timeline())).toContain(choice);
+    });
+
+    it("keeps two cards apart when the note-taker files both under one key", async () => {
+      for (const [platform, choice] of [["desktop", "Local signing"], ["mobile", "Cloud signing"]]) {
+        const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Signing", subtitle: `Which signing service for ${platform}?`, options: [choice!, "No signing"], askUser: true } });
+        const tap = answer(card, choice!);
+        reply({ kind: "decision", key: "Signing service", fact: choice, quote: choice, message_id: tap.id, question_id: card.id });
+        await settle();
+      }
+      expect(picks().map(([, picked]) => picked)).toEqual(["Local signing", "Cloud signing"]);
+      expect(picksBlock(timeline())).toContain("Local signing");
+      expect(picksBlock(timeline())).toContain("Cloud signing");
+    });
+
+    it("keeps an answer that waits for approval or never ends live after its day", async () => {
+      const ask = (subtitle: string, options: string[]) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Release", subtitle, options, askUser: true } });
+      answer(ask("Should we publish the announcement?", ["Not now, wait for my approval", "Publish"]), "Not now, wait for my approval");
+      answer(ask("Which notification policy should I use?", ["Never page me after 18:00", "Page me anytime"]), "Never page me after 18:00");
+      answer(ask("When should we archive the demo?", ["Tonight", "Next week"]), "Tonight");
+      reply();
+      await settle();
+      vi.setSystemTime(NOW + 2 * 24 * 60 * MINUTE);
+      answer(ask("Which label color?", ["Mint", "Orange"]), "Mint");
+      reply();
+      await settle();
+      expect(currentPicks(timeline()).map(({ picked, retired }) => [picked, Boolean(retired)])).toEqual([["Not now, wait for my approval", false], ["Never page me after 18:00", false], ["Tonight", true], ["Mint", false]]);
+    });
+
+    it("never retires a pick by a PR only its question or a rejected option names", async () => {
+      pass.dispose();
+      pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged: () => [{ number: 41, mergedAt: Date.now() }] });
+      const ask = (subtitle: string, options: string[]) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Release", subtitle, options, askUser: true } });
+      answer(ask("Ship with PR #41 or wait for confirmation?", ["Ship with PR #41", "Hold until I confirm"]), "Hold until I confirm");
+      answer(ask("What is the release policy after PR #41 merges?", ["Wait for a manual release", "Release on merge"]), "Wait for a manual release");
+      answer(ask("Close the audit after PR #41 merges?", ["Yes", "No"]), "Yes");
+      answer(ask("When should the packing close?", ["Close it once PR #41 merges", "Keep it open"]), "Close it once PR #41 merges");
+      reply();
+      await settle();
+      expect(currentPicks(timeline()).map(({ picked, retired }) => [picked, Boolean(retired)])).toEqual([["Hold until I confirm", false], ["Wait for a manual release", false], ["Yes", false], ["Close it once PR #41 merges", true]]);
     });
   });
 

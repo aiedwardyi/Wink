@@ -237,9 +237,15 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const card = change.kind === "pick" && change.binding && change.binding !== "unbound" && change.binding.questionId !== change.binding.messageId ? change.binding : undefined;
     // a later answer to the same card is that card's pick, whatever key the note-taker gave it
     const answers = card ? entries.filter((entry) => !entry.replacedBy && !entry.kind && entry.questionId === card.questionId && entry.thread === card.thread && entry.messageId !== card.messageId) : [];
-    const current = (answers.length === 1 ? answers[0] : undefined) ?? entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === (moved.get(slot) ?? slot));
+    let current = (answers.length === 1 ? answers[0] : undefined) ?? entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === (moved.get(slot) ?? slot));
     if (card && current && slotOf(current) !== slot) moved.set(slot, slotOf(current));
-    const key = current?.key ?? asked;
+    let key = current?.key ?? asked;
+    // another card's pick that shares only a shortened question or the note-taker's key stays current beside this one
+    if (change.kind === "pick" && change.tapped && card && current?.tapped && current.binding === "verified" && current.questionId && current.questionId !== card.questionId && !(card.question && same(current.key, card.question.replace(/\|/g, "/")))) {
+      current = undefined;
+      for (let n = 2; entries.some((entry) => !entry.replacedBy && slotOf(entry) === slotOf({ key })); n += 1) key = `${asked} (${n})`;
+      moved.set(slot, slotOf({ key }));
+    }
     if (change.kind === "goal") {
       // a replayed batch from before the current entry never lands on it
       if (current && change.at < entryTime(current)) continue;
@@ -280,7 +286,8 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     if (evidence.messageId && entries.some((entry) => entry.messageId === evidence.messageId && entry.thread === evidence.thread && pickKey(entry.key) === pickKey(key))) continue;
     // a new card asking the same question again is a new answer, dated today
     const reasked = tapped && current?.tapped && card && current.questionId !== card.questionId;
-    if (current && sameOption(current.picked, picked) && !reasked) {
+    // a tap is the user's own selected words, so only the whole text names the same option
+    if (current && (tapped ? same(current.picked, picked) : sameOption(current.picked, picked)) && !reasked) {
       // a re-pick whose question never names the pick keeps the verified picture and time
       const proven = binding !== "verified" || current.binding !== "verified" || evidence.named;
       if (proven && (overTap || (binding === "verified" && (current.binding === "unbound" || (current.binding === "verified" && !tapped && !current.tapped))))) {
@@ -591,17 +598,20 @@ export function currentOnly(text: string): string {
 const DATED = /(?<![\w.@])(?:tonight|today|right now|after \d{1,2}:\d{2})\b|(?<![\w.@]|\b(?:for|from) )now\b(?! on\b)|(?<![\w.@]|\bfrom )tomorrow\b/i;
 // a tweak is the user's raw words, so it dates the pick only by these
 const DATED_SAID = /(?<![\w.@])(?:tonight|expires? today|right now|after \d{1,2}:\d{2})\b/i;
+// an answer held for the user, or a ban, has no day it is done
+const WAITS = /\b(?:wait|approv|confirm|never)/i;
 // "every day after 13:30" is a standing rule, whatever time it names
 const RECURRING = /\b(?:every|each|daily|nightly|weekly|monthly|always|whenever|from now on|(?:mon|tues|wednes|thurs|fri|satur|sun)days|onwards?|going forward|starting (?:today|tomorrow|now))\b/i;
 
-/** Marks current picks that are finished one-offs as retired today: the chosen answer or the user's newest words date it to a day now past, or done() says the PRs it names merged since; null from done() is a PR still open. Null when none. */
+/** Marks current picks that are finished one-offs as retired today: the chosen answer or the user's newest words date it to a day now past, or done() says the PRs its answer names merged since; null from done() is a PR still open. An answer that waits, asks for approval or confirmation, or says never stays. Null when none. */
 export function retirePicks(text: string, now: number, done: (entry: PickEntry) => boolean | null = () => false): string | null {
   const timeline = parseTimeline(text);
   const today = pickStamp(now).slice(0, 10);
   let retired = 0;
   for (const entry of timeline.entries) {
     if (entry.replacedBy || entry.kind || entry.retired) continue;
-    if (RECURRING.test([entry.key, entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n"))) continue;
+    const answer = [entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n");
+    if (RECURRING.test(`${entry.key}\n${answer}`) || WAITS.test(answer)) continue;
     const finished = done(entry);
     if (finished === null) continue;
     const tweak = entry.tweaks.at(-1);

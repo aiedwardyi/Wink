@@ -795,7 +795,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     return room ? deps.store.groupByThread(room[1])?.memberIds?.includes(room[0]) ? deps.store.bot?.(room[0]) : undefined : deps.store.botByThread(key);
   };
   const busy = (botId: string, key: string) => deps.busy(botId, sourceThread(key));
-  // every PR the pick names merged after it was picked; null while one is unread or open
+  // every PR the pick names merged after it was picked, and its answer names one; null while one is unread or open
   const prsMerged = (botId: string, threadId: string, entry: PickEntry) => {
     const ref = [entry.key, entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n");
     const prs = refPrs(ref);
@@ -806,7 +806,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     if (!checked) return null;
     // a tweak after the merge is work the merge did not finish
     const since = Math.max(entryTime(entry), ...entry.tweaks.map(({ at }) => entryTime({ id: at })));
-    return checked.every((pr) => (pr.mergedAt ?? 0) > since);
+    // a PR only the question or a beaten option names may hold the pick, never finish it
+    return refPrs([entry.picked, ...entry.tweaks.map(({ said }) => said)].join("\n")).length > 0 && checked.every((pr) => (pr.mergedAt ?? 0) > since);
   };
 
   let claim = false;
