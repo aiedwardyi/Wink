@@ -50,6 +50,8 @@ function DreamRow({ run, onFix, className }: { run: MemoryCleanRun & { dream: Dr
   const { dream } = run;
   const time = new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(run.at);
   const moves = dream.notes.items.length;
+  // a fix the user OK'd changed MEMORY.md, so the row says so the way an applied cleanup does
+  const applied = dream.fixes?.items.flatMap((item) => (item.done && item.done.undoneAt === undefined ? [item.done.at] : [])) ?? [];
   const fixes = dream.fixes?.items.filter((item) => !item.done).length ?? 0;
   const closes = dream.asks.items.filter((item) => item.op === "close").length;
   const count = (n: number, one: "bot.dreamNote" | "bot.dreamTodo", many: "bot.dreamNotes" | "bot.dreamTodos") => t(n === 1 ? one : many, { count: n });
@@ -59,7 +61,7 @@ function DreamRow({ run, onFix, className }: { run: MemoryCleanRun & { dream: Dr
   return (
     <div className={cn("mx-4 mb-4 border-t border-hairline/40 pt-3", className)}>
       <div className="break-keep text-[12px] leading-relaxed text-ink-secondary">
-        <span>{t("bot.dreamDry", { time })} {listed ? t(fixes ? "bot.dreamWouldFix" : "bot.dreamWould", would) : t("bot.dreamNothing")}</span>
+        <span>{applied.length ? t("bot.memoryTidied", { date: new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" }).format(Math.max(...applied)) }) : t("bot.dreamDry", { time })} {listed ? t(fixes ? "bot.dreamWouldFix" : "bot.dreamWould", would) : t("bot.dreamNothing")}</span>
         {listed && <> <span aria-hidden="true">·</span> <button type="button" className="font-medium text-accent-text" aria-expanded={open} onClick={() => setOpen(!open)}>{t(open ? "bot.dreamHide" : "bot.dreamShow")}</button></>}
       </div>
       <div className="break-keep text-[12px] leading-relaxed text-ink-secondary">{[t("bot.dreamPaused"), notes].filter(Boolean).join(" ")}</div>
