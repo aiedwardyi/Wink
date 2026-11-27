@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
-import { createElement } from "react";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it, vi } from "vitest";
 
@@ -22,6 +23,16 @@ function instance(snapshot: InstanceInfo["snapshot"]): InstanceInfo {
 const row = (setupInstance: InstanceInfo, onRetry?: () => void) =>
   renderToStaticMarkup(createElement(I18nProvider, null,
     createElement(ErrorRow, { botId: "bot", message: "Codex is not signed in", setupInstance, onRetry })));
+
+async function pendingCard(capture: { url?: string; inputGeneration?: number }) {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ state: "pending", ...capture })));
+  const host = document.createElement("div");
+  await act(async () => createRoot(host).render(createElement(I18nProvider, null,
+    createElement(ErrorRow, { botId: "bot", message: "Claude is not signed in.", signIn: true, bound: true,
+      setupInstance: { ...instance({ state: "available", authenticated: true }), instanceId: "acct_3", displayName: "Studio", accountState: "stopped", loginState: "pending" } }))));
+  return host;
+}
 
 it("shows a signed-out turn as a calm sign-in card, not a red error", () => {
   const html = row(instance({ state: "available", authenticated: false }));
@@ -60,6 +71,21 @@ it("keeps a bound sign-out card until that account is ready, then offers Retry",
   expect(ready).not.toContain("Sign In Again");
 });
 
+it("puts Retry left of Sign In on one row, and leaves the card alone without onRetry", () => {
+  const card = (onRetry?: () => void) => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(I18nProvider, null,
+      createElement(ErrorRow, { botId: "bot", message: "Codex is not signed in", signIn: true, onRetry,
+        setupInstance: instance({ state: "available", authenticated: false }) })));
+    return host.querySelector<HTMLElement>("[data-sign-in-card] > :last-child > :first-child")!;
+  };
+  const group = card(() => {});
+  expect(Array.from(group.children, (el) => el.textContent)).toEqual(["Retry", "Sign In"]);
+  expect(group.className).toContain("items-center");
+  expect(group.className).not.toContain("flex-col");
+  expect(Array.from(card().children, (el) => el.textContent)).toEqual(["Sign In"]);
+});
+
 it("stacks the computer-only instruction under the text instead of squeezing it beside", () => {
   const original = window.matchMedia;
   window.matchMedia = (() => ({ matches: true, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
@@ -75,23 +101,13 @@ it("stacks the computer-only instruction under the text instead of squeezing it 
   expect(card.lastElementChild!.className).toContain("basis-full");
 });
 
-it("gives the sign-in code input room for its whole placeholder", () => {
-  const html = renderToStaticMarkup(createElement(I18nProvider, null,
-    createElement(ErrorRow, { botId: "bot", message: "Claude is not signed in.", signIn: true, bound: true,
-      setupInstance: { ...instance({ state: "available", authenticated: true }), instanceId: "acct_3", displayName: "Studio", accountState: "stopped",
-        loginState: "pending", loginCapture: { inputGeneration: 1 } } })));
-  const host = document.createElement("div");
-  host.innerHTML = html;
+it("gives the sign-in code input room for its whole placeholder", async () => {
+  const host = await pendingCard({ inputGeneration: 1 });
   expect(host.querySelector("input[type=password]")!.className).toContain(" w-60 ");
 });
 
-it("keeps the open sign-in row beside the text and wraps it under only when the title no longer fits", () => {
-  const html = renderToStaticMarkup(createElement(I18nProvider, null,
-    createElement(ErrorRow, { botId: "bot", message: "Claude is not signed in.", signIn: true, bound: true,
-      setupInstance: { ...instance({ state: "available", authenticated: true }), instanceId: "acct_3", displayName: "Studio", accountState: "stopped",
-        loginState: "pending", loginCapture: { inputGeneration: 1, url: "https://example.test/login" } } })));
-  const host = document.createElement("div");
-  host.innerHTML = html;
+it("keeps the open sign-in row beside the text and wraps it under only when the title no longer fits", async () => {
+  const host = await pendingCard({ inputGeneration: 1, url: "https://example.test/login" });
   const card = host.querySelector("[data-sign-in-card]")!;
   const row = card.querySelector("[data-sign-in-open]")!;
   const text = card.children[1] as HTMLElement;
@@ -109,16 +125,11 @@ it("keeps the open sign-in row beside the text and wraps it under only when the 
   expect(row.className).toContain("items-end");
 });
 
-it("says sign in with your browser under the title while the code row shows, not beside it", () => {
+it("says sign in with your browser under the title while the code row shows, not beside it", async () => {
   vi.stubGlobal("localStorage", window.localStorage);
   for (const [locale, line, help] of [["en", "Sign in with your browser", "Sign in, then send your message again."], ["ko", "브라우저로 로그인하세요", "로그인한 뒤 메시지를 다시 보내세요."]] as const) {
     persistPreference(locale);
-    const html = renderToStaticMarkup(createElement(I18nProvider, null,
-      createElement(ErrorRow, { botId: "bot", message: "Claude is not signed in.", signIn: true, bound: true,
-        setupInstance: { ...instance({ state: "available", authenticated: true }), instanceId: "acct_3", displayName: "Studio", accountState: "stopped",
-          loginState: "pending", loginCapture: { inputGeneration: 1, url: "https://example.test/login" } } })));
-    const host = document.createElement("div");
-    host.innerHTML = html;
+    const host = await pendingCard({ inputGeneration: 1, url: "https://example.test/login" });
     const card = host.querySelector("[data-sign-in-card]")!;
     const row = card.querySelector("[data-sign-in-open]")!;
     expect(row.hasAttribute("data-sign-in-code"), locale).toBe(true);

@@ -1,0 +1,13 @@
+diff --git a/server/memory-lookup.ts b/server/memory-lookup.ts
+index a746bbafa..5d696950e 100644
+--- a/server/memory-lookup.ts
++++ b/server/memory-lookup.ts
+@@ -649,7 +649,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
+     if (!passed.length) return [];
+ 
+     const newest = new Map<string, RecallHit>();
+-    for (const hit of passed) if (!newest.has(hit.topic)) newest.set(hit.topic, hit);
++    for (const hit of passed.toReversed()) if (!newest.has(hit.topic)) newest.set(hit.topic, hit);
+     const mark = sessionMark(botId, threadId, session);
+     const unseen = [...newest.values()].filter((hit) => !mark.rows.has(hit.key)).sort((a, b) => a.tier - b.tier);
+     if (!unseen.length) {

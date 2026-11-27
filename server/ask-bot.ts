@@ -20,6 +20,7 @@ export const askTimeoutText = (botName: string, taskId: string) =>
 export interface AskReply {
   text: string;
   replied: boolean;
+  engine?: string;
   /** Set when the peer outlived the wait and its reply became this delegation. */
   taskId?: string;
 }

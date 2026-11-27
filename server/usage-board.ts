@@ -4,12 +4,12 @@ import { usageIdentity } from "../shared/usage-identity.ts";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngineId, UsageBoardEvent, UsageBoardFrame, UsageBoardRun, UsageBoardWindow } from "../src/lib/usage-board.ts";
 import { isInstanceId, type AccountDrain } from "./accounts.ts";
 import { CODEX_CREDIT_NAME } from "./codex-credit.ts";
-import type { RateLimitsReport } from "./rate-limits-store.ts";
+import { observedRateLimits, type RateLimitsReport } from "./rate-limits-store.ts";
 import type { createUsageHistory } from "./usage-history.ts";
 
 type AccountRow = {
   id: string; of: string; driverKind: string; generation: number; existing: boolean; state: "pending" | "ready" | "stopped";
-  blocked?: boolean; identity?: string; credit?: true;
+  blocked?: boolean; checking?: boolean; identity?: string; credit?: true; userSignedOut?: true;
   status?: { state: "available" | "unavailable" | "checking"; cliMissing?: boolean; authenticated?: boolean; account?: string; accountIdentity?: string };
 };
 type Bot = { id: string; name: string; base: string };
@@ -37,6 +37,8 @@ type Deps = {
 type Cursor = { boot: string; revision: number; counter: number; accounts: string; epoch: number };
 const engines = new Map<string, UsageBoardEngineId>([["claudeAgent", "claude"], ["codex", "codex"], ["grokAgent", "grok"], ["gemini", "gemini"], ["muse", "muse"]]);
 const titles = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini", muse: "Muse" } satisfies Record<UsageBoardEngineId, string>;
+// Signed in with no known address: still a sign-in, so its sign-out clears the row's usage.
+const SIGNED_IN = "\0signed-in";
 
 function kind(window: { id: string; windowMinutes?: number }): UsageBoardWindow["kind"] {
   if (window.windowMinutes === 300 || window.id === "five_hour") return "session";
@@ -64,10 +66,18 @@ export function createUsageBoard(deps: Deps) {
   let accountSet = "";
   let epoch = 0;
   let previous = new Map<string, number>();
+  let shownFolds = "[]";
+  // Accounts the last known runs had workers on: a read without runs keeps that answer instead of flipping rows.
+  const working = new Set<string>();
   const identities = new Map<string, string | null>();
+  // Account id to how many times its sign-in changed this boot: the board's stand-in for an identity it never carries.
+  const logins = new Map<string, number>();
+  // Account id to the generation and time the CLI refused it for a past-due payment. It belongs to the signed-in
+  // identity: a sign-out or identity change drops it, and only a good send or a usage reading observed after it clears it.
+  const unpaid = new Map<string, { generation: number; at: number }>();
 
   for (const row of deps.accounts.list()) {
-    const report = deps.rateLimits.get(row.id);
+    const report = observedRateLimits(deps.rateLimits.get(row.id));
     const at = report ? Date.parse(report.observedAt) : NaN;
     if (report && Number.isSafeInteger(at) && at >= 0) reports.set(row.id, { generation: row.generation, at, windows: report.windows.map((window) => ({ ...window })) });
   }
@@ -89,17 +99,26 @@ export function createUsageBoard(deps: Deps) {
     const rows = deps.accounts.list().filter((row) => engines.has(row.driverKind) && isInstanceId(row.id) && isInstanceId(row.of))
       .map((row) => ({ ...row, codexPromo: row.driverKind === "codex" && Boolean(deps.codexPromo?.(row.id, row.generation)) }));
     for (const row of rows) {
-      const identity = usageIdentity(row.status ?? {});
+      const known = usageIdentity(row.status ?? {});
+      const identity = known === undefined && row.status?.authenticated === true ? SIGNED_IN : known;
       if (identity === undefined) continue;
-      if (identities.has(row.id) && identities.get(row.id) !== identity) {
+      const before = identities.get(row.id);
+      // An address showing up for a sign-in, or going missing from a later check, is the same sign-in.
+      const same = before !== undefined && before !== null && identity !== null && (before === SIGNED_IN || identity === SIGNED_IN);
+      const changed = identities.has(row.id) && before !== identity && !same;
+      // Stored before accountChanged runs: its callbacks read the board again.
+      if (!(same && identity === SIGNED_IN)) identities.set(row.id, identity);
+      if (changed) {
+        logins.set(row.id, (logins.get(row.id) ?? 0) + 1);
         deps.rateLimits.delete(row.id);
+        unpaid.delete(row.id);
         deps.history.purge(row.id);
         reports.delete(row.id);
         for (let i = queue.length - 1; i >= 0; i--) if (queue[i].id === row.id) queue.splice(i, 1);
         seenReports.clear();
         deps.accountChanged?.(row.id, row.status?.authenticated !== false);
       }
-      identities.set(row.id, identity);
+      if (identity === null) unpaid.delete(row.id);
     }
     const signature = JSON.stringify(rows.map((row) => [row.id, row.of, row.generation, identities.get(row.id), row.codexPromo]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
     if (signature !== accountSet) {
@@ -110,6 +129,7 @@ export function createUsageBoard(deps: Deps) {
       }
       for (const [id, report] of reports) if (current.get(id) !== report.generation) reports.delete(id);
       for (const [id, turn] of turns) if (current.get(turn.accountId) !== turn.generation) turns.delete(id);
+      for (const id of working) if (!current.has(id)) working.delete(id);
       previous = current;
       accountSet = signature;
       epoch++;
@@ -134,6 +154,7 @@ export function createUsageBoard(deps: Deps) {
   }
 
   function recordReport(accountId: string, report: RateLimitsReport) {
+    if (!observedRateLimits(report)) return;
     const row = accounts().find((row) => row.id === accountId);
     const at = Date.parse(report.observedAt);
     if (!row || !Number.isSafeInteger(at) || at < 0) return;
@@ -145,6 +166,7 @@ export function createUsageBoard(deps: Deps) {
     if (seenReports.has(key)) return;
     seenReports.add(key);
     if (seenReports.size > 1024) seenReports.delete(seenReports.values().next().value!);
+    if (at > (unpaid.get(accountId)?.at ?? Infinity)) unpaid.delete(accountId);
     if (!last || at > last.at) {
       for (const window of windows) {
         const before = last?.windows.find((value) => value.id === window.id);
@@ -180,7 +202,19 @@ export function createUsageBoard(deps: Deps) {
     bump();
   }
 
-  function turnSettled(turnId: string) { if (turns.delete(turnId)) bump(); }
+  function turnSettled(turnId: string, ok = false) {
+    const turn = turns.get(turnId);
+    if (!turns.delete(turnId)) return;
+    if (ok) unpaid.delete(turn!.accountId);
+    bump();
+  }
+
+  function paymentDue(accountId: string) {
+    const row = accounts().find((row) => row.id === accountId);
+    if (!row) return;
+    unpaid.set(accountId, { generation: row.generation, at: now() });
+    bump();
+  }
 
   function freeze(cursor?: string) {
     const rows = accounts();
@@ -195,6 +229,16 @@ export function createUsageBoard(deps: Deps) {
     const history = deps.history.since(full ? undefined : old.counter);
     const board: UsageBoard = { version: 1, revision, cursor: "", full, at: now(), runs: "unknown", engines: [] };
     const byId = new Map(rows.map((row) => [row.id, row]));
+    // A base signed in as an account added beside it: that account's row stands for both (uuid when both report one, else email).
+    const login = (row: AccountRow) => row.state === "ready" && !row.blocked && !row.credit && row.status?.authenticated === true
+      ? { identity: row.status.accountIdentity, email: row.status.account?.trim().toLowerCase() } : undefined;
+    const sameLogin = (a: AccountRow, b: AccountRow) => {
+      const [x, y] = [login(a), login(b)];
+      return Boolean(x && y && (x.identity && y.identity ? x.identity === y.identity : x.email && x.email === y.email));
+    };
+    // A base the user signed out, not signed in again, folds the same way while another account of its engine is listed.
+    const duplicates = new Set(rows.filter((row) => row.id === row.of && rows.some((other) => other.of === row.of && other.id !== row.id
+      && !Object.hasOwn(deps.accounts.drains, other.id) && (sameLogin(row, other) || (row.userSignedOut && !login(row) && !other.credit)))).map((row) => row.id));
     for (const row of rows) {
       const engine = engines.get(row.driverKind)!;
       let group = board.engines.find((group) => group.base === row.of);
@@ -217,7 +261,7 @@ export function createUsageBoard(deps: Deps) {
       const fallback = row.credit ? CODEX_CREDIT_NAME : engine === "claude" || engine === "codex" || engine === "grok" ? `${titles[engine]} ${number}` : titles[engine];
       // Validated user labels may match the provider's sign-in name.
       const nickname = named?.nickname && named.name === named.nickname && !named.nickname.includes("@") ? named.nickname : null;
-      const report = deps.rateLimits.get(row.id);
+      const report = observedRateLimits(deps.rateLimits.get(row.id));
       const windows: UsageBoardWindow[] = (report?.windows ?? []).filter((window) => Number.isFinite(window.usedPercent)).map((window) => ({
         id: text(window.id, "other"), kind: kind(window), usedPercent: window.usedPercent,
         resetsAt: Number.isFinite(window.resetsAt) ? window.resetsAt : null,
@@ -232,6 +276,7 @@ export function createUsageBoard(deps: Deps) {
       let signIn: UsageBoardAccount["signIn"] = "unknown";
       if (Object.hasOwn(deps.accounts.drains, row.id)) signIn = "draining";
       else if (row.status?.cliMissing || byId.get(row.of)?.status?.cliMissing) signIn = "cli-missing";
+      else if (row.checking) signIn = "unknown";
       // A ready account is blocked while its sign-in is unconfirmed, not only after a sign-out.
       else if (row.blocked && !row.existing && row.state === "ready") signIn = "unknown";
       else if (row.blocked || row.state === "stopped") signIn = "signed-out";
@@ -239,13 +284,14 @@ export function createUsageBoard(deps: Deps) {
       else if (!row.existing) signIn = "ready";
       else if (row.status?.authenticated === true) signIn = "ready";
       else if (row.status?.authenticated === false) signIn = "signed-out";
+      if (signIn === "ready" && unpaid.get(row.id)?.generation === row.generation) signIn = "payment-due";
       const observedAt = report ? Date.parse(report.observedAt) : NaN;
       group.accounts.push({ id: row.id, number, nickname, name: nickname ?? text(named?.name ?? fallback, fallback), main: row.id === group.mainId,
         signIn, coverage: "unknown", windows, observedAt: Number.isFinite(observedAt) ? observedAt : null,
         history: points?.generation === row.generation ? { fine: points.fine, coarse: points.coarse } : { fine: [], coarse: [] },
-        bots: accountBots, workers: null, ...(row.credit ? { credit: true as const } : {}), ...(row.codexPromo ? { codexPromo: true as const } : {}) });
+        bots: accountBots, workers: null, ...(logins.has(row.id) ? { login: logins.get(row.id)! } : {}), ...(row.credit ? { credit: true as const } : {}), ...(row.codexPromo ? { codexPromo: true as const } : {}) });
     }
-    return { board, rows: rows.map((row) => ({ id: row.id, generation: row.generation })), bots, text, counter: history.counter, accounts: accountSet, epoch };
+    return { board, rows: rows.map((row) => ({ id: row.id, generation: row.generation })), bots, text, counter: history.counter, accounts: accountSet, epoch, duplicates };
   }
 
   async function read(cursor?: string): Promise<UsageBoard> {
@@ -269,6 +315,23 @@ export function createUsageBoard(deps: Deps) {
         account.workers.push({ botId: snapshot.text(run.botId, "bot"), bot: snapshot.bots.find((bot) => bot.id === run.botId)?.name ?? "Bot",
           paneId: snapshot.text(run.paneId, "pane"), label: snapshot.text(run.label, ""), state: run.state });
       }
+      if (account.workers.length) working.add(account.id);
+      else working.delete(account.id);
+    }
+    // Main and its bots, busy bots and running workers keep the base's own row.
+    const folds: string[] = [];
+    for (const group of board.engines) {
+      const folded = group.accounts.filter((account) => snapshot.duplicates.has(account.id) && !account.main && !account.bots.length && !working.has(account.id));
+      if (!folded.length) continue;
+      group.accounts = group.accounts.filter((account) => !folded.includes(account));
+      group.duplicates = folded.map((account) => account.id);
+      folds.push(...group.duplicates);
+    }
+    // Rows come and go without an account change: the next read is a full one, so a returning row brings its whole history.
+    if (JSON.stringify(folds) !== shownFolds) {
+      shownFolds = JSON.stringify(folds);
+      epoch++;
+      bump();
     }
     board.cursor = randomUUID();
     cursors.set(board.cursor, { boot, revision: board.revision, counter: snapshot.counter, accounts: snapshot.accounts, epoch: snapshot.epoch });
@@ -288,5 +351,5 @@ export function createUsageBoard(deps: Deps) {
     return () => { listeners.delete(callback); if (!listeners.size) { clearTimeout(frameTimer); frameTimer = undefined; } };
   }
 
-  return { read, handle, touch, sync: accounts, turnStarted, turnSettled, recordReport, recordMain, onFrame };
+  return { read, handle, touch, sync: accounts, turnStarted, turnSettled, paymentDue, recordReport, recordMain, onFrame };
 }

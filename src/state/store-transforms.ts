@@ -62,6 +62,7 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
     box: frame.box,
     vps: frame.vps,
     rooms: frame.rooms,
+    usageOrder: frame.usageOrder,
     localVm: frame.localVm,
     tts: frame.tts,
     imageGen: frame.imageGen,

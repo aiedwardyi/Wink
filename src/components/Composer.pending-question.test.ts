@@ -2,15 +2,19 @@
 // The pinned ask_user question over the composer, against the real store:
 // it arrives as the full card and shrinks to one row once the person types,
 // attaches or the chat moves on; a tap goes out exactly the way a typed answer
-// would, the row's x only hides it, and the open card's x settles it.
+// would, and either x settles the question.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Readable } from "node:stream";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { StoreProvider, type Bot, type Group, type Message } from "@/state/store";
+import { StoreProvider, useStore, type Bot, type Group, type Message } from "@/state/store";
+import { createBotChatRoutes } from "../../server/bot-chat-routes";
+import { Store as ServerStore } from "../../server/store";
 
 import { Composer } from "./Composer";
 
@@ -54,6 +58,14 @@ const bot = (messages: Message[]): Bot => ({
   modelSelection: { instanceId: "claude", model: "claude" },
 });
 
+const screen = (phone: boolean) => vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: phone && query.includes("max-width"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+
+let focused: ReturnType<typeof useStore>["state"]["focusMessage"] = null;
+function Probe() {
+  focused = useStore().state.focusMessage;
+  return null;
+}
+
 let root: ReturnType<typeof createRoot> | null = null;
 let host: HTMLElement | null = null;
 const calls: Array<{ method: string; path: string; body: unknown }> = [];
@@ -67,6 +79,7 @@ afterEach(async () => {
   host?.remove();
   root = null;
   host = null;
+  focused = null;
   calls.length = 0;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -87,7 +100,7 @@ async function mount(props: Parameters<typeof Composer>[0]) {
   vi.spyOn(console, "error").mockImplementation(() => {});
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
-  await act(async () => root!.render(createElement(StoreProvider, null, createElement(Composer, props))));
+  await act(async () => root!.render(createElement(StoreProvider, null, createElement(Probe), createElement(Composer, props))));
   await act(async () => FakeEventSource.current!.onmessage?.({
     data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }),
     lastEventId: "",
@@ -132,7 +145,7 @@ const attach = (file: File) => act(async () => {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 });
 // the chat view hands the composer its bot again as messages land
-const rerender = (props: Parameters<typeof Composer>[0]) => act(async () => root!.render(createElement(StoreProvider, null, createElement(Composer, props))));
+const rerender = (props: Parameters<typeof Composer>[0]) => act(async () => root!.render(createElement(StoreProvider, null, createElement(Probe), createElement(Composer, props))));
 const expand = async () => {
   await act(async () => row()!.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
   await settle();
@@ -224,6 +237,62 @@ describe("pinned ask_user question", () => {
     resized();
     expect(card()!.style.maxHeight).toBe("106px");
     expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["22px", "auto"]);
+  });
+
+  it("lifts the tray's own cap, so a phone keeps three lines of the question with every choice in sight", async () => {
+    vi.stubGlobal("ResizeObserver", class { constructor() {} observe() {} disconnect() {} });
+    screen(true);
+    const sheet = document.head.appendChild(document.createElement("style"));
+    sheet.textContent = "[data-composer-tray] { overflow-y: auto; }";
+    const isPane = (el: Element) => el.matches("[data-composer-tray]");
+    const tall = 170;
+    const need = tall + 128;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : this.matches("[data-pending-question]") ? need : 0; });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : isPane(this) ? need : 0; });
+    // a phone's 30dvh tray cap at 844 is 253px, below the card's 298px
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return isPane(this) ? (this.style.maxHeight === "none" ? need : 253) : 0; });
+    await mount({ bot: bot([question]) });
+    const tray = host!.querySelector<HTMLElement>("[data-composer-tray]")!;
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    const choices = card()!.querySelector<HTMLElement>("[data-term-choices]")!;
+    expect(body.style.minHeight).toBe("66px");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["", ""]);
+    expect(tray.style.maxHeight).toBe("none");
+    await act(async () => root!.unmount());
+    root = null;
+    expect(tray.style.maxHeight).toBe("");
+    sheet.remove();
+  });
+
+  it("ends a cut question on a whole line, never half of one", async () => {
+    vi.stubGlobal("ResizeObserver", class { constructor() {} observe() {} disconnect() {} });
+    screen(true);
+    let shown = 113;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 0, this.matches("[data-question-body]") ? shown : 0); });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 132 : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.style.maxHeight).toBe("110px");
+    shown = 110;
+    window.dispatchEvent(new Event("resize"));
+    expect(body.style.maxHeight).toBe("");
+    shown = 120;
+    window.dispatchEvent(new Event("resize"));
+    expect(body.style.maxHeight).toBe("110px");
+    shown = 132;
+    window.dispatchEvent(new Event("resize"));
+    expect(body.style.maxHeight).toBe("");
+  });
+
+  it("keeps a desktop card's window and the tray's cap as they were", async () => {
+    vi.stubGlobal("ResizeObserver", class { constructor() {} observe() {} disconnect() {} });
+    screen(false);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 0, this.matches("[data-question-body]") ? 174 : 0); });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 1078 : 0; });
+    await mount({ bot: bot([ask({ options: ["Prod", "Staging", "Both"] })]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.style.maxHeight).toBe("");
+    expect(host!.querySelector<HTMLElement>("[data-composer-tray]")!.style.maxHeight).toBe("");
   });
 
   it("fades a cut question at its foot until it is scrolled to its end", async () => {
@@ -319,7 +388,7 @@ describe("pinned ask_user question", () => {
     expect(host!.querySelector("[data-term-choices]")).toBeNull();
     expect([...row()!.querySelectorAll("[data-row-choices] button:not([hidden])")].map((chip) => chip.textContent)).toEqual(["Prod", "Staging"]);
     expect(rowButton("Prod").className).toContain("whitespace-nowrap");
-    expect(pinButton("Hide question")).toBeTruthy();
+    expect(pinButton("Dismiss question")).toBeTruthy();
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
   });
 
@@ -350,7 +419,7 @@ describe("pinned ask_user question", () => {
     await act(async () => pinButton("Fold question").click());
     await settle();
     expect(host!.querySelector(".arrival-glow")).toBeNull();
-    await act(async () => pinButton("Hide question").click());
+    await swipe(row()!, 200);
     await act(async () => dot()!.click());
     expect(host!.querySelector(".arrival-glow")).toBeNull();
     await expand();
@@ -398,6 +467,105 @@ describe("pinned ask_user question", () => {
     await rerender({ bot: bot([{ ...first, card: { ...first.card!, answered: "Seoul" } }, second]) });
     expect(row()!.textContent).toContain("Which plan?");
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
+  });
+
+  it("steps between open questions from the open card, staying open", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    expect(card()!.textContent).toContain("2/2");
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("1/2");
+    expect(card()!.textContent).toContain("Which region?");
+    await act(async () => pinButton("Next question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which plan?");
+  });
+
+  it("steps from a card opened over a draft to the next question open, and from a row to a row", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await type("thinking");
+    await settle();
+    expect(card()).toBeNull();
+    await expand();
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+    await act(async () => pinButton("Fold question").click());
+    await settle();
+    await act(async () => rowButton("Next question").click());
+    await settle();
+    expect(card()).toBeNull();
+    expect(row()!.textContent).toContain("Which plan?");
+    await type("");
+  });
+
+  it("keeps the open card being read when a new question arrives, and moves on once it is answered", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    const third = ask({ subtitle: "Which color?", options: ["Red", "Blue"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    await rerender({ bot: bot([first, second, third]) });
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+    expect(card()!.textContent).toContain("1/3");
+    await rerender({ bot: bot([{ ...first, card: { ...first.card!, answered: "Seoul" } }, second, third]) });
+    await settle();
+    expect(card()!.textContent).toContain("Which color?");
+    expect(card()!.textContent).toContain("2/2");
+  });
+
+  it("keeps the card being read over a draft, open or folded, when a new question arrives", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    const third = ask({ subtitle: "Which color?", options: ["Red", "Blue"], staysOpen: true });
+    const fourth = ask({ subtitle: "Which size?", options: ["S", "L"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await type("thinking");
+    await settle();
+    await expand();
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    await rerender({ bot: bot([first, second, third]) });
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+    expect(card()!.textContent).toContain("1/3");
+    await act(async () => pinButton("Fold question").click());
+    await settle();
+    await rerender({ bot: bot([first, second, third, fourth]) });
+    await settle();
+    expect(card()).toBeNull();
+    expect(row()!.textContent).toContain("Which region?");
+    expect(row()!.textContent).toContain("1/4");
+    expect(textarea()!.value).toBe("thinking");
+    await type("");
+  });
+
+  it("shows a new question after the stepped-to row was swiped away", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    const third = ask({ subtitle: "Which color?", options: ["Red", "Blue"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await shrink();
+    await act(async () => rowButton("Previous question").click());
+    expect(row()!.textContent).toContain("Which region?");
+    await swipe(row()!, 200);
+    expect(pin()).toBeNull();
+    expect(dot()?.textContent).toBe("2");
+    await rerender({ bot: bot([first, second, third]) });
+    await settle();
+    expect(pin()!.textContent).toContain("Which color?");
+    expect(pin()!.textContent).toContain("3/3");
   });
 
   it("outlines the choices in secondary ink with a 44px touch target", async () => {
@@ -453,19 +621,52 @@ describe("pinned ask_user question", () => {
     expect(sent("POST", "/api/bots/asker/messages")).toEqual([]);
   });
 
-  it("hides with the row's x without dismissing, and the composer's dot brings it back", async () => {
+  it("dismisses with the row's x without leaving a dot", async () => {
     await mount({ bot: bot([question]) });
     await shrink();
-    await act(async () => pinButton("Hide question").click());
+    await act(async () => pinButton("Dismiss question").click());
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]);
+    await rerender({ bot: bot([{ ...question, card: { ...question.card!, dismissed: true } }]) });
     expect(pin()).toBeNull();
-    expect(calls).toEqual([]);
-    expect(dot()?.textContent).toBe("1");
-    expect(dot()?.getAttribute("aria-label")).toBe("Show question");
-    expect(dot()!.closest("[data-orbit-composer-frame]")).not.toBeNull();
-    await act(async () => dot()!.click());
-    expect(row()).not.toBeNull();
     expect(dot()).toBeNull();
-    expect(calls).toEqual([]);
+    expect(textarea()?.disabled).toBe(false);
+  });
+
+  it("saves a row dismissal and sends the same sync row as an answer", async () => {
+    const server = new ServerStore(() => ({ instanceId: "claude", model: "opus" }));
+    const owner = server.createBot({}, { seedMessages: false });
+    const createAsk = () => server.appendMessage(owner.threadId, { role: "bot", kind: "options", card: { title: "Q", subtitle: "Which?", options: ["Yes"], askUser: true, staysOpen: true } });
+    const dismissed = createAsk();
+    const writes: unknown[] = [];
+    server.setSyncWriter((threadId, mutations, write) => { writes.push([threadId, mutations]); write(); });
+    const routes = createBotChatRoutes({ store: server, clientMessage: (value: unknown) => value } as Parameters<typeof createBotChatRoutes>[0]);
+    const patch = async (id: string, body: object) => {
+      let status = 0;
+      const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: () => {} } as unknown as ServerResponse;
+      await routes.patchCard(Readable.from([JSON.stringify(body)]) as IncomingMessage, res, ["", owner.id, id] as RegExpMatchArray);
+      expect(status).toBe(200);
+    };
+    const uiBot = { ...bot([dismissed as Message]), id: owner.id, threadId: owner.threadId };
+    await mount({ bot: uiBot });
+    const fetch = vi.mocked(globalThis.fetch);
+    const original = fetch.getMockImplementation()!;
+    fetch.mockImplementation(async (url, init) => {
+      if (init?.method === "PATCH") {
+        await patch(dismissed.id, JSON.parse(String(init.body)));
+        return Response.json({});
+      }
+      return original(url, init);
+    });
+    await shrink();
+    await act(async () => row()!.querySelector<HTMLButtonElement>('button:has(svg.lucide-x)')!.click());
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    const reloaded = new ServerStore(() => ({ instanceId: "claude", model: "opus" }));
+    expect(reloaded.messagesFor(owner.threadId).find((m) => m.id === dismissed.id)?.card?.dismissed).toBe(true);
+    expect(writes[0]).toEqual([owner.threadId, [{ kind: "row", value: expect.objectContaining({ id: dismissed.id, card: expect.objectContaining({ dismissed: true }) }) }]]);
+    const answered = createAsk();
+    writes.length = 0;
+    await patch(answered.id, { answered: "Yes" });
+    expect(writes[0]).toEqual([owner.threadId, [{ kind: "row", value: expect.objectContaining({ id: answered.id, card: expect.objectContaining({ answered: "Yes" }) }) }]]);
   });
 
   it("hides on a sideways swipe across the row without dismissing", async () => {
@@ -487,7 +688,7 @@ describe("pinned ask_user question", () => {
     await shrink();
     expect(row()!.textContent).toContain("2/2");
     expect(row()!.textContent).toContain("Which plan?");
-    await act(async () => pinButton("Hide question").click());
+    await swipe(row()!, 200);
     expect(dot()?.textContent).toBe("2");
   });
 
@@ -547,5 +748,62 @@ describe("one tray over the message box", () => {
     const together = tray?.querySelector('[data-attachment-tray="row"]');
     expect(together?.textContent).toContain("Replying to Ada");
     expect(together?.querySelectorAll('[aria-label="Remove image"]')).toHaveLength(2);
+  });
+});
+
+describe("jumping from the question card", () => {
+  const reply = (id: string, from?: Message["from"]): Message => ({ id, role: "bot", kind: "text", at: 1, text: "Here is why I am asking.", from });
+  const tool = (id: string): Message => ({ id, role: "bot", kind: "activity", at: 1, tool: { name: "Read", ok: true } });
+  const tap = () => act(async () => host!.querySelector<HTMLElement>("[data-question-body]")!.click());
+
+  it("lands on the bot's own text from the turn that raised the pinned question", async () => {
+    const stamped = ask({ replyId: "reply-1" });
+    await mount({ bot: bot([reply("reply-1"), tool("t1"), stamped]) });
+    await tap();
+    expect(focused).toMatchObject({ threadId: "asker-thread", messageId: "reply-1", consumed: false });
+  });
+
+  it("lands on the asking member's text in a room, not another member's", async () => {
+    const ada = bot([]);
+    const max = { ...bot([]), id: "max", name: "Max" };
+    const from = (member: Bot) => ({ botId: member.id, name: member.name, color: member.color });
+    const group: Group = {
+      id: "room", threadId: "room-thread", name: "War room", memberIds: [ada.id, max.id], bulletin: "",
+      defaultResponder: { kind: "everyone" }, unread: false, createdAt: 1,
+      messages: [reply("ada-text", from(ada)), reply("max-text", from(max)), { ...ask({ replyId: "ada-text" }), from: from(ada) }],
+    };
+    await mount({ group, members: [ada, max] });
+    await tap();
+    expect(focused).toMatchObject({ threadId: "room-thread", messageId: "ada-text" });
+  });
+
+  it("does nothing for a question whose turn wrote no text, even with an earlier turn's text above it", async () => {
+    await mount({ bot: bot([reply("earlier"), tool("t1"), question]) });
+    expect(host!.querySelector("[data-question-body]")!.className).not.toContain("cursor-pointer");
+    await tap();
+    expect(focused).toBeNull();
+  });
+
+  it("jumps to an older open question's own record, reached with the arrows", async () => {
+    const older = ask({ staysOpen: true, subtitle: "Older question?" });
+    const newest = ask({ staysOpen: true, subtitle: "Newest question?" });
+    await mount({ bot: bot([reply("reply-1"), older, newest]) });
+    await shrink();
+    await act(async () => rowButton("Previous question").click());
+    await expand();
+    await tap();
+    expect(card()?.textContent).toContain("Older question?");
+    expect(focused).toMatchObject({ messageId: older.id });
+  });
+
+  it("leaves the arrows and the choices to flip and answer, not jump", async () => {
+    const older = ask({ staysOpen: true, subtitle: "Older question?" });
+    const newest = ask({ staysOpen: true, subtitle: "Newest question?" });
+    await mount({ bot: bot([reply("reply-1"), older, newest]) });
+    await shrink();
+    await act(async () => rowButton("Previous question").click());
+    await act(async () => rowButton("Prod").click());
+    expect(focused).toBeNull();
+    expect(row()!.textContent).toContain("1/2");
   });
 });

@@ -13,6 +13,7 @@ export interface JoinedEntry {
   id: string;
   at: number;
   author: { kind: "host" | "person" | "bot"; id: string; name: string; owner?: string };
+  seat?: string;
   text: string;
   replyToId?: string;
   files?: JoinedFile[];
@@ -41,7 +42,8 @@ export interface JoinedState {
   roomName: string;
   instructions: string;
   host: string;
-  me: { id: string; name: string };
+  me: { id: string; name: string; host?: true };
+  hostSeats?: string[];
   /** `works` is the host's "Can make bots work" switch; absent from an older host. */
   people: Array<{ id: string; name: string; works?: boolean }>;
   bots: Array<{ id: string; name: string; color: string; mascotStyle?: string }>;
@@ -63,7 +65,7 @@ export type JoinedStatus = "joined" | "removed" | "left";
 export interface JoinedRoom {
   roomId: string;
   relayHost: string;
-  me: { id: string; name: string };
+  me: JoinedState["me"];
   status: JoinedStatus;
   state: JoinedState | null;
   joinedAt: number;
@@ -88,6 +90,7 @@ function open(): DatabaseSync {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
   const upgrade = !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'people_works'").get();
+  const unmarked = !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'left_rooms'").get();
   db.exec(`
     CREATE TABLE IF NOT EXISTS joined (
       room_id TEXT PRIMARY KEY,
@@ -161,7 +164,10 @@ function open(): DatabaseSync {
       works INTEGER NOT NULL,
       PRIMARY KEY (room_id, person_id)
     );
+    -- rooms the user left by hand; kept after Remove, so sync never seats this PC there again
+    CREATE TABLE IF NOT EXISTS left_rooms (room_id TEXT PRIMARY KEY);
   `);
+  if (unmarked) db.exec("INSERT OR IGNORE INTO left_rooms (room_id) SELECT room_id FROM joined WHERE status = 'left'");
   // Everyone already in a joined room keeps full power with this PC's bots; anyone seen later starts off.
   if (upgrade) {
     db.exec(`
@@ -208,14 +214,14 @@ function transaction<T>(work: (database: DatabaseSync) => T): T {
 
 const COLUMNS = "room_id, relay_host, person_id, person_name, status, state, joined_at";
 
-const rowToRoom = (row: RoomRow): JoinedRoom => ({
-  roomId: row.room_id,
-  relayHost: row.relay_host,
-  me: { id: row.person_id, name: row.person_name },
-  status: row.status,
-  state: row.state ? ({ bots: [], ...JSON.parse(row.state) } as JoinedState) : null,
-  joinedAt: row.joined_at,
-});
+const rowToRoom = (row: RoomRow): JoinedRoom => {
+  const state = row.state ? ({ bots: [], ...JSON.parse(row.state) } as JoinedState) : null;
+  return {
+    roomId: row.room_id, relayHost: row.relay_host,
+    me: { id: row.person_id, name: row.person_name, ...(state?.me.host ? { host: true } : {}) },
+    status: row.status, state, joinedAt: row.joined_at,
+  };
+};
 
 /** A fresh join replaces any earlier copy of the room. */
 export function saveJoined(roomId: string, relayHost: string, me: { id: string; name: string }, key: string, code?: string): JoinedRoom {
@@ -227,6 +233,7 @@ export function saveJoined(roomId: string, relayHost: string, me: { id: string; 
     database.prepare("DELETE FROM deleted_counts WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM translations WHERE room_id = ?").run(roomId);
     database.prepare("DELETE FROM reactions WHERE room_id = ?").run(roomId);
+    database.prepare("DELETE FROM left_rooms WHERE room_id = ?").run(roomId);
     // The host keeps a returning person's bots, so this PC keeps its record of them.
     const before = database.prepare("SELECT person_id FROM joined WHERE room_id = ?").get(roomId) as { person_id: string } | undefined;
     if (before?.person_id !== me.id) {
@@ -266,6 +273,15 @@ export function joinedDeletedCount(roomId: string): number {
 
 export function setJoinedDeletedCount(roomId: string, count: number): void {
   db().prepare("INSERT OR REPLACE INTO deleted_counts (room_id, count) VALUES (?, ?)").run(roomId, count);
+}
+
+/** The host's PC answered this room and key under another relay name, so every later call and a rejoin go there. */
+export function moveJoined(roomId: string, key: string, relayHost: string): void {
+  transaction((database) => {
+    const moved = database.prepare("UPDATE joined SET relay_host = ? WHERE room_id = ? AND key = ? AND status = 'joined'").run(relayHost, roomId, key).changes > 0;
+    const code = moved ? joinedCode(roomId) : null;
+    if (code) saveJoinedCode(roomId, code.replace(/^wkr1:[^:]+/, () => `wkr1:${relayHost}`));
+  });
 }
 
 /** Only the guest client reads this. */
@@ -351,8 +367,8 @@ export function joinedSummary(room: JoinedRoom): { unread: number; lastEntry?: J
   const { unread } = db().prepare(`
     SELECT COUNT(*) AS unread FROM entries
     WHERE room_id = ? AND seq > COALESCE((SELECT seq FROM room_reads WHERE room_id = ?), 0)
-      AND NOT (json_extract(body, '$.author.kind') = 'person' AND json_extract(body, '$.author.id') = ?)
-  `).get(room.roomId, room.roomId, room.me.id) as { unread: number };
+      AND NOT (json_extract(body, '$.author.kind') = ? AND json_extract(body, '$.author.id') = ?)
+  `).get(room.roomId, room.roomId, room.me.host ? "host" : "person", room.me.host ? "host" : room.me.id) as { unread: number };
   const lastEntry = joinedEntries(room.roomId, 1)[0];
   return { unread, ...(lastEntry ? { lastEntry } : {}) };
 }
@@ -408,17 +424,43 @@ export function joinedCursor(roomId: string): number {
 
 /** An equal-version state can fill a bot roster a previous build did not keep. */
 export function setJoinedState(roomId: string, state: JoinedState): boolean {
-  return db().prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND (version < ? OR (version = ? AND (json_extract(state, '$.bots') IS NULL OR (? = 1 AND json_extract(state, '$.teamBots') IS NULL))))")
-    .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version, state.version, Number(state.teamBots !== undefined)).changes > 0;
+  return transaction((database) => {
+    const changed = database.prepare("UPDATE joined SET state = ?, version = ?, person_name = ? WHERE room_id = ? AND status = 'joined' AND (version < ? OR (version = ? AND (json_extract(state, '$.bots') IS NULL OR (? = 1 AND json_extract(state, '$.teamBots') IS NULL))))")
+      .run(JSON.stringify(state), state.version, state.me.name, roomId, state.version, state.version, Number(state.teamBots !== undefined)).changes > 0;
+    if (changed && state.hostSeats?.length) database.prepare(`
+      UPDATE entries SET body = json_set(body, '$.seat', json_extract(body, '$.author.id'), '$.author', json_object('kind', 'host', 'id', 'host', 'name', ?))
+      WHERE room_id = ? AND json_extract(body, '$.author.kind') = 'person'
+        AND json_extract(body, '$.author.id') IN (SELECT value FROM json_each(?))
+    `).run(state.host, roomId, JSON.stringify(state.hostSeats));
+    return changed;
+  });
 }
 
-/** Read-only from here on; the key is gone. */
+/** Read-only from here on; the key is gone. A leave is the user's own, so it outlives Remove. */
 export function endJoined(roomId: string, status: "removed" | "left"): boolean {
-  return db().prepare("UPDATE joined SET status = ?, key = NULL WHERE room_id = ? AND status = 'joined'").run(status, roomId).changes > 0;
+  return transaction((database) => {
+    const ended = database.prepare("UPDATE joined SET status = ?, key = NULL WHERE room_id = ? AND status = 'joined'").run(status, roomId).changes > 0;
+    if (ended && status === "left") database.prepare("INSERT OR IGNORE INTO left_rooms (room_id) VALUES (?)").run(roomId);
+    return ended;
+  });
+}
+
+/** This PC holds a seat in the room, read-only too, or the user once left it here; only a join by hand clears that. */
+export function seatTaken(roomId: string): boolean {
+  return Boolean(db().prepare("SELECT 1 FROM joined WHERE room_id = ? UNION ALL SELECT 1 FROM left_rooms WHERE room_id = ?").get(roomId, roomId));
+}
+
+/** The user left the room here by hand, even if its row is gone since. */
+export function leftByHand(roomId: string): boolean {
+  return Boolean(db().prepare("SELECT 1 FROM left_rooms WHERE room_id = ?").get(roomId));
 }
 
 export function joinedCode(roomId: string): string | null {
   return (db().prepare("SELECT code FROM joined_codes WHERE room_id = ?").get(roomId) as { code: string } | undefined)?.code ?? null;
+}
+
+export function saveJoinedCode(roomId: string, code: string): void {
+  db().prepare("INSERT OR REPLACE INTO joined_codes (room_id, code) VALUES (?, ?)").run(roomId, code);
 }
 
 export function removeJoined(roomId: string): boolean {

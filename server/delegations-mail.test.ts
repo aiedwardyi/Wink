@@ -8,9 +8,10 @@ import { handMail, mailForTurn, settleMail } from "./mail.ts";
 import { bootRowsNow } from "./testing/boot-rows.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { Store } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   _loadPending();
 });
 

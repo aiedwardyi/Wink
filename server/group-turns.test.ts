@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import ts from "typescript";
@@ -150,6 +151,43 @@ describe("a reply to a member's line", () => {
   });
 });
 
+it.each([false, true])("publishes a live idle receipt only for a settled room send (working: %s)", async (working) => {
+  const broadcast = vi.fn();
+  const sendId = "room-send-00000001";
+  const startGroupTurn = () => {
+    const message = store.appendMessage(group.threadId, { role: "user", kind: "text", text: "hello", sendId });
+    broadcast({ kind: "message", threadId: group.threadId, message });
+    return message;
+  };
+  type RouteDeps = Parameters<typeof createGroupRoutes>[0];
+  const deps: Pick<RouteDeps, "store" | "groupIsWorking" | "broadcast" | "sendSequencer" | "resolveReplyTarget" | "startGroupTurn"> = {
+    store,
+    groupIsWorking: () => working,
+    broadcast,
+    sendSequencer: new SendSequencer(),
+    resolveReplyTarget: () => undefined,
+    startGroupTurn,
+  };
+  // SAFETY: only these dependencies are read when posting to this local room.
+  const routes = createGroupRoutes(deps as RouteDeps);
+  const req = new IncomingMessage(new Socket());
+  const res = new ServerResponse(req);
+  const writeHead = vi.spyOn(res, "writeHead");
+  const end = vi.spyOn(res, "end").mockReturnValue(res);
+  const match = `/api/groups/${group.id}/messages`.match(/^\/api\/groups\/([\w-]+)\/messages$/)!;
+  const posted = routes.postMessage(req, res, match);
+  req.emit("data", JSON.stringify({ text: "hello", sendId }));
+  req.emit("end");
+  await posted;
+  expect(res.statusCode).toBe(202);
+  expect(JSON.parse(String(end.mock.calls[0][0]))).toMatchObject({ idle: !working });
+  expect(broadcast.mock.calls.map(([frame]) => frame)).toEqual([
+    { kind: "message", threadId: group.threadId, message: expect.objectContaining({ sendId }) },
+    ...(working ? [] : [{ kind: "group.send.idle", threadId: group.threadId, sendId }]),
+  ]);
+  if (!working) expect(broadcast.mock.invocationCallOrder[1]).toBeLessThan(writeHead.mock.invocationCallOrder[0]);
+});
+
 describe("a tapped question card in a group", () => {
   const ask = () =>
     store.appendMessage(group.threadId, {
@@ -177,7 +215,7 @@ describe("a tapped question card in a group", () => {
     await routes.postMessage(Readable.from([JSON.stringify({ text: "Yes", cardId: card.id })]) as unknown as IncomingMessage, res as unknown as ServerResponse, ["", group.id] as RegExpMatchArray);
     expect(res.writeHead.mock.calls[0][0]).toBe(202);
     expect(steer).not.toHaveBeenCalled();
-    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "Yes", undefined, undefined, ray.id, card.id, [], undefined);
+    expect(startGroupTurn).toHaveBeenCalledWith(group.id, "Yes", undefined, undefined, ray.id, card.id, [], undefined, undefined, undefined, undefined);
   });
 
   it("runs the asking bot under a lead rule", async () => {
@@ -214,11 +252,15 @@ describe("a typed answer to an open question in a group", () => {
       from: { botId: ray.id, name: ray.name, color: ray.color },
       card: { title: "Question", subtitle: "Which color?", options: [], askUser: true },
     });
-    expect(await post({ text: "blue" })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, ray.id, undefined, [], undefined);
+    expect(await post({ text: "blue" })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, ray.id, undefined, [], undefined, undefined, undefined, undefined);
   });
 
   it("keeps the room's rule when no question is open", async () => {
-    expect(await post({ text: "blue" })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, undefined, undefined, [], undefined);
+    expect(await post({ text: "blue" })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, undefined, undefined, [], undefined, undefined, undefined, undefined);
+  });
+
+  it("passes a held line's waited mark to the turn it starts", async () => {
+    expect(await post({ text: "blue", waited: true })).toHaveBeenCalledWith(group.id, "blue", undefined, undefined, undefined, undefined, [], undefined, true, undefined, undefined);
   });
 });
 

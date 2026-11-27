@@ -189,6 +189,18 @@ describe("server status lines in a tool chip", () => {
   });
 });
 
+describe("call mark on a sent message", () => {
+  const mark = chatBubble.slice(chatBubble.indexOf("const callMark"), chatBubble.indexOf("if (user && editing"));
+
+  it("follows the bubble text color instead of the dim secondary ink", () => {
+    const [, user, bot] = mark.match(/user \? "([^"]*)" : "([^"]*)"/)!.map((c) => `className="${c}"`);
+    expect(classTokens(user).has("text-current")).toBe(true);
+    expect(classTokens(user).has("opacity-70")).toBe(true);
+    expect([...classTokens(user)].some((c) => c.startsWith("text-ink-secondary"))).toBe(false);
+    expect(classTokens(bot).has("text-ink-secondary/70")).toBe(true);
+  });
+});
+
 // The header row's right side is as wide as its children's full text, so a long
 // label pushed the roster off a phone unless every link in the chain can shrink.
 describe("room header on a phone", () => {

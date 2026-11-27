@@ -49,10 +49,10 @@ async function key(box: HTMLInputElement, name: string) {
   });
 }
 
-describe("6-box code input", () => {
-  it("renders six boxes with a phone-friendly keyboard", async () => {
+describe("8-box code input", () => {
+  it("renders eight boxes with a phone-friendly keyboard", async () => {
     const { boxes } = await mount();
-    expect(boxes).toHaveLength(6);
+    expect(boxes).toHaveLength(8);
     for (const box of boxes) {
       expect(box.getAttribute("autocapitalize")).toBe("characters");
       expect(box.getAttribute("inputmode")).toBe("text");
@@ -71,11 +71,26 @@ describe("6-box code input", () => {
     expect(document.activeElement).toBe(boxes[1]);
   });
 
-  it("fills every box from a paste and finishes", async () => {
+  it("fills every box from one paste and finishes", async () => {
+    const { boxes, onDone } = await mount();
+    await paste(boxes[3]!, " abcd-efgh ");
+    expect(value(boxes)).toBe("ABCDEFGH");
+    expect(onDone).toHaveBeenCalledExactlyOnceWith("ABCDEFGH");
+  });
+
+  it("finishes on a pasted 6-character code minted before", async () => {
     const { boxes, onDone } = await mount();
     await paste(boxes[0]!, " abc-def ");
     expect(value(boxes)).toBe("ABCDEF");
     expect(onDone).toHaveBeenCalledWith("ABCDEF");
+  });
+
+  it("waits on a typed 6-character code until Enter", async () => {
+    const { boxes, onDone } = await mount();
+    for (const [i, ch] of [..."GHJKLM"].entries()) await type(boxes[i]!, ch);
+    expect(onDone).not.toHaveBeenCalled();
+    await key(boxes[6]!, "Enter");
+    expect(onDone).toHaveBeenCalledExactlyOnceWith("GHJKLM");
   });
 
   it("hands a long code or other text over whole instead of filling the boxes", async () => {
@@ -99,30 +114,30 @@ describe("6-box code input", () => {
 
   it("clears only the box Backspace is on in a full code, and finishes once it is typed again", async () => {
     const { boxes, onDone } = await mount();
-    for (const [i, ch] of [..."GHJKLM"].entries()) await type(boxes[i]!, ch);
+    for (const [i, ch] of [..."GHJKLMNP"].entries()) await type(boxes[i]!, ch);
     onDone.mockClear();
     await key(boxes[2]!, "Backspace");
-    expect(boxes.map((box) => box.value)).toEqual(["G", "H", "", "K", "L", "M"]);
+    expect(boxes.map((box) => box.value)).toEqual(["G", "H", "", "K", "L", "M", "N", "P"]);
     expect(document.activeElement).toBe(boxes[2]);
     await type(boxes[2]!, "X");
-    expect(value(boxes)).toBe("GHXKLM");
-    expect(onDone).toHaveBeenCalledExactlyOnceWith("GHXKLM");
+    expect(value(boxes)).toBe("GHXKLMNP");
+    expect(onDone).toHaveBeenCalledExactlyOnceWith("GHXKLMNP");
   });
 
   it("finishes once the last box is typed", async () => {
     const { boxes, onDone } = await mount();
-    for (const [i, ch] of [..."GHJKLM"].entries()) await type(boxes[i]!, ch);
-    expect(onDone).toHaveBeenCalledWith("GHJKLM");
+    for (const [i, ch] of [..."GHJKLMNP"].entries()) await type(boxes[i]!, ch);
+    expect(onDone).toHaveBeenCalledWith("GHJKLMNP");
   });
 
   it("fixes one wrong letter mid-code without wiping the boxes after it", async () => {
     const { boxes, onDone } = await mount();
-    await paste(boxes[0]!, "ABXDEF");
+    await paste(boxes[0]!, "ABXDEFGH");
     onDone.mockClear();
     await type(boxes[2]!, "C");
-    expect(value(boxes)).toBe("ABCDEF");
+    expect(value(boxes)).toBe("ABCDEFGH");
     expect(document.activeElement).toBe(boxes[3]);
-    expect(onDone).toHaveBeenCalledWith("ABCDEF");
+    expect(onDone).toHaveBeenCalledWith("ABCDEFGH");
   });
 
   it("reads Korean keyboard letters as the keys they sit on", async () => {
@@ -130,7 +145,9 @@ describe("6-box code input", () => {
     for (const [i, ch] of [..."ㅁㅠㅊ2ㄸ"].entries()) await type(boxes[i]!, ch);
     expect(value(boxes)).toBe("ABC2E");
     await type(boxes[5]!, "ㄹ");
-    expect(onDone).toHaveBeenCalledWith("ABC2EF");
+    await type(boxes[6]!, "ㅎ");
+    await type(boxes[7]!, "ㅗ");
+    expect(onDone).toHaveBeenCalledWith("ABC2EFGH");
   });
 
   it("splits a composed Hangul syllable into its keys", async () => {

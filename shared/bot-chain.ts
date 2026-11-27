@@ -5,11 +5,14 @@ import { botLineResponder } from "./room-routing.ts";
 /** The strip's count reads this far back. */
 export const CHAIN_LINES = 100;
 
-type Line = { author: { kind: string; id: string }; text: string };
+type Line = { author: { kind: string; id: string }; text: string; files?: readonly unknown[] };
 type Bot = { id: string; name: string };
 
+export const handoffTarget = <T extends Bot>(line: Line, bots: readonly T[], people: readonly string[]) =>
+  line.author.kind === "bot" && !line.files?.length ? botLineResponder(line.text, bots, people, line.author.id) : null;
+
 export const handsOff = (line: Line, bots: readonly Bot[], people: readonly string[]) =>
-  line.author.kind === "bot" && botLineResponder(line.text, bots, people, line.author.id) !== null;
+  handoffTarget(line, bots, people) !== null;
 
 /** A handoff to a bot this PC can't see working counts this long after its line. */
 export const CHAIN_PENDING_MS = 2 * 60_000;
@@ -20,7 +23,7 @@ export type ChainSeen = { working?(botId: string): boolean | null; since?: numbe
 /** Bot lines since a person or the host last spoke, while the newest hands off to a bot that is working or still pending; 0 otherwise. */
 export function botChain(lines: readonly (Line & { at: number })[], bots: readonly Bot[], people: readonly string[], seen: ChainSeen = {}): number {
   const last = lines.at(-1);
-  const to = last?.author.kind === "bot" ? botLineResponder(last.text, bots, people, last.author.id) : null;
+  const to = last && handoffTarget(last, bots, people);
   if (!last || !to) return 0;
   const pending = last.at >= (seen.since ?? 0) && (seen.now ?? Date.now()) - last.at < CHAIN_PENDING_MS;
   if (!(seen.working?.(to.id) ?? pending)) return 0;

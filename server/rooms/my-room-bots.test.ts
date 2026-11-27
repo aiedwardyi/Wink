@@ -1,13 +1,23 @@
-import { mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CHAIN_PENDING_MS } from "../../shared/bot-chain.ts";
-import { DATA_DIR } from "../config.ts";
-import type { Message } from "../store.ts";
-import { addJoinedEntries, closeJoinedDb, endJoined, myRoomBotThreads, saveJoined, saveMyRoomBot, setJoinedState, setJoinedWorks, type JoinedEntry } from "./joined.ts";
+import { DATA_DIR, ensureDirs } from "../config.ts";
+import type { ProviderInstance } from "../contracts.ts";
+import { GrokAgentDriver } from "../drivers/acp/grok.ts";
+import { createInternalRoutes } from "../internal-routes.ts";
+import type { BotRecord, Message } from "../store.ts";
+import { addJoinedEntries, closeJoinedDb, endJoined, myRoomBotThreads, saveJoined, saveMyRoomBot, setJoinedState, setJoinedWorks, type JoinedEntry, type JoinedState } from "./joined.ts";
 import { MyRoomBotTurns, type MyRoomBotDeps } from "./my-room-bots.ts";
+import { removeTempDir } from "../testing/cleanup.ts";
+import { recordEvents } from "../testing/events.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const ROOM = "room1";
 const ME = { id: "p1", name: "Peter" };
@@ -17,7 +27,7 @@ const FILE = { id: "f".repeat(24), name: "q3.pdf", type: "application/pdf", byte
 
 let seq = 0;
 let thread: Message[];
-let deps: MyRoomBotDeps & Record<"startTurn" | "createTask" | "changed", ReturnType<typeof vi.fn>> & { client: Record<"botSend" | "file", ReturnType<typeof vi.fn>> };
+let deps: MyRoomBotDeps & Record<"startTurn" | "createTask" | "changed", ReturnType<typeof vi.fn>> & { client: Record<"botSend" | "botPicture" | "file", ReturnType<typeof vi.fn>> };
 
 function line(author: JoinedEntry["author"], text: string, extra: Partial<JoinedEntry> = {}): JoinedEntry {
   seq += 1;
@@ -31,7 +41,7 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 beforeEach(() => {
   closeJoinedDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   seq = 0;
   thread = [];
@@ -39,7 +49,7 @@ beforeEach(() => {
   setJoinedState(ROOM, { version: 1, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME, { id: "p2", name: "Mina" }], bots: [{ id: "b1", name: "EdBot", color: "blue" }], teamBots: [PETE, MINI] });
   saveMyRoomBot(ROOM, PETE.id, "local-pete");
   deps = {
-    client: { botSend: vi.fn(async () => ({ ok: true, value: { seq: 99 } })), file: vi.fn(async () => ({ ok: true, value: { path: "C:\\cache\\q3.pdf" } })) },
+    client: { botSend: vi.fn(async () => ({ ok: true, value: { seq: 99 } })), botPicture: vi.fn(), file: vi.fn(async () => ({ ok: true, value: { path: "C:\\cache\\q3.pdf" } })) },
     bot: (botId: string) => (botId === "local-pete" ? { id: botId, name: "Pete" } : null),
     busy: () => false,
     hasTask: () => false,
@@ -216,7 +226,7 @@ describe("this PC's bot in a joined room", () => {
     turns.heard(ROOM, host);
     await settle();
     expect(deps.startTurn.mock.calls.map((call) => call[3])).toEqual([host.text]);
-    expect(deps.startTurn.mock.calls[0]![2]).toContain('"Edward" asked you: @Pete-Coder chart Q3');
+    expect(deps.startTurn.mock.calls[0]![2]).toContain('"Edward" asked you: @\u200BPete-Coder chart Q3');
     thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "Chart's up." });
     deps.client.botSend.mockResolvedValueOnce({ ok: true, value: { seq: seq + 1 } });
     await turns.settled("task-1", true);
@@ -285,6 +295,7 @@ describe("this PC's bot in a joined room", () => {
     await turns.settled("task-1", true);
     await settle();
     expect(deps.startTurn.mock.calls[1]![2]).toContain('"Peter" runs you; "Mina" may also make you work; everyone else here is read-only. "Can make bots work" on "Edward"\'s Wink: "Peter" off, "Mina" on;');
+    expect(deps.startTurn.mock.calls.map((call) => call[6])).toEqual([false, false]);
   });
 
   it("keeps the host and people already in the room at full power after the upgrade, and starts a new joiner read-only", async () => {
@@ -297,6 +308,8 @@ describe("this PC's bot in a joined room", () => {
     turns.heard(ROOM, line({ kind: "host", id: "host", name: "Edward" }, "@Pete-Coder fix the login test", { at: Date.now() }));
     await settle();
     expect(deps.startTurn.mock.calls[0]![5]).toBe(false);
+    // Switched on, the host still isn't this PC's person: a guest turn (web_read borrows no other bot for it).
+    expect(deps.startTurn.mock.calls[0]![6]).toBe(true);
     expect(deps.startTurn.mock.calls[0]![2]).toContain('"Peter" runs you; "Edward", "Mina" may also make you work; everyone else here is read-only.');
     await turns.settled(deps.startTurn.mock.calls[0]![1] as string, true);
     turns.heard(ROOM, line({ kind: "person", id: "p2", name: "Mina" }, "@Pete-Coder rename the file", { at: Date.now() }));
@@ -394,10 +407,17 @@ describe("a room bot's @ to this PC's bot", () => {
     const [, , prompt, typed] = deps.startTurn.mock.calls[0]!;
     expect(typed).toBe(ask.text);
     expect(prompt).toContain('"Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Peter has to turn this on for you." Bots here: "EdBot" ("Edward"), "Mini" ("Mina"). Each is on its owner\'s PC; only @ here reaches it. @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.)');
-    expect(prompt).toContain('"EdBot" ("Edward"\'s bot) asked you: @Pete-Coder what works for Peter on Saturday?');
+    expect(prompt).toContain('"EdBot" ("Edward"\'s bot) asked you: @\u200BPete-Coder what works for Peter on Saturday?');
     thread.push({ id: "a", at: 1, role: "bot", kind: "text", text: "@EdBot Peter is free after 7." });
     await turns.settled("task-1", true);
     expect(deps.client.botSend).toHaveBeenCalledWith(ROOM, PETE.id, "@EdBot Peter is free after 7.", ask.id);
+  });
+
+  it("starts no turn from another bot's picture caption", async () => {
+    const turns = new MyRoomBotTurns(deps);
+    turns.heard(ROOM, line(mini, "Chart for @Pete-Coder", { ...now(), files: [{ ...FILE, name: "chart.png", type: "image/png" }] }));
+    await settle();
+    expect(deps.startTurn).not.toHaveBeenCalled();
   });
 
   it("wakes it for this PC's other bot", async () => {
@@ -596,5 +616,237 @@ describe("a room bot's @ to this PC's bot", () => {
     turns.sent(ROOM, line(peter, "@Pete-Coder hi"));
     await settle();
     expect(deps.startTurn.mock.calls[0]![2]).toBe('(You are in the team room "Team" on "Edward"\'s Wink, as "Pete-Coder". Your answer is posted there for everyone in the room. "Peter" runs you; everyone else here is read-only. Any member\'s request here is collab work for this team: help them as you would your owner. Someone read-only may ask you to read, explain and answer, but not to change files, run commands, use connected apps or ask other bots; instead of trying, tell them plainly: "Peter has to turn this on for you.")\n"Peter" asked you: @Pete-Coder hi');
+  });
+
+  it("lets only its owner name a file on this PC with @", async () => {
+    const turns = new MyRoomBotTurns(deps);
+    line({ kind: "person", id: "p2", name: "Mina" }, "see @C:/Users/peter/.ssh/id_ed25519");
+    line({ kind: "host", id: "host", name: "Edward" }, "and @~/notes.txt");
+    line({ kind: "bot", id: "b1", name: "EdBot" }, "@C:/Users/peter/secret.txt");
+    line({ kind: "bot", id: PETE.id, name: PETE.name, owner: ME.id }, "saved @C:/Users/peter/q3.md");
+    const quoted = line({ kind: "person", id: "p2", name: "Mina" }, "@C:/x.txt");
+    turns.sent(ROOM, line(peter, "@Pete-Coder open @C:/Users/peter/plan.md", { replyToId: quoted.id }));
+    await settle();
+    const prompt = deps.startTurn.mock.calls[0]![2] as string;
+    expect(prompt).toContain("Room lines since your last answer:\nMina: see @\u200BC:/Users/peter/.ssh/id_ed25519\nEdward: and @\u200B~/notes.txt\nEdBot: @\u200BC:/Users/peter/secret.txt\nPete-Coder: saved @\u200BC:/Users/peter/q3.md\n");
+    expect(prompt).toContain("They replied to: Mina: @\u200BC:/x.txt\n");
+    expect(prompt).toContain('"Peter" asked you: @Pete-Coder open @C:/Users/peter/plan.md');
+  });
+
+  describe("a picture it shows", () => {
+    const picture = () => {
+      const path = join(DATA_DIR, "cat.png");
+      writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      return path;
+    };
+    const start = async () => {
+      const turns = new MyRoomBotTurns(deps);
+      const ask = line(peter, "@Pete-Coder draw a cat");
+      turns.sent(ROOM, ask);
+      await settle();
+      return { turns, ask };
+    };
+
+    it("posts as the room's own line and hands the bot its room URL", async () => {
+      deps.client.botPicture.mockResolvedValueOnce({ ok: true, value: { seq: 5, id: "e5", files: [FILE] } });
+      const { turns, ask } = await start();
+      expect(turns.capturePicture("private-task")).toBeNull();
+      await expect(turns.capturePicture("task-1")!(picture(), "cat.png", "A cat")).resolves.toEqual({ messageId: "e5", url: `/api/joined/rooms/${ROOM}/files/${FILE.id}/preview` });
+      expect(deps.client.botPicture).toHaveBeenCalledWith(ROOM, PETE.id, "A cat", ask.id, "cat.png", expect.any(Buffer), expect.any(AbortSignal));
+    });
+
+    it("shows a local picture in the room task after the room turn settles", async () => {
+      const { turns } = await start();
+      await turns.settled("task-1", true);
+      const bot = { id: "local-pete", threadId: "main", name: "Pete", cwd: DATA_DIR } as BotRecord;
+      const appendMessage = vi.fn((_threadId: string, _message: Partial<Message>) => ({ id: "message" }));
+      const routes = createInternalRoutes({
+        readOnlyTurn: () => false,
+        cfg: {},
+        store: { bot: () => bot, taskByThread: () => undefined, appendMessage },
+        connectorThread: () => ({}),
+        captureRoomPicture: (_bot: BotRecord, task: string) => turns.capturePicture(task),
+      } as unknown as Parameters<typeof createInternalRoutes>[0]);
+      const body = { fromBotId: bot.id, fromThreadId: "task-1", path: picture() };
+      const req = Readable.from([JSON.stringify(body)]) as unknown as IncomingMessage;
+      const res = { writeHead: vi.fn(), end: vi.fn() };
+      await routes.showImage(req, res as unknown as ServerResponse);
+      expect(res.writeHead).toHaveBeenCalledWith(201, expect.any(Object));
+      expect(appendMessage).toHaveBeenCalledWith("task-1", expect.objectContaining({ kind: "screen", image: expect.any(String), shown: true }));
+      const image = appendMessage.mock.calls[0]![1].image;
+      expect(JSON.parse(res.end.mock.calls[0]![0])).toEqual({ messageId: "message", url: `/api/attachments/${image}` });
+      expect(deps.client.botPicture).not.toHaveBeenCalled();
+    });
+
+    it("keeps an answered ask out of the next prompt after a picture-only turn", async () => {
+      deps.client.botPicture.mockImplementationOnce(async () => ({ ok: true, value: line({ kind: "bot", ...PETE }, "", { files: [FILE] }) }));
+      deps.hasTask = (_botId, threadId) => threadId === "task-1";
+      const { turns, ask } = await start();
+      await turns.capturePicture("task-1")!(picture(), "cat.png", "");
+      await turns.settled("task-1", true);
+      turns.sent(ROOM, line(peter, "@Pete-Coder draw a dog"));
+      await settle();
+      expect(deps.startTurn).toHaveBeenCalledTimes(2);
+      expect(deps.startTurn.mock.calls[1]?.[2]).not.toContain(ask.text);
+    });
+
+    it("does not post a stopped generation as an answer to the next ask", async () => {
+      deps.interrupt = vi.fn(async () => {});
+      deps.hasTask = (_botId, threadId) => threadId === "task-1";
+      deps.client.botPicture.mockResolvedValue({ ok: true, value: { seq: 5, id: "e5", files: [FILE] } });
+      const { turns } = await start();
+      const bot = { id: "local-pete", threadId: "main", name: "Pete", cwd: DATA_DIR } as BotRecord;
+      const appendMessage = vi.fn(() => ({ id: "message" }));
+      const routes = createInternalRoutes({
+        readOnlyTurn: () => false,
+        cfg: { imageGen: { key: "test-key" } },
+        store: { bot: () => bot, taskByThread: () => undefined, groupTaskByThread: () => undefined, appendMessage },
+        connectorThread: () => ({}),
+        botOutputRoots: () => [DATA_DIR],
+        captureRoomPicture: (_bot: BotRecord, task: string) => turns.capturePicture(task),
+      } as unknown as Parameters<typeof createInternalRoutes>[0]);
+      let finish!: (response: Response) => void;
+      const result = new Promise<Response>((resolve) => (finish = resolve));
+      let started!: () => void;
+      const generating = new Promise<void>((resolve) => (started = resolve));
+      vi.stubGlobal("fetch", vi.fn(() => {
+        started();
+        return result;
+      }));
+      try {
+        const req = Readable.from([JSON.stringify({ fromBotId: bot.id, fromThreadId: "task-1", prompt: "cat" })]) as unknown as IncomingMessage;
+        const res = { writeHead: vi.fn(), end: vi.fn() };
+        const pending = routes.generateImage(req, res as unknown as ServerResponse);
+        await generating;
+        await turns.stopMine(ROOM);
+        await turns.settled("task-1", false);
+        turns.sent(ROOM, line(peter, "@Pete-Coder draw a dog"));
+        await settle();
+        expect(deps.startTurn).toHaveBeenCalledTimes(2);
+        const gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        finish(new Response(JSON.stringify({ data: [{ b64_json: gif }] })));
+        await pending;
+        expect(JSON.parse(res.end.mock.calls[0]![0])).toMatchObject({ showError: "the room refused it: the turn was stopped" });
+        expect(deps.client.botPicture).not.toHaveBeenCalled();
+        expect(appendMessage).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("names why the room refused it and posts no line", async () => {
+      deps.client.botPicture.mockResolvedValueOnce({ ok: false, status: 507, error: "this room is out of space for files" });
+      const { turns } = await start();
+      await expect(turns.capturePicture("task-1")!(picture(), "cat.png", "A cat")).rejects.toMatchObject({ status: 507, message: "this room is out of space for files" });
+      expect(deps.client.botSend).not.toHaveBeenCalled();
+      deps.client.botPicture.mockResolvedValueOnce({ ok: false, status: 404, error: "not found" });
+      await expect(turns.capturePicture("task-1")!(picture(), "cat.png", "A cat")).rejects.toMatchObject({ status: 404, message: "the host's Wink is too old for pictures from teammates' bots" });
+    });
+
+    it("posts nothing once its owner pressed Stop", async () => {
+      deps.interrupt = vi.fn(async () => {});
+      const { turns } = await start();
+      const captured = turns.capturePicture("task-1")!;
+      await turns.stopMine(ROOM);
+      await expect(captured(picture(), "cat.png", "A cat")).rejects.toMatchObject({ status: 409 });
+      expect(deps.client.botPicture).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// GATE-REVIEW-2239E: names reach the prompt beside the lines, and grok inlines a file an @ in any of them names
+describe("names in a joined room's prompt", () => {
+  const CANARY = "host-only file: canary GJR-7731";
+  const ASK = "@Pete-Coder what does the attached file say?";
+  const mina = (name = "Mina") => ({ kind: "person" as const, id: "p2", name });
+  const plain = (): JoinedState => ({ version: 2, roomName: "Team", instructions: "", host: "Edward", me: ME, people: [ME, { id: "p2", name: "Mina" }], bots: [{ id: "b1", name: "EdBot", color: "blue" }], teamBots: [PETE, MINI] });
+  type Spot = { state?: (state: JoinedState, at: string) => JoinedState; author?: (at: string) => JoinedEntry["author"]; file?: (at: string) => string };
+  // every spot in the gate's table a guest, the host or a member's upload controls
+  const SPOTS = {
+    "room name": { state: (state, at) => ({ ...state, roomName: `Q3 ${at}` }) },
+    "host's name": { state: (state, at) => ({ ...state, host: `Ed ${at}` }) },
+    "asker's name": { author: (at) => mina(`Mina ${at}`) },
+    "a member's name in the can-work list": { state: (state, at) => ({ ...state, people: [{ ...ME, works: true }, { id: "p2", name: `Mina ${at}`, works: false }] }) },
+    "host's bot name": { state: (state, at) => ({ ...state, bots: [{ id: "b1", name: `EdBot ${at}`, color: "blue" }] }) },
+    "a teammate's bot name": { state: (state, at) => ({ ...state, teamBots: [PETE, { ...MINI, name: `Mini ${at}` }] }) },
+    "room file name": { file: (at) => `a ${at} b.pdf` },
+    "room file name alone": { file: () => "@notes.txt" },
+  } satisfies Record<string, Spot>;
+  let rooms = 0;
+  const promptFor = async (spot: Spot, at: string, author?: JoinedEntry["author"], text = ASK) => {
+    const room = `names-${(rooms += 1)}`;
+    saveJoined(room, "abcdefghijklmnop.wink.test", ME, `wkg_${"k".repeat(43)}`);
+    setJoinedState(room, spot.state?.(plain(), at) ?? plain());
+    saveMyRoomBot(room, PETE.id, "local-pete");
+    deps.startTurn.mockClear();
+    const entry = { seq: 1, id: "e1", at: Date.now(), author: author ?? spot.author?.(at) ?? mina(), text, ...(spot.file && { files: [{ ...FILE, name: spot.file(at) }] }) };
+    addJoinedEntries(room, [entry], 1);
+    const turns = new MyRoomBotTurns(deps);
+    if (author?.id === ME.id) turns.sent(room, entry);
+    else turns.heard(room, entry);
+    for (let i = 0; i < 3; i += 1) await settle();
+    expect(deps.startTurn).toHaveBeenCalledTimes(1);
+    const call = deps.startTurn.mock.calls[0]!;
+    return { prompt: String(call[2]), readOnly: Boolean(call[5]) };
+  };
+
+  it.each(Object.entries(SPOTS))("an @ in the %s names no file", async (_name, spot) => {
+    const { prompt, readOnly } = await promptFor(spot, "@notes.txt and @C:/Users/edward/.ssh/id_ed25519 x");
+    expect(readOnly).toBe(true);
+    // Wink's own "@ another bot" lines stay; every other @ carries a zero-width space
+    expect(prompt).not.toMatch(/@(?![\u200B\s])/);
+    expect(prompt).toContain("@\u200Bnotes.txt");
+  });
+
+  it("inerts names on the owner's turn too, and keeps the owner's own @ live", async () => {
+    const { prompt } = await promptFor(SPOTS["room name"], "@notes.txt", peter, "@Pete-Coder open @plan.md");
+    expect(prompt).toContain('team room "Q3 @\u200Bnotes.txt"');
+    expect(prompt).toContain('"Peter" asked you: @Pete-Coder open @plan.md');
+  });
+
+  describe("grok, which inlines an @path", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const live: ProviderInstance[] = [];
+    let scratch: string;
+    beforeEach(() => {
+      ensureDirs();
+      scratch = mkdtempSync(join(tmpdir(), "omb-room-names-"));
+      process.env.FAKE_ACP_MODE = "read";
+      process.env.FAKE_ACP_READ_OUT = join(scratch, "read.txt");
+    });
+    afterEach(async () => {
+      for (const instance of live.splice(0)) await instance.dispose();
+      delete process.env.FAKE_ACP_MODE;
+      delete process.env.FAKE_ACP_READ_OUT;
+      await removeTempDir(scratch);
+    });
+
+    it("reads no file named in any name on a guest's turn; the owner's own @path still reads", async () => {
+      const project = join(scratch, "proj");
+      mkdirSync(project, { recursive: true });
+      writeFileSync(join(project, "notes.txt"), CANARY);
+      const outside = join(scratch, "elsewhere.txt").replace(/\\/g, "/");
+      writeFileSync(outside, "outside canary");
+      const instance = await GrokAgentDriver.create({ instanceId: "names-grok", displayName: undefined, environment: {}, enabled: true, config: { cli: join(here, "..", "testing", "fake-acp-cli.ts"), fullAuto: true } });
+      live.push(instance);
+      const out = process.env.FAKE_ACP_READ_OUT!;
+      const read = async (threadId: string, prompt: string, readOnly: boolean) => {
+        rmSync(out, { force: true });
+        const recorder = recordEvents(instance.adapter);
+        await instance.adapter.sendTurn({ threadId, text: prompt, cwd: project, approval: "ask", integrations: { agents: { command: process.execPath, args: ["-e", ""], env: {} } }, ...(readOnly && { readOnly }) });
+        expect(await recorder.until((e) => e.type === "turn.completed" && e.threadId === threadId)).toMatchObject({ ok: true });
+        return existsSync(out) ? readFileSync(out, "utf8") : null;
+      };
+      const got: Record<string, string | null> = {};
+      for (const [name, spot] of Object.entries(SPOTS)) {
+        const { prompt, readOnly } = await promptFor(spot, `@notes.txt and @${outside} x`);
+        got[name] = await read(`t-${rooms}`, prompt, readOnly);
+      }
+      expect(got).toEqual(Object.fromEntries(Object.keys(SPOTS).map((name) => [name, null])));
+      const owner = await promptFor({}, "", peter, `@Pete-Coder open @notes.txt and @${outside}`);
+      expect(owner.readOnly).toBe(false);
+      // the owner's turn has the read tool as well, so the project canary shows either way; the outside file only by @
+      expect(await read("t-owner", owner.prompt, false)).toContain("outside canary");
+    }, 120_000);
   });
 });

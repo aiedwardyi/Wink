@@ -51,8 +51,7 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
 
   const land = async (hit: SearchHit) => {
     try {
-      await landOnSearchHit(hit, state, dispatch, q);
-      onLanded();
+      if (await landOnSearchHit(hit, state, dispatch, q)) onLanded();
     } catch (e) {
       dispatch({ type: "error", message: e instanceof Error ? e.message : String(e) });
     }

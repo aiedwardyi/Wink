@@ -13,7 +13,7 @@ import { useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
 import { usePresence } from "@/lib/use-presence";
 import type { Message } from "@/state/store";
 import { listedRuns, listedSessionId, workerAnchors, type WorkerRun, type WorkerShownState } from "@/lib/worker-runs";
-import { ProviderMark } from "./ProviderIcons";
+import { ProviderBrandMark } from "./ProviderIcons";
 import { Fold } from "./Fold";
 import { MENU_CLASS } from "./MessageMenu";
 import { trackScreen } from "@/lib/usage-stats";
@@ -46,7 +46,7 @@ export function WorkerMark({ provider, compact = false }: { provider: string | n
   const size = 14;
   return (
     <span aria-hidden={compact || undefined} className={compact ? "mr-1.5 inline-flex size-3.5 shrink-0 items-center justify-center align-middle" : "flex size-6 shrink-0 items-center justify-center rounded-md border border-hairline/40 bg-raised"}>
-      {provider === "script" ? <ScrollText size={size} className="text-ink-secondary" aria-hidden /> : provider ? <ProviderMark driverKind={provider} size={size} /> : <Bot size={size} className="text-ink-secondary" aria-hidden />}
+      {provider === "script" ? <ScrollText size={size} className="text-ink-secondary" aria-hidden /> : provider ? <ProviderBrandMark driverKind={provider} size={size} /> : <Bot size={size} className="text-ink-secondary" aria-hidden />}
     </span>
   );
 }
@@ -335,16 +335,19 @@ export function useSharedWorkers(threadId: string | undefined): WorkerSource | u
 }
 
 /** The side pane's Workers tab: the chat's one worker list. */
-export function WorkerPage({ source, maximized, onClose }: { source: WorkerSource | undefined; maximized: boolean; onClose: () => void }) {
+export function WorkerPage({ source, maximized, kept, onClose }: { source: WorkerSource | undefined; maximized: boolean; kept?: boolean; onClose: () => void }) {
   const { t } = useI18n();
+  const phone = useIsPhone();
   useEffect(() => { trackScreen("workers"); }, []);
+  // The desktop pane goes along on a chat switch, so only the phone's sheet shuts with the worker menus.
   useEffect(() => {
+    if (!phone) return;
     window.addEventListener("orbit:close-worker-menu", onClose);
     return () => window.removeEventListener("orbit:close-worker-menu", onClose);
-  }, [onClose]);
+  }, [onClose, phone]);
   const listed = source ? listedFor(source) : [];
   return (
-    <div data-worker-list className="verify-watch-frame show-workers" data-maximized={maximized || undefined}>
+    <div data-worker-list className="verify-watch-frame show-workers" data-maximized={maximized || undefined} data-kept={kept}>
       <div className="verify-watch-bar show-frame-bar">
         <Bot size={14} aria-hidden className="show-frame-icon" />
         <h2 className="show-frame-name">{source ? t("workers.title", { name: source.name }) : t("show.workers")}</h2>

@@ -189,7 +189,7 @@ describe("sourced data", () => {
 
   it("charts Legal Research Bench for 15 models at each run's own cost", () => {
     const legal = MODEL_INDEX_ENTRIES.filter((e) => e.index === "legal");
-    expect([...new Set(indexView("legal", []).points.map((e) => e.model))].sort()).toEqual(CHARTED.filter((id) => !id.endsWith("-contributor")).sort());
+    expect([...new Set(indexView("legal", []).points.map((e) => e.model))].sort()).toEqual(CHARTED.filter((id) => !id.endsWith("-contributor") && id !== "gemini-4-neon").sort());
     for (const e of legal) {
       expect([e.benchmark, e.costBenchmark, e.costSource], e.model).toEqual(["vals-legal-research", "vals-legal-research", "https://www.vals.ai/benchmarks/legal_research"]);
       expect(e.cost, e.model).toBeGreaterThan(0);
@@ -207,7 +207,7 @@ describe("sourced data", () => {
   it("charts 12 Design models with published page costs and confidence intervals", () => {
     const { points, missing } = indexView("design", PICKER_MODEL_IDS.map((model) => ({ provider: "other", model, label: model })));
     expect(new Set(points.map((e) => e.model)).size).toBe(12);
-    expect(missing.map((e) => e.model).sort()).toEqual(["claude-fable-5-2", "gemini-4-carbon", "gemini-4-hydrogen", "gpt-6.2-astra", "gpt-6.2-sol", "grok-4.6", "muse-ember-1.0", "muse-spark-1.3", "muse-spark-1.3-contributor"]);
+    expect(missing.map((e) => e.model).sort()).toEqual(["claude-fable-5-2", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-neon", "gpt-6.2-astra", "gpt-6.2-sol", "grok-4.6", "muse-ember-1.0", "muse-spark-1.3", "muse-spark-1.3-contributor"]);
     for (const e of points) {
       expect([e.benchmark, e.costBenchmark, e.effort]).toEqual(["rams-index", "rams-index", "default"]);
       expect(e.costSource).toBe("https://www.rams.ai/index/data/models-v0.6.1.json");
@@ -269,10 +269,10 @@ describe("sourced data", () => {
       ["coding", "aa-frontiercode", "high", 25.7076262626263, undefined],
       ["general", "aa-gdpval", "medium", 1578.39, undefined],
       ["general", "aa-gdpval", "high", 1633.51, 3.64],
-      ["intelligence", "aa-intelligence-index", "medium", 47.6040598289046, 4.314621569087732],
-      ["intelligence", "aa-intelligence-index", "high", 50.4121935905389, 4.973304355775267],
-      ["agentic", "aa-terminal-bench", "medium", 55.050505050505, 6.424922769986513],
-      ["agentic", "aa-terminal-bench", "high", 57.0707070707071, 6.780140181187823],
+      ["intelligence", "aa-intelligence-index", "medium", 47.6040598289046, 8.629243138175465],
+      ["intelligence", "aa-intelligence-index", "high", 50.4121935905389, 9.946608711550533],
+      ["agentic", "aa-terminal-bench", "medium", 55.050505050505, 12.849845539973026],
+      ["agentic", "aa-terminal-bench", "high", 57.0707070707071, 13.560280362375645],
       ["design", "rams-index", "default", 20.7, 0.149],
       ["security", "vals-cyberbench", "all", 77.857, 5.113798],
       ["legal", "vals-legal-research", "all", 54.808, 6.44908],

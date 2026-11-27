@@ -10,7 +10,7 @@ import type { Message } from "@/state/store";
 import { applyLocale } from "./i18n";
 import { NO_REPLY_MS } from "./no-reply";
 import { useRoomTurnStage } from "./room-turn";
-import type { TurnStreamState } from "./turn-stage";
+import { threadTurn, type TurnStreamState } from "./turn-stage";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const groupView = readFileSync(join(here, "../components/GroupView.tsx"), "utf8");
@@ -20,7 +20,7 @@ const tool: Message = { id: "a1", at: 2, role: "bot", kind: "activity", tool: { 
 const stream = (signal?: "started" | "preparing"): TurnStreamState => ({ streaming: {}, reasoning: {}, signal: signal ? { t1: signal } : {} });
 
 function Probe({ messages, state }: { messages: Message[]; state: TurnStreamState }) {
-  const { label, noReply } = useRoomTurnStage("t1", messages, state, true, "antigravityAgent");
+  const { label, noReply } = useRoomTurnStage("t1", messages, threadTurn(state, "t1", messages.at(-1)?.id), true, "antigravityAgent");
   return createElement("span", { "data-quiet": String(noReply?.quiet ?? false), "data-wrap": String(Boolean(noReply)) }, label);
 }
 

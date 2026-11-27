@@ -14,20 +14,26 @@ const READ = 0.7;
 const HOP = 0.618;
 const QUICK_MS = 250;
 const DRAIN_MS = 2_000;
+// Rows the reading front may pass in one glide before the readers ride along with it instead of hopping.
+const SKIM_ROWS = 24;
+const SPREAD = 2;
 // One model call per chunk reads for all four; numbering is rules, run once before the first chunk.
 const READERS: VerifyDocKind[] = ["spelling", "grammar", "translation", "names"];
 const KINDS = new Set<unknown>(VERIFY_DOC_KINDS);
 const GLIDE_MS = CURSOR_MS - CURSOR_REST_MS;
 const int = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+const WIDE = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/g;
+/** Columns a line takes: a Hangul or CJK character is two. */
+export const docCols = (text: string) => text.length + (text.match(WIDE)?.length ?? 0);
 
 /** Where a checker's cursor points: a spot along a line's text, or a finding's quote. */
-export interface DocCursor { id: string; kind: VerifyDocKind; /** first line of its chunk, 0 for the names comparison */ band: number; line: number; along: number; quote?: string; duration: number }
+export interface DocCursor { id: string; kind: VerifyDocKind; /** first line of its chunk, 0 for the names comparison */ band: number; line: number; along: number; quote?: string; duration: number; /** a skim: the glide runs at an even pace, riding with the view */ ride?: boolean; /** a rider's rows below the front, however late it moves */ ahead?: number }
 export interface DocEnd { ms: number; blocked: boolean }
 export interface DocStep { marks: VerifyReplayMark[]; moved: DocCursor[]; left: string[]; end: DocEnd | null }
 
 interface Lane { kind: VerifyDocKind; i: number; turn: number; next: number; queue: VerifyReplayMark[]; landing?: { at: number; mark: VerifyReplayMark } }
-interface Band { from: number; to: number; at: number; rows: number[]; rounds: number; lanes: Lane[]; /** a cursor rests on the quote it just marked until then */ hold: number; compare?: boolean; closing?: number; done?: VerifyReplayMark }
-interface Due { at: number; mark?: VerifyReplayMark; until?: number; compare?: boolean; end?: DocEnd }
+interface Band { from: number; to: number; at: number; rows: number[]; rounds: number; /** live: the readers make one pass over the chunk, then rest until its done mark */ once: boolean; lanes: Lane[]; /** a cursor rests on the quote it just marked until then */ hold: number; compare?: boolean; closing?: number; done?: VerifyReplayMark }
+interface Due { at: number; mark?: VerifyReplayMark; until?: number; compare?: boolean; end?: DocEnd; /** a skimmed finding: marked as the front passes it, no cursor flies to it */ pass?: boolean }
 interface Chunk { from: number; to: number; start: number; done: number; s: number; e: number }
 
 const findingOf = (mark: VerifyReplayMark) => {
@@ -48,8 +54,12 @@ export class VerifyDocShow {
   /** live: since when no chunk is open after one was */
   private idle = Infinity;
   private marks: VerifyReplayMark[] = [];
-  private moved = new Map<string, DocCursor>();
+  private moved: DocCursor[] = [];
   private left: string[] = [];
+  /** a skim's chunks in show time, top to bottom */
+  private sweep: Chunk[] = [];
+  /** drawn rows above each line: a long line wraps to many, so the front sweeps rows, not lines */
+  private tops = [0];
 
   /** `still`: no cursors, for reduced motion. `view`: the lines on screen, where the names comparison shows. */
   constructor(readonly live: boolean, private still = false, private view: () => readonly [number, number] | null = () => null) {}
@@ -58,8 +68,11 @@ export class VerifyDocShow {
   feed(mark: VerifyReplayMark, after = 0) { this.queue.push({ at: this.clock + after, mark }); }
   finish(ms: number, blocked: boolean, after = 0) { this.queue.push({ at: this.clock + after, end: { ms, blocked } }); }
 
-  plan(marks: VerifyReplayMark[], ms: number, blocked: boolean) {
+  /** `perRow`: the columns one drawn row holds at the stage's width. */
+  plan(marks: VerifyReplayMark[], ms: number, blocked: boolean, perRow = Infinity) {
     const total = Math.max(ms, marks.at(-1)?.ms ?? 0), text = marks.find(mark => mark.kind === "doc-text"), chunks = new Map<number, Chunk>();
+    this.tops = [0];
+    for (const line of Array.isArray(text?.lines) ? text.lines : []) this.tops.push(this.tops.at(-1)! + Math.max(1, Math.ceil(docCols(typeof line === "string" ? line : "") / perRow)));
     for (const mark of marks) {
       const c = chunkOf(mark);
       if (c && !c.done) chunks.set(c.from, { from: c.from, to: c.to, start: mark.ms, done: total, s: 0, e: 0 });
@@ -71,10 +84,18 @@ export class VerifyDocShow {
     const body = length - compare, room = Math.min(body, 3 * CURSOR_MS);
     // A check answered from cache took no time: its chunks get the whole show.
     const at = (run: number) => last > first ? Math.max(0, Math.min(run, last) - first) / (last - first) * body : 0;
-    for (const c of chunks.values()) {
-      c.s = Math.min(at(c.start), body - room);
-      c.e = last > first ? Math.max(at(c.done), c.s + room) : body;
+    // The run read chunks side by side; the show reads them top to bottom, one after another, so the readers and the view only move down.
+    const rows = [...chunks.values()].reduce((n, c) => n + this.span(c), 0), order = [...chunks.values()].sort((x, y) => x.from - y.from);
+    // Too long to read in the show: one front sweeps down at an even pace and the readers ride just below it.
+    const skim = !this.still && body > 0 && rows * GLIDE_MS / body > SKIM_ROWS;
+    // Every chunk read in the show gets at least room, the slots scaled back to fit body so each closes before the next opens.
+    const least = skim ? 0 : room / body * rows, width = (c: Chunk) => Math.max(this.span(c), least), sum = order.reduce((n, c) => n + width(c), 0);
+    let before = 0;
+    for (const c of order) {
+      c.s = before / sum * body;
+      c.e = (before += width(c)) / sum * body;
     }
+    this.sweep = skim ? order : [];
     const found = new Map<string, VerifyReplayMark[]>(), merged: VerifyReplayMark[] = [];
     for (const mark of marks) {
       const c = chunkOf(mark), f = findingOf(mark);
@@ -86,6 +107,10 @@ export class VerifyDocShow {
     }
     for (const [key, list] of found) {
       const c = chunks.get(Number(key.split(":")[0]))!, lineOf = (mark: VerifyReplayMark) => findingOf(mark)!.line;
+      if (skim) {
+        for (const mark of list) this.queue.push({ at: c.s + (this.row(lineOf(mark)) - this.row(c.from)) / this.span(c) * (c.e - c.s), mark, pass: true });
+        continue;
+      }
       // A finding lands as its checker reads past it: numbering while it skims, or as its chunk closes when it was not open for the rules.
       const [a, b] = !key.endsWith(":numbering") ? [c.s, c.e - 2 * CURSOR_MS] : c.start <= EARLY_MS ? [c.s, c.s + (SKIM - 1) * CURSOR_MS] : [c.e, c.e];
       list.sort((x, y) => lineOf(x) - lineOf(y)).forEach((mark, k) => {
@@ -97,6 +122,30 @@ export class VerifyDocShow {
     merged.forEach((mark, k) => this.queue.push({ at: body + CURSOR_REST_MS + k * Math.min(CURSOR_MS, (compare - CURSOR_MS) / merged.length), mark }));
     this.queue.push({ at: length, end: { ms, blocked } });
     this.queue.sort((x, y) => x.at - y.at);
+  }
+
+  /** A skim's reading front, a fractional line; null when the readers read on their own. */
+  front(at = this.clock): number | null {
+    const c = this.sweep.findLast(row => row.s <= at) ?? this.sweep[0];
+    return c ? Math.min(c.to + 1, this.tops.length, this.lineAt(this.row(c.from) + Math.min(1, Math.max(0, at - c.s) / Math.max(1, c.e - c.s)) * this.span(c))) : null;
+  }
+
+  /** Drawn rows above line `n`, fractional within a line. */
+  row(n: number) {
+    const i = Math.min(Math.floor(n), this.tops.length) - 1, top = this.tops[i] ?? 0;
+    return top + (i + 1 < this.tops.length ? this.tops[i + 1]! - top : 1) * (n - i - 1);
+  }
+
+  private span(c: { from: number; to: number }) {
+    return this.row(c.to + 1) - this.row(c.from);
+  }
+
+  /** The fractional line at `row` drawn rows down. */
+  lineAt(row: number) {
+    let lo = 0, hi = this.tops.length - 1;
+    if (row >= this.tops[hi]!) return hi + 1 + row - this.tops[hi]!;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (this.tops[mid]! <= row) lo = mid; else hi = mid; }
+    return lo + 1 + (row - this.tops[lo]!) / (this.tops[lo + 1]! - this.tops[lo]!);
   }
 
   advance(ms: number): DocStep {
@@ -117,7 +166,8 @@ export class VerifyDocShow {
           if (lane.next <= this.clock) { this.turn(band, lane); busy = true; }
         }
         if (band.closing === undefined || band.hold > this.clock || band.lanes.some(lane => lane.landing || lane.queue.length)) continue;
-        for (const lane of band.lanes) this.away(band, lane);
+        const last = band.compare || !this.sweep.some(c => c.from > band.from);
+        for (const lane of band.lanes) if (last || lane.kind === "numbering") this.away(band, lane);
         if (band.done) this.marks.push(band.done);
         this.bands.splice(this.bands.indexOf(band), 1);
         if (!band.compare && !this.bands.length) this.idle = this.clock;
@@ -126,9 +176,9 @@ export class VerifyDocShow {
     }
     const end = this.end && !this.bands.length && !this.ended ? this.end : null;
     if (end) this.ended = true;
-    const step = { marks: this.marks, moved: [...this.moved.values()], left: this.left, end };
+    const step = { marks: this.marks, moved: this.moved, left: this.left, end };
     this.marks = [];
-    this.moved = new Map();
+    this.moved = [];
     this.left = [];
     return step;
   }
@@ -151,7 +201,7 @@ export class VerifyDocShow {
       return;
     }
     if (due.compare) return this.compare(due.at);
-    const mark = due.mark!, c = this.still ? null : chunkOf(mark), f = this.still ? null : findingOf(mark);
+    const mark = due.mark!, c = this.still ? null : chunkOf(mark), f = this.still || due.pass ? null : findingOf(mark);
     if (mark.kind === "doc-text" && Array.isArray(mark.lines)) this.lines = mark.lines.map(line => typeof line === "string" ? line : "");
     const open = c && this.bands.find(band => band.from === c.from && !band.compare);
     if (c?.done && open) {
@@ -178,28 +228,31 @@ export class VerifyDocShow {
   }
 
   private open(from: number, to: number, at: number, early: boolean, until?: number) {
-    const kinds: VerifyDocKind[] = early ? [...READERS, "numbering"] : READERS, step = CURSOR_MS / kinds.length, rows = this.rows(from, to);
-    // A replay reads the chunk once, top to bottom, in the time it has; live keeps reading it over until the done mark.
+    // A skim shares one cursor per checker across chunks, so numbering rides only the first.
+    const kinds: VerifyDocKind[] = early && (!this.sweep.length || from === this.sweep[0]!.from) ? [...READERS, "numbering"] : READERS, step = CURSOR_MS / kinds.length, rows = this.rows(from, to);
+    // A replay reads the chunk once, top to bottom, in the time it has; live reads it once at the glide pace, then rests until the done mark.
     const reads = until === undefined ? 0 : Math.floor(Math.max(0, until - at - CURSOR_REST_MS) / GLIDE_MS) + 2;
     const rounds = until === undefined ? Math.min(8, Math.max(2, Math.ceil(rows.length / READERS.length))) : Math.ceil(reads / 2);
-    const band: Band = { from, to, at, rows, rounds, hold: 0, lanes: kinds.map((kind, i) => ({ kind, i, turn: 0, next: at + CURSOR_REST_MS + i * step, queue: [] })) };
+    const band: Band = { from, to, at, rows, rounds, once: until === undefined, hold: 0, lanes: kinds.map((kind, i) => ({ kind, i, turn: 0, next: this.sweep.length ? at : at + CURSOR_REST_MS + i * step, queue: [] })) };
     this.bands.push(band);
     this.idle = Infinity;
-    for (const lane of band.lanes) this.read(band, lane, 0);
+    for (const lane of band.lanes) this.read(band, lane, 0, at);
   }
 
   /** The cross-document names and dates call: its cursor works alone. */
   private compare(at: number) {
     this.idle = Infinity;
     if (this.still || !this.lines.length) return;
-    const band: Band = { from: 1, to: this.lines.length, at, rows: this.rows(1, this.lines.length), rounds: 1, hold: 0, compare: true, lanes: [{ kind: "names", i: 0, turn: 0, next: at + CURSOR_REST_MS, queue: [] }] };
+    const band: Band = { from: 1, to: this.lines.length, at, rows: this.rows(1, this.lines.length), rounds: 1, once: false, hold: 0, compare: true, lanes: [{ kind: "names", i: 0, turn: 0, next: at + CURSOR_REST_MS, queue: [] }] };
     this.bands.push(band);
-    this.read(band, band.lanes[0]!, 0);
+    this.read(band, band.lanes[0]!, 0, at);
   }
 
   private close(band: Band, at: number) {
     if (band.closing !== undefined) return;
     band.closing = at;
+    // A skim's readers stop with their chunk and ride on with the next one.
+    if (this.sweep.length && !band.compare) for (const lane of band.lanes) lane.next = Infinity;
     // Opened and closed in one go: marks that were waiting when a live watch joined.
     const late = at - band.at < CURSOR_REST_MS;
     for (const lane of band.lanes) {
@@ -219,13 +272,25 @@ export class VerifyDocShow {
       const f = findingOf(hit)!;
       this.point(band, lane, { line: f.line, along: 0, quote: f.quote, duration: glide });
       lane.landing = { at: at + glide, mark: hit };
-    } else this.read(band, lane, glide);
+    } else if (band.once && lane.kind !== "numbering" && lane.turn >= 2 * band.rounds) {
+      lane.next = Infinity;
+      return;
+    } else this.read(band, lane, glide, at);
     // Reading runs straight on; it rests only on a quote it marked.
     lane.next = at + glide + (quick ? QUICK_MS / 2 : hit ? CURSOR_REST_MS : 0);
   }
 
-  private read(band: Band, lane: Lane, duration: number) {
+  private read(band: Band, lane: Lane, duration: number, at: number) {
     const turn = lane.turn++, n = band.rows.length;
+    if (this.sweep.length && !band.compare) {
+      // Lands where the front will be on time, even when this turn runs late.
+      const lead = this.row(this.front(at + duration)!), first = Math.min(this.row(this.lines.length + 1) - 1, Math.ceil(lead + lane.i * SPREAD));
+      // A reader reads the first text in its own rows; past a long blank stretch it stays on its row, with the front.
+      const spot = Array.from({ length: SPREAD }, (_, k) => first + k).find(r => this.lines[Math.floor(this.lineAt(r)) - 1]?.trim()) ?? first;
+      const line = Math.min(this.lines.length, Math.floor(this.lineAt(spot))), rows = this.row(line + 1) - this.row(line);
+      const along = Math.min(1, (spot - this.row(line) + (turn % 2 ? READ : 0)) / rows);
+      return this.point(band, lane, { line, along, duration: Math.max(0, at + duration - this.clock), ride: true, ahead: this.row(line + along) - lead });
+    }
     if (band.compare) {
       const [top, bottom] = this.view() ?? [1, this.lines.length], seen = band.rows.filter(row => row >= top && row <= bottom), rows = seen.length ? seen : band.rows;
       return this.point(band, lane, { line: rows[Math.floor((turn >> 1) * HOP % 1 * rows.length)]!, along: turn % 2 ? READ : 0, duration });
@@ -237,16 +302,23 @@ export class VerifyDocShow {
     this.point(band, lane, { line: band.rows[Math.min(n - 1, Math.floor(p))]!, along: turn % 2 ? Math.min(1, start + Math.min(1, n / slots) * READ) : start, duration });
   }
 
-  private point(band: Band, lane: Lane, to: Pick<DocCursor, "line" | "along" | "quote" | "duration">) {
-    const id = `${band.compare ? 0 : band.from}:${lane.kind}`, cursor: DocCursor = { id, kind: lane.kind, band: band.compare ? 0 : band.from, ...to };
+  private point(band: Band, lane: Lane, to: Pick<DocCursor, "line" | "along" | "quote" | "duration" | "ride" | "ahead">) {
+    const id = this.idOf(band, lane), cursor: DocCursor = { id, kind: lane.kind, band: band.compare ? 0 : band.from, ...to };
     this.cursors.set(id, cursor);
-    this.moved.set(id, cursor);
+    // A skim reader placed and sent gliding in one step keeps both, so it starts at the front.
+    const i = this.moved.findIndex(row => row.id === id);
+    if (i < 0 || to.ride && !this.moved[i]!.duration) this.moved.push(cursor);
+    else this.moved[i] = cursor;
+  }
+
+  private idOf(band: Band, lane: Lane) {
+    return `${band.compare ? 0 : this.sweep.length ? "skim" : band.from}:${lane.kind}`;
   }
 
   private away(band: Band, lane: Lane) {
-    const id = `${band.compare ? 0 : band.from}:${lane.kind}`;
+    const id = this.idOf(band, lane);
     if (!this.cursors.delete(id)) return;
-    this.moved.delete(id);
+    this.moved = this.moved.filter(row => row.id !== id);
     this.left.push(id);
   }
 }

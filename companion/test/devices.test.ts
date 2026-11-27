@@ -1,7 +1,7 @@
 // Companion device registry contract. The three properties that matter:
 // a token is never recoverable from disk, pairing credentials are one-time,
 // a manual code cannot be ground down by guessing, and revocation works.
-import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,6 +13,7 @@ import {
   MAX_PAIRING_ATTEMPTS,
   PAIRING_TTL_MS,
 } from "../src/devices.ts";
+import { removeTestData } from "../../server/testing/test-home.ts";
 
 const pair = (registry: DeviceRegistry, name = "iPhone") => {
   const { code } = registry.openPairing();
@@ -23,7 +24,7 @@ const pair = (registry: DeviceRegistry, name = "iPhone") => {
 
 describe("DeviceRegistry", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("issues a token that authenticates, and never stores it", () => {
@@ -319,7 +320,7 @@ describe("a pairing that cannot be saved", () => {
   // Same throwaway state as the suite above — a registry built on a leftover
   // devices.json would start with a device already in it.
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("is not left live in memory", () => {

@@ -1,14 +1,14 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import { translate } from "@/lib/i18n";
 import { sidebarWorkerStatus } from "@/lib/worker-status";
 import { workerRuns } from "@/lib/worker-runs";
 import type { Message } from "@/state/store";
 import { saveSidebarSide } from "@/lib/sidebar-preferences";
-import { closeShow, showItem, useMediaThread, useShowItem } from "@/lib/show-pane";
+import { closeShow, showItem, showMedia, showWorkers, useMediaThread, useShowItem, useToolsThread, useWorkersThread } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { ShowPaneButton } from "./ShowPaneButton";
 import type { WorkerSource } from "./WorkerRows";
@@ -20,9 +20,13 @@ let host: HTMLElement;
 let state: unknown[] = [];
 
 let workers: WorkerSource | undefined;
+let crew: string | null = null;
+let listed: string | null = null;
 
 function Probe({ threadId }: { threadId: string }) {
   state = [useShowItem()?.path ?? null, useMediaThread(), Boolean(useVerifyWatch())];
+  crew = useWorkersThread();
+  listed = useToolsThread();
   return createElement(ShowPaneButton, { threadId, workers });
 }
 
@@ -30,12 +34,12 @@ beforeEach(() => {
   host = document.createElement("div");
   root = createRoot(host);
 });
-afterEach(() => { workers = undefined; act(() => root.unmount()); act(() => { closeShow(); closeVerifyWatch(); }); applyLocale("en"); saveSidebarSide("left"); });
+afterEach(() => { workers = undefined; act(() => root.unmount()); host.remove(); act(() => { closeShow(); closeVerifyWatch(); }); applyLocale("en"); saveSidebarSide("left"); vi.restoreAllMocks(); });
 
 const render = (threadId: string) => act(async () => root.render(createElement(Probe, { threadId })));
 const press = () => act(async () => host.querySelector("button")!.click());
 
-it.each(["left", "right"] as const)("opens Media, then closes, with the bot list on the %s", async (side) => {
+it.each(["left", "right"] as const)("opens the tool list, then closes, with the bot list on the %s", async (side) => {
   saveSidebarSide(side);
   await render("b1");
   const button = host.querySelector("button")!;
@@ -46,12 +50,21 @@ it.each(["left", "right"] as const)("opens Media, then closes, with the bot list
   expect(button.querySelector("svg")!.getAttribute("width")).toBe("18");
   expect(button.querySelector("svg")!.getAttribute("stroke-width")).toBe("2");
   await press();
-  expect(state).toEqual([null, "b1", false]);
+  expect([state, listed]).toEqual([[null, null, false], "b1"]);
   expect(button.getAttribute("aria-pressed")).toBe("true");
   expect(button.querySelector("svg")!.classList.contains("lucide-panel-right-close")).toBe(true);
   await press();
-  expect(state).toEqual([null, null, false]);
+  expect([state, listed]).toEqual([[null, null, false], null]);
   expect(button.querySelector("svg")!.classList.contains("lucide-panel-right-open")).toBe(true);
+});
+
+it("stays the sidebar toggle's gray when open", async () => {
+  await render("b7");
+  const button = host.querySelector("button")!;
+  await press();
+  expect(button.getAttribute("aria-pressed")).toBe("true");
+  expect(button.classList.contains("text-ink-secondary")).toBe(true);
+  expect(button.classList.contains("text-accent")).toBe(false);
 });
 
 it("opens Show when this chat has shown a file", async () => {
@@ -70,6 +83,30 @@ it("closes the checker when it holds the pane", async () => {
   expect(host.querySelector(".lucide-panel-right-close")).not.toBeNull();
   await press();
   expect(state).toEqual([null, null, false]);
+});
+
+it("keeps one worker shortcut when the open pane has its own toggle", async () => {
+  document.body.append(host);
+  workers = { name: "Ada", runs: [], onOpenTerminal: () => {} };
+  let crew: string | null = null;
+  function Pair() {
+    crew = useWorkersThread();
+    return createElement("div", null,
+      createElement(ShowPaneButton, { threadId: "b6", workers }),
+      createElement("div", { "data-side-panel": "" }, createElement(ShowPaneButton, { threadId: "b6", workers, inPane: true })),
+    );
+  }
+  await act(async () => root.render(createElement(Pair)));
+  await act(async () => showWorkers("b6"));
+  const buttons = host.querySelectorAll("[data-show-pane-button]");
+  expect(buttons[0].classList.contains("md:hidden")).toBe(true);
+  expect(buttons[1].classList.contains("md:hidden")).toBe(false);
+  const header = buttons[0] as HTMLButtonElement;
+  const focus = vi.spyOn(header, "focus").mockImplementation(() => { expect(header.getAttribute("aria-pressed")).toBe("false"); });
+  (buttons[1] as HTMLButtonElement).focus();
+  await act(async () => window.dispatchEvent(new Event("orbit:toggle-worker-menu")));
+  expect(crew).toBeNull();
+  expect(focus).toHaveBeenCalledOnce();
 });
 
 it("speaks Korean", async () => {
@@ -102,4 +139,37 @@ it.each([["BLOCKED", "waiting", "bg-warning text-app"], ["FAIL", "failed", "bg-d
   expect(badge.getAttribute("data-worker-state")).toBe(shown);
   expect(badge.textContent).toBe("2");
   expect(badge.className).toContain(classes);
+});
+
+it("reopens on the chat's last tab while no worker is listed, and on Workers once one is", async () => {
+  workers = { name: "Ada", runs: [], livePanes: new Set(), onOpenTerminal: () => {} };
+  await render("b7");
+  await act(async () => showMedia("b7"));
+  await press();
+  await press();
+  expect([state[1], crew]).toEqual(["b7", null]);
+  await press();
+  const launch: Message = { id: "l1", at: 1, role: "bot", kind: "launch", text: "Launched W1 | Opus 5.5 | high\nSession: 00000001-1" };
+  const runs = workerRuns([launch]).map((run) => ({ run, state: run.state }));
+  workers = { ...workers, runs, livePanes: new Set(["00000001-1"]) };
+  await render("b7");
+  await press();
+  expect([state[1], crew]).toEqual([null, "b7"]);
+});
+
+it("reopens on Workers when it was the chat's last tab, with no worker listed", async () => {
+  workers = { name: "Ada", runs: [], livePanes: new Set(), onOpenTerminal: () => {} };
+  await render("b9");
+  await act(async () => showWorkers("b9"));
+  await press();
+  expect(crew).toBeNull();
+  await press();
+  expect([state[1], crew]).toEqual([null, "b9"]);
+});
+
+it("keeps the Working badge and sidebar line for an open pane whose run is past the loaded page", async () => {
+  workers = { name: "Ada", runs: [], livePanes: new Set(["00000009-1"]), paneLabels: new Map([["00000009-1", "OLD | Opus 5.5 | high"]]) };
+  await render("b8");
+  expect(host.querySelector("[data-worker-badge]")?.textContent).toBe("1");
+  expect(sidebarWorkerStatus([], ["OLD | Opus 5.5 | high"], (key, vars) => translate("en", key, vars))).toBe("1 worker");
 });

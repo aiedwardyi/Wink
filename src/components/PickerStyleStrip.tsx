@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { ChartSpline, Check, ChevronDown, Gauge, List, type LucideIcon } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { ChartSpline, Check, ChevronDown, Gauge, List, Zap, type LucideIcon } from "lucide-react";
 import type { ModelPickerView } from "@/lib/model-picker-view";
 import { PICKER_LOOK_CHOICES, pickerLook, pickerLookSkin, shownPickerLook, type PickerLook, type PickerLookChoice } from "@/lib/picker-look";
 import type { SkinId } from "@/lib/skins";
@@ -108,10 +108,45 @@ function ChartPreview() {
   </>;
 }
 
+function QuickPreview() {
+  return <>
+    <g opacity="0.24">
+      <rect className="f-card s-line" x="10" y="24" width="44" height="10" rx="3" />
+      <rect className="f-dim" x="10" y="42" width="42" height="2.5" rx="1" />
+      <rect className="f-dim" x="10" y="48" width="30" height="2.5" rx="1" />
+      <rect className="f-card s-line" x="10" y="78" width="46" height="13" rx="3" />
+    </g>
+    <rect className="f-card s-line" x="102" y="6" width="50" height="8" rx="2" />
+    <rect className="f-ink" x="107" y="8.8" width="28" height="2.4" rx="1" />
+    <circle className="f-acc" cx="141" cy="10" r="1.6" />
+    <rect className="f-card s-acc" x="64" y="18" width="88" height="74" rx="5" strokeWidth="1.5" />
+    {[0, 1, 2, 3].map((i) => (
+      <rect key={i} className={i === 0 ? "f-card s-acc" : "f-card s-line"} x={70 + i * 19.5} y="24" width="17" height="7" rx="2" />
+    ))}
+    {[0, 1, 2, 3].map((i) => (
+      <g key={i}>
+        {i === 1 && <rect className="f-card s-acc" x="70" y={34.5 + i * 7.5} width="76" height="6.5" rx="2" />}
+        <rect className="f-ink" x="74" y={36.7 + i * 7.5} width={[24, 28, 22, 18][i]} height="2" rx="1" opacity={i === 1 ? 1 : 0.6} />
+        <rect className="f-dim" x="128" y={36.7 + i * 7.5} width="8" height="2" rx="1" opacity="0.7" />
+        {i === 1 && <circle className="f-acc" cx="141.5" cy={37.7 + i * 7.5} r="1.5" />}
+      </g>
+    ))}
+    <path className="s-line" d="M65 66.5H151" />
+    <rect className="f-dim" x="70" y="70" width="18" height="2" rx="1" />
+    {[0, 1, 2, 3].map((i) => (
+      <rect key={i} className="f-acc" x={132 + i * 3.5} y={73 - i * 1.1} width="2" height={2.2 + i * 1.1} rx=".75" />
+    ))}
+    <rect className="f-card s-line" x="70" y="76" width="76" height="10" rx="2.5" />
+    <rect className="f-acc" x="126.5" y="77.5" width="18" height="5.5" rx="1.5" />
+    <rect className="f-acc" x="72" y="84.2" width="72" height="1" rx=".5" opacity="0.75" />
+  </>;
+}
+
 const STYLES: ReadonlyArray<{ id: ModelPickerView; Icon: LucideIcon; Preview: () => ReactNode }> = [
   { id: "dial", Icon: Gauge, Preview: DialPreview },
   { id: "list", Icon: List, Preview: ListPreview },
   { id: "chart", Icon: ChartSpline, Preview: ChartPreview },
+  { id: "quick", Icon: Zap, Preview: QuickPreview },
 ];
 
 function Mini({ look, skin, Preview }: { look: PickerLook; skin: SkinId; Preview: () => ReactNode }) {
@@ -179,13 +214,14 @@ type StripProps = {
   styles: readonly ModelPickerView[];
   picked: PickerLookChoice;
   skin: SkinId;
+  anchor?: RefObject<HTMLElement | null>;
   onStyle: (style: ModelPickerView) => void;
   onLook: (look: PickerLookChoice) => void;
   /** A tile click is a commit: the pick is applied, then the strip closes. */
   onDone: () => void;
 };
 
-export function PickerStyleStrip({ closing, shown, styles, picked, skin, onStyle, onLook, onDone }: StripProps) {
+export function PickerStyleStrip({ closing, shown, styles, picked, skin, anchor, onStyle, onLook, onDone }: StripProps) {
   const { t } = useI18n();
   const root = useRef<HTMLDivElement>(null);
   const look = shownPickerLook(picked, skin);
@@ -197,17 +233,18 @@ export function PickerStyleStrip({ closing, shown, styles, picked, skin, onStyle
     const place = () => {
       const strip = root.current;
       const dialog = strip?.closest(".model-cross-dialog");
-      const button = dialog?.querySelector(".model-cross-header [data-picker-style-button]");
+      const button = anchor?.current ?? dialog?.querySelector(".model-cross-header [data-picker-style-button]");
       const rect = button?.getBoundingClientRect();
       if (strip && rect) {
         strip.style.setProperty("--pss-top", `${Math.round(rect.bottom + 8)}px`);
-        strip.style.setProperty("--pss-right", `${Math.max(8, Math.round(window.innerWidth - rect.right))}px`);
+        const right = Math.max(8, Math.round(window.innerWidth - rect.right));
+        strip.style.setProperty("--pss-right", `${anchor ? Math.min(right, Math.max(8, window.innerWidth - strip.offsetWidth - 8)) : right}px`);
       }
       frame = requestAnimationFrame(place);
     };
     place();
     return () => cancelAnimationFrame(frame);
-  }, []);
+  }, [anchor]);
 
   useEffect(() => {
     root.current?.querySelector<HTMLElement>('[data-picker-style][aria-checked="true"]')?.focus({ preventScroll: true });

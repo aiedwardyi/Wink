@@ -23,24 +23,11 @@ describe("shouldHideOnboardingCard", () => {
       options: ["Work & projects"],
     },
   });
-  const greeting = msg({ id: "hi", kind: "text", text: "Hey — I'm Echo." });
-  const user = msg({ id: "u1", role: "user", kind: "text", text: "Hi bro" });
 
-  it("keeps the quiz until the person talks", () => {
-    expect(shouldHideOnboardingCard(quiz, [greeting, quiz])).toBe(false);
-  });
-
-  it("hides once a later user message is on the path", () => {
-    expect(shouldHideOnboardingCard(quiz, [greeting, quiz, user])).toBe(true);
-  });
-
-  it("hides an answered or dismissed quiz even with no later user message", () => {
-    expect(
-      shouldHideOnboardingCard({ ...quiz, card: { ...quiz.card!, answered: "Work & projects" } }, [greeting, quiz]),
-    ).toBe(true);
-    expect(
-      shouldHideOnboardingCard({ ...quiz, card: { ...quiz.card!, dismissed: true } }, [greeting, quiz]),
-    ).toBe(true);
+  it("hides a seeded quiz before anyone talks, answered or not", () => {
+    expect(shouldHideOnboardingCard(quiz)).toBe(true);
+    expect(shouldHideOnboardingCard({ ...quiz, card: { ...quiz.card!, answered: "Work & projects" } })).toBe(true);
+    expect(shouldHideOnboardingCard({ ...quiz, card: { ...quiz.card!, dismissed: true } })).toBe(true);
   });
 
   it("never hides a live permission or question card", () => {
@@ -55,7 +42,7 @@ describe("shouldHideOnboardingCard", () => {
         tool: "Bash",
       },
     });
-    expect(shouldHideOnboardingCard(ask, [greeting, quiz, user, ask])).toBe(false);
+    expect(shouldHideOnboardingCard(ask)).toBe(false);
     const question = msg({
       id: "q",
       kind: "options",
@@ -66,7 +53,7 @@ describe("shouldHideOnboardingCard", () => {
         requestId: "req-2",
       },
     });
-    expect(shouldHideOnboardingCard(question, [user, question])).toBe(false);
+    expect(shouldHideOnboardingCard(question)).toBe(false);
   });
 });
 
@@ -95,17 +82,9 @@ describe("OptionCard language", () => {
     };
   };
 
-  it.each([
-    ["en", "What do you mostly want help with?", "Pick whatever's closest; we can always expand from there.", ["Work & projects", "Writing & research", "Life admin", "A bit of everything"], "Dismiss question", "Type your own answer"],
-    ["ko", "주로 어떤 일에 도움이 필요하세요?", "가장 잘 맞는 항목을 고르세요. 나중에 다른 일에도 활용할 수 있습니다.", ["업무와 프로젝트", "글쓰기와 리서치", "생활 관리", "이것저것 조금씩"], "질문 닫기", "답을 직접 입력하세요"],
-  ] as const)("renders the first question card in %s", (locale, title, subtitle, options, dismiss, placeholder) => {
-    const rendered = render(firstQuestion, locale);
-    expect(rendered.dismiss).toBe(dismiss);
-    expect(rendered.placeholder).toBe(placeholder);
-    expect(rendered.text).toContain(title);
-    expect(rendered.text).toContain(subtitle);
-    for (const option of options) expect(rendered.text).toContain(option);
-    for (const letter of "ABCD") expect(rendered.text).toContain(letter);
+  it("renders nothing for the starter quiz in either language", () => {
+    expect(render(firstQuestion, "en").text).toBe("");
+    expect(render(firstQuestion, "ko").text).toBe("");
   });
 
   it("keeps a live question's own text in Korean", () => {

@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-import { rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,6 +12,7 @@ import { admitPaneWake, markMailRead, mailForTurn, registerReplyWake, unreadMail
 import { PaneWakeScheduler } from "./pane-wake.ts";
 import { Store } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const EXHAUSTED = "This request reached its 24 bot turn limit. Finish with what you have; the user can send a message to continue.";
 const PAUSED = "Bot messaging limit reached. Send a message to reset it.";
@@ -22,7 +22,7 @@ let from: ReturnType<Store["createBot"]>;
 let target: ReturnType<Store["createBot"]>;
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   _resetPending();
   roots._resetCommsRoots();
   store = new Store(() => ({ instanceId: "claude", model: "fake" }));
@@ -45,7 +45,7 @@ type AskBotAndWait = (...args: never[]) => Promise<{ replied: boolean; text: str
 const bus = () => ({ store, broadcast: () => {} });
 
 async function call(method: "askBot" | "delegateBot", askBotAndWait: AskBotAndWait = completingAsk(), extra: Record<string, unknown> = {}, callers?: CommsCallers) {
-  const route = createInternalRoutes({ store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
+  const route = createInternalRoutes({ readOnlyTurn: () => false, store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
     MAX_WORKSPACE_BOTS: 100, checkedMemberIds: (memberIds: string[]) => ({ ok: true, memberIds }),
     connectorThread: (botId: string, threadId: string) => store.conversationForBot(botId, threadId),
     delegationWatch: new Map(), askBotAndWait, resolveCommsCaller: callers && ((header: string | string[] | undefined) => callers.resolve(header)),

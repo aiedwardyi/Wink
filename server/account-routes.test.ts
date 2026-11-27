@@ -29,7 +29,7 @@ function fixture(withNames = true, store?: AccountNames) {
     return { ...row };
   }), nameOf: () => "", selectorOf: () => null, resolve: () => ({ kind: "unknown" as const }) };
   const lifecycle = { accounts: { list: () => rows, isDefault: () => false, drains: {}, snapshot: [], get: () => undefined } } as unknown as AccountLifecycle;
-  const registry = { describeCached: async () => [], accountBlocked: () => false } as unknown as ProviderRegistry;
+  const registry = { describeCached: async () => [], accountBlocked: () => false, accountStopped: () => false } as unknown as ProviderRegistry;
   const onNamesChanged = vi.fn();
   const routes = createAccountRoutes(lifecycle, registry, withNames ? { names: store ?? names, onNamesChanged } : undefined);
   async function request(method: string, path = "/api/accounts", body?: unknown, raw?: string) {
@@ -38,7 +38,7 @@ function fixture(withNames = true, store?: AccountNames) {
     const req = Readable.from(raw !== undefined ? [raw] : body === undefined ? [] : [JSON.stringify(body)]) as IncomingMessage;
     req.headers = { "content-type": "application/json" };
     const res = { writeHead: (code: number) => { status = code; }, end: (raw: string) => { data = JSON.parse(raw); } } as unknown as ServerResponse;
-    const handled = await routes(req, res, method, path);
+    const handled = await routes(req, res, method, path, "pc:");
     return { handled, status, data };
   }
   return { request, names, onNamesChanged, rows };
@@ -60,7 +60,7 @@ describe("account names routes", () => {
       history: createUsageHistory(dir, { schedule: () => {} }), runs: async () => ({ known: true, runs: [] }),
     });
     const wire = () => createAccountRoutes({ accounts } as unknown as AccountLifecycle,
-      { describeCached: async () => [], accountBlocked: () => false } as unknown as ProviderRegistry,
+      { describeCached: async () => [], accountBlocked: () => false, accountStopped: () => false } as unknown as ProviderRegistry,
       { names, onNamesChanged: () => { board.touch(); } });
     let routes = wire();
     const request = async (method: string, id?: string, nickname?: string | null) => {
@@ -68,7 +68,7 @@ describe("account names routes", () => {
       req.headers = { "content-type": "application/json" };
       let data: any;
       const res = { writeHead: (status: number) => { expect(status).toBe(200); }, end: (raw: string) => { data = JSON.parse(raw); } } as unknown as ServerResponse;
-      expect(await routes(req, res, method, id ? `/api/accounts/${id}/name` : "/api/accounts")).toBe(true);
+      expect(await routes(req, res, method, id ? `/api/accounts/${id}/name` : "/api/accounts", "pc:")).toBe(true);
       return data;
     };
     const first = await board.read();
@@ -186,23 +186,23 @@ describe("lone base sign-in", () => {
       const req = Readable.from([JSON.stringify({})]) as IncomingMessage;
       req.headers = { "content-type": "application/json" };
       const res = { writeHead: (code: number) => { status = code; }, end: (raw: string) => { data = JSON.parse(raw); } } as unknown as ServerResponse;
-      const handled = await routes(req, res, method, path);
+      const handled = await routes(req, res, method, path, "pc:");
       return { handled, status, data };
     };
     try {
       registry.blockAccount("claude", true);
-      expect(await request("POST", "/api/instances/claude/sign-out")).toMatchObject({ handled: false });
+      expect(await request("POST", "/api/instances/claude/sign-out")).toMatchObject({ handled: true, status: 409, data: { error: "This engine's only account is already signed out" } });
       expect(await request("POST", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 200, data: { url: "https://claude.com/cai/oauth/authorize?fixture" } });
       await lifecycle.settled("claude");
       expect(registry.accountBlocked("claude")).toBe(false);
       expect(changed).toHaveBeenCalled();
-      expect(changed.mock.calls.every((call) => call[0] === undefined)).toBe(true);
-      expect(await request("POST", "/api/instances/claude/sign-in")).toMatchObject({ handled: false });
+      expect(changed).toHaveBeenCalledWith("claude");
+      expect(await request("POST", "/api/instances/claude/sign-in")).toMatchObject({ handled: true, status: 200 });
       registry.blockAccount("claude", true);
       expect(await request("DELETE", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 200, data: {} });
       expect(cancelSignIn).toHaveBeenCalledExactlyOnceWith("claude");
       startSignIn.mockResolvedValue(null);
-      expect(await request("POST", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 404, data: { error: "Unknown engine sign-in" } });
+      expect(await request("POST", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 404, data: { error: "Unknown engine sign-in", code: "unknown-engine-sign-in" } });
       expect(registry.accountBlocked("claude")).toBe(true);
     } finally {
       lifecycle.dispose();

@@ -16,6 +16,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import { testHome } from "../../server/testing/test-home.ts";
+import { DATA_DIR } from "../src/state.ts";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ENTRY = join(HERE, "..", "src", "index.ts");
 
@@ -37,9 +40,9 @@ const start = (env: Record<string, string>): Promise<{ code: number | null; err:
       env: {
         ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
-        ...(process.env.HOME ? { HOME: process.env.HOME } : {}),
-        ...(process.env.USERPROFILE ? { USERPROFILE: process.env.USERPROFILE } : {}),
-        ...(process.env.OMB_COMPANION_DIR ? { OMB_COMPANION_DIR: process.env.OMB_COMPANION_DIR } : {}),
+        HOME: testHome(),
+        USERPROFILE: testHome(),
+        OMB_COMPANION_DIR: DATA_DIR,
         ...env,
       },
       stdio: ["ignore", "ignore", "pipe"],

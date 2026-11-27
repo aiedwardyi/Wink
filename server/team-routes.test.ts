@@ -1,6 +1,6 @@
 import { createServer, type ServerResponse } from "node:http";
-import { homedir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testHome } from "./testing/test-home.ts";
 
 import type { AppConfig } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
@@ -126,12 +126,12 @@ describe("package room imports", () => {
   });
 
   it("honors the caller's project folder and room name for package imports", async () => {
-    const query = new URLSearchParams({ mode: "project", cwd: homedir(), room: "Current project" });
+    const query = new URLSearchParams({ mode: "project", cwd: testHome(), room: "Current project" });
     const response = await fetch(`${base}/import?${query}`, { method: "POST", body: JSON.stringify(document) });
     expect(response.status).toBe(201);
     const imported = await response.json() as ImportResult;
-    expect(imported.group).toMatchObject({ name: "Current project", cwd: homedir(), memberIds: [imported.bots[0].id] });
-    expect(store.group(imported.group.id)?.cwd).toBe(homedir());
+    expect(imported.group).toMatchObject({ name: "Current project", cwd: testHome(), memberIds: [imported.bots[0].id] });
+    expect(store.group(imported.group.id)?.cwd).toBe(testHome());
     expect(imported.groups).toHaveLength(3);
   });
 });

@@ -11,7 +11,7 @@ const HEALTHY: MemoryHealth = { longLines: 0, orphans: [] };
 describe("memoryNotice", () => {
   it("names every problem in one line", () => {
     expect(memoryNotice({ longLines: 26, orphans: ["x.md"] }, { dropped: 4, since: SINCE })).toBe(
-      "[Memory check: 26 lines are over 300 bytes; memory/x.md has no pointer line in MEMORY.md; 4 auto notes since 10-14 were not saved because the file is full. This session, move details into memory/ side files, one topic each, with a short pointer line in MEMORY.md saying when to read it. Keep every fact and exact value whole. Add the missing pointer lines too. Put pointer lines in the first 200 lines. Use the file edit tool, not scripts. Recheck no original line was lost.]",
+      "[Memory check: 26 lines are over 300 bytes; memory/x.md has no pointer line in MEMORY.md; 4 auto notes since 10-14 went to memory/auto-notes-overflow.md because MEMORY.md is full. This session, move details into memory/ side files, one topic each, with a short pointer line in MEMORY.md saying when to read it. Keep every fact and exact value whole. Add the missing pointer lines too. Put pointer lines in the first 200 lines. Use the file edit tool, not scripts. Recheck no original line was lost.]",
     );
   });
 
@@ -20,7 +20,7 @@ describe("memoryNotice", () => {
       "[Memory check: 1 line is over 300 bytes. This session, move details into memory/ side files, one topic each, with a short pointer line in MEMORY.md saying when to read it. Keep every fact and exact value whole. Put pointer lines in the first 200 lines. Use the file edit tool, not scripts. Recheck no original line was lost.]",
     );
     expect(memoryNotice(HEALTHY, { dropped: 1, since: SINCE })).toBe(
-      "[Memory check: 1 auto note since 10-14 was not saved because the file is full. This session, move details into memory/ side files, one topic each, with a short pointer line in MEMORY.md saying when to read it. Keep every fact and exact value whole. Put pointer lines in the first 200 lines. Use the file edit tool, not scripts. Recheck no original line was lost.]",
+      "[Memory check: 1 auto note since 10-14 went to memory/auto-notes-overflow.md because MEMORY.md is full. This session, move details into memory/ side files, one topic each, with a short pointer line in MEMORY.md saying when to read it. Keep every fact and exact value whole. Put pointer lines in the first 200 lines. Use the file edit tool, not scripts. Recheck no original line was lost.]",
     );
     expect(memoryNotice({ longLines: 0, orphans: ["a.md", "b.md"] })).toBe(
       "[Memory check: memory/a.md and memory/b.md have no pointer line in MEMORY.md. This session, add a short pointer line in MEMORY.md for each, saying when to read it. Put pointer lines in the first 200 lines. Use the file edit tool, not scripts. Recheck no original line was lost.]",
@@ -33,6 +33,12 @@ describe("memoryNotice", () => {
   it("moves details and adds the missing pointers", () => {
     expect(memoryNotice({ longLines: 2, orphans: ["a.md"] })).toBe(
       "[Memory check: 2 lines are over 300 bytes; memory/a.md has no pointer line in MEMORY.md. This session, move details into memory/ side files, one topic each, with a short pointer line in MEMORY.md saying when to read it. Keep every fact and exact value whole. Add the missing pointer lines too. Put pointer lines in the first 200 lines. Use the file edit tool, not scripts. Recheck no original line was lost.]",
+    );
+  });
+
+  it("asks for when to read a side file whose pointer never says", () => {
+    expect(memoryNotice({ longLines: 0, orphans: [], untriggered: ["glasses-v1.md"] })).toBe(
+      '[Memory check: memory/glasses-v1.md has a pointer line that never says when to read it. This session, end each of those pointer lines with when to read the file, like "read memory/glasses-v1.md before X". Put pointer lines in the first 200 lines. Use the file edit tool, not scripts. Recheck no original line was lost.]',
     );
   });
 
@@ -55,6 +61,15 @@ describe("createMemoryHealthCheck", () => {
     health = HEALTHY;
     check.settled("bot", "t1", { sessionId: "s3" });
     expect(check.take("bot", "t1", { sessionId: "s4" })).toBe("");
+  });
+
+  it("names the overflow file again in a fresh session after compaction", () => {
+    const check = createMemoryHealthCheck({ health: () => HEALTHY, dropped: () => ({ dropped: 2, since: SINCE }), now: () => NOW });
+    check.refresh("bot");
+    expect(check.take("bot", "t1", { sessionId: "s1" })).toContain("2 auto notes since 10-14 went to memory/auto-notes-overflow.md");
+    check.settled("bot", "t1", { sessionId: "s1" });
+    expect(check.take("bot", "t1", { sessionId: "s1" })).toBe("");
+    expect(check.take("bot", "t1", { sessionId: "s2" })).toContain("memory/auto-notes-overflow.md");
   });
 
   it("refreshAll reads nothing on the calling turn", async () => {
@@ -85,13 +100,13 @@ describe("createMemoryHealthCheck", () => {
 describe("memory check refresh sites", () => {
   it("refreshes the check after a Memory box save", () => {
     const bots = readFileSync(new URL("./bot-routes.ts", import.meta.url), "utf8");
-    expect(bots).toMatch(/const saved = saveMemoryFile\(m\[1\], parsed\.data\.text, parsed\.data\.baseRevision\);\r?\n\s*if \(saved\.conflict\) return json\(res, 409[^;]*;\r?\n\s*memoryHealthCheck\.refresh\(m\[1\]\);/);
+    expect(bots).toMatch(/const saved = saveMemoryFile\(m\[1\], parsed\.data\.text, parsed\.data\.baseRevision\);\s*if \(saved\.conflict\) return json\(res, 409[^;]*;\s*deps\.noteTalked\(m\[1\]\);\s*memoryHealthCheck\.refresh\(m\[1\]\);/);
   });
 
-  it("refreshes the check only when sync pulled or conflicted", () => {
+  it("refreshes the check and page only when sync pulled or conflicted", () => {
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    const sync = index.slice(index.indexOf("function syncMemory("), index.indexOf("function noteTalked("));
+    const sync = index.slice(index.indexOf("async function syncMemoryPass("), index.indexOf("async function syncMemoryOnce("));
     expect(sync).toContain("const results = syncBotMemory(");
-    expect(sync).toMatch(/if \(Object\.values\(results\)\.some\(\(result\) => result === "pulled" \|\| result === "conflict"\)\) memoryHealthCheck\.refresh\(botId\);/);
+    expect(sync).toMatch(/if \(Object\.values\(results\)\.some\(\(result\) => result === "pulled" \|\| result === "conflict"\)\) \{\s*memoryHealthCheck\.refresh\(botId\);\s*broadcast\(\{ kind: "memory.changed", botId \}\);\s*\}/);
   });
 });

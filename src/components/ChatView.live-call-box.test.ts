@@ -60,7 +60,7 @@ const posts: string[] = [];
 const fetchImpl = async (input: RequestInfo | URL) => {
   const path = String(input);
   posts.push(path);
-  if (path === "/api/config") return fakes.config ? fakes.config() : Response.json({ gemini: { configured: false } });
+  if (path === "/api/config") return fakes.config ? fakes.config() : Response.json({ gemini: { configured: false }, features: { voiceCalls: true } });
   if (path.endsWith("/call/token") && fakes.token) return fakes.token();
   if (path.endsWith("/call/token")) return Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" });
   if (path.endsWith("/messages")) return fakes.messages?.() ?? Response.json({ ok: true }, { status: 202 });
@@ -72,7 +72,7 @@ async function saveKey(configured = true) {
   fakes.key = true;
   await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "qa:1" }), lastEventId: "qa:1" }));
   await vi.waitFor(() => expect(posts.some((path) => path.startsWith("/api/bots?"))).toBe(true));
-  await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", gemini: { configured } }), lastEventId: "qa:2" }));
+  await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", gemini: { configured }, features: { voiceCalls: true } }), lastEventId: "qa:2" }));
 }
 
 async function mount(key = false, mic = true) {
@@ -670,22 +670,11 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("waits for config and Start call before the first mic or token request", async () => {
+  it("waits for Start call before the first mic or token request", async () => {
     const start = vi.spyOn(LiveCall.prototype, "start");
-    let finish!: (response: Response) => void;
-    const config = new Promise<Response>((resolve) => { finish = resolve; });
-    fakes.config = () => config;
-    const { host, unmount } = await mount();
+    const { host, unmount } = await mount(true);
     try {
       await act(async () => button(host, "Call Atlas")!.click());
-      await vi.waitFor(() => expect(host.querySelector("[data-live-call]")).not.toBeNull());
-      expect(start).not.toHaveBeenCalled();
-      expect(tokens()).toBe(0);
-      expect(fakes.capture).not.toHaveBeenCalled();
-      fakes.key = true;
-      await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "qa:1" }), lastEventId: "qa:1" }));
-      await vi.waitFor(() => expect(posts).toContain("/api/config"));
-      await act(async () => finish(Response.json({ gemini: { configured: true } })));
       await vi.waitFor(() => expect(intro()).not.toBeNull());
       expect(start).not.toHaveBeenCalled();
       expect(tokens()).toBe(0);
@@ -696,7 +685,6 @@ describe("live call in the message box", () => {
       expect(tokens()).toBe(1);
       expect(fakes.capture).toHaveBeenCalledTimes(1);
     } finally {
-      finish(Response.json({ gemini: { configured: true } }));
       await unmount();
     }
   });

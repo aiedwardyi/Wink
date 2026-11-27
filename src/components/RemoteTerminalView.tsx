@@ -3,6 +3,7 @@ import { Check, Copy, CornerDownLeft, RotateCcw, TerminalSquare, X } from "lucid
 import type { Bot } from "@/state/store";
 import { api, visibleMessages } from "@/state/store";
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { noteTerminalFetching, noteTerminalShown } from "@/lib/cold-open-timing";
 import { paintRun, runPaint, type RunPaint } from "@/lib/ansi-palette";
 import { composerEnterIntent } from "@/lib/composer-enter";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
@@ -11,6 +12,7 @@ import { lastViewedPanes } from "@/lib/terminal-panes";
 import { latestPaneRun, paneProvider, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { WorkerChip, WorkerMark } from "./WorkerRows";
 
 type RemoteTerminalPane = {
@@ -43,6 +45,8 @@ const MAIN_CLOSED: RemoteTerminalSnapshot = { state: "no-terminal" };
 const REFRESH_MS = 1_000;
 const SPIN_MS = 500;
 const REFRESH_TIMEOUT_MS = 5_000;
+// Chromium holds a GET behind an identical one still waiting on headers (its cache lock), so a hung read would stall every later poll.
+const READ: RequestInit = { cache: "no-store" };
 const SEND_MAY_HAVE_RUN = "Send may have run. Check the screen before resending.";
 
 type TerminalKey = "up" | "down" | "enter" | "esc" | "clear";
@@ -109,14 +113,19 @@ export function RemoteTerminalView({
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [selectedPane, setSelectedPane] = useState<string | null>(() => lastViewedPanes.get(bot.id) ?? null);
+  // A tapped pane is the first read; waiting for a roster to list it costs a phone a whole extra read.
+  const [selectedPane, setSelectedPane] = useState<string | null>(() => paneFocus?.sessionId ?? lastViewedPanes.get(bot.id) ?? null);
   const [draft, setDraft] = useState("");
+  // The pane a draft was typed for, MAIN_TAB for Main since a restart gives it a new id; a closed pane must not hand its line to whichever pane takes the screen.
+  const [draftPane, setDraftPane] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [starting, setStarting] = useState(false);
   const requestRef = useRef(0);
   const appliedRequestRef = useRef(0);
+  // Reads in flight, oldest first, from the poll and the Refresh button alike. Closing or switching panes cancels them, since nothing can show them.
+  const readsRef = useRef<{ read: AbortController; answering: boolean }[]>([]);
   const outputRef = useRef<HTMLPreElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pinnedRef = useRef(true);
@@ -129,6 +138,13 @@ export function RemoteTerminalView({
 
   const panes = snapshot?.panes ?? [];
   const mainPane = panes.find((pane) => pane.main);
+  // A later tap picks its worker in the render that brings it, so the poll's first read is that worker, not the last pane.
+  const [tapped, setTapped] = useState(paneFocus);
+  if (tapped !== paneFocus) {
+    setTapped(paneFocus);
+    const id = paneFocus?.sessionId;
+    if (id && !panes.some((pane) => pane.sessionId === id && pane.main)) setSelectedPane(id);
+  }
   const order: RemoteTerminalPane[] = !panes.length
     ? panes
     : mainPane
@@ -142,19 +158,32 @@ export function RemoteTerminalView({
 
   const refresh = useCallback(async () => {
     const request = ++requestRef.current;
+    const reads = readsRef.current;
+    const entry = { read: new AbortController(), answering: false };
+    reads.push(entry);
+    // A link that answers nothing holds at most two of the phone's few sockets: a third read cancels the oldest still waiting.
+    // A read whose answer has begun is never dropped for this, however long its body takes.
+    const waiting = reads.filter((open) => !open.answering);
+    if (waiting.length > 2) reads.splice(reads.indexOf(waiting[0]), 1)[0].read.abort();
+    const { signal } = entry.read;
     const path = `/api/bots/${encodeURIComponent(bot.id)}/terminal`;
     const targetPane = onMainTab ? undefined : picked ?? fallbackPane;
     try {
       const qs = targetPane ? `?sessionId=${encodeURIComponent(targetPane)}` : "";
-      const next = await api(`${path}${qs}`);
+      noteTerminalFetching(targetPane, mainPane?.sessionId);
+      const next = await api(`${path}${qs}`, { ...READ, signal }, () => { entry.answering = true; });
       if (request < appliedRequestRef.current) return;
+      // A body cut off mid-read decodes to {}: it holds no frame, so the last one stays.
+      if (!Object.keys(next ?? {}).length) return;
       appliedRequestRef.current = request;
       restoringRef.current = null;
       setSnapshot(next);
+      noteTerminalShown(targetPane, mainPane?.sessionId);
       setError(null);
       setActionError(null);
     } catch (cause) {
-      if (request < appliedRequestRef.current) return;
+      // A read cancelled on close or pane switch has nothing left to show.
+      if (signal?.aborted || request < appliedRequestRef.current) return;
       appliedRequestRef.current = request;
       const message = cause instanceof Error ? cause.message : String(cause);
       if (targetPane && /unknown terminal/i.test(message)) {
@@ -167,17 +196,21 @@ export function RemoteTerminalView({
         }
         // The roster still lists the closed pane, so re-read it or the fallback keeps targeting it.
         try {
-          const roster = await api(path);
+          const roster = await api(path, { ...READ, signal });
           if (request < appliedRequestRef.current) return;
           setSnapshot(roster);
           setError(null);
         } catch (retry) {
-          if (request < appliedRequestRef.current) return;
+          if (signal?.aborted || request < appliedRequestRef.current) return;
           setError(retry instanceof Error ? retry.message : String(retry));
         }
         return;
       }
       setError(message);
+    } finally {
+      // Older reads can only be discarded after this answer, so they free their sockets now.
+      const index = reads.indexOf(entry);
+      if (index >= 0) for (const older of reads.splice(0, index + 1)) if (older !== entry) older.read.abort();
     }
   }, [bot.id, picked, onMainTab, fallbackPane]);
 
@@ -194,7 +227,7 @@ export function RemoteTerminalView({
     setRefreshing(false);
   }, [refresh]);
 
-  // A stale roster must not consume the tap. Apply it once that pane is listed.
+  // A roster can predate a worker the chat lists, so an unlisted tap is a worker; a gone one falls back on its read.
   const focusedRef = useRef<typeof paneFocus>(null);
   useEffect(() => {
     if (!paneFocus || focusedRef.current === paneFocus) return;
@@ -202,12 +235,14 @@ export function RemoteTerminalView({
     if (paneFocus.sessionId === null) {
       focusedRef.current = paneFocus;
       setSelectedPane(mainPane ? null : MAIN_TAB);
+      setDraftPane(mainPane ? MAIN_TAB : null);
       return;
     }
-    const match = panes.find((pane) => pane.sessionId === paneFocus.sessionId);
-    if (!match) return;
+    if (!panes.length) return;
+    const main = panes.some((pane) => pane.main && pane.sessionId === paneFocus.sessionId);
     focusedRef.current = paneFocus;
-    setSelectedPane(match.main ? null : match.sessionId);
+    setSelectedPane(main ? null : paneFocus.sessionId);
+    setDraftPane(main ? MAIN_TAB : paneFocus.sessionId);
   }, [paneFocus, panes]);
 
   useEffect(() => {
@@ -216,11 +251,20 @@ export function RemoteTerminalView({
 
   useEffect(() => {
     if (!visible) return;
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), REFRESH_MS);
+    let timer = 0;
+    let live = true;
+    // The next tick waits for this read, so a slow link never stacks them; a dropped one holds the poll only until the timeout.
+    // A read still arriving then runs on and paints: cancelling it would drop a frame that is on its way.
+    const tick = async () => {
+      await Promise.race([refresh(), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
+      if (live) timer = window.setTimeout(tick, REFRESH_MS);
+    };
+    void tick();
     return () => {
-      window.clearInterval(timer);
+      live = false;
+      window.clearTimeout(timer);
       appliedRequestRef.current = ++requestRef.current;
+      for (const { read } of readsRef.current.splice(0)) read.abort();
     };
   }, [visible, refresh]);
 
@@ -237,6 +281,8 @@ export function RemoteTerminalView({
   const text = shown && !noTerminal ? snapshotText(shown).replace(/(?:\r?\n[^\S\r\n]*)+$/, "") : "";
   const screenRuns = shown?.screenRuns?.slice(0, Math.max(1, shown.screenRuns.findLastIndex((row) => row.some((run) => run.t.trim())) + 1));
   const canType = !!shown?.sessionId && shown.generation !== undefined && !noTerminal && !shown.exited;
+  const shownPane = shown?.sessionId && shown.sessionId === mainPane?.sessionId ? MAIN_TAB : shown?.sessionId ?? null;
+  const stranded = draft !== "" && draftPane !== null && draftPane !== shownPane;
 
   useLayoutEffect(() => {
     const el = outputRef.current;
@@ -288,6 +334,7 @@ export function RemoteTerminalView({
 
   const post = async (input: ReturnType<typeof terminalSendInput> | { key: TerminalKey }) => {
     if (sending || !canType || !shown?.sessionId || shown.generation === undefined) return;
+    if (!("key" in input) && stranded) return;
     const line = draft;
     const sessionId = shown.sessionId;
     const submitted = !("key" in input) && panes.some((pane) => pane.sessionId === sessionId && !pane.main) && createTerminalLineTracker()(`${input.text}${input.paste ? "\n" : ""}`);
@@ -327,6 +374,7 @@ export function RemoteTerminalView({
       appliedRequestRef.current = ++requestRef.current;
       pinnedRef.current = true;
       setSelectedPane(null);
+      setDraftPane(next.sessionId ? MAIN_TAB : null);
       setSnapshot(next);
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : String(cause));
@@ -347,7 +395,11 @@ export function RemoteTerminalView({
     }
   };
   const buttonClass =
-    "flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50";
+    "flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] max-md:min-h-10 max-md:min-w-10 max-md:px-2 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50";
+  const phone = useIsPhone();
+  const status = noTerminal ? t("terminal.noSession") : shown?.exited ? t("terminal.exited", { code: shown.exitCode ?? "?" }) : "";
+  // A phone keeps the title on one line with room for the name; only the folder drops, never the exit/no-session status.
+  const detail = [phone ? "" : shown?.cwd, status].filter(Boolean).join(" · ");
   const chip = rosterChip(workers, panes.filter((pane) => !pane.main));
   const paneOrder = workerPaneOrder(panes, workers);
   useLayoutEffect(() => {
@@ -359,18 +411,17 @@ export function RemoteTerminalView({
   const watchedName = watched ? parseWorkerLabel(watched.label).nick ?? watched.sessionId.slice(0, 8) : bot.name;
   const pick = (sessionId: string | null) => {
     setSelectedPane(sessionId);
+    setDraftPane(sessionId === MAIN_TAB ? null : sessionId ?? (mainPane ? MAIN_TAB : null));
     focusInput(inputRef.current);
   };
 
   return (
     <main ref={mainRef} className="flex min-h-0 min-w-0 flex-1 flex-col bg-inset text-ink" aria-label={t("terminal.title")}>
-      <header className={`@container/chathead flex shrink-0 items-center gap-2 border-b border-hairline bg-panel px-2 py-2 md:pl-5 ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
+      <header className={`@container/chathead flex shrink-0 items-center gap-2 border-b border-hairline bg-panel px-2 py-2 max-md:gap-0.5 md:pl-5 ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
         <TerminalSquare size={16} className="shrink-0 text-accent-text" />
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {watched && <WorkerMark compact provider={paneProvider(workers, watched.sessionId, watched.label)} />}{watchedName}</span></h1>
-          <p className="truncate font-mono text-[11px] text-ink-secondary">
-            {[shown?.cwd, noTerminal ? t("terminal.noSession") : shown?.exited ? t("terminal.exited", { code: shown.exitCode ?? "?" }) : ""].filter(Boolean).join(" · ")}
-          </p>
+        <div className="min-w-0 flex-1 max-md:px-1">
+          <h1 className="truncate text-[13px] font-medium"><span className="max-md:hidden">{t("terminal.title")} </span><span className="text-ink-secondary max-md:text-ink"><span className="max-md:hidden">/ </span>{watched && <WorkerMark compact provider={paneProvider(workers, watched.sessionId, watched.label)} />}{watchedName}</span></h1>
+          {(!phone || detail) && <p className="truncate font-mono text-[11px] text-ink-secondary">{detail}</p>}
         </div>
         {/* A docked terminal hides without the close broadcast, which would also shut the Workers pane taking its spot. */}
         <WorkerChip
@@ -462,7 +513,10 @@ export function RemoteTerminalView({
               ref={inputRef}
               rows={1}
               value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={(event) => {
+                if (!draft || draftPane === null) setDraftPane(shownPane);
+                setDraft(event.target.value);
+              }}
               placeholder={t("terminal.inputPlaceholder")}
               aria-label={t("terminal.inputPlaceholder")}
               onKeyDown={onInputKeyDown}
@@ -475,7 +529,7 @@ export function RemoteTerminalView({
             />
             <button
               type="submit"
-              disabled={sending}
+              disabled={sending || stranded}
               aria-label={t("terminal.send")}
               onMouseDown={(event) => event.preventDefault()}
               className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink hover:brightness-110 disabled:opacity-50"
