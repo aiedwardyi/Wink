@@ -3225,6 +3225,11 @@ const dreamLive = createDreamLive({
   stored: (threadId) => userMarks(threadId),
   under: (threadId, id) => rowsUnder(threadId, id),
   waiting: (botId) => hasQueuedSends(botId),
+  incoming: (botId) => {
+    const bot = store.bot(botId);
+    const botSyncId = chatSyncBotId(profileSyncSettings, botId);
+    return !!bot && !!botSyncId && syncHold.incoming(botSyncId, ownerChats(bot, notOwnerChats()));
+  },
   checked: () => askPrs.settled(),
   reverted: async (botId, threadId) => {
     const pinned = store.taskByThread(botId, threadId)?.cwd;

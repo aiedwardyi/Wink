@@ -9,6 +9,7 @@ import type { SyncApplyResult, SyncScope } from "./thread-sync-v2.ts";
 const HOLD_MS = 10_000;
 const folderKey = (folder: string) => process.platform === "win32" ? resolve(folder).toLowerCase() : resolve(folder);
 const threadFor = (path: string) => /^threads-v2(?: \([1-9]\d*\))?\/[^/]+\/([^/]+)\/[^/]+\/head\.json$/.exec(path)?.[1];
+const botFor = (path: string) => /^threads-v2(?: \([1-9]\d*\))?\/([^/]+)\/[^/]+\/[^/]+\/head\.json$/.exec(path)?.[1];
 
 interface WaitingSend {
   messageId: string;
@@ -152,6 +153,14 @@ export const syncHold = {
   waiting(threadId: string, until?: number): boolean {
     expire();
     return !released.has(threadId) && until !== undefined && until > Date.now() && behind(threadId) !== false;
+  },
+  /** Whether Drive listed a peer update to this bot's chats, a chat new here included, that the store has not taken in. */
+  incoming(botSyncId: string, threadIds: readonly string[]): boolean {
+    if (!enabled()) return false;
+    for (const heads of pending.values()) {
+      if ([...heads.keys()].some((path) => botFor(path) === botSyncId)) return true;
+    }
+    return threadIds.some((threadId) => behind(threadId) === true);
   },
   reset(): void {
     clearTimeout(timer);

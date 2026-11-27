@@ -95,6 +95,8 @@ export interface DreamLiveDeps {
   under(threadId: string, id: string): string[];
   /** Whether a send from this bot's owner was taken and still waits to reach the chat. */
   waiting(botId: string): boolean;
+  /** Whether another device's update to the bot's chats is listed and not in the store yet. */
+  incoming(botId: string): boolean;
   /** Resolves once every gh check started so far has finished. */
   checked(): Promise<void>;
   /** After a fresh look at the thread's repo: whether a revert there undid this PR. */
@@ -315,6 +317,8 @@ export function createDreamLive(deps: DreamLiveDeps) {
       // once undone an item stays undone: a late OK from another window never puts the fix back
       if (item.done) return { ok: false, error: item.done.undoneAt === undefined ? "done" : "undone" };
       if (item.outdated !== undefined) return { ok: false, error: "outdated" };
+      // another device's update is still coming: OK leaves the fix unmarked, judged fresh or stale once it lands
+      if (deps.incoming(botId)) return { ok: false, error: "outdated" };
       if (!stands(botId, item)) {
         item.outdated = at;
         write();

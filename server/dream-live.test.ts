@@ -129,6 +129,7 @@ describe("dreaming, dry", () => {
   let gh: Record<string, GhView>;
   let typed: Map<string, Message[]>;
   let waiting: boolean;
+  let incoming: boolean;
   // where each row sits in the store: one first read later was stored later
   const places = new WeakMap<Message, number>();
   let place = 0;
@@ -166,6 +167,7 @@ describe("dreaming, dry", () => {
         return below;
       },
       waiting: () => waiting,
+      incoming: () => incoming,
       packet: (threadId) => pending.get(threadId) ?? packets.get(threadId) ?? null,
       busy: (_botId, threadId) => busy.has(threadId),
       cite: async () => {},
@@ -210,6 +212,7 @@ describe("dreaming, dry", () => {
     gh = {};
     typed = new Map();
     waiting = false;
+    incoming = false;
     reverts = new Set();
     enabled = true;
     busy = new Set();
@@ -968,6 +971,31 @@ describe("dreaming, dry", () => {
       expect(memoryFileRaw(bot)).toBe(raw);
     });
 
+    it("refuses an OK while another device's update to the chats is still coming, and takes it once that lands with nothing new", async () => {
+      await quiet();
+      incoming = true;
+      expect(approve(false)).toEqual({ ok: false, error: "outdated" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+      expect(history()).toBe("");
+      expect(plans()[0]!.fixes!.items[0]!.outdated).toBeUndefined();
+      incoming = false;
+      expect(approve(false).ok).toBe(true);
+      expect(memoryFileRaw(bot)).toBe(raw.replace(OLD, NEW));
+    });
+
+    it.each(["t1", "t2"])("writes no value once the incoming update lands a withdrawal in %s", async (chat) => {
+      await quiet();
+      incoming = true;
+      expect(approve(false)).toEqual({ ok: false, error: "outdated" });
+      // the peer's clock runs behind this one
+      const withdraw = said("withdraw", NOW - DAY - 60_000, "Disregard March and keep the saved date.");
+      typed.set(chat, [...typed.get(chat) ?? [], withdraw]);
+      incoming = false;
+      expect(approve(false)).toEqual({ ok: false, error: "outdated" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+      expect(history()).toBe("");
+    });
+
     it("judges nothing and drops a waiting fix while an owner send waits", async () => {
       waiting = true;
       await quiet();
@@ -1098,6 +1126,7 @@ describe("dreaming's wiring", () => {
     expect(call).toContain("stored: (threadId) => userMarks(threadId)");
     expect(call).toContain("under: (threadId, id) => rowsUnder(threadId, id)");
     expect(call).toContain("waiting: (botId) => hasQueuedSends(botId)");
+    expect(call).toContain("syncHold.incoming(botSyncId, ownerChats(bot, notOwnerChats()))");
   });
 
   it("writes no packet in dry mode", () => {

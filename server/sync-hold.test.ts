@@ -199,6 +199,20 @@ describe("sends while a chat catches up", () => {
     expect(h.run.mock.calls[0]![3]?.parentId).toBe("peer-tip");
   });
 
+  it("names a listed peer update to a bot's chats as incoming until the store takes it in", async () => {
+    const h = await googlePC();
+    const { syncHold } = await import("./sync-hold.ts");
+    expect(syncHold.incoming("bot", ["thread"])).toBe(false);
+    const pending = await h.listed();
+    expect(syncHold.incoming("bot", [])).toBe(true);
+    expect(syncHold.incoming("other-bot", ["other"])).toBe(false);
+    pending.release();
+    await pending.pass;
+    h.deliverSegment();
+    await h.sync.pull("thread");
+    expect(syncHold.incoming("bot", ["thread"])).toBe(false);
+  });
+
   it("releases a listed Google head on stop when the data folder uses a junction", async () => {
     const early = await boot(true);
     const dataDir = join(root, "linked-data");

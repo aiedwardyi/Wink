@@ -328,12 +328,17 @@ export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: Readon
       no("row is about another day's event");
       continue;
     }
-    const by = fixLine(note.text, one.fix);
     // both judges name the one new line byte for byte: case, spaces and marks inside a value can change it
-    if (one.fix.trim() !== other.fix.trim()) {
+    if (one.fix !== other.fix) {
       no("judges fix different values");
       continue;
     }
+    // a space or break at either end may be the owner's, and the one line OK writes would drop it
+    if (one.fix !== one.fix.trim() || /[\r\n]/.test(one.fix)) {
+      no("fix changes as one line");
+      continue;
+    }
+    const by = fixLine(note.text, one.fix);
     if (!body(by) || by === note.text || !factsSurvive(by, [note.text, row.text]) || redactRoomMemory(by) !== by || redactRoomMemory(note.text) !== note.text) {
       no("fix not grounded in the old line and the quote");
       continue;

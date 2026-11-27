@@ -456,7 +456,8 @@ describe("what the judges read and agree on", () => {
     expect((await ask(withdrawn, [may, null])).items).toEqual([]);
     expect((await ask(withdrawn, [null, may])).items).toEqual([]);
     expect((await ask(withdrawn, [may, may])).items).toEqual([may]);
-    expect((await ask(withdrawn, [`  ${may}\n`, may])).items).toEqual([may]);
+    expect((await ask(withdrawn, [`  ${may}\n`, may])).items).toEqual([]);
+    expect((await ask(withdrawn, [`  ${may}\n`, `  ${may}\n`])).items).toEqual([]);
     expect((await ask(withdrawn, [may, may.replace("The main", "the main")])).items).toEqual([]);
     for (const [one, other] of [["1.5", "1/5"], ["9.50", "950"], ["v2.1", "v2-1"], ["src/app", "src.app"]]) {
       const owner = `The main account plan ends in May ${one} now, after the April estimate was withdrawn.`;
@@ -464,6 +465,25 @@ describe("what the judges read and agree on", () => {
       expect([one, (await ask(owner, [right, right], "The main account plan ends in May")).items]).toEqual([one, [right]]);
       expect([one, (await ask(owner, [right, close], "The main account plan ends in May")).items, (await ask(owner, [close, right], "The main account plan ends in May")).items]).toEqual([one, [], []]);
     }
+  });
+
+  it("lists nothing when the one line OK writes would drop a space at an end of the judges' fix", async () => {
+    const legacy = "- The main project filename prefix (noted 2026-11-20) is Legacy";
+    const listed = async (value: string, fixes: [string, string]) => {
+      const owner = `The main project now uses the filename prefix [${value}] for all exports.`;
+      const judge = (fix: string): NoteGenerator => async (prompt) => JSON.stringify({ wrong: [...prompt.matchAll(/^PAIR\n(L\d+) \(written [^)]*\): ([^\n]+)\n(M\d+) /gm)].filter((match) => match[2] === legacy).map((match) => ({ note: match[1], message: match[3], quote: "uses the filename prefix", fix })) });
+      // SAFETY: ownerRows reads only id, at, role, kind and text of a user row.
+      const rows = ownerRows("t1", [{ id: "evidence", at: time(24, 12), role: "user", kind: "text", text: owner } as never], 0);
+      const checked = await checkWrong({ raw: SAFETY_MEMORY + legacy + "\n", rows, newest: { thread: "t1", id: "evidence", at: time(24, 12) }, ids: "ids", owned: [], saved: [], judges: { claude: judge(fixes[0]), gemini: judge(fixes[1]) }, today: TODAY, signal: new AbortController().signal, now: Date.now });
+      return checked.items.map((item) => item.by);
+    };
+    for (const value of ["Report ", "Invoice - ", "Report  "]) {
+      const [kept, trimmed] = [value, value.trimEnd()].map((each) => legacy.replace("Legacy", each));
+      expect([value, await listed(value, [kept, kept]), await listed(value, [kept, trimmed]), await listed(value, [trimmed, kept])]).toEqual([value, [], [], []]);
+    }
+    const report = legacy.replace("Legacy", "Report");
+    expect(await listed("Report", [report, report])).toEqual([report]);
+    expect(await listed(" Report", [legacy.replace("Legacy", " Report"), legacy.replace("Legacy", " Report")])).toEqual([legacy.replace("Legacy", " Report")]);
   });
 
   it("lists nothing when the judges' new lines differ only in case or inner spaces", async () => {
