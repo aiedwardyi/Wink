@@ -639,12 +639,6 @@ describe("Steps fold and live turn steps", () => {
     }
   });
 
-  it("folds steps across a hidden room echo into one Steps (n)", () => {
-    const echo: Message = { id: "e1", at: 1, role: "bot", kind: "note", text: "Posted in the room.", roomEcho: { groupId: "g" } };
-    const items = groupActivityRuns([stepText("s1", "One."), stepText("s2", "Two."), echo, stepText("s3", "Three."), text("Done.")]);
-    expect(items.map((item) => (item.kind === "run" ? describeSteps(item.messages) : item.kind === "message" ? item.message.id : item.kind))).toEqual(["Steps (3)", "e1", expect.stringMatching(/^m/)]);
-  });
-
   it("never folds sidekick quick answers into Steps", () => {
     const quick: Message = { id: "q1", at: 1, role: "bot", kind: "text", text: "Quick answer", step: true, quick: { state: "answer", askId: "a1" } };
     expect(isStepText(quick)).toBe(false);

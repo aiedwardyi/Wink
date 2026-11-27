@@ -239,12 +239,4 @@ describe("chatTranscriptRows", () => {
     const renders = (index: number) => windowRowVisible(messages, index, { showToolCalls: false, transcript: messages });
     expect(tailWindowStart(messages.length, 4, renders)).toBe(0);
   });
-
-  it("keeps counting a Steps fold once across a hidden room echo", () => {
-    const stepText = (body: string): Message => ({ ...say(body), step: true });
-    const echo: Message = { id: "e1", at: at(1), role: "bot", kind: "note", text: "Posted in the room.", roomEcho: { groupId: "g" } };
-    const messages = [user("Check the sync."), stepText("One."), stepText("Two."), echo, stepText("Three."), say("Done.")];
-    const renders = (index: number) => windowRowVisible(messages, index, { showToolCalls: false, transcript: messages });
-    expect(tailWindowStart(messages.length, 2, renders)).toBe(1);
-  });
 });

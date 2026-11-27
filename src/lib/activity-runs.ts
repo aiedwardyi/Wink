@@ -8,7 +8,6 @@
 import { chatErrorText } from "./error-text";
 import { t as translate, type MessageKey, type Translate } from "@/lib/i18n";
 import { en } from "./i18n-catalog";
-import { isShownMessage } from "./shown-message";
 import type { Message } from "@/state/store";
 import { termVerb } from "@/lib/terminal-skin";
 import { isVoiceLine } from "../../shared/live-call";
@@ -384,8 +383,8 @@ export function liveTurnSteps(
   let turnStart = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     const row = messages[i];
-    // a sidekick question asked mid-turn starts no turn of its own; a room echo wakes none either
-    if (row.queued || row.steered || row.quick?.state === "asked" || row.roomEcho) continue;
+    // a sidekick question asked mid-turn starts no turn of its own
+    if (row.queued || row.steered || row.quick?.state === "asked") continue;
     const userLine = row.role === "user" && row.kind === "text" && (!row.placeholder || i <= floor);
     if (userLine || (row.role === "bot" && row.kind === "note" && i <= floor)) {
       turnStart = i;
@@ -455,7 +454,6 @@ export function groupActivityRuns(messages: Message[], terminal = false, shown: 
   let run: Message[] = [];
   let saves: Message[] = [];
   let held: TranscriptItem[] = [];
-  let quiet: Message[] = [];
   const flushSaves = () => {
     if (saves.length > 1) items.push({ kind: "memory", id: `memory:${saves[0].id}`, messages: saves });
     else for (const message of saves) items.push({ kind: "message", message });
@@ -480,19 +478,12 @@ export function groupActivityRuns(messages: Message[], terminal = false, shown: 
       emit(notices ? { kind: "run", id, messages: run, notices } : { kind: "run", id, messages: run }, hasSteps || shown(run[0]));
     } else for (const message of run) emit(messageItem(message, linked.byStep.get(message.id)), shown(message));
     run = [];
-    for (const message of quiet) emit(messageItem(message, linked.byStep.get(message.id)), shown(message));
-    quiet = [];
   };
   for (const message of messages) {
     if (linked.consumed.has(message.id)) continue;
     if (isStepText(message) || (foldable(message) && (!terminal || SEARCH_TOOLS.has(termVerb(message.tool?.verb ?? message.tool?.name ?? ""))))) {
       if (run[0] && startsNewStretch(run[0], message)) flush();
       run.push(message);
-      continue;
-    }
-    // a room echo never renders, so it follows the fold instead of splitting Steps (n)
-    if (run.length && !isShownMessage(message)) {
-      quiet.push(message);
       continue;
     }
     flush();
