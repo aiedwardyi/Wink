@@ -9,7 +9,7 @@ import { askUserRequestSchema, postAskUser, type AskUserDeps } from "./ask-user.
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
 import { Store, type BotRecord } from "./store.ts";
-import { scanQuestion } from "../shared/open-question.ts";
+import { answerPrefix, scanQuestion } from "../shared/open-question.ts";
 
 function harness() {
   const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
@@ -45,6 +45,29 @@ describe("close question", () => {
       card: expect.objectContaining({ answered: "Answered in chat" }),
     });
     expect(h.notifyQuestion).toHaveBeenCalledTimes(1);
+  });
+
+  it("records the person's newest message a close answers, never one another card claims", () => {
+    const h = harness();
+    h.ask("Ship it?");
+    const path = () => h.store.activePath(h.bot.threadId);
+    const card = path().at(-1)!;
+    const typed = h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Use staging first." });
+    h.ask("Which region?");
+    const region = path().at(-1)!;
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Yes", answersCard: region.id });
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: `${answerPrefix(region)}EU` });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Noted." });
+    expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: true } });
+    expect(path().find((m) => m.id === card.id)?.card).toMatchObject({ answered: "Answered in chat", answeredBy: typed.id });
+  });
+
+  it("closes with no answering message when the person sent none since the card", () => {
+    const h = harness();
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Before the card." });
+    h.ask("Ship it?");
+    expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: true } });
+    expect(h.store.activePath(h.bot.threadId).at(-1)?.card?.answeredBy).toBeUndefined();
   });
 
   it.each([{ answered: "Yes" }, { dismissed: true }])("leaves a settled card unchanged: %j", (patch) => {

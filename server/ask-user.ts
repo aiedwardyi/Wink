@@ -6,7 +6,7 @@
 // activity is never set to waiting-on-you.
 import { z } from "zod";
 
-import { ANSWERED_IN_CHAT, askStates, isSentByPerson, scanQuestion } from "../shared/open-question.ts";
+import { ANSWERED_IN_CHAT, answerPrefix, answersQuestion, askStates, isSentByPerson, scanQuestion, type AskState } from "../shared/open-question.ts";
 import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { addQuestionAsk, answerQuestionAsk, isOpenAsk, lastAskIdOf, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
@@ -85,10 +85,15 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
   if (!question) return { status: 400, body: { error: "question required" } };
   if (request.close) {
     let closed = deps.cancelHeld(from.id, request.fromThreadId, question);
-    for (const [message, state] of askStates(deps.activePath(request.fromThreadId))) {
+    const path = deps.activePath(request.fromThreadId);
+    const states = askStates(path);
+    for (const [message, state] of states) {
       if (state.state !== "waiting" || message.card!.subtitle.trim() !== question) continue;
       if (owner.group ? message.from?.botId !== from.id : Boolean(message.from)) continue;
-      closed = Boolean(deps.patchMessage(request.fromThreadId, message.id, { card: { ...message.card!, answered: ANSWERED_IN_CHAT } })) || closed;
+      const card = { ...message.card!, answered: ANSWERED_IN_CHAT };
+      const by = chatAnswer(path, states, message);
+      if (by) card.answeredBy = by.id;
+      closed = Boolean(deps.patchMessage(request.fromThreadId, message.id, { card })) || closed;
     }
     return { status: 200, body: { closed } };
   }
@@ -122,6 +127,14 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
   }, question, Boolean(notice));
   if (notice) return { status: 200, body: { notice } };
   return posted ? { status: 201, body: { messageId: posted.id } } : { status: 202, body: { held: true } };
+}
+
+/** The person's newest message since `card` that no other card claims by its id, its quote or the transcript: what a close:true answered. */
+function chatAnswer(path: readonly Message[], states: Map<Message, AskState>, card: Message): Message | undefined {
+  const claimed = new Set([...states].flatMap(([other, state]) => other !== card && state.state === "answered" && state.by ? [state.by] : []));
+  const own = answerPrefix(card);
+  return path.slice(path.indexOf(card) + 1).findLast((row) => answersQuestion(row) && !claimed.has(row)
+    && (!row.answersCard || row.answersCard === card.id) && (!row.text?.startsWith("Re: “") || row.text.startsWith(own)));
 }
 
 /** Per bot and thread, the current turn's last text: where a tap on its ask_user card lands. */

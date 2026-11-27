@@ -2,7 +2,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { answerPrefix, askStates } from "../shared/open-question.ts";
+import { ANSWERED_IN_CHAT, answerPrefix, askStates } from "../shared/open-question.ts";
+import { askUserRequestSchema, postAskUser } from "./ask-user.ts";
 import { DATA_DIR } from "./config.ts";
 import { prepareModelContext } from "./context-compaction.ts";
 import { createMemoryPass } from "./memory-pass.ts";
@@ -177,8 +178,16 @@ describe("every way to answer a card files it under that card", () => {
       const { turnText } = buildTurnContext({ text: "Continue.", transcript: prepared.transcript, rewound: false, fresh: false, recycled: true, recycleReason: "session-fat", replaysNatively: false });
       return { replay: turnText, prompt: memorySystemPrompt(bot.id), picks: currentPicks(readMemoryTopic(bot.id, PICKS_FILE) ?? "") };
     };
+    // the bot's ask_user close:true, as the agents proxy sends it
+    const close = (question: string) => postAskUser({
+      bot: (id) => store.bot(id), conversation: (botId, threadId) => store.conversationForBot(botId, threadId),
+      appendMessage: (threadId, row) => store.appendMessage(threadId, row), activePath: (threadId) => store.activePath(threadId),
+      patchMessage: (threadId, id, patch) => store.patchMessage(threadId, id, patch), cancelHeld: () => false,
+      alertThread: (_bot, threadId) => threadId, notifyQuestion: () => {}, whenSettled: (_bot, _thread, post) => post(),
+    }, askUserRequestSchema.parse({ fromBotId: bot.id, fromThreadId: bot.threadId, question, choices: [], close: true }));
+    const card = (id: string) => store.messagesFor(bot.threadId).find((row) => row.id === id)?.card;
     return {
-      ask, send, settle, answeredBy, restarted, post: (row: Omit<Message, "id" | "at">) => store.appendMessage(bot.threadId, row),
+      ask, send, settle, answeredBy, restarted, close, card, post: (row: Omit<Message, "id" | "at">) => store.appendMessage(bot.threadId, row),
       branch: (id: string, text: string) => store.branchMessage(bot.threadId, id, text)!,
       botId: bot.id, threadId: bot.threadId,
     };
@@ -234,6 +243,37 @@ describe("every way to answer a card files it under that card", () => {
     expect(replay).not.toContain("Postgres");
     expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId])).toEqual([["Postgres", card.id, reply.id]]);
     expect(`${prompt}\n`).toMatch(/- Which database should the reporting service use\? \(\d\d-\d\d\): Postgres\n/);
+  });
+
+  it.each([
+    { name: "own words", words: "Use Staging for the preview", picked: "Use Staging for the preview" },
+    { name: "a place on the card", words: "The second one", picked: "Staging" },
+    { name: "an option to an older card after a newer one was answered", words: "Staging", picked: "Staging", newer: true },
+    { name: "holding a secret", words: "Use Staging, password: Tr0ub4dor&3xQ", picked: undefined },
+  ])("files a reply the bot closed as answered in chat, $name, after restart", async ({ words, picked, newer }) => {
+    const { ask, send, settle, restarted, close, card: cardOf } = setup();
+    const question = "Which environment should the preview use?";
+    const card = ask(question, ["Prod", "Staging"]);
+    const format = newer ? ask("Which export format?", ["CSV", "JSON"]) : undefined;
+    if (format) {
+      send("CSV", { answersCard: format.id, actedAt: Date.now() - 2 * MINUTE });
+      await settle();
+    }
+    const reply = send(words, { sendId: "send-1" });
+    expect(close(question)).toEqual({ status: 200, body: { closed: true } });
+    expect(cardOf(card.id)).toMatchObject({ answered: ANSWERED_IN_CHAT, answeredBy: reply.id });
+    await settle();
+    const { replay, prompt, picks } = await restarted();
+    expect(replay).not.toContain(words);
+    if (picked === undefined) {
+      expect(picks).toEqual([]);
+      expect(prompt).not.toContain("Tr0ub4dor");
+      return;
+    }
+    expect(picks.map(({ picked, said, questionId, messageId }) => [picked, said, questionId, messageId]))
+      .toEqual([...(format ? [["CSV", "CSV", format.id, expect.any(String)]] : []), [picked, words, card.id, reply.id]]);
+    expect(`${prompt}\n`).toContain(`- ${question} (`);
+    expect(`${prompt}\n`).toMatch(new RegExp(`\\(\\d\\d-\\d\\d\\): ${picked}\\n`));
   });
 
   it.each(["postgres", "Postgres please", "B", "the first one"])("leaves a typed %s that is not an option's whole text to the notes", async (sent) => {
