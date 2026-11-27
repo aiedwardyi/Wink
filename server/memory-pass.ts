@@ -801,6 +801,8 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const queue: Array<{ botId: string; threadId: string }> = [];
   const running = new Map<string, { botId: string; done: Promise<void>; controller: AbortController }>();
+  // a pass asked for while one runs: the running one read its rows first
+  const again = new Set<string>();
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   let warned = false;
   let disposed = false;
@@ -877,7 +879,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
 
   const enqueue = (botId: string, threadId: string) => {
     const active = running.get(threadId);
-    if (disposed || (active && !active.controller.signal.aborted) || queue.some((item) => item.threadId === threadId)) return;
+    if (disposed || queue.some((item) => item.threadId === threadId)) return;
+    if (active && !active.controller.signal.aborted) {
+      again.add(threadId);
+      return;
+    }
     clearTimeout(timers.get(threadId));
     timers.delete(threadId);
     queue.push({ botId, threadId });
@@ -1211,6 +1217,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         .finally(() => {
           clearTimeout(timer);
           running.delete(threadId);
+          if (again.delete(threadId)) enqueue(botId, threadId);
           pump();
         });
     }

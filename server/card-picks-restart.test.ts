@@ -417,6 +417,38 @@ describe("every way to answer a card files it under that card", () => {
     expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Use Staging for the preview", card.id]]);
   });
 
+  it("files a card the bot closes while its thread's notes pass is still running", async () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-opus-5-5" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    let release = () => {};
+    let calls = 0;
+    const generate = () => async () => {
+      calls += 1;
+      if (calls === 1) await new Promise<void>((resolve) => { release = resolve; });
+      return "[]";
+    };
+    const pass = createMemoryPass({ store, dataDir: DATA_DIR, generate, enabled: () => true, busy: () => false });
+    const question = "Which environment should the preview use?";
+    const card = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: { title: "Ask", subtitle: question, options: ["Prod", "Staging"], askUser: true, staysOpen: true } });
+    const reply = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Use Staging for the preview", actedAt: Date.now() - MINUTE });
+    pass.onSettled(bot.id, bot.threadId, true);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(calls).toBe(1);
+    expect(postAskUser({
+      bot: (id) => store.bot(id), conversation: (botId, threadId) => store.conversationForBot(botId, threadId),
+      appendMessage: (threadId, row) => store.appendMessage(threadId, row), activePath: (threadId) => store.activePath(threadId),
+      patchMessage: (threadId, id, patch) => store.patchMessage(threadId, id, patch), cancelHeld: () => false,
+      alertThread: (_bot, threadId) => threadId, notifyQuestion: () => {}, whenSettled: (_bot, _thread, post) => post(),
+    }, askUserRequestSchema.parse({ fromBotId: bot.id, fromThreadId: bot.threadId, question, choices: [], close: true, answer: reply.text }))).toEqual({ status: 200, body: { closed: true } });
+    // the turn that closed it ends before the pass does
+    pass.onSettled(bot.id, bot.threadId, true);
+    release();
+    await pass.idle();
+    pass.dispose();
+    const picks = currentPicks(readMemoryTopic(bot.id, PICKS_FILE) ?? "");
+    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId])).toEqual([[reply.text, card.id, reply.id]]);
+  });
+
   it("files an edit of a reply the bot closed as answered in chat as the card's answer now", async () => {
     const { ask, send, settle, restarted, close, branch } = setup();
     const question = "Which environment should the preview use?";
