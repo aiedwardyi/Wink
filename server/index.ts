@@ -5999,7 +5999,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     contextCapped: compactedThisTurn || resumeSessionUnseeded(seedInputs),
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
-    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, elsewhereAsks) : "",
+    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, elsewhereAsks, turnStartedByUser(opts)) : "",
   });
   const resumeFallback = buildResumeFallback({
     driverKind: instance.driverKind,

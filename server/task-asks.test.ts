@@ -179,6 +179,38 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
     ]) expect(asksNudge([quiet], NOW, "thanks"), quiet.id).toBe("");
   });
 
+  it("brings the newest asks waiting on the user to a typed reply, so a bare done reaches the one they finished", () => {
+    const vm = ask(1, { ask: "Set up the teacher VM", status: "waiting-for-user", ref: "VM ready; his logins", changedAt: NOW - 2 * DAY });
+    expect(asksNudge([vm], NOW, "done", [], true).split("\n")).toEqual([
+      "[Wink asks waiting on the user - 1 open, newest first. If this message finishes or answers one, update it by ID and go on; otherwise leave them alone and do not nag.]",
+      "- A1 waiting-for-user 11-12: Set up the teacher VM (VM ready; his logins)",
+    ]);
+    expect(asksNudge([vm], NOW, "done")).toBe("");
+    expect(asksNudge([vm], NOW, "status?", [], true)).not.toContain("waiting on the user -");
+    const many = Array.from({ length: 30 }, (_, index) => ask(index + 1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - DAY + index }));
+    expect(asksNudge(many, NOW, "done", [], true).split("\n").slice(1)).toEqual(["- A30 waiting-for-user 11-12: ask number 30 (VM ready)", "- A29 waiting-for-user 11-12: ask number 29 (VM ready)", "- A28 waiting-for-user 11-12: ask number 28 (VM ready)", "- +27 more waiting on the user; a status question lists them"]);
+  });
+
+  it("shows at most 3 stale waiting asks for a verdict on an ordinary turn, and every one on a status question", () => {
+    const many = Array.from({ length: 30 }, (_, index) => ask(index + 1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY }));
+    for (const typed of [false, true]) {
+      const block = asksNudge(many, NOW, "thanks", [], typed);
+      expect(listed(block).filter((line) => line.includes("needs verdict"))).toEqual(["- A1 waiting-for-user needs verdict 11-12: ask number 1 (VM ready)", "- A2 waiting-for-user needs verdict 11-12: ask number 2 (VM ready)", "- A3 waiting-for-user needs verdict 11-12: ask number 3 (VM ready)"]);
+      expect(block).toContain("30 need a verdict");
+      expect(block).toContain(" 27 more show on a status question.");
+      expect(listed(block)).toHaveLength(typed ? 6 : 3);
+    }
+    expect(listed(asksNudge(many, NOW, "status?"))).toHaveLength(30);
+    const stale = Array.from({ length: 5 }, (_, index) => ask(index + 1, { changedAt: NOW - 4 * DAY }));
+    expect(listed(asksNudge(stale, NOW, "thanks"))).toHaveLength(5);
+  });
+
+  it("keeps a building ask with a ref and a parked one out of a typed reply", () => {
+    for (const quiet of [ask(1, { status: "building", ref: "PR #3", changedAt: 0 }), ask(2, { ref: "VM ready", until: NOW + DAY, changedAt: 0 })]) {
+      expect(asksNudge([quiet], NOW, "done", [], true), quiet.id).toBe("");
+    }
+  });
+
   it("keeps the verdict nudge on an engine's own ask worded as a question, and spares only a filed leftover", () => {
     const own = ask(1, { ask: "Could you fix the login redirect?", changedAt: NOW - ASK_VERDICT_MS });
     expect(listed(asksNudge([own], NOW, "thanks"))).toEqual(["- A1 open needs verdict 11-12: Could you fix the login redirect?"]);
@@ -321,6 +353,11 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
       expect(tokens(header)).toBeLessThanOrEqual(45);
     });
 
+    it("names an ask by the words in its ref too", () => {
+      const vm = ask(1, { ask: "Tell me when the setup is finished", status: "waiting-for-user", ref: "VM ready; his logins" });
+      expect(listed(asksNudge([vm, ask(2)], NOW, "logins finished"))).toEqual(["- A1 waiting-for-user 11-12: Tell me when the setup is finished (VM ready; his logins)"]);
+    });
+
     it("names at most 3 asks in about 100 tokens, and never on a word many asks share", () => {
       const asks = [
         ...["alpha bravo one", "alpha bravo two", "alpha bravo three"].map((words, index) => ask(index + 1, { ask: `ship the ${words} header` })),
@@ -399,9 +436,9 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
     });
 
     it("tells every bot the list is whole, how to park, that repeats merge and how to judge an old ask", () => {
-      expect(TASK_ASKS_PROMPT).toContain("Wink lists every open ask in a fresh session and on a status question, otherwise the asks the user's words name, and merges a repeat into the ask it matches.");
+      expect(TASK_ASKS_PROMPT).toContain("Wink lists every open ask in a fresh session and on a status question, otherwise the asks the user's words name and, on a message the user typed, the newest asks waiting on them, and merges a repeat into the ask it matches.");
       expect(TASK_ASKS_PROMPT).toContain("Park an ask with until when it waits on a date.");
-      expect(TASK_ASKS_PROMPT).toContain("An ask with no ref and no change in 3 days needs your verdict: build it (helper or time), park it or close it yourself, and ask the user about at most 3 at a time.");
+      expect(TASK_ASKS_PROMPT).toContain("An ask with no ref, or waiting on the user, and no change in 3 days needs your verdict: build it (helper or time), park it or close it yourself, and ask the user about at most 3 at a time.");
       expect(TASK_ASKS_PROMPT).not.toMatch(/6\+? hours|raise them with the user now/);
     });
   });
