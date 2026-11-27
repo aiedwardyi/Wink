@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -12,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -35,6 +36,11 @@ import {
 } from "./task-state.ts";
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket } from "./task-state-fold.ts";
 import { taskAskSchema, type TaskAsk } from "./task-asks.ts";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, realpathSync: Object.assign(vi.fn(actual.realpathSync), { native: vi.fn(actual.realpathSync.native) }), statSync: vi.fn(actual.statSync) };
+});
 
 const packet = (overrides: Partial<TaskResumePacket> = {}): TaskResumePacket => ({
   v: 1,
@@ -553,7 +559,7 @@ describe("task state clipping", () => {
     const clipped: string[] = [];
     const parsed = taskStateUpdateSchema(clipped).safeParse({ fromBotId: "bot-1", fromThreadId: "thread-1", ...fields });
     if (!parsed.success) return { error: taskStateUpdateError(parsed.error), saved: undefined, clipped, kept: [], dropped: [] };
-    return { saved: parsed.data, clipped, ...groundTaskArtifacts(parsed.data.artifacts ?? [], cwd) };
+    return { saved: parsed.data, clipped, ...groundTaskArtifacts(parsed.data.artifacts ?? [], cwd, { kind: "any" }) };
   };
   const rejection = (parsed: z.ZodSafeParseResult<unknown>) => (parsed.success ? "saved" : taskStateUpdateError(parsed.error));
 
@@ -583,37 +589,74 @@ describe("task state clipping", () => {
     expect(result.clipped).toEqual(["completed_note (354 > 300)"]);
   });
 
-  it("drops an artifact outside the task folder and keeps the rest", () => {
+  it("keeps a file from any folder and drops folders, device paths and missing files", () => {
     const outsideFile = join(outside, "notes.md");
+    const device = "\\\\?\\Z:\\nope\\notes.md";
     const result = submit({
       artifacts: [
         { ref: "brief.md", label: "Brief" },
         { ref: outsideFile, label: "Notes" },
         { ref: join(cwd, "repro"), label: "Repro folder" },
+        { ref: device, label: "Device" },
+        { ref: join(outside, "gone.md"), label: "Gone" },
       ],
     });
     expect(result).not.toHaveProperty("error");
-    expect(result.kept).toEqual([{ ref: realpathSync(join(cwd, "brief.md")), label: "Brief" }]);
-    expect(result.dropped).toEqual([outsideFile, join(cwd, "repro")]);
+    expect(result.kept).toEqual([
+      { ref: realpathSync(join(cwd, "brief.md")), label: "Brief" },
+      { ref: realpathSync(outsideFile), label: "Notes" },
+    ]);
+    expect(result.dropped).toEqual([join(cwd, "repro"), device, join(outside, "gone.md")]);
+  });
+
+  it("keeps only files under the roots when scoped, refusing traversal and absolute paths outside", () => {
+    const outsideFile = join(outside, "notes.md");
+    const refs = ["brief.md", `..${sep}outside${sep}notes.md`, outsideFile];
+    const { kept, dropped } = groundTaskArtifacts(refs.map((ref) => ({ ref, label: "L" })), cwd, { kind: "roots", roots: [cwd] });
+    expect(kept).toEqual([{ ref: realpathSync(join(cwd, "brief.md")), label: "L" }]);
+    expect(dropped).toEqual(refs.slice(1));
+  });
+
+  it.runIf(process.platform === "win32").each([
+    ["scoped", { kind: "roots", roots: ["\\\\server\\share\\project"] }],
+    ["unscoped", { kind: "any" }],
+  ] as const)("drops a relative artifact under a network task folder before touching the filesystem (%s)", (_, scope) => {
+    const calls = [realpathSync, realpathSync.native, statSync].map((fn) => vi.mocked(fn));
+    calls.forEach((fn) => fn.mockClear());
+    expect(groundTaskArtifacts([{ ref: "brief.md", label: "L" }], "\\\\server\\share\\project", scope).dropped).toEqual(["brief.md"]);
+    calls.forEach((fn) => expect(fn).not.toHaveBeenCalled());
+  });
+
+  it("drops an artifact whose real path lands on a network share before the second lookup", () => {
+    vi.mocked(realpathSync).mockReturnValueOnce("\\\\server\\share\\brief.md");
+    vi.mocked(realpathSync.native).mockClear();
+    expect(groundTaskArtifacts([{ ref: "brief.md", label: "L" }], cwd, { kind: "any" }).dropped).toEqual(["brief.md"]);
+    expect(realpathSync.native).not.toHaveBeenCalled();
+  });
+
+  it.runIf(process.platform === "win32")("scopes a folder given by its Windows short name", (context) => {
+    const short = execFileSync("powershell", ["-NoProfile", "-Command", `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${cwd}').ShortPath`], { encoding: "utf8", windowsHide: true }).trim();
+    if (short.toLowerCase() === cwd.toLowerCase()) return context.skip();
+    expect(groundTaskArtifacts([{ ref: "brief.md", label: "L" }], short, { kind: "roots", roots: [short] }).kept).toHaveLength(1);
   });
 
   it("saves a mixed update and reports the clip and the drop in one line", () => {
-    const outsideFile = join(outside, "notes.md");
+    const missing = join(outside, "gone.md");
     const result = submit({
       completed_note: "n".repeat(354),
       plan: [{ step: "a", status: "done" }, { step: "b".repeat(228), status: "active" }],
-      artifacts: [{ ref: "brief.md", label: "Brief" }, { ref: outsideFile, label: "Notes" }],
+      artifacts: [{ ref: "brief.md", label: "Brief" }, { ref: missing, label: "Notes" }],
     });
     expect(result).not.toHaveProperty("error");
     expect(result.kept).toHaveLength(1);
-    expect(taskStateNotice(result.clipped, result.dropped, cwd)).toBe(
-      `Clipped to fit: plan.1.step (228 > 200), completed_note (354 > 300). Dropped artifacts that are not files inside ${cwd}: ${outsideFile}.`,
+    expect(taskStateNotice(result.clipped, result.dropped, { kind: "any" })).toBe(
+      `Clipped to fit: plan.1.step (228 > 200), completed_note (354 > 300). Dropped artifacts that are not files: ${missing}.`,
     );
   });
 
   it("gives a clean save no notice", () => {
     const result = submit({ goal: "Ship", artifacts: [{ ref: "brief.md", label: "Brief" }] });
-    expect(taskStateNotice(result.clipped, result.dropped, cwd)).toBe("");
+    expect(taskStateNotice(result.clipped, result.dropped, { kind: "any" })).toBe("");
   });
 
   it("clips every length-limited string", () => {
@@ -690,8 +733,8 @@ describe("task state clipping", () => {
     expect(result.clipped).toEqual([]);
     expect(result.kept).toEqual([]);
     expect(result.dropped).toEqual([ref]);
-    expect(taskStateNotice(result.clipped, result.dropped, cwd)).toBe(
-      `Dropped artifacts that are not files inside ${cwd}: ${ref}.`,
+    expect(taskStateNotice(result.clipped, result.dropped, { kind: "any" })).toBe(
+      `Dropped artifacts that are not files: ${ref}.`,
     );
   });
 

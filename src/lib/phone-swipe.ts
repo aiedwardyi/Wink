@@ -92,12 +92,16 @@ export function swipeChatIds(
   return sidebarOrderedItems(bots, groups, order).map((item) => item.id);
 }
 
+export function swipeBlockedInput(target: Element): boolean {
+  return Boolean(target.closest("input"));
+}
+
 export function swipeBlocked(target: EventTarget | null, startX: number, win: typeof window = window): boolean {
   if (startX < SWIPE_EDGE || startX > win.innerWidth - SWIPE_EDGE) return true;
   const selection = win.getSelection?.();
   if (selection && !selection.isCollapsed) return true;
   if (!(target instanceof win.Element)) return true;
-  if (target.closest('textarea, input, select, [contenteditable="true"], [data-orbit-composer-frame], pre, table, [data-no-swipe]')) return true;
+  if (swipeBlockedInput(target) || target.closest('textarea, select, [contenteditable="true"], [data-orbit-composer-frame], pre, table, [data-no-swipe]')) return true;
   for (let node: Element | null = target; node; node = node.parentElement) {
     if (node.scrollWidth <= node.clientWidth) continue;
     const overflow = win.getComputedStyle(node).overflowX;

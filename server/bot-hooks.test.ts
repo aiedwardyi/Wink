@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ATTACHMENTS_DIR } from "./attachments.ts";
@@ -71,12 +71,13 @@ async function call(route: (req: IncomingMessage, res: ServerResponse) => Promis
   return { status, raw, body: JSON.parse(raw) };
 }
 
-function routes(group = false) {
+function routes(group = false, readOnly = false) {
   return createInternalRoutes({
-    readOnlyTurn: () => false,
     cfg: { imageGen: { key: "test-key" } }, store,
     connectorThread: () => ({ ...(group ? { group: { id: "group" } } : {}) }),
     botOutputRoots: () => [folder],
+    readOnlyTurn: () => readOnly,
+    ownerTurn: () => !readOnly,
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
 }
 
@@ -110,7 +111,7 @@ async function refused(reason: string) {
 
 describe("a bot's picture in a team room", () => {
   const shared = (roomPicture: (...args: unknown[]) => Promise<unknown>) => createInternalRoutes({
-    readOnlyTurn: () => false,
+    readOnlyTurn: () => false, ownerTurn: () => false,
     cfg: { imageGen: { key: "test-key" } }, store,
     connectorThread: () => ({ group: { id: "group" } }),
     botOutputRoots: () => [folder],
@@ -131,7 +132,7 @@ describe("a bot's picture in a team room", () => {
   it("posts only to the conversation the caller's own token names", async () => {
     const roomPicture = vi.fn(async () => ({ messageId: "room-row", url: "/api/rooms/r1/files/f/preview" }));
     const routes = createInternalRoutes({
-      readOnlyTurn: () => false,
+      readOnlyTurn: () => false, ownerTurn: () => false,
       cfg: { imageGen: { key: "test-key" } }, store,
       connectorThread: () => ({ group: { id: "group" } }),
       botOutputRoots: () => [folder],
@@ -167,6 +168,24 @@ describe("a bot's picture in a team room", () => {
 });
 
 describe("picture gate routes", () => {
+  it.each([[false, 201], [true, 403]])("a picture outside the bot's folders: read-only turn %s answers %s", async (readOnly, status) => {
+    const away = mkdtempSync(join(DATA_DIR, "away-"));
+    const picture = join(away, "pic.gif");
+    writeFileSync(picture, pixels);
+    const result = await call(routes(false, readOnly).showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path: picture });
+    expect(result.status).toBe(status);
+    expect(appendMessage).toHaveBeenCalledTimes(status === 201 ? 1 : 0);
+  });
+
+  it("a read-only turn cannot reach outside the bot's folders by traversal", async () => {
+    const away = mkdtempSync(join(DATA_DIR, "away-"));
+    writeFileSync(join(away, "pic.gif"), pixels);
+    const traversal = join(folder, "..", basename(away), "pic.gif");
+    const result = await call(routes(false, true).showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path: traversal });
+    expect(result.status).toBe(403);
+    expect(appendMessage).not.toHaveBeenCalled();
+  });
+
   it.each(["working folder", "workspace"])("refuses stamps inside the bot's %s in PATCH", async (root) => {
     gate();
     const hooks = bot.hooks;

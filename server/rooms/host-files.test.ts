@@ -175,7 +175,7 @@ describe("a host bot's picture in a room with people", () => {
   async function showCat(caption = " A cat ") {
     const bot = store.bot(group.memberIds[0]!)!;
     const routes = createInternalRoutes({
-      readOnlyTurn: () => false,
+      readOnlyTurn: () => false, ownerTurn: () => false,
       cfg: {},
       store,
       connectorThread: () => ({ group }),
@@ -207,7 +207,7 @@ describe("a host bot's picture in a room with people", () => {
     response.on("data", (chunk: Buffer) => bytes.push(chunk));
     const received = once(response, "end");
     const writeHead = vi.fn();
-    await threadRoutes.messageImage(Object.assign(response, { writeHead }) as unknown as ServerResponse,
+    await threadRoutes.messageImage({ headers: {} } as Parameters<typeof threadRoutes.messageImage>[0], Object.assign(response, { writeHead }) as unknown as ServerResponse,
       ["", group.threadId, body.messageId] as RegExpMatchArray);
     expect(writeHead).toHaveBeenCalledWith(200, expect.objectContaining({ "content-type": "image/png" }));
     await received;

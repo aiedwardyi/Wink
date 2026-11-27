@@ -37,7 +37,7 @@ async function ask(extra: Record<string, unknown>) {
   const route = createInternalRoutes({ store, commsBus: { store, broadcast: () => {} }, approvalBus: { store, broadcast: () => {} }, MAX_COMMS_DEPTH: 1,
     MAX_WORKSPACE_BOTS: 100, checkedMemberIds: (memberIds: string[]) => ({ ok: true, memberIds }),
     connectorThread: (botId: string, threadId: string) => store.conversationForBot(botId, threadId),
-    delegationWatch: new Map(), askBotAndWait, readOnlyTurn: () => false,
+    delegationWatch: new Map(), askBotAndWait, readOnlyTurn: () => false, ownerTurn: () => false,
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
   let body = "";
   const res = { writeHead() {}, getHeader() {}, setHeader() {}, end(value: string) { body = value; } } as unknown as ServerResponse;

@@ -332,7 +332,7 @@ const TOOLS = [
         },
         artifacts: {
           type: "array",
-          description: "New files created inside this task's working folder, at most 20.",
+          description: "New files this task created, at most 20.",
           items: {
             type: "object",
             additionalProperties: false,
@@ -493,7 +493,7 @@ const TOOLS = [
       type: "object",
       additionalProperties: false,
       properties: {
-        path: { type: "string", description: "Absolute path to the image file, inside your project or workspace folder." },
+        path: { type: "string", description: "Absolute path to the image file." },
         caption: { type: "string", description: "Optional short caption." },
       },
       required: ["path"],

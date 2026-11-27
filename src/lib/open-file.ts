@@ -33,7 +33,11 @@ export interface FileTap {
   threadId?: string;
   /** a room file's own URL; a bot's or attached file goes through linked-file */
   src?: string;
+  /** a room file's sniffed type, which knows a clip its name doesn't */
+  type?: string;
 }
+
+export const tapOpen = (file: Pick<FileTap, "path" | "type">): FileOpen => file.type?.startsWith("video/") ? "video" : fileOpen(file.path);
 
 /** What the surface holding the file can do itself. */
 export interface FileHands {
@@ -48,7 +52,7 @@ export interface FileHands {
 export function openFile(file: FileTap, hands: FileHands = {}): void {
   const { path, threadId } = file;
   const src = file.src ?? (threadId ? linkedFileSrc(threadId, path) : "");
-  const open = fileOpen(path);
+  const open = tapOpen(file);
   if ((open === "picture" || open === "video") && hands.view) return hands.view({ src, name: showName(path), video: open === "video" || undefined });
   if (open === "audio" && hands.play) return hands.play(src);
   const kind = open === "picture" ? "image" : open === "pdf" || open === "text" || open === "page" ? open : null;

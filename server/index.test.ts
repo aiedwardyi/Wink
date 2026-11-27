@@ -2825,14 +2825,24 @@ describe("harness HTTP API", () => {
         body: JSON.stringify({
           fromBotId: bot.id,
           fromThreadId: bot.threadId,
-          artifacts: [{ ref: outsidePath, label: "Outside" }],
+          artifacts: [{ ref: outsidePath, label: "Outside" }, { ref: join(home, "gone.txt"), label: "Gone" }],
         }),
       });
       expect(outside.status).toBe(200);
       const { notice: outsideNotice } = (await outside.json()) as { notice: string };
-      expect(outsideNotice).toMatch(/^Dropped artifacts that are not files inside /);
-      expect(outsideNotice).toContain(outsidePath);
-      expect(storedTaskPacket(bot.threadId).artifacts).toEqual([{ ref: groundedArtifactPath, label: "Weekly brief" }]);
+      expect(outsideNotice).toBe(`Dropped artifacts that are not files: ${join(home, "gone.txt")}.`);
+      expect(storedTaskPacket(bot.threadId).artifacts).toEqual([
+        { ref: groundedArtifactPath, label: "Weekly brief" },
+        { ref: realpathSync(outsidePath), label: "Outside" },
+      ]);
+      const outsidePicture = join(home, "outside-pic.png");
+      writeFileSync(outsidePicture, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("pixels")]));
+      const shown = await fetch(`${BASE}/api/internal/show-image`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${commsToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, path: outsidePicture }),
+      });
+      expect(shown.status).toBe(201);
       const foreign = await fetch(`${BASE}/api/internal/task-state`, {
         method: "POST",
         headers: { authorization: `Bearer ${commsToken}`, "content-type": "application/json" },
@@ -4845,16 +4855,15 @@ describe("message pages", () => {
    * assertions. */
   const seedRoom = async (count: number) => {
     const { body } = await api("GET", "/api/bots");
-    const created = await api("POST", "/api/groups", { name: "Paging", memberIds: [body.bots[0].id] });
-    expect(created.status).toBe(201);
-    const groupId = created.body.group.id;
-    // finish room setup with a mentions-only responder so no bot answers the probes
-    const quiet = await api("PATCH", `/api/groups/${groupId}/setup`, {
-      action: "complete",
-      defaultResponder: { kind: "mentions" },
-      bulletin: "",
+    // setup goes in the create request: a room created without it is already skipped, so a later setup call is a no-op
+    const created = await api("POST", "/api/groups", {
+      name: "Paging",
+      memberIds: [body.bots[0].id],
+      setup: { bulletin: "", defaultResponder: { kind: "mentions" } },
     });
-    expect(quiet.status).toBe(200);
+    expect(created.status).toBe(201);
+    expect(created.body.group.defaultResponder).toEqual({ kind: "mentions" });
+    const groupId = created.body.group.id;
 
     for (let i = 0; i < count; i++) {
       const posted = await api("POST", `/api/groups/${groupId}/messages`, { text: `page probe ${i}` });
