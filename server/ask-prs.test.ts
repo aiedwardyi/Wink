@@ -520,7 +520,7 @@ describe("a closing turn in index.ts", () => {
       taskPacketForWrite: () => structuredClone(stored),
       persistTaskPacket: (packet: typeof stored) => { persisted.push(packet); return packet; },
       stampTaskResumePacket, taskRecordBlock,
-      lastUserInstruction: () => undefined, sessionPromptFor: () => undefined, store: { messagesFor: () => [] },
+      lastUserInstruction: () => undefined, sessionPromptFor: () => undefined, store: { messagesFor: () => [] }, taskRows: (rows: unknown[]) => rows,
       inlineSummarizer: () => undefined, summaryInstance: () => ({}), goalsOf: () => [], logSummaryCall: () => {}, inlineDeadlineMs: () => 0,
       prepareModelContext: async (input: { beforeSummarize?: () => void }) => { input.beforeSummarize?.(); return { status: "ready" }; },
     };

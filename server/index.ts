@@ -206,7 +206,7 @@ import "./comms-visibility.ts";
 import type { CommsBus } from "./comms-visibility.ts";
 import { lastMessageAt } from "./message-db.ts";
 import "./turn-index.ts";
-import { composeUserTurnPrompt, inertMentions, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
+import { composeUserTurnPrompt, inertMentions, turnReplaysTranscript, unstampedAsGuest, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
 import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
@@ -5252,6 +5252,8 @@ type StartTurnOptions = {
   commsAsk?: boolean;
   /** Someone else in a room this PC joined asked: no edits or shell, Wink's safe tools only, nothing approved. */
   readOnly?: boolean;
+  /** A room this PC joined: true when anyone but this PC's person typed it. Stamped on the user row. */
+  guest?: boolean;
   /** web_read's borrowed reader: page text steers it, so read-only with no Wink tools. */
   webReader?: boolean;
 };
@@ -5573,6 +5575,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sendSeq: opts?.sendSeq,
           sentAfterId: opts?.sentAfterId,
           waited: opts?.waited,
+          guest: opts?.guest,
           from: opts?.peerSender,
           comm: opts?.peerComm,
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
@@ -5615,11 +5618,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // Model context follows the active branch only. The durable transcript is
   // never pruned; only this provider-facing projection is bounded.
   const skipTranscript = new Set<string>([userMessage.id, ...(opts?.excludeMessageIds ?? [])]);
+  // the guest stamp came later: a room task's older rows may be anyone's
+  const taskRows = (rows: Message[]) => (roomTaskThreads().has(threadId) ? unstampedAsGuest(rows) : rows);
   // a teammate's turn leaves worker notes pending, for this whole dispatch
   const holdNotes = hasPeerWatch(threadId) ? (messages: Message[]) => holdWorkerNotes(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined) : undefined;
   const modelContextWindow = contextWindowFor(instance.models, model, instance.driverKind === "claudeAgent" ? reportedWindow(task, model) : null);
   const nativeAt = nativeCompactAt(instance.driverKind, model, modelContextWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[instanceId]?.environment });
-  const messagesBeforeSummary = store.activePath(threadId);
+  const messagesBeforeSummary = taskRows(store.activePath(threadId));
   holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
   const selectionChanged = task.lastInstanceId !== undefined && (
@@ -5677,7 +5682,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ...nativeCycle,
     resumeNativeReplay,
     userName: cfg.profile?.name?.trim() || "User",
-    referenceMessages: store.messagesFor(threadId),
+    referenceMessages: taskRows(store.messagesFor(threadId)),
   });
   const summaryGrace: SummaryGrace = {
     knownWindow: catalogWindow === null ? null : Math.min(catalogWindow, modelContextWindow),
@@ -5753,7 +5758,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     }
     const taskRecordToFlush = storedTaskRecord;
     return prepareModelContext({
-      messages,
+      messages: taskRows(messages),
       contextWindow: modelContextWindow,
       taskRecordText: durableTaskRecordText || "No durable task record is available.",
       excludeIds: inlineNotes?.ids?.length ? new Set([...skipTranscript, ...inlineNotes.ids]) : skipTranscript,
@@ -5763,7 +5768,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       summaryGrace: grace,
       plan: grace ? planBeforeSummary : undefined,
       userName: cfg.profile?.name?.trim() || "User",
-      referenceMessages: store.messagesFor(threadId),
+      referenceMessages: taskRows(store.messagesFor(threadId)),
       summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),
       goals: () => goalsOf(bot.id),
       onSummaryCall: (record) => logSummaryCall({
@@ -7205,7 +7210,7 @@ const myRoomBotTurns: MyRoomBotTurns = new MyRoomBotTurns({
     joinedRoomThreads.add(threadId);
     if (guest) joinedGuestThreads.add(threadId);
     else joinedGuestThreads.delete(threadId);
-    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}) });
+    return startTurn(botId, prompt, { threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}), guest });
   },
   readOnlyTurns: (botId, threadId) => {
     const bot = store.bot(botId);
