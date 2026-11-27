@@ -4527,16 +4527,15 @@ describe("message pages", () => {
    * assertions. */
   const seedRoom = async (count: number) => {
     const { body } = await api("GET", "/api/bots");
-    const created = await api("POST", "/api/groups", { name: "Paging", memberIds: [body.bots[0].id] });
-    expect(created.status).toBe(201);
-    const groupId = created.body.group.id;
-    // finish room setup with a mentions-only responder so no bot answers the probes
-    const quiet = await api("PATCH", `/api/groups/${groupId}/setup`, {
-      action: "complete",
-      defaultResponder: { kind: "mentions" },
-      bulletin: "",
+    // setup goes in the create request: a room created without it is already skipped, so a later setup call is a no-op
+    const created = await api("POST", "/api/groups", {
+      name: "Paging",
+      memberIds: [body.bots[0].id],
+      setup: { bulletin: "", defaultResponder: { kind: "mentions" } },
     });
-    expect(quiet.status).toBe(200);
+    expect(created.status).toBe(201);
+    expect(created.body.group.defaultResponder).toEqual({ kind: "mentions" });
+    const groupId = created.body.group.id;
 
     for (let i = 0; i < count; i++) {
       const posted = await api("POST", `/api/groups/${groupId}/messages`, { text: `page probe ${i}` });
