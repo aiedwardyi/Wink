@@ -105,7 +105,8 @@ async function post(route: "taskState" | "showImage", token: [string, string] | 
   req.emit("data", JSON.stringify(body));
   req.emit("end");
   await pending;
-  return { status, error: (JSON.parse(out || "{}") as { error?: string }).error ?? "" };
+  const parsed = JSON.parse(out || "{}") as { error?: string; notice?: string };
+  return { status, error: parsed.error ?? "", notice: parsed.notice ?? "" };
 }
 
 const artifactsOf = (threadId: string) => packets.get(threadId)!.artifacts.map((artifact) => artifact.ref);
@@ -146,7 +147,9 @@ describe("only the owner's own 1:1 turn reads outside the bot's folders", () => 
     live("bot-j", "chat-j");
     expect((await show("bot-j", "chat-j", picture)).status).toBe(403);
     expect((await show("bot-j", "chat-j", insidePicture)).status).toBe(201);
-    expect((await record("bot-j", "chat-j", [outside, inside])).status).toBe(200);
+    const saved = await record("bot-j", "chat-j", [outside, inside]);
+    expect(saved.status).toBe(200);
+    expect(saved.notice).toBe(`Dropped artifacts that are not files inside ${taskDir}: ${outside}.`);
     expect(artifactsOf("chat-j")).toEqual([realpathSync(inside)]);
   });
 

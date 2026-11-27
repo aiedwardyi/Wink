@@ -642,14 +642,14 @@ describe("task state clipping", () => {
     });
     expect(result).not.toHaveProperty("error");
     expect(result.kept).toHaveLength(1);
-    expect(taskStateNotice(result.clipped, result.dropped)).toBe(
+    expect(taskStateNotice(result.clipped, result.dropped, { kind: "any" })).toBe(
       `Clipped to fit: plan.1.step (228 > 200), completed_note (354 > 300). Dropped artifacts that are not files: ${missing}.`,
     );
   });
 
   it("gives a clean save no notice", () => {
     const result = submit({ goal: "Ship", artifacts: [{ ref: "brief.md", label: "Brief" }] });
-    expect(taskStateNotice(result.clipped, result.dropped)).toBe("");
+    expect(taskStateNotice(result.clipped, result.dropped, { kind: "any" })).toBe("");
   });
 
   it("clips every length-limited string", () => {
@@ -726,7 +726,7 @@ describe("task state clipping", () => {
     expect(result.clipped).toEqual([]);
     expect(result.kept).toEqual([]);
     expect(result.dropped).toEqual([ref]);
-    expect(taskStateNotice(result.clipped, result.dropped)).toBe(
+    expect(taskStateNotice(result.clipped, result.dropped, { kind: "any" })).toBe(
       `Dropped artifacts that are not files: ${ref}.`,
     );
   });

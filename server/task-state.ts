@@ -601,9 +601,10 @@ export function groundTaskArtifacts(artifacts: TaskArtifact[], cwd: string, scop
 }
 
 /** One line for the bot when an update saved with something clipped or dropped. Empty on a clean save. */
-export function taskStateNotice(clipped: string[], dropped: string[]): string {
+export function taskStateNotice(clipped: string[], dropped: string[], scope: FileScope): string {
   const parts: string[] = [];
+  const where = scope.kind === "roots" ? ` inside ${scope.roots.join(", ")}` : "";
   if (clipped.length) parts.push(`Clipped to fit: ${clipped.join(", ")}.`);
-  if (dropped.length) parts.push(`Dropped artifacts that are not files: ${dropped.join(", ")}.`);
+  if (dropped.length) parts.push(`Dropped artifacts that are not files${where}: ${dropped.join(", ")}.`);
   return parts.join(" ");
 }

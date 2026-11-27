@@ -265,7 +265,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       }
       const hint = saved && body.plan ? await planHint(bot.id, body.fromThreadId, body.plan) : "";
       return saved
-        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped), asks?.note, board?.notice, deps.boardCalls?.ownStuck(bot.id, body.fromThreadId), hint].filter(Boolean).join(" ") })
+        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, scope), asks?.note, board?.notice, deps.boardCalls?.ownStuck(bot.id, body.fromThreadId), hint].filter(Boolean).join(" ") })
         : json(res, 409, { error: "task record could not be saved" });
     },
     agents: async (res: ServerResponse, url: URL) => {
