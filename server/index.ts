@@ -8179,20 +8179,47 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
   });
 }
 
+// A room card a save from elsewhere settled: only that card's own ack may start a room turn.
+const quietRoomCards = new Set<string>();
+
+/** Settles the cards and starts at most one continuation for them. */
+function settleSecretCards(botId: string, threadId: string, messageIds: string[], outcome: SecretResumeEntry["outcome"], continues: boolean) {
+  const cards = messageIds.flatMap((id) => {
+    const message = secretMessage(botId, threadId, id);
+    return message?.secret && !message.secret.resumed ? [{ id, secret: message.secret }] : [];
+  });
+  for (const { id, secret } of cards) {
+    store.patchRow(threadId, id, {
+      secret: {
+        ...secret,
+        provided: outcome === "provided" ? true : secret.provided,
+        dismissed: outcome === "dismissed" ? true : secret.dismissed,
+        resumed: true,
+        error: undefined,
+      },
+    });
+  }
+  const first = cards.find(({ secret }) => !isCallKeyCard(secret));
+  if (first && continues) dispatchSecretResume({ botId, threadId, messageId: first.id, label: first.secret.label, outcome });
+}
+
 function resumeSecretCard(botId: string, threadId: string, messageId: string, outcome: SecretResumeEntry["outcome"]) {
   const message = secretMessage(botId, threadId, messageId);
   if (!message?.secret) return false;
-  if (message.secret.resumed) return true;
-  store.patchRow(threadId, message.id, {
-    secret: {
-      ...message.secret,
-      provided: outcome === "provided" ? true : message.secret.provided,
-      dismissed: outcome === "dismissed" ? true : message.secret.dismissed,
-      resumed: true,
-      error: undefined,
-    },
-  });
-  if (!isCallKeyCard(message.secret)) dispatchSecretResume({ botId, threadId, messageId, label: message.secret.label, outcome });
+  const key = `${threadId}:${messageId}`;
+  if (message.secret.resumed) {
+    if (quietRoomCards.delete(key) && !isCallKeyCard(message.secret)) {
+      dispatchSecretResume({ botId, threadId, messageId, label: message.secret.label, outcome: "provided" });
+    }
+    return true;
+  }
+  const target = credentialCardTarget(message.secret);
+  const group = Boolean(store.groupByThread(threadId));
+  const siblings = outcome === "provided"
+    ? store.messagesFor(threadId).filter((row) => row.id !== messageId && row.kind === "secret" && row.secret && !row.secret.provided &&
+      !row.secret.dismissed && credentialCardTarget(row.secret) === target && (!group || row.from?.botId === botId)).map((row) => row.id)
+    : [];
+  settleSecretCards(botId, threadId, [messageId, ...siblings], outcome, true);
   return true;
 }
 
@@ -8202,6 +8229,7 @@ async function resumeSavedCredentialCards(saved: CredentialConfig) {
     ...Object.keys(saved.customKeys ?? {}).map(customCredentialId),
   ];
   if (!targets.some((target) => credentialIsConfigured(saved, target))) return;
+  const settles = new Map<string, { botId: string; threadId: string; messageIds: string[] }>();
   for (const { threadId, messageId } of await coldOpenCredentialCards()) {
     const message = store.row(threadId, messageId);
     const secret = message?.secret;
@@ -8209,7 +8237,16 @@ async function resumeSavedCredentialCards(saved: CredentialConfig) {
     const target = credentialCardTarget(secret);
     if (!credentialIsConfigured(saved, target) || !credentialIsConfigured(cfg, target)) continue;
     const botId = store.groupByThread(threadId) ? message.from?.botId : store.botByThread(threadId)?.id;
-    if (botId) resumeSecretCard(botId, threadId, messageId, "provided");
+    if (!botId) continue;
+    const key = `${botId}:${threadId}:${target}`;
+    const settle = settles.get(key) ?? settles.set(key, { botId, threadId, messageIds: [] }).get(key)!;
+    settle.messageIds.push(messageId);
+  }
+  for (const { botId, threadId, messageIds } of settles.values()) {
+    // a settings save comes from no room: a room bot sees the key on its next turn instead
+    const room = Boolean(store.groupByThread(threadId)?.hosted);
+    settleSecretCards(botId, threadId, messageIds, "provided", !room);
+    if (room) for (const id of messageIds) quietRoomCards.add(`${threadId}:${id}`);
   }
 }
 

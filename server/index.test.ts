@@ -3593,6 +3593,110 @@ describe("harness HTTP API", () => {
     }
   }, 30_000);
 
+  it("settles one bot's two cards for a key with one continuation", async () => {
+    const bot = (await api("POST", "/api/bots", { name: "Twice", modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" } })).body.bot;
+    const host = "api.asked-twice.example";
+    const settings = "/api/config?secretStorage=external";
+    const headers = { authorization: `Bearer ${await harnessToken(BASE)}`, "content-type": "application/json" };
+    const prompts = join(home, "happy-prompts.ndjson");
+    const countResumes = () => existsSync(prompts)
+      ? readFileSync(prompts, "utf8").trim().split("\n").filter((row) => JSON.parse(row).text.includes("Wink credential update: the user securely provided Twice Key.")).length
+      : 0;
+    try {
+      const cards = [];
+      for (const header of ["authorization", "x-api-key"]) {
+        const response = await fetch(`${BASE}/api/internal/request-credential`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, credentialId: "custom", service: { name: "Twice Key", host, header } }),
+        });
+        expect(response.status).toBe(201);
+        cards.push(z.object({ messageId: z.string() }).parse(await response.json()).messageId);
+      }
+      expect(cards[0]).not.toBe(cards[1]);
+      const saved = { customKeys: { [host]: { name: "Twice Key", header: "authorization", prefix: "Bearer ", key: "test-only-twice-key" } } };
+      expect((await api("PUT", settings, saved)).status).toBe(200);
+      expect((await api("POST", `/api/bots/${bot.id}/secret-cards/${cards[0]}/provided`, { threadId: bot.threadId })).status).toBe(200);
+      await expect.poll(countResumes, { timeout: 10_000 }).toBe(1);
+      await expect.poll(async () => (await api("GET", "/api/bots?messages=0")).body.bots.find((row: { id: string }) => row.id === bot.id)?.busy, { timeout: 10_000 }).toBe(false);
+      const messages = (await api("GET", "/api/bots")).body.bots.find((row: { id: string }) => row.id === bot.id).messages;
+      for (const messageId of cards) {
+        expect(messages.find((row: { id: string }) => row.id === messageId).secret).toMatchObject({ provided: true, resumed: true });
+      }
+      expect(countResumes()).toBe(1);
+    } finally {
+      await api("PUT", settings, { customKeys: { [host]: null } });
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  }, 30_000);
+
+  it("keeps a private key save out of a hosted room's log", async () => {
+    const [atlas, juno] = await Promise.all(["Atlas", "Juno"].map(async (name) => (await api("POST", "/api/bots", {
+      name,
+      modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" },
+    })).body.bot));
+    const room = (await api("POST", "/api/groups", { name: "Hosted key room", memberIds: [juno.id], hosted: true })).body.group;
+    const hosts = ["api.private-save.example", "api.room-save.example"];
+    const settings = "/api/config?secretStorage=external";
+    const headers = { authorization: `Bearer ${await harnessToken(BASE)}`, "content-type": "application/json" };
+    const requestCard = async (bot: { id: string }, threadId: string, name: string, host: string) => {
+      const response = await fetch(`${BASE}/api/internal/request-credential`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ fromBotId: bot.id, fromThreadId: threadId, credentialId: "custom", service: { name, host } }),
+      });
+      expect(response.status).toBe(201);
+      return z.object({ messageId: z.string() }).parse(await response.json()).messageId;
+    };
+    const save = (host: string) => api("PUT", settings, { customKeys: { [host]: { name: "Room Key", header: "authorization", prefix: "Bearer ", key: "test-only-room-key" } } });
+    const prompts = join(home, "happy-prompts.ndjson");
+    const countResumes = (label: string) => existsSync(prompts)
+      ? readFileSync(prompts, "utf8").trim().split("\n").filter((row) => JSON.parse(row).text.includes(`Wink credential update: the user securely provided ${label}.`)).length
+      : 0;
+    const roomLog = () => {
+      const db = new DatabaseSync(join(home, ".orbit", "rooms.db"), { readOnly: true });
+      try {
+        return db.prepare("SELECT text FROM log WHERE room_id = ?").all(room.hosted.roomId).map((row) => row.text);
+      } finally {
+        db.close();
+      }
+    };
+    const roomCard = async (messageId: string) => (await api("GET", "/api/bots")).body.groups
+      .find((group: { id: string }) => group.id === room.id).messages.find((row: { id: string }) => row.id === messageId);
+    const waitForIdle = () => expect.poll(async () => {
+      const state = (await api("GET", "/api/bots?messages=0")).body;
+      return [atlas, juno].every((bot) => state.bots.find((row: { id: string }) => row.id === bot.id)?.busy === false) &&
+        !state.groups.find((group: { id: string }) => group.id === room.id)?.working;
+    }, { timeout: 10_000 }).toBe(true);
+    try {
+      expect(room.hosted.roomId).toBeTruthy();
+      const quiet = await requestCard(juno, room.threadId, "Juno Key", hosts[0]);
+      const privateCard = await requestCard(atlas, atlas.threadId, "Atlas Key", hosts[0]);
+      expect((await save(hosts[0])).status).toBe(200);
+      expect((await api("POST", `/api/bots/${atlas.id}/secret-cards/${privateCard}/provided`, { threadId: atlas.threadId })).status).toBe(200);
+      await expect.poll(() => countResumes("Atlas Key"), { timeout: 10_000 }).toBe(1);
+      await expect.poll(async () => (await roomCard(quiet))?.secret?.provided, { timeout: 10_000 }).toBe(true);
+      await waitForIdle();
+      expect(countResumes("Atlas Key")).toBe(1);
+      expect(countResumes("Juno Key")).toBe(0);
+      expect(roomLog()).toEqual([]);
+
+      // A save from the room's own card still continues the room.
+      const own = await requestCard(juno, room.threadId, "Room Card Key", hosts[1]);
+      expect((await save(hosts[1])).status).toBe(200);
+      expect((await api("POST", `/api/bots/${juno.id}/secret-cards/${own}/provided`, { threadId: room.threadId })).status).toBe(200);
+      await expect.poll(() => countResumes("Room Card Key"), { timeout: 10_000 }).toBe(1);
+      await waitForIdle();
+      expect(roomLog()).toHaveLength(1);
+      expect(countResumes("Juno Key")).toBe(0);
+    } finally {
+      await api("PUT", settings, { customKeys: Object.fromEntries(hosts.map((host) => [host, null])) });
+      await waitForIdle();
+      await api("DELETE", `/api/groups/${room.id}`);
+      for (const bot of [atlas, juno]) await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  }, 30_000);
+
   it("does not post a custom credential card when its host already has a key", async () => {
     const bot = (await api("POST", "/api/bots", {})).body.bot;
     const host = "api.already-saved.example";

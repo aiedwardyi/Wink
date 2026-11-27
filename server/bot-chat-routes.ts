@@ -814,7 +814,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         if (!credentialIsConfigured(cfg, credentialCardTarget(message.secret))) {
           return json(res, 409, { error: `${message.secret.label} was not saved yet` });
         }
-        if (!message.secret.provided) resumeSecretCard(m[1], threadId, message.id, "provided");
+        resumeSecretCard(m[1], threadId, message.id, "provided");
         return json(res, 200, { provided: true, resumed: true });
       }
       if (m[3] === "resume") {
