@@ -355,6 +355,30 @@ describe("staged chat peek", () => {
     expect(host.querySelector('[aria-haspopup="dialog"]')).not.toBeNull();
   });
 
+  it("paints a peeked chat's rows only once they sit at its bottom", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute("data-orbit-transcript") ? 600 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute("data-orbit-transcript") ? this.querySelectorAll("[data-mid]").length * 100 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(function (this: HTMLElement, options?: ScrollToOptions | number, y?: number) {
+      this.scrollTop = Math.max(0, Math.min(typeof options === "object" ? options.top ?? 0 : y ?? 0, this.scrollHeight - this.clientHeight));
+    });
+    const painted = () => {
+      const row = host.querySelector("[data-mid]");
+      return Boolean(row) && getComputedStyle(row!).visibility !== "hidden";
+    };
+    await stage("bot", true);
+    const transcript = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+    const shown: { rows: number; top: number }[] = [];
+    for (let part = 1; part <= 7; part++) {
+      await nextPart();
+      if (painted()) shown.push({ rows: mids().length, top: transcript.scrollTop });
+    }
+    expect(shown).toEqual([{ rows: 8, top: 200 }]);
+  });
+
   it.each(["bot", "room"] as const)("grows an underfilled peeked %s only after its rows mount", async (kind) => {
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
       return this.hasAttribute("data-orbit-transcript") ? 600 : 0;

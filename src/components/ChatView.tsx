@@ -1856,7 +1856,8 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
         <div
           ref={contentRef}
           className={cn("flex w-full flex-col gap-3 px-5", CHAT_COLUMN_CLASS)}
-          style={{ paddingBottom: TRANSCRIPT_GAP }}
+          // staged rows land oldest first and the window grows once they settle, so painting them sooner shows the peek away from its bottom
+          style={{ paddingBottom: TRANSCRIPT_GAP, visibility: peekSettled ? undefined : "hidden" }}
           role="log"
           aria-live="polite"
           aria-label={t("chat.conversationAria", { name: bot.name })}
