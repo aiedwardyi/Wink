@@ -110,11 +110,12 @@ export const QUOTED = /^\s*>/;
 const QUOTE_MARKS = /^\s*(?:>\s?)+/;
 const plain = (text: string) => text.replace(/[*_`~]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 
-/** A reply without the blockquotes it pasted from the chat before it; a blockquote the user wrote, such as a callout, is their own words. */
+/** A reply without the blockquotes it pasted from the chat before it, unless it says nothing else or its own words lead into the quote with a colon; a blockquote the user wrote, such as a callout, is their own words. */
 function ownWords(said: string, before: () => readonly Message[]): string {
   let shown: string | undefined;
   const quotesChat = (words: string) => (shown ??= plain(before().flatMap((row) => [row.text ?? "", row.card?.subtitle ?? "", ...(row.card?.options ?? [])]).join("\n"))).includes(words);
   const lines = said.split("\n");
+  if (lines.every((line) => !line.trim() || QUOTED.test(line))) return said.trim();
   const kept: string[] = [];
   for (let i = 0; i < lines.length;) {
     let end = i;
@@ -125,10 +126,20 @@ function ownWords(said: string, before: () => readonly Message[]): string {
     }
     const block = lines.slice(i, end);
     const words = plain(block.map((line) => line.replace(QUOTE_MARKS, "")).join(" "));
-    if (!words || !quotesChat(words)) kept.push(...block);
+    const lead = lines.slice(0, i).findLast((line) => line.trim());
+    const adopted = lead !== undefined && !QUOTED.test(lead) && /:[*_]*\s*$/.test(lead);
+    if (!words || adopted || !quotesChat(words)) kept.push(...block);
     i = end;
   }
   return kept.join("\n").trim();
+}
+
+/** What a reply files as its answer to `card`: the option it names word for word, else its own words. A close checks its words against this same text. */
+export function cardAnswer(card: Message, reply: Message, before: () => readonly Message[]) {
+  const text = reply.text ?? "";
+  const said = (text.startsWith(answerPrefix(card)) ? text.slice(answerPrefix(card).length) : text).trim();
+  const choice = cardChoice(said, card.card?.options?.length ? card.card.options : labeledOptions(card.card?.subtitle));
+  return { answer: choice === said ? said : ownWords(said, before), choice };
 }
 
 export function replyTurns(messages: readonly Message[], ids: string[], attachments: string): Map<string, ReplyPictures> {
@@ -181,11 +192,9 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
       const reply: ReplyPictures = { ...current, prior: prior && { ...prior, kind: preview ? "preview" : "correction" }, previousAnswerId: previousAnswer?.id, invalidCard: Boolean(answer.answersCard && !answered), question: answered?.card?.subtitle };
       if (answered) {
         reply.cardId = answered.id;
-        const text = answer.text ?? "";
-        const said = (text.startsWith(answerPrefix(answered)) ? text.slice(answerPrefix(answered).length) : text).trim();
-        const choice = cardChoice(said, answered.card?.options?.length ? answered.card.options : labeledOptions(answered.card?.subtitle));
+        const { answer: words, choice } = cardAnswer(answered, answer, () => branch().slice(0, -1));
         if (choice !== undefined) reply.choice = choice;
-        reply.answer = choice === said ? said : ownWords(said, () => branch().slice(0, -1));
+        reply.answer = words;
       }
       // each earlier edit took effect after the rows it replaced, so a later edit is newer still
       if (replaced.length) reply.edits = replaced.reduce((after, row) => Math.max(row.actedAt ?? row.at, after + 1), -Infinity);

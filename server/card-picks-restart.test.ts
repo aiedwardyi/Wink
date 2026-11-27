@@ -373,6 +373,40 @@ describe("every way to answer a card files it under that card", () => {
       .toEqual([[expect.stringContaining("CSV for the export"), format.id, first.id], [second.text, demo.id, second.id]]);
   });
 
+  const plan = "Use Staging only, and get my sign-off before publishing to Production.";
+  it.each([
+    { name: "under the user's lead-in", words: `Go with this plan:\n> ${plan}` },
+    { name: "alone", words: `> ${plan}` },
+  ])("files a plan the user quotes from the chat $name whole when the bot closes the card on it, after restart", async ({ words }) => {
+    const { ask, send, settle, restarted, close, card: cardOf, post, botId } = setup();
+    post({ role: "bot", kind: "text", text: `My plan: ${plan}` });
+    const question = "How should we deploy the release?";
+    const card = ask(question, ["Production", "Staging"]);
+    const reply = send(words);
+    expect(close(question, words)).toEqual({ status: 200, body: { closed: true } });
+    expect(cardOf(card.id)?.answeredBy).toBe(reply.id);
+    await settle();
+    const { prompt, picks } = await restarted();
+    const whole = words.replace(/\s+/g, " ");
+    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId])).toEqual([[whole, card.id, reply.id]]);
+    expect(readMemoryTopic(botId, PICKS_FILE)).toContain("get my sign-off before publishing to Production");
+    expect(`${prompt}\n`).toContain(`: ${whole}\n`);
+  });
+
+  it("refuses a close on words the user only quoted from the chat, and files the words a corrected close names", async () => {
+    const { ask, send, settle, restarted, close, card: cardOf, post } = setup();
+    post({ role: "bot", kind: "text", text: "Last week's plan: hold everything until Friday." });
+    const question = "How should we handle the release notes?";
+    const card = ask(question, ["Send them", "Leave unchanged"]);
+    const reply = send("Send the release notes\n> Hold everything until Friday.");
+    expect(close(question, "Hold everything until Friday.")).toMatchObject({ status: 400, body: { error: expect.stringContaining("quote") } });
+    expect(cardOf(card.id)?.answered).toBeUndefined();
+    expect(close(question, "Send the release notes")).toEqual({ status: 200, body: { closed: true } });
+    await settle();
+    const { picks } = await restarted();
+    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId])).toEqual([["Send the release notes", card.id, reply.id]]);
+  });
+
   it("files a close the bot makes after its reply's notes pass settled", async () => {
     const { ask, send, settle, restarted, close } = setup();
     const question = "Which environment should the preview use?";

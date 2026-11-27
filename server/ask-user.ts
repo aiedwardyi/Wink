@@ -7,7 +7,7 @@
 import { z } from "zod";
 
 import { ANSWERED_IN_CHAT, answerPrefix, answersQuestion, askStates, isSentByPerson, scanQuestion, type AskState } from "../shared/open-question.ts";
-import { QUOTED } from "./pick-sources.ts";
+import { cardAnswer, QUOTED } from "./pick-sources.ts";
 import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { addQuestionAsk, answerQuestionAsk, isOpenAsk, lastAskIdOf, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
@@ -152,13 +152,15 @@ function chatAnswer(path: readonly Message[], card: Message, words: string): { b
     const text = row.text ?? "";
     return text.startsWith(own) ? text.slice(own.length) : text;
   };
-  const holding = path.slice(path.indexOf(card) + 1).filter((row) => {
+  const replies = path.slice(path.indexOf(card) + 1).filter((row) => {
     const text = row.text ?? "";
-    return answersQuestion(row) && (!row.answersCard || row.answersCard === card.id) && (!text.startsWith("Re: “") || text.startsWith(own))
-      && flat(body(row)).includes(said);
+    return answersQuestion(row) && (!row.answersCard || row.answersCard === card.id) && (!text.startsWith("Re: “") || text.startsWith(own));
   });
+  // the words filing keeps, so a close never succeeds on words its pick drops
+  const holding = replies.filter((row) => flat(cardAnswer(card, row, () => path.slice(0, path.indexOf(row))).answer).includes(said));
   const saying = holding.length > 1 ? holding.filter((row) => flat(body(row).split("\n").filter((line) => !QUOTED.test(line)).join("\n")).includes(said)) : holding;
   if (saying.length === 1) return { by: saying[0]! };
+  if (!holding.length && replies.some((row) => flat(body(row)).includes(said))) return { error: "those words are a quote of earlier chat in their message, not their answer; pass the words they wrote" };
   if (!holding.length) return { error: "no message from the person since this question holds those words; copy them exactly as they typed them" };
   return { error: `${holding.length} messages since this question hold those words; pass more of the one that answered it` };
 }
