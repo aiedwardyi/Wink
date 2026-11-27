@@ -363,6 +363,20 @@ describe("dreaming, dry", () => {
   });
 
   it.each([
+    ["10 Nov. 2027", false],
+    ["November 10 to 30", false],
+    ["10 to 30 November", false],
+    ["November 2 to 10", true],
+  ])("live tidy moves a booking on %s only once every day of it is past", async (date, moves) => {
+    setMode({ [bot]: "live" });
+    const raw = memory(`- The studio booking is for ${date} at the annex`, "- Bring the studio keys");
+    writeMemoryFile(bot, raw);
+    generator = reply({ stale: ["L3"] });
+    await quiet();
+    expect(memoryFileRaw(bot)).toBe(moves ? memory("- Bring the studio keys") : raw);
+  });
+
+  it.each([
     ["no mode file", () => rmSync(join(dataDir, "dream-live.json"), { force: true })],
     ["a mode file that is not JSON", () => writeFileSync(join(dataDir, "dream-live.json"), "{ bots: ")],
     ["a bot the list leaves out", () => setMode({ "another-bot": "live" })],
@@ -640,6 +654,30 @@ describe("dreaming, dry", () => {
       sleep.onSettled(bot);
       await quiet(SLEEP_GAP_MS);
       expect(sent.some((prompt) => prompt.includes("January was right") && prompt.includes(OLD))).toBe(true);
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)).toBeUndefined();
+      expect(approve(false)).toEqual({ ok: false, error: "no-item" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+    });
+
+    it("drops a waiting fix when the owner takes back a newer correction in the same pass", async () => {
+      await quiet();
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)?.by).toBe(NEW);
+      const april = "The main account plan ends in April now, instead of March.";
+      const withdraw = "The main account plan ends in January after all, please disregard April and March.";
+      typed.set("t1", [said("april", Date.now() + 90_000, april), said("withdraw", Date.now() + 180_000, withdraw)]);
+      const judged: string[] = [];
+      generator = async (prompt) => {
+        const pairs = [...prompt.matchAll(/^PAIR\n(L\d+) \(written [^)]*\): ([^\n]+)\n(M\d+) \([^)]*\): ([^\n]+)/gm)];
+        const wrong = pairs.flatMap(([, note, text, message, row]) => {
+          if (text !== OLD) return [];
+          judged.push(row!);
+          return row === april ? [{ note, message, quote: "ends in April now", fix: NEW.replace("March", "April") }] : [];
+        });
+        return JSON.stringify({ wrong });
+      };
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(judged).toEqual(expect.arrayContaining([april, withdraw]));
       expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)).toBeUndefined();
       expect(approve(false)).toEqual({ ok: false, error: "no-item" });
       expect(memoryFileRaw(bot)).toBe(raw);

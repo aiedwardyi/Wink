@@ -189,6 +189,8 @@ describe("what a fix takes as the owner's word", () => {
     expect(await run(note, "For the November 24 studio tour use the green entrance, not blue.", "use the green entrance", fix)).toEqual([]);
     expect(await run(note, "The studio tour on 24 Nov will use the green entrance, not blue.", "use the green entrance", fix)).toEqual([]);
     expect(listed(await run(note, "The Nov. 10th studio tour used the green entrance, not blue.", "used the green entrance", fix))).toEqual([false]);
+    const dated = "- The studio tour on November 10, 2026 used the blue entrance (noted 2026-11-11)";
+    expect(await run(dated, "For the 10 Nov. 2025 studio tour we used the green entrance, not blue.", "used the green entrance", dated.replace("blue", "green"))).toEqual([]);
   });
 
   it("takes no words the owner quotes from someone else", async () => {

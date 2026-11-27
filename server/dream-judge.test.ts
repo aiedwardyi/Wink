@@ -70,6 +70,10 @@ describe("gates", () => {
     ["a date still to come", "- Dentist on 11-02, then again 12-01", false],
     ["no written date, only the stamp", "- Likes tea (noted 2026-10-01)", false],
     ["a range, not a date", "- Replies run 3-5 lines", false],
+    ["a written-out day in a later year", "- Studio booked for 10 Nov. 2027", false],
+    ["a range still running", "- Studio booked November 10 to 30", false],
+    ["a day range before its month", "- Studio booked 10-30 November", false],
+    ["a range that ran out", "- Studio booked November 2 to 10", true],
   ])("expired: %s", (_, text, past) => {
     expect(expired(text, "2026-11-26")).toBe(past);
   });

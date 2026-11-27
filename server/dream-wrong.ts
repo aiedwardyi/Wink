@@ -229,6 +229,12 @@ export type WrongContext = { all: readonly string[]; today: string; written(note
 export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: ReadonlyMap<string, Pair>, context: WrongContext) {
   const items: FixItem[] = [];
   const rejected: Rejected[] = [];
+  // the newest owner line both judges read about each note
+  const lastRead = new Map<string, Pair>();
+  for (const pair of refs.values()) {
+    const key = `note:${sha8(pair.note.text)}`;
+    if (pair.row.at > (lastRead.get(key)?.row.at ?? -Infinity)) lastRead.set(key, pair);
+  }
   for (const one of a) {
     const pair = refs.get(one.message);
     // a flag names the note it was paired with, never one from another pair
@@ -282,7 +288,14 @@ export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: Readon
     if (held >= 0) items[held] = item;
     else items.push(item);
   }
-  return { items, rejected };
+  // a later line about the note that no agreed flag backs takes the fix back, as it would in a newer pass
+  const backed = items.filter((item) => {
+    const last = lastRead.get(item.target)!;
+    if (item.evidence.at >= last.row.at) return true;
+    rejected.push({ note: last.note.at + 1, message: item.evidence.message, why: "a later row takes it back" });
+    return false;
+  });
+  return { items: backed, rejected };
 }
 
 /** When Auto Notes saved this note: the first receipt on its stamp day that names it. */

@@ -28,12 +28,13 @@ const FULL_DATE = /(?<![\d/-])(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?!
 // 11-19 or 11/19; a one-digit side like 3-5 or 1/3 is a range or a share far more often than a day
 const SHORT_DATE = /(?<![\d/-])(0[1-9]|1[0-2])[-/](0[1-9]|[12]\d|3[01])(?![\d/-])/g;
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
-const MONTH = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?";
-const ORDINAL = "(0?[1-9]|[12]\\d|3[01])(?:st|nd|rd|th)?";
+const MONTH = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\b\\.?";
+const ORDINAL = "(0?[1-9]|[12]\\d|3[01])(?:st|nd|rd|th)?\\b";
+const TO = "\\s*(?:-|–|to|through|thru|until|till)\\s*";
 const YEAR = "(?:,?\\s+(20\\d{2}))?";
-// November 10, Nov. 10th, 2026, 10 Nov; a lowercase "2 may" is a verb far more often than a day
-const MONTH_DAY = new RegExp(`\\b${MONTH}\\s+${ORDINAL}\\b${YEAR}`, "gi");
-const DAY_MONTH = new RegExp(`\\b${ORDINAL}\\s+(?:of\\s+)?${MONTH}\\b${YEAR}`, "gi");
+// November 10, Nov. 10th, 2026, November 10 to December 2, 10 Nov. 2027, 10 to 30 November; a lowercase "2 may" is a verb far more often than a day
+const MONTH_DAY = new RegExp(`\\b${MONTH}\\s+${ORDINAL}(?:${TO}(?:${MONTH}\\s+)?${ORDINAL})?${YEAR}`, "gi");
+const DAY_MONTH = new RegExp(`\\b(?:${ORDINAL}${TO})?${ORDINAL}\\s+(?:of\\s+)?${MONTH}${YEAR}`, "gi");
 // a standing rule, however old its date: an ALL CAPS label, or always, never, must, a rule
 const RULE_CAPS = /^[-*+]\s+(?:\*\*)?[A-Z][A-Z0-9&/'+-]{2,}(?:\s+[A-Z0-9&/'+-]+)*(?:\*\*)?\s*[:(]/;
 const RULE_WORDS = /\b(?:never|always|must|rules?|don['’]?t|do not)\b/i;
@@ -43,18 +44,24 @@ const PINNED = /\bpin(?:ned|s)?\b|\block(?:ed)?\b|\bpicks?\b|\bdecisions?\b|📌
 const ref = (line: NoteLine) => `L${line.at + 1}`;
 const withoutStamp = (text: string) => text.replace(STAMP, " ");
 
-/** Every day the note itself names, not its Auto Notes stamp; a day with no year is in today's year. */
+/** Every day the note itself names, not its Auto Notes stamp, a range by both ends; a day with no year is in today's year. */
 export function writtenDays(text: string, today: string): string[] {
   const body = withoutStamp(text);
   const days = [...body.matchAll(FULL_DATE)].map(([, y, m, d]) => `${y}-${m}-${d}`);
+  const named = (month: string, date: string, year = today.slice(0, 4)) => `${year}-${String(MONTHS.indexOf(month.slice(0, 3).toLowerCase()) + 1).padStart(2, "0")}-${date.padStart(2, "0")}`;
+  // a year written after a range is its end's; a range that runs past December ends in the next year
+  const span = (from: string[], to: string[] | null, year?: string) => {
+    if (!to) return [named(from[0]!, from[1]!, year)];
+    const [first, last] = [named(from[0]!, from[1]!, year), named(to[0]!, to[1]!, year)];
+    if (first <= last) return [first, last];
+    return year ? [named(from[0]!, from[1]!, String(Number(year) - 1)), last] : [first, named(to[0]!, to[1]!, String(Number(today.slice(0, 4)) + 1))];
+  };
   const rest = body.replace(FULL_DATE, " ");
-  const named = (month: string, date: string, year?: string) => `${year ?? today.slice(0, 4)}-${String(MONTHS.indexOf(month.slice(0, 3).toLowerCase()) + 1).padStart(2, "0")}-${date.padStart(2, "0")}`;
-  return [
-    ...days,
-    ...[...rest.matchAll(SHORT_DATE)].map(([, m, d]) => `${today.slice(0, 4)}-${m}-${d}`),
-    ...[...rest.matchAll(MONTH_DAY)].map(([, m, d, y]) => named(m!, d!, y)),
-    ...[...rest.matchAll(DAY_MONTH)].flatMap(([, d, m, y]) => (m === "may" ? [] : [named(m!, d!, y)])),
-  ];
+  const monthDay = [...rest.matchAll(MONTH_DAY)].flatMap(([, m, d, m2, d2, y]) => span([m!, d!], d2 ? [m2 ?? m!, d2] : null, y));
+  const dayMonth = [...rest.matchAll(DAY_MONTH)].flatMap(([, d, d2, m, y]) => (m === "may" ? [] : span([m!, d ?? d2!], d ? [m!, d2!] : null, y)));
+  // named months first, so 10-30 November is not read as October 30
+  const left = rest.replace(MONTH_DAY, " ").replace(DAY_MONTH, (match, _d, _d2, m: string) => (m === "may" ? match : " "));
+  return [...days, ...[...left.matchAll(SHORT_DATE)].map(([, m, d]) => `${today.slice(0, 4)}-${m}-${d}`), ...monthDay, ...dayMonth];
 }
 
 /** A one-off whose every written day is before today; a note with no written day never expires. */
