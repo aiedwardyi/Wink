@@ -796,13 +796,24 @@ export function repairTarget(messages: Message[]): RepairTarget | null {
   const repairs = (later: ApplicableCompaction, row: ApplicableCompaction) =>
     later.pathIndex > row.pathIndex && later.value.coveredThroughId === row.value.coveredThroughId && !derives(later, row);
   const chain = rows.filter((row) => !rows.some((later) => repairs(later, row)));
+  const descends = (row: ApplicableCompaction, from: ApplicableCompaction) => {
+    for (let at: ApplicableCompaction | undefined = row; at; ) {
+      if (at === from) return true;
+      const next = byId.get(at.value.previousCompactionId ?? "");
+      at = next && next.pathIndex < at.pathIndex ? next : undefined;
+    }
+    return false;
+  };
   let fallbackAt = -1;
   let firstAt = -1;
   chain.forEach((row, index) => {
     if (isFallbackSummary(row.value.summary)) {
       fallbackAt = index;
       if (firstAt < 0) firstAt = index;
-    } else if (rows.some((earlier) => repairs(row, earlier))) fallbackAt = firstAt = -1;
+    } else if (!(fallbackAt >= 0 && descends(row, chain[fallbackAt]!)) && rows.some((earlier) => repairs(row, earlier))) {
+      // a row chained from the live fallback is a build on it, whatever older row it shares a boundary with
+      fallbackAt = firstAt = -1;
+    }
   });
   if (fallbackAt < 0) return null;
   // A row chained onto a fallback since the run's first one is provisional, so the repair starts before it.

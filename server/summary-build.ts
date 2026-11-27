@@ -222,7 +222,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
 
   const prepare = async ({ botId, threadId, messages, leafId, settledPrompt }: BuildJob, controller: AbortController): Promise<Ready | null> => {
     if (deps.busy(botId, threadId) && !graceThreads.has(threadId)) return null;
-    // a fallback chain builds too: the send chains from it anyway, and place() drops a build a repair beat
+    // a fallback chain builds too: the send chains from it anyway, and place() drops a build once a repair landed first
     if (!leafId || !eligible(leafId)) return null;
     const inputs = await deps.sendInputs(botId, threadId, messages);
     if (disposed || controller.signal.aborted || !inputs?.instance.generateText) return null;
