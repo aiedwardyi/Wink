@@ -77,6 +77,17 @@ const asksSomething = (sentence: string) =>
   !(ASKS_WORK.test(sentence) && !INFO_Q.test(sentence)) &&
   (ENDS_Q.test(sentence) || QUESTION_START.test(sentence) || INFO_Q.test(sentence) || DO_Q.test(sentence) || KO_QUESTION.test(sentence) || TAG_Q.test(sentence));
 
+// A nudge asks to be answered and says nothing else: "sidekick answer me", "answer me??", "hello?", "you there?". "ok" or "lol" alone is no nudge, and "don't answer" refuses.
+const NUDGE = new RegExp(`^((${CASUAL_WORD}|me|my|question|q|now|already|someone|anyone|anybody|come on|답 ?좀|빨리)(?=$|[\\s,.!?~])[\\s,.!?~]*)+$`, "i");
+const NUDGE_SIGNAL = /\?|\b(answer|reply|respond|sidekick|side ?bot|helper|hi+|hello+|hey+|yo+|ping|there|anyone|anybody|someone)\b|사이드킥|사이드 ?봇|대?답|안녕|거기/i;
+const NUDGE_NOT = /\b(dont|don'?t|do not|never|no|stop)\b/i;
+
+/** Only asks for an answer: the helper answers the person's question still waiting above it, if any. */
+export const isNudge = (raw: string) => {
+  const text = raw.trim();
+  return Boolean(text) && NUDGE.test(text) && NUDGE_SIGNAL.test(text) && !NUDGE_NOT.test(text);
+};
+
 /** An order or a decision for the bot, whose meaning only the bot may read. */
 export const isOrder = (raw: string) => parts(raw).some(orders);
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isOrder, nominate, questionPart } from "./quick-route.ts";
+import { isNudge, isOrder, nominate, questionPart } from "./quick-route.ts";
 
 // Busy-time asks, redacted; the label is the probe rules' decision.
 const LABELED: Array<[string, "quick" | "aside" | "main"]> = [
@@ -339,5 +339,24 @@ describe("nominate", () => {
     const started = process.hrtime.bigint();
     for (let rep = 0; rep < reps; rep++) for (const text of texts) nominate(text);
     expect(Number(process.hrtime.bigint() - started) / 1000 / (reps * texts.length)).toBeLessThan(10);
+  });
+});
+
+describe("isNudge", () => {
+  it.each(["sidekick answer me", "answer me??", "hello?", "you there?", "sidekick?", "hey sidekick, answer my question", "pls answer", "anyone?", "사이드킥 대답해"])("asks to be answered: %s", (text) => {
+    expect(isNudge(text)).toBe(true);
+  });
+
+  it.each(["ok", "lol", "yeah", "", "sidekick dont answer", "no don't reply", "stop", "answer the review then fix it", "whats the address?", "fix the build", "ok sounds good"])("is no nudge: %s", (text) => {
+    expect(isNudge(text)).toBe(false);
+  });
+
+  it("finds the questions of a mixed message and leaves its order out", () => {
+    const mixed = "can i let a teammate use my spare account ? whats the address again. we dont use it for tests right we can leave tests to this one ? or whatsup";
+    expect(nominate(mixed)).toBe("quick");
+    expect(isOrder(mixed)).toBe(false);
+    expect(questionPart(mixed)).toBe("can i let a teammate use my spare account ? whats the address again. we dont use it for tests right we can leave tests to this one ?");
+    expect(questionPart("whats the address again? switch the tests to this one")).toBe("whats the address again?");
+    expect(isOrder("whats the address again? switch the tests to this one")).toBe(true);
   });
 });

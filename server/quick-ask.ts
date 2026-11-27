@@ -12,7 +12,7 @@ import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import type { ProviderInstance, RuntimeEvent } from "./contracts.ts";
 import { steerUntilTaken } from "./note-steer.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
-import { isOrder, nominate } from "./quick-route.ts";
+import { isNudge, isOrder, nominate, questionPart } from "./quick-route.ts";
 import type { QuickBot, QuickResult } from "./side-chat.ts";
 import { queueSteeredMessage } from "./steer-queue.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
@@ -62,6 +62,21 @@ function route(gate: QuickGate): ReturnType<typeof nominate> {
 export const routesQuick = (gate: QuickGate) => route(gate) === "quick";
 /** Steered to the bot as the person's own words; the helper answers only the question in it. */
 export const routesAside = (gate: QuickGate) => route(gate) === "aside";
+
+/** A nudge's question: the questions the person typed since the bot last said anything that no helper took, oldest first; "" when the send is no nudge, is the bot's alone, or nothing waits. */
+export function waitingQuestion(gate: QuickGate): string {
+  if (!isNudge(gate.text) || route(gate) === "main") return "";
+  const path = gate.messages;
+  const asked: string[] = [];
+  for (let at = path.length - 1; at >= 0; at--) {
+    const row = path[at]!;
+    if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && row.text?.trim()) break;
+    if (row.role !== "user" || row.kind !== "text" || row.quick) continue;
+    const question = questionPart(row.text ?? "");
+    if (question) asked.unshift(question);
+  }
+  return asked.join(" ");
+}
 
 // The answers a thread's starting turn carries in its block, until that turn's first model event.
 const carried = new Map<string, string[]>();
@@ -367,18 +382,18 @@ export const repliedUnder = (path: Message[], ask: Message) => {
 };
 
 /** The helper's reply as a row under the ask, then a note to the bot while it still works there. */
-async function land(store: QuickDeps["store"], instance: ProviderInstance | null | undefined, current: BotRecord, threadId: string, ask: Message, text: string): Promise<void> {
+async function land(store: QuickDeps["store"], instance: ProviderInstance | null | undefined, current: BotRecord, threadId: string, ask: Message, text: string, asked = ask.text): Promise<void> {
   const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text, engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
   if (!current.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
-  const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${text}`;
+  const note = `${NOTE_HEAD} Q: ${asked?.trim()} A: ${text}`;
   await steerUntilTaken(instance?.adapter, threadId, note, () => {
     const row = store.messagesFor(threadId).find((message) => message.id === answer.id);
     if (row?.quick) store.patchMessage(threadId, answer.id, { quick: { ...row.quick, noted: true } });
   })?.catch(() => false);
 }
 
-/** The helper's answer to the question in a send the bot already took as the person's own words; none when the helper has none. */
-export async function answerAside(deps: HelperDeps, botId: string, threadId: string, sent: Message, question: string): Promise<void> {
+/** The helper's answer to the question in a send the bot already took as the person's own words, or to the question a nudge waits on; none when the helper has none. */
+export async function answerAside(deps: HelperDeps, botId: string, threadId: string, sent: Message, question: string, waiting = false): Promise<void> {
   const { store } = deps;
   const bot = store.bot(botId);
   const instance = bot ? deps.instance(bot, threadId) : null;
@@ -389,5 +404,5 @@ export async function answerAside(deps: HelperDeps, botId: string, threadId: str
   const path = store.activePath(threadId);
   // an edit or rewind dropped the send, or the finished turn already replied to it
   if (!path.some((row) => row.id === sent.id && row.text === sent.text) || (!current.busy && repliedUnder(path, sent))) return;
-  await land(store, instance, current, threadId, sent, result.text);
+  await land(store, instance, current, threadId, sent, result.text, waiting ? question : undefined);
 }

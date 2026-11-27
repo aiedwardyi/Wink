@@ -7,7 +7,7 @@ import { steersSend } from "./send-deliver.ts";
 import { sendPostReceipt, startedTurn } from "./send-receipt.ts";
 import { parseCallTag } from "./live-call.ts";
 import { applyPendingModel, switchHeld } from "./pending-model.ts";
-import { quickAskRecovery, routesAside, routesQuick } from "./quick-ask.ts";
+import { quickAskRecovery, routesAside, routesQuick, waitingQuestion } from "./quick-ask.ts";
 import { isOrder, questionPart } from "./quick-route.ts";
 import { coldLoad, coldLoading, coldNewestStamp, sentRow } from "./cold-thread.ts";
 import { hasPeerWatch, watchPeerTurn } from "./peer-takeover.ts";
@@ -216,7 +216,7 @@ describe("a line typed while the bot works", () => {
   const working = (activeThreadId: string, steer = vi.fn(async () => activeThreadId === "thread"), extra: Record<string, unknown> = {}) => {
     const startQuick = vi.fn();
     const h = harness(steer, true, {
-      routesQuick, routesAside, isOrder, questionPart, startQuick, startAside: vi.fn(), quick: { accountReady: () => true },
+      routesQuick, routesAside, waitingQuestion, isOrder, questionPart, startQuick, startAside: vi.fn(), quick: { accountReady: () => true },
       instanceForBot: () => ({ driverKind: "claudeAgent", fork: vi.fn(), adapter: { capabilities: { queueing: true }, steer, interruptTurn: vi.fn() } }),
       ...extra,
     });
@@ -299,7 +299,7 @@ describe("a model switch during a busy turn", () => {
     const startQuick = vi.fn();
     const fork = vi.fn();
     const h = harness(undefined, true, {
-      routesQuick, startQuick, quick: { accountReady: () => true },
+      routesQuick, waitingQuestion, startQuick, quick: { accountReady: () => true },
       instanceForBot: () => ({ driverKind: "claudeAgent", fork, adapter: { capabilities: { queueing: true }, steer: vi.fn(async () => true), interruptTurn: vi.fn() } }),
     });
     Object.assign(h.store, { groupByThread: () => undefined });

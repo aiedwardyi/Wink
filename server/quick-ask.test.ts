@@ -1243,3 +1243,64 @@ describe("predicates skip quick rows", () => {
     expect(sync).toMatch(/const turns = rows\.filter\(\(row\) => [^\n]*&& !row\.quick\)/);
   });
 });
+
+// A paraphrase of a real mixed message: two questions and a loose tail, no order.
+const MIXED = "can i let a teammate use my spare account ? whats the address again. we dont use it for tests right we can leave tests to this one ? or whatsup";
+const MIXED_Q = "can i let a teammate use my spare account ? whats the address again. we dont use it for tests right we can leave tests to this one ?";
+
+describe("a nudge while the person's question waits", () => {
+  // the question started the running turn, and the bot has said nothing since
+  const waiting = (opts: Parameters<typeof harness>[0] = {}, text = MIXED) => {
+    const h = harness(opts);
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "activity", tool: { name: "Bash", ok: true } });
+    return h;
+  };
+
+  it.each(["sidekick answer me", "answer me??", "hello?"])("asks the helper the waiting question, not the nudge: %s", async (nudge) => {
+    const h = waiting({ consumed: true, result: { route: "answer", text: "Yes. It's the second address.", ms: 1 } });
+    mainAcks(h);
+    expect((await h.send({ text: nudge })).data.steered).toBe(true);
+    await h.settled();
+    expect(h.ask).toHaveBeenCalledOnce();
+    expect((h.ask.mock.calls[0] as unknown[])[2]).toMatchObject({ text: MIXED_Q });
+    expect(botLines(h)).toEqual(["Yes. It's the second address."]);
+    expect(h.rows().at(-1)).toMatchObject({ quick: { state: "answer" } });
+  });
+
+  it("tells the bot to answer the waiting question when the helper has none, with no line of its own", async () => {
+    const h = waiting({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: "sidekick answer me" });
+    const count = h.rows().length;
+    await h.settled();
+    expect(h.steer).toHaveBeenCalledTimes(2);
+    expect(h.steer.mock.calls[1]![1]).toMatch(/No fast reply reached the person for "can i let a teammate use my spare account \?/);
+    expect(h.rows()).toHaveLength(count);
+    expect(botLines(h)).toEqual([]);
+  });
+
+  it("leaves an order with the bot: only the question part of a mixed message is asked", async () => {
+    const h = waiting({ consumed: true, result: { route: "answer", text: "It's the second address.", ms: 1 } }, "whats the address again? switch the tests to this one");
+    mainAcks(h);
+    await h.send({ text: "sidekick answer me" });
+    await h.settled();
+    expect((h.ask.mock.calls[0] as unknown[])[2]).toMatchObject({ text: "whats the address again?" });
+  });
+
+  it("keeps a nudge silent when nothing waits", async () => {
+    const h = waiting({ consumed: true }, "fix the build");
+    mainAcks(h);
+    expect((await h.send({ text: "sidekick answer me" })).data.steered).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(h.ask).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing once the bot replied after the question", async () => {
+    const h = waiting({ consumed: true });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Looking it up." });
+    mainAcks(h);
+    await h.send({ text: "sidekick answer me" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(h.ask).not.toHaveBeenCalled();
+  });
+});
