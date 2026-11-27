@@ -338,6 +338,33 @@ describe("memory sync", () => {
     expect(tidying(a)).toEqual([true]);
   });
 
+  it("takes the tidy six hours after a message here whether the closed PC's copy lands before or after it", () => {
+    for (const late of [false, true]) {
+      const [a, b] = devices("aaaaaaaaaaaa", "bbbbbbbbbbbb");
+      seed(MEMORY_SEED, a, b);
+      talk(a, T0);
+      talk(b, T0);
+      swap(a, b);
+      // the laptop takes the tidy while the desktop is closed, then is closed for three days
+      talk(b, T0 + 8 * DAY);
+      const back = T0 + 11 * DAY;
+      if (!late) {
+        receive(b, a);
+        sync(a, back - 60_000);
+      }
+      talk(a, back);
+      if (late) {
+        receive(b, a);
+        sync(a, back + 60_000);
+      }
+      expect(tidying(a)).toEqual([false]);
+      sync(a, back + 6 * 60 * 60_000 - 1);
+      expect(tidying(a)).toEqual([false]);
+      sync(a, back + 6 * 60 * 60_000);
+      expect(tidying(a)).toEqual([true]);
+    }
+  });
+
   it("keeps waiting on a PC that names itself while its copy changes after each message here", () => {
     const [a, b] = devices("aaaaaaaaaaaa", "bbbbbbbbbbbb");
     seed(MEMORY_SEED, a, b);

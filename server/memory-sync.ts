@@ -322,9 +322,10 @@ const HOLD_MS = 6 * 60 * 60_000;
 type Held = NonNullable<MemorySyncLedger["bots"][string]["held"]>;
 
 // The PC the tidy moved to waits on it only while it shows it is on: the wait starts with a message here once this PC is the pick and that PC's stamp has not
-// changed since, and ends HOLD_MS later. Each new stamp from it waits for the next message here, so a PC in use that holds on is never tidied beside.
+// changed since, and ends HOLD_MS later; a stamp first seen after a message here it predates counts that message. Each new stamp from it waits for the next
+// message here, so a PC in use that holds on is never tidied beside.
 function hold(held: Held | undefined, at: number, talkedAt: number, picked: boolean): Held {
-  const fresh = held !== undefined && held.talked !== talkedAt;
+  const fresh = held === undefined ? at < talkedAt : held.talked !== talkedAt;
   const since = !picked ? undefined : held?.at === at && held.since !== undefined ? held.since : fresh ? talkedAt : undefined;
   return { at, talked: talkedAt, since };
 }
