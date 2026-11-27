@@ -1,5 +1,6 @@
 import type { ProviderInstance } from "./contracts.ts";
 import {
+  repairBatches,
   repairModelContext,
   repairTarget,
   type SummaryCallRecord,
@@ -85,7 +86,7 @@ export function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<
 /** Rebuilds fallback summaries after a turn settles, one at a time app-wide. State is in memory only. */
 export function createSummaryRepair(deps: SummaryRepairDeps): SummaryRepair {
   const budgets = new Map<string, { runs: number; nextAt: number }>();
-  const held = new Map<string, { botId: string; targetId: string; compaction: ContextCompactionV1 }>();
+  const held = new Map<string, { botId: string; fallbackId: string; compaction: ContextCompactionV1 }>();
   const queue: Array<{ botId: string; threadId: string }> = [];
   let active: ActiveRun | null = null;
   let timeouts = 0;
@@ -98,13 +99,20 @@ export function createSummaryRepair(deps: SummaryRepairDeps): SummaryRepair {
     return now >= pausedUntil && (!budget || (budget.runs < MAX_REPAIR_RUNS && now >= budget.nextAt));
   };
 
-  const land = (threadId: string, botId: string, targetId: string, compaction: ContextCompactionV1): boolean => {
+  const land = (threadId: string, botId: string, fallbackId: string, compaction: ContextCompactionV1): boolean => {
     if (deps.busy(botId, threadId)) {
-      held.set(threadId, { botId, targetId, compaction });
+      held.set(threadId, { botId, fallbackId, compaction });
       return true;
     }
     held.delete(threadId);
-    if (repairTarget(deps.store.activePath(threadId))?.target.messageId !== targetId) return false;
+    const messages = deps.store.activePath(threadId);
+    const now = repairTarget(messages);
+    if (!now || now.fallback.messageId !== fallbackId) return false;
+    // A summary chained onto the fallback since moved the target; it is repaired on its own unless its longer span is past the cap.
+    if (
+      now.target.value.coveredThroughId !== compaction.coveredThroughId &&
+      repairBatches({ messages, target: now, userName: deps.userName(), referenceMessages: deps.store.messagesFor(threadId) }) <= MAX_REPAIR_BATCHES
+    ) return false;
     deps.store.appendCompaction(threadId, compaction);
     return true;
   };
@@ -162,7 +170,7 @@ export function createSummaryRepair(deps: SummaryRepairDeps): SummaryRepair {
       timeouts = 0;
       pausedUntil = end + BREAKER_PAUSE_MS;
     }
-    if (result.status === "ready" && !disposed) land(threadId, botId, targetId, result.compaction);
+    if (result.status === "ready" && !disposed) land(threadId, botId, found.fallback.messageId, result.compaction);
   };
 
   const pump = () => {
@@ -185,7 +193,7 @@ export function createSummaryRepair(deps: SummaryRepairDeps): SummaryRepair {
     onSettled(botId, threadId) {
       if (disposed) return;
       const pending = held.get(threadId);
-      if (pending && land(threadId, pending.botId, pending.targetId, pending.compaction)) return;
+      if (pending && land(threadId, pending.botId, pending.fallbackId, pending.compaction)) return;
       const found = repairTarget(deps.store.activePath(threadId));
       if (!found || !eligible(found.target.messageId)) return;
       if (active?.threadId === threadId || queue.some((item) => item.threadId === threadId)) return;

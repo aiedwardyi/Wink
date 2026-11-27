@@ -2190,6 +2190,16 @@ describe("summary repair", () => {
     expect(isFallbackSummary(fallbackRow.summary)).toBe(true);
   });
 
+  it("keeps a model rewrite of the fallback on its own boundary a repair target", () => {
+    const rewrite = compactionMessage("cr", "m23", row({ summary: "model rewrite of the fallback", coveredThroughId: "m14", firstKeptId: "m15", sourceMessageCount: 15, previousCompactionId: "cf" }));
+    const found = repairTarget([...fallbackPath(), rewrite]);
+    expect(found?.target.messageId).toBe("cr");
+    expect(found?.fallback.messageId).toBe("cf");
+    expect(found?.good?.messageId).toBe("cg");
+    const repaired = compactionMessage("cp", "m23", row({ summary: "repaired summary", coveredThroughId: "m14", firstKeptId: "m15", sourceMessageCount: 15, previousCompactionId: "cg" }));
+    expect(repairTarget([...fallbackPath(), rewrite, repaired])).toBeNull();
+  });
+
   it("returns clean for a model-only chain without calling the summarizer", async () => {
     const path = [
       ...longHistory(10),

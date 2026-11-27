@@ -4,9 +4,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildCompaction, isFallbackSummary, planCompaction, prepareModelContext } from "./context-compaction.ts";
+import { applicableCompaction, buildCompaction, isFallbackSummary, planCompaction, prepareModelContext, repairTarget } from "./context-compaction.ts";
 import type { Message } from "./store.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer } from "./summary-build.ts";
+import { createSummaryRepair } from "./summary-repair.ts";
 import { TYPED_VALUES_HEADER } from "./typed-values.ts";
 import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
 
@@ -300,6 +301,90 @@ describe("summary build after settle", () => {
     expect(appended).toEqual([]);
     const dropped = vi.mocked(console.info).mock.calls.map(([line]) => String(line)).filter((line) => line.startsWith("[summary-build] dropped "));
     expect(dropped).toHaveLength(1);
+  });
+
+  const NOTICE = "Model summary unavailable; full transcript retained by Wink.";
+  const RELEASE = "release 4.2 shipped from the harbor branch";
+  const logLine = "the tide log kept every buoy reading in order. ".repeat(27);
+  const turns = (prefix: string, count: number, text = logLine) => Array.from({ length: count }, (_, index) =>
+    message(`${prefix}${index}`, `${prefix === "h" && index === 0 ? `${RELEASE}. ` : ""}${text}`, { role: index % 2 ? "bot" : "user" }));
+  const standIn = (summary: string, contextWindow: number): Message => ({
+    id: "fallback",
+    at: 2_000,
+    role: "bot",
+    kind: "compaction",
+    compaction: { v: 1, summary: `${NOTICE}\n${summary}`, coveredThroughId: "h11", firstKeptId: "k0", contextWindow, estimatedTokensBefore: 9_000, sourceMessageCount: 12 },
+  });
+
+  function besideRepair(harness: ReturnType<typeof setup>) {
+    const { calls, generateText } = deferred();
+    const repair = createSummaryRepair({
+      store: harness.store,
+      instanceFor: async () => ({ driverKind: "claude", generateText, textModel: "claude-haiku-5-5", textTimeoutMs: 90_000 }),
+      busy: () => harness.state.busy,
+      taskRecordText: () => "Goal: build",
+      userName: () => "User",
+    });
+    return { repair, calls };
+  }
+
+  const answer = async (calls: ReturnType<typeof deferred>["calls"], text: string) => {
+    for (let index = 0; index < calls.length; index++) {
+      calls[index]!.resolve(text);
+      await tick();
+    }
+  };
+
+  // Both workers start from the same fallback chain and the build lands first.
+  async function buildThenRepair(harness: ReturnType<typeof setup>, builder: ReturnType<typeof deferred>) {
+    const { repair, calls } = besideRepair(harness);
+    repair.onSettled("bot", "t");
+    harness.build.onSettled("bot", "t");
+    await tick();
+    expect(calls).toHaveLength(1);
+    await answer(builder.calls, "SUMMARY\nbuilt from the fallback");
+    await harness.build.idle();
+    await answer(calls, "SUMMARY\nrepaired with the 4.2 release");
+    await repair.idle();
+    return calls;
+  }
+
+  it("lands the repair when a build chained past it leaves a span over the repair's batch cap", async () => {
+    const builder = deferred();
+    const harness = setup(builder.generateText);
+    const { threads, state } = harness;
+    state.window = 8_192;
+    const tail = turns("k", 20);
+    threads.set("t", [...turns("h", 12), ...tail.slice(0, 2), standIn("fallback digest", 8_192), ...tail.slice(2)]);
+    const raw = threads.get("t")!.map((row) => row.id);
+
+    const calls = await buildThenRepair(harness, builder);
+
+    const path = threads.get("t")!;
+    expect(calls).toHaveLength(4);
+    expect(calls[0]!.prompt).toContain(RELEASE);
+    expect(applicableCompaction(path)).toMatchObject({ value: { coveredThroughId: "h11", summary: expect.stringContaining("repaired with the 4.2 release") } });
+    expect(repairTarget(path)).toBeNull();
+    expect(path.filter((row) => row.kind !== "compaction" || row.id === "fallback").map((row) => row.id)).toEqual(raw);
+  });
+
+  it("lands the repair when a build only rewrote the stand-in on its boundary", async () => {
+    const builder = deferred();
+    const harness = setup(builder.generateText);
+    const { threads, state } = harness;
+    state.window = 8_192;
+    const digestText = "stand-in digest line about buoy readings and tide tables.\n".repeat(347);
+    const tail = turns("k", 3, "short follow-up");
+    threads.set("t", [...turns("h", 12), ...tail.slice(0, 2), standIn(digestText, WINDOW), ...tail.slice(2)]);
+    const raw = threads.get("t")!.map((row) => row.id);
+
+    await buildThenRepair(harness, builder);
+
+    const path = threads.get("t")!;
+    expect(builder.calls.map((call) => call.prompt).join("\n")).not.toContain(RELEASE);
+    expect(applicableCompaction(path)).toMatchObject({ value: { coveredThroughId: "h11", summary: expect.stringContaining("repaired with the 4.2 release") } });
+    expect(repairTarget(path)).toBeNull();
+    expect(path.filter((row) => row.kind !== "compaction" || row.id === "fallback").map((row) => row.id)).toEqual(raw);
   });
 
   it("lands nothing when the leaf moved", async () => {
