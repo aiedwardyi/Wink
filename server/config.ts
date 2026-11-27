@@ -83,6 +83,8 @@ const featureConfigSchema = z.object({
   memoryNotes: z.boolean().optional(),
   /** Experimental dial view of the model picker. Off unless explicitly enabled. */
   modelDial: z.boolean().optional(),
+  /** One solved Forum fix before a typed turn. Off unless explicitly enabled. */
+  forumRecall: z.boolean().optional(),
 });
 const instanceConfigSchema = z.object({
   driver: z.string().min(1),
@@ -194,7 +196,7 @@ export interface AppConfig {
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Product switches. Every flag defaults to off except memoryNotes and liveVerifyAuto. */
-  features?: { showToolCalls?: boolean; toolDetailCapture?: boolean; liveVerifyAuto?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
+  features?: { showToolCalls?: boolean; toolDetailCapture?: boolean; liveVerifyAuto?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean; forumRecall?: boolean };
   instances?: InstanceConfigMap;
   phoneRelay?: PhoneRelayConfig;
   /** Usage order the user set by drag; only PUT /api/usage-order writes it. */
@@ -304,6 +306,10 @@ export function detailedRepliesEnabled(cfg: AppConfig): boolean {
 
 export function showToolCallsEnabled(cfg: AppConfig): boolean {
   return cfg.features?.showToolCalls === true;
+}
+
+export function forumRecallEnabled(cfg: AppConfig): boolean {
+  return cfg.features?.forumRecall === true;
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.

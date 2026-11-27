@@ -331,7 +331,7 @@ describe("repos a bot works in", () => {
     expect(source).toContain("  return remotes.flatMap((url) => remoteRepo(url) ?? []);\n}, cited: async (botId, boot) => {\n");
     expect(source).toContain("  return reposIn([...botAsks(bot, (threadId) => store.taskPacket(threadId), notOwnerChats()).map((ask) => ask.ref ?? \"\"), ...reports]);\n} });");
     expect(source).toContain("    knownRepos: _knownRepos,\n");
-    const unlanded = source.slice(source.indexOf('startupTiming.afterPaint("unlanded"'), source.indexOf("const memoryLookup = createMemoryLookup("));
+    const unlanded = source.slice(source.indexOf('startupTiming.afterPaint("unlanded"'), source.indexOf("const memoryLookup = withBoardRecall(createMemoryLookup("));
     expect(unlanded, "a restart reads the cited repos off the send path, from boot's reports").toContain("  for (const bot of store.bots) await knownRepos.cite(bot.id, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));\n");
   });
 

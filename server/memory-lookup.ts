@@ -381,7 +381,7 @@ export interface MemoryLookup {
   settled(botId: string, threadId: string, cursor: unknown): Promise<void>;
 }
 
-const cursorKey = (cursor: unknown) => (cursor === undefined || cursor === null ? "" : JSON.stringify(cursor));
+export const cursorKey = (cursor: unknown) => (cursor === undefined || cursor === null ? "" : JSON.stringify(cursor));
 /* oxlint-enable anti-slop/no-unknown-parameters */
 
 type LookupLog = {
