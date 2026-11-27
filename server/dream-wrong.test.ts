@@ -404,6 +404,12 @@ describe("what the judges read and agree on", () => {
     expect((await ask(withdrawn, [null, may])).items).toEqual([]);
     expect((await ask(withdrawn, [may, may])).items).toEqual([may]);
     expect((await ask(withdrawn, [may, may.replace("The main", "the main").replace(" (noted", ". (noted")])).items).toEqual([may]);
+    for (const [one, other] of [["1.5", "1/5"], ["9.50", "950"], ["v2.1", "v2-1"], ["src/app", "src.app"]]) {
+      const owner = `The main account plan ends in May ${one} now, after the April estimate was withdrawn.`;
+      const [right, close] = [one, other].map((each) => may.replace("May", `May ${each}`));
+      expect([one, (await ask(owner, [right, right], "The main account plan ends in May")).items]).toEqual([one, [right]]);
+      expect([one, (await ask(owner, [right, close], "The main account plan ends in May")).items, (await ask(owner, [close, right], "The main account plan ends in May")).items]).toEqual([one, [], []]);
+    }
   });
 
   it("sends no judge a message the prompt would change, and lists nothing from it", async () => {

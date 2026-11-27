@@ -63,7 +63,8 @@ const lowWords = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) 
 
 const squash = (text: string) => text.replace(/\s+/g, " ").trim();
 // a fix line's words in order, so two judges naming one value read alike whatever their case or marks
-const value = (line: string) => lowWords(body(line)).join(" ");
+// only case, spacing and an end stop may differ: punctuation inside a value can change it
+const value = (line: string) => squash(body(line)).toLowerCase().replace(/\.$/, "");
 
 /** The owner's own typing in these rows after `since`; a line that may hold a login or code is marked guarded. */
 export function ownerRows(thread: string, messages: readonly Message[], since: number): OwnerRow[] {
