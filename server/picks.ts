@@ -522,7 +522,8 @@ export function pickKeysList(text: string | null | undefined): string {
 }
 
 function pickLine(entry: PickEntry): string {
-  const shown = entry.tweaks.slice(-TWEAKS_SHOWN).map(({ at, said }) => `"${clip(said, TWEAK_SHOWN_MAX)}" (${monthDay(at)})`);
+  // a card answer's follow-up is the user's words on it, shown whole: its last words can hold the pick back
+  const shown = entry.tweaks.slice(-TWEAKS_SHOWN).map(({ at, said }) => `"${cardOf(entry) ? said : clip(said, TWEAK_SHOWN_MAX)}" (${monthDay(at)})`);
   const earlier = entry.tweaks.length - shown.length;
   const tweaks = shown.length ? ` + tweaks: ${shown.join(", ")}${earlier ? ` (+${earlier} earlier in memory/${PICKS_FILE})` : ""}` : "";
   const head = `- ${pickHead(entry)}${entry.picture ? ` (${entry.picture.path})` : ""}`;

@@ -23,6 +23,8 @@ export type ReplyPictures = PictureTurn & {
   answer?: string;
   /** the card's own option the reply picks, word for word */
   choice?: string;
+  /** an edit's newest replaced row time: the edit is newer, whatever that row's clock said */
+  edits?: number;
 };
 type PickSource = Partial<ReplyPictures> & { id?: string; at?: number; thread?: string; files?: string[] };
 type PickClaim = {
@@ -102,6 +104,31 @@ export function cardChoice(answer: string, options: readonly string[]): string |
   return own[place === "last" ? own.length - 1 : (PLACES.indexOf(place) + 1 || Number(place[0])) - 1];
 }
 
+const QUOTED = /^\s*>/;
+const QUOTE_MARKS = /^\s*(?:>\s?)+/;
+const plain = (text: string) => text.replace(/[*_`~]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+
+/** A reply without the blockquotes it pasted from the chat before it; a blockquote the user wrote, such as a callout, is their own words. */
+function ownWords(said: string, before: () => readonly Message[]): string {
+  let shown: string | undefined;
+  const quotesChat = (words: string) => (shown ??= plain(before().flatMap((row) => [row.text ?? "", row.card?.subtitle ?? "", ...(row.card?.options ?? [])]).join("\n"))).includes(words);
+  const lines = said.split("\n");
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length;) {
+    let end = i;
+    while (end < lines.length && QUOTED.test(lines[end]!)) end += 1;
+    if (end === i) {
+      kept.push(lines[i++]!);
+      continue;
+    }
+    const block = lines.slice(i, end);
+    const words = plain(block.map((line) => line.replace(QUOTE_MARKS, "")).join(" "));
+    if (!words || !quotesChat(words)) kept.push(...block);
+    i = end;
+  }
+  return kept.join("\n").trim();
+}
+
 export function replyTurns(messages: readonly Message[], ids: string[], attachments: string): Map<string, ReplyPictures> {
   const wanted = new Set(ids);
   const found = new Map<string, ReplyPictures>();
@@ -111,18 +138,27 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
     const index = id === undefined ? i - 1 : id ? byId.get(id) ?? -1 : -1;
     return index < i ? index : -1;
   };
-  // a reply with no card id answers the card the chat closes with it: one it quotes, or a question with no buttons
-  let closedBy: Map<string, Message> | undefined;
-  const chatCard = (answer: Message) => {
+  // the chat as the reply's own branch shows it, root first: a card on another branch is never its question
+  const pathTo = (i: number) => {
+    const path: Message[] = [];
+    for (let at = i; at >= 0; at = parent(at)) path.push(messages[at]!);
+    return path.reverse();
+  };
+  // a reply with no card id answers the newest card on its branch it quotes, answered before or not, else a question with no buttons its branch closes with it
+  const chatCard = (answer: Message, path: readonly Message[]) => {
     if (answer.answersCard) return undefined;
-    const closed = closedBy ??= new Map([...askStates(messages)].flatMap(([card, state]) => state.state === "answered" && state.by?.id ? [[state.by.id, card] as const] : []));
-    const card = closed.get(answer.id);
-    return card && (answer.text?.startsWith(answerPrefix(card)) || !card.card?.options?.length) ? card.id : undefined;
+    const text = answer.text ?? "";
+    const quoted = text.startsWith("Re: “") ? path.findLast((row) => row !== answer && isQuestionCard(row) && text.startsWith(answerPrefix(row))) : undefined;
+    if (quoted) return quoted.id;
+    for (const [card, state] of askStates(path)) if (state.state === "answered" && state.by === answer && !card.card?.options?.length) return card.id;
+    return undefined;
   };
   for (let i = messages.length - 1; i >= 0 && wanted.size; i -= 1) {
     const answer = messages[i]!;
     if (!wanted.delete(answer.id)) continue;
-    const cardId = answer.answersCard ?? chatCard(answer);
+    let path: Message[] | undefined;
+    const branch = () => (path ??= pathTo(i));
+    const cardId = answer.answersCard ?? chatCard(answer, branch());
     const card = cardId ? byId.get(cardId) : undefined;
     const answered = card !== undefined && card < i && isQuestionCard(messages[card]!) ? messages[card] : undefined;
     const { turn, previous } = botTurn(messages, answered ? card! : parent(i), parent);
@@ -136,10 +172,13 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
       reply.cardId = answered.id;
       const text = answer.text ?? "";
       const said = (text.startsWith(answerPrefix(answered)) ? text.slice(answerPrefix(answered).length) : text).trim();
-      reply.answer = said;
       const choice = cardChoice(said, answered.card?.options?.length ? answered.card.options : labeledOptions(answered.card?.subtitle));
       if (choice !== undefined) reply.choice = choice;
+      reply.answer = choice === said ? said : ownWords(said, () => branch().slice(0, -1));
     }
+    // an edit sits on the parent of the user's rows it replaces
+    const replaced = messages.slice(0, i).filter((row, j) => sentByPerson(row) && parent(j) === parent(i));
+    if (replaced.length) reply.edits = Math.max(...replaced.map((row) => row.actedAt ?? row.at));
     found.set(answer.id, reply);
   }
   return found;

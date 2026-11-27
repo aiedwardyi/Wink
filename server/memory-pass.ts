@@ -165,14 +165,15 @@ export function withoutBlocks(text: string): string {
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
 }
 
-/** whole: a card answer, never cut for length: a card's own option keeps its quotes and blockquotes, a typed answer loses only pastes, code and the lines it quotes. */
+/** whole: a card answer, never cut for length: a card's own option keeps its quotes and blockquotes, a typed answer loses only pastes and code. */
 export function userTyping(text: string, dropSensitive = true, keepImages = false, whole?: "option" | "answer"): string {
   const attached = text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : "");
   const typed = whole === "option" ? attached : withoutBlocks(attached);
   // the whole message: a label and its value can sit in different paragraphs
   if (dropSensitive && secretValue(typed)) return "";
   if (whole === "option") return redactSecretsInText(typed.trim());
-  if (whole === "answer") return redactSecretsInText(typed.split("\n").filter((line) => !line.trimStart().startsWith(">")).join("\n").trim());
+  // replyTurns already dropped the lines it quotes from the chat; a callout the user wrote stays
+  if (whole === "answer") return redactSecretsInText(typed.trim());
   const unwrapped = typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
   const kept = unwrapped
     .split(/\n\s*\n/)
@@ -1105,7 +1106,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       // a pasted tag cannot open or close a prompt block
       // a card answer is the user's own words after the question it quotes, whole
       const text = userTyping(reply?.answer ?? row.text!, true, false, reply?.answer === undefined ? undefined : reply.choice === reply.answer ? "option" : "answer").replace(CONTEXT_TAGS, " ").trim();
-      return text ? [{ id, text, at: row.actedAt ?? row.at, tap: Boolean(row.answersCard || reply?.cardId), files: attachedImages(row.text ?? "") }] : [];
+      return text ? [{ id, text, at: Math.max(row.actedAt ?? row.at, (reply?.edits ?? -Infinity) + 1), tap: Boolean(row.answersCard || reply?.cardId), files: attachedImages(row.text ?? "") }] : [];
     });
     const lines = typed.sort((a, b) => a.at - b.at).map(({ id, text, at, tap, files }) => {
       const line: UserLine = { id, text, at, thread: sourceThread(threadId) };

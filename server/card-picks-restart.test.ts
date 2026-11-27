@@ -100,14 +100,15 @@ describe("card picks survive a session restart", () => {
     { name: "a tapped choice holding a blockquote", question: "How should we handle the release notes?", options: [approval, "Leave unchanged"], answer: approval, send: "tap" },
     { name: "a typed choice holding a blockquote", question: "How should we handle the release notes?", options: [approval, "Leave unchanged"], answer: approval, send: "typed" },
     // a quote the user pasted under their own words is not what they said
-    { name: "a typed reply quoting an earlier message", question: "How should we handle the release notes?", options: [approval, "Leave unchanged"], answer: "Send the release notes\n> Hold everything until Friday.", send: "typed", filed: "Send the release notes" },
+    { name: "a typed reply quoting an earlier message", question: "How should we handle the release notes?", options: [approval, "Leave unchanged"], answer: "Send the release notes\n> Hold everything until Friday.", send: "typed", filed: "Send the release notes", earlier: "Last week's plan: hold everything until Friday." },
     { name: "a tapped choice holding a secret in its blockquote", question: "Which box should the release use?", options: ["Use the staging box\n> password: Tr0ub4dor&3xQ", "Skip"], answer: "Use the staging box\n> password: Tr0ub4dor&3xQ", send: "tap", secret: "Tr0ub4dor" },
     // the letter reads clean; the option it names holds a password, only partly masked by the text redactor
     { name: "a tapped letter naming a secret option", question: "Which wifi should the kiosk join?", options: ["A) Wi-Fi password: Tr0ub4dor&3xQ", "B) Guest network"], answer: "A", send: "tap", secret: "Wi-Fi password" },
-  ])("files $name under the card the chat says it answers, in its whole words", async ({ question, options, answer, send, secret, filed: typed }) => {
+  ])("files $name under the card the chat says it answers, in its whole words", async ({ question, options, answer, send, secret, filed: typed, earlier }) => {
     const store = new Store(() => ({ instanceId: "claude", model: "claude-opus-5-5" }));
     const pass = createMemoryPass({ store, dataDir: DATA_DIR, generate: () => async () => "[]", enabled: () => true, busy: () => false });
     const bot = store.createBot({}, { seedMessages: false });
+    if (earlier) store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: earlier });
     const card = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: { title: "Pick", subtitle: question, options, askUser: true, staysOpen: true } });
     // a newer card makes the reply name its question
     if (send === "typed") store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: { title: "Pick", subtitle: "Where should the sample go?", options: ["By the window", "On the desk"], askUser: true, staysOpen: true } });
@@ -175,7 +176,10 @@ describe("every way to answer a card files it under that card", () => {
       const { turnText } = buildTurnContext({ text: "Continue.", transcript: prepared.transcript, rewound: false, fresh: false, recycled: true, recycleReason: "session-fat", replaysNatively: false });
       return { replay: turnText, prompt: memorySystemPrompt(bot.id), picks: currentPicks(readMemoryTopic(bot.id, PICKS_FILE) ?? "") };
     };
-    return { ask, send, settle, answeredBy, restarted, post: (row: Omit<Message, "id" | "at">) => store.appendMessage(bot.threadId, row) };
+    return {
+      ask, send, settle, answeredBy, restarted, post: (row: Omit<Message, "id" | "at">) => store.appendMessage(bot.threadId, row),
+      branch: (id: string, text: string) => store.branchMessage(bot.threadId, id, text)!,
+    };
   };
 
   it("files a plain composer reply to a question with no buttons", async () => {
@@ -323,6 +327,68 @@ describe("every way to answer a card files it under that card", () => {
     const whole = words.replace(/\s+/g, " ");
     expect(replay).not.toContain("include a link to the updated setup guide");
     expect(picks.map(({ picked, said, questionId }) => [picked, said, questionId])).toEqual([[whole, whole, card.id]]);
+    expect(`${prompt}\n`).toContain(`: ${whole}\n`);
+  });
+
+  it("files nothing from an edit onto a branch that never shows the card", async () => {
+    const { ask, send, settle, restarted, post, branch } = setup();
+    post({ role: "bot", kind: "text", text: "I can work on that." });
+    const request = send("Prepare the deployment steps.");
+    ask("Where should we deploy the service?", []);
+    await settle();
+    branch(request.id, "Can you summarize the changes?");
+    await settle();
+    const { prompt, picks } = await restarted();
+    expect(picks).toEqual([]);
+    expect(prompt).not.toContain("Can you summarize the changes?");
+  });
+
+  it.each([
+    { revise: "a second quote", ahead: 0 },
+    { revise: "an edit of the first quote", ahead: 0 },
+    // the first answer's PC clock ran ahead of the server that stamps the edit
+    { revise: "an edit of the first quote", ahead: 90 * MINUTE },
+  ])("files $revise of an answered card as its answer now (first clock ahead $ahead ms)", async ({ revise, ahead }) => {
+    const { ask, send, settle, restarted, branch } = setup();
+    const card = ask("What database should billing use?", ["SQLite", "Postgres"]);
+    // a newer card makes the reply name its question
+    ask("Which theme should billing use?", ["Light", "Dark"]);
+    const first = send(`${answerPrefix(card)}SQLite`, { actedAt: Date.now() - 2 * MINUTE + ahead });
+    await settle();
+    if (revise === "a second quote") send(`${answerPrefix(card)}Postgres`);
+    else branch(first.id, `${answerPrefix(card)}Postgres`);
+    await settle();
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", card.id]]);
+    expect(`${prompt}\n`).toContain("): Postgres\n");
+    expect(prompt).not.toContain("SQLite");
+  });
+
+  it("shows a card answer's long follow-up whole in the prompt", async () => {
+    const { ask, send, settle, restarted } = setup();
+    const card = ask("Vendor rollout", ["Enable the vendor rollout", "Keep it off"]);
+    send("Enable the vendor rollout", { answersCard: card.id, actedAt: Date.now() - 2 * MINUTE });
+    await settle();
+    const approval = "Wait for my written approval before enabling it.";
+    const words = `Check audit findings and invoices before the vendor rollout. ${approval}`;
+    send(words);
+    await settle({ kind: "tweak", key: "Vendor rollout", fact: approval, quote: words });
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ questionId, tweaks }) => [questionId, tweaks.map(({ said }) => said)])).toEqual([[card.id, [words]]]);
+    const line = prompt.split("\n").find((each) => each.includes(": Enable the vendor rollout"));
+    expect(line).toContain(`"${words}"`);
+  });
+
+  it.each([{ quoted: false }, { quoted: true }])("keeps a Markdown callout the user typed in a card answer (quoted $quoted)", async ({ quoted }) => {
+    const { ask, send, settle, restarted } = setup();
+    const card = ask("How should the release announcement go out?", []);
+    if (quoted) ask("Which color should we use?", ["Blue", "Green"]);
+    const words = "Prepare the announcement for Monday.\n\n> **Required**\n> Wait for my release approval before sending.";
+    send(quoted ? `${answerPrefix(card)}${words}` : words);
+    await settle();
+    const { prompt, picks } = await restarted();
+    const whole = words.replace(/\s+/g, " ");
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([[whole, card.id]]);
     expect(`${prompt}\n`).toContain(`: ${whole}\n`);
   });
 });
