@@ -37,8 +37,9 @@ const KO_REPORT = /버그|고장|크래시|안 ?(돼|되|됨)|같은데|[는은�
 const KO_QUESTION = /^(뭐|무엇|어디|언제|왜|어떻게|얼마|몇|누가|어느)(?!든|냐하?면)|(나요|까요|인가요?|일까)\?*$/;
 // Greetings, pings and asks aimed at the helper itself: a sentence of only these words orders nothing.
 const HELLO = /\b(hi+|hello+|hey+|yo+|sup|wh?at'?s ?up|wassup|howdy|ping|test(ing)?|sidekick|side ?bot)\b|안녕|하이|헬로|테스트|사이드킥|사이드 ?봇/i;
+// Each word matches one way only ("you are" is "you" then "are"), so a long run of them never backtracks.
 const CASUAL_WORD =
-  "hi+|hello+|hey+|heya|hiya|yo+|sup|wh?at'?s ?up|wassup|howdy|ping|test(s|ing)?|\\d+|sidekick|side ?bot|helper|main|one|if|(you|u|ya)('?re|'?r| are| r)?|youre|ur|are|r|is|the|a|there|here|still|alive|awake|asleep|sleeping|i think|say|((do|dont|don'?t|do not) )?(respond|reply|answer)|let me know|with|sentence|last|time|again|please|pls|yeah|yea|ya|ok|okay|and|so|lol|lmao|ha(ha)+\\w*|" +
+  "hi+|hello+|hey+|heya|hiya|yo+|sup|wh?at'?s ?up|wassup|howdy|ping|test(s|ing)?|\\d+|sidekick|side ?bot|helper|main|one|if|(you|u|ya)('?re|'?r)?|youre|ur|are|r|is|the|a|there|here|still|alive|awake|asleep|sleeping|i think|say|((do|dont|don'?t|do not) )?(respond|reply|answer)|let me know|with|sentence|last|time|again|please|pls|yeah|yea|ok|okay|and|so|lol|lmao|ha(ha)+\\w*|" +
   "안녕(하세요)?|하이|헬로|ㅎㅇ|테스트(중)?|사이드킥(이면|이라면|이야)?|사이드 ?봇(이면|이라면|이야)?|거기|아직|있어(요)?|인사(해|해줘|해주세요)|대?답(해|해줘|해주세요)|ㅋ+|ㅎ+";
 const CASUAL = new RegExp(`^((${CASUAL_WORD})(?=$|[\\s,.!?~])[\\s,.!?~]*)+$`, "i");
 // A pick or a number answers the bot's question: "both", "squash both", "2", "the second one".

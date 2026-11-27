@@ -351,6 +351,14 @@ describe("isNudge", () => {
     expect(isNudge(text)).toBe(false);
   });
 
+  it("answers in linear time on a long run of casual words", () => {
+    const text = "you are ".repeat(40) + "X";
+    const started = process.hrtime.bigint();
+    expect(isNudge(text)).toBe(false);
+    expect(nominate(`hello. ${text}`)).not.toBeUndefined();
+    expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(50);
+  });
+
   it("finds the questions of a mixed message and leaves its order out", () => {
     const mixed = "can i let a teammate use my spare account ? whats the address again. we dont use it for tests right we can leave tests to this one ? or whatsup";
     expect(nominate(mixed)).toBe("quick");
