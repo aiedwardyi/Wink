@@ -128,12 +128,6 @@ html[data-usage-dragging], html[data-usage-dragging] * { cursor: grabbing !impor
   [data-phone-columns] .usage-meter-summary .usage-figures { row-gap: 6px; }
   [data-phone-columns] .usage-reset > span { white-space: normal; }
   .usage-desk .usage-reset, [data-usage-quick] .usage-reset { display: flex; flex-wrap: wrap; row-gap: 4px; }
-  .usage-chat-button { --cells-w: 64px; --cell-h: 5px; }
-  .usage-chat-windows { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; min-width: 0; overflow: hidden; }
-  .usage-chat-windows[data-windows="2"] { --cells-w: 38px; gap: 8px; }
-  .usage-chat-windows[data-windows="2"] .usage-reset-short { display: none; }
-  .usage-meter-chat { flex-wrap: nowrap; gap: 0 5px; font-size: 11.5px; line-height: 16px; }
-  .usage-meter-chat .usage-figures { gap: 4px; }
 }
 @media (width >= 768px) {
   .usage-sections[data-summary-size="large"] .usage-cells-mini { --cells-w: 120px; --cell-h: 7px; }
