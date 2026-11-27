@@ -216,6 +216,95 @@ describe("every way to answer a card files it under that card", () => {
     expect(`${prompt}\n`).toContain(": Cloud signing\n");
   });
 
+  it.each([
+    { options: ["Last", "First"], tap: "Last" },
+    { options: ["Last", "First"], tap: "First" },
+    { options: ["2", "1", "4"], tap: "2" },
+  ])("files a tapped $tap word for word, wherever it sits on the card", async ({ options, tap }) => {
+    const { ask, send, settle, restarted } = setup();
+    const card = ask("Where should missing values appear in the sorted table?", options);
+    send(tap, { answersCard: card.id });
+    await settle();
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, said, questionId }) => [picked, said, questionId])).toEqual([[tap, tap, card.id]]);
+    expect(`${prompt}\n`).toContain(`): ${tap}\n`);
+  });
+
+  it.each([
+    { options: ["C#", "Rust"], words: "C++", filed: "C++" },
+    { options: ["+5", "Skip"], words: "-5", filed: "-5" },
+    { options: ["Release", "main"], words: "release", filed: "release" },
+    { options: ["SQLite", "Postgres", "MySQL"], words: "option 2", filed: "Postgres" },
+    { options: ["SQLite", "Postgres", "MySQL"], words: "2", filed: "Postgres" },
+    { options: ["SQLite", "Postgres", "MySQL"], words: "B", filed: "Postgres" },
+    { options: ["SQLite", "Postgres", "MySQL"], words: "the second one", filed: "Postgres" },
+    { options: ["SQLite", "Postgres", "MySQL"], words: "the last one", filed: "MySQL" },
+    { options: ["1) SQLite", "2) Postgres", "3) MySQL"], words: "option 2", filed: "2) Postgres" },
+  ])("files a typed $words on a card offering $options as $filed, with the user's words", async ({ options, words, filed }) => {
+    const { ask, send, settle, answeredBy, restarted } = setup();
+    const card = ask("Which one should the build use?", options);
+    // a newer card makes the reply name its question
+    ask("Which shade should the example use?", ["Blue", "Green"]);
+    const reply = send(`${answerPrefix(card)}${words}`);
+    expect(answeredBy(card)).toBe(reply.id);
+    await settle();
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, said, questionId }) => [picked, said, questionId])).toEqual([[filed, words, card.id]]);
+    expect(`${prompt}\n`).toContain(`): ${filed}\n`);
+  });
+
+  it.each([
+    { intro: "Delivery choices were A) Pickup or B) Courier.", question: "Which material should we order: A) Cedar or B) Balsa?", words: "the second one", filed: "B - Balsa", quoted: false },
+    { intro: "Finish: A) Matte or B) Gloss.", question: "Which environment should the preview use?", words: "Staging", filed: "Staging", quoted: false },
+    { intro: "Finish: A) Matte or B) Gloss.", question: "Which environment should the preview use?", words: "Staging", filed: "Staging", quoted: true },
+  ])("files $words on a card with no buttons by its own question, never an earlier bot list (quoted $quoted)", async ({ intro, question, words, filed, quoted }) => {
+    const { ask, send, settle, answeredBy, restarted, post } = setup();
+    post({ role: "bot", kind: "text", text: intro });
+    const card = ask(question, []);
+    if (quoted) ask("Which shade should the example use?", ["Blue", "Green"]);
+    const reply = send(quoted ? `${answerPrefix(card)}${words}` : words);
+    expect(answeredBy(card)).toBe(reply.id);
+    await settle();
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, said, questionId }) => [picked, said, questionId])).toEqual([[filed, words, card.id]]);
+    expect(`${prompt}\n`).toContain(`): ${filed}\n`);
+  });
+
+  it.each([{ helper: true }, { helper: false }])("keeps a card tap and a later typed decision on another question under the same key (helper note $helper)", async ({ helper }) => {
+    const { ask, send, settle, restarted, post } = setup();
+    const card = ask("Which signing service should we use for mobile builds?", ["Cloud signing", "Manual signing"]);
+    const tap = send("Cloud signing", { answersCard: card.id, actedAt: Date.now() - 2 * MINUTE });
+    await settle(...(helper ? [{ kind: "decision", key: "Signing service", fact: "Cloud signing", quote: "Cloud signing", message_id: tap.id, question_id: card.id }] : []));
+    const asked = post({ role: "bot", kind: "text", text: "Which signing service should we use for desktop builds? Local signing or unsigned?" });
+    const typed = send("Use Local signing for desktop builds");
+    await settle({ kind: "decision", key: "Signing service", fact: "Local signing", quote: "Use Local signing for desktop builds", message_id: typed.id, question_id: asked.id });
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Cloud signing", card.id], ["Local signing", asked.id]]);
+    expect(`${prompt}\n`).toContain("): Cloud signing\n");
+    expect(`${prompt}\n`).toContain("): Local signing\n");
+  });
+
+  it("keeps a later condition on a long card answer, both whole in the prompt", async () => {
+    const { ask, send, settle, restarted } = setup();
+    const card = ask("Release announcement", []);
+    const words = [
+      "Prepare the desktop release announcement for the beta group and schedule it for Monday morning. Start with the change people will notice on their first launch. Mention that their existing settings will carry over, and point them to the setup page if they need to check the installation.",
+      "Explain the two improvements to importing invoices. Include an example of the new filename and show the location of the review screen. Put the troubleshooting steps in a separate paragraph so that people who already finished the import can skip them.",
+      "Send a copy to the support team and put the runbook link at the end. Include the names of the three supported formats, the way to request a correction and the date the previous importer will stop accepting new files. Ask each regional support lead to confirm the translation.",
+      "Keep the existing list of recipients from the pilot. Use the approved subject line from the release calendar. Send the reminder to people who have not completed the update on Thursday and include the link to the office hours session in that reminder.",
+    ].join("\n\n");
+    send(words, { answersCard: card.id, actedAt: Date.now() - 2 * MINUTE });
+    await settle();
+    const condition = "Wait for my approval before sending.";
+    send(condition);
+    await settle({ kind: "tweak", key: "Release announcement", fact: condition, quote: condition });
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ questionId, tweaks }) => [questionId, tweaks.map(({ said }) => said)])).toEqual([[card.id, [condition]]]);
+    const line = prompt.split("\n").find((each) => each.startsWith("- Release announcement"));
+    expect(line).toContain(words.replace(/\s+/g, " "));
+    expect(line).toContain(`"${condition}"`);
+  });
+
   const first = "Prepare the release email for the beta group. List the fixes to the desktop installer and include a link to the updated setup guide. Give the support team a copy of the draft so they can check the instructions and flag anything that has changed.";
   const second = "Use the launch mailing list we agreed on yesterday. Keep the subject line short and explain which installer people should download. Put the new schedule in the first paragraph so people can plan around it. Wait for my approval before sending.";
   it.each([

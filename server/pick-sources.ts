@@ -78,6 +78,30 @@ function picturesIn(turn: Message[], attachments: string, answered?: Message): P
   return { questionId, context, options: card?.options, pictures: pictures.slice(-PICTURES_MAX) };
 }
 
+export const labeledOptions = (context = "") => [...context.matchAll(/(?:^|\s)([a-h]|\d{1,2})\s*[-.):]\s+(.+?)(?=\s+(?:or\s+)?(?:[a-h]|\d{1,2})\s*[-.):]\s+|$)/gi)]
+  .map((match) => `${match[1]} - ${match[2]!.replace(/[?,;]+$/, "").trim()}`);
+
+const PLACES = ["first", "second", "third", "fourth", "fifth"];
+const POINTER = /^(?:option\s+)?([a-z]|\d{1,2})[.)]?$/i;
+const PLACE = /^(?:the\s+)?(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)(?:\s+(?:one|option|choice))?(?:,?\s+please)?[.!]?$/i;
+
+/** The card's own option an answer names: its whole text as written, else its letter, number or place on this card. Never a near name: "C++" is not "C#". */
+export function cardChoice(answer: string, options: readonly string[]): string | undefined {
+  const said = answer.trim();
+  const own = options.map((option) => option.trim()).filter(Boolean);
+  if (own.includes(said)) return said;
+  const label = POINTER.exec(said)?.[1]?.toLowerCase();
+  if (label) {
+    const labeled = own.filter((option) => LABELED.exec(option)?.[1]?.toLowerCase() === label);
+    // a card that letters or numbers its options is read by those labels, not by place
+    if (own.some((option) => LABELED.test(option))) return labeled.length === 1 ? labeled[0] : undefined;
+    return own[/\d/.test(label) ? Number(label) - 1 : label.charCodeAt(0) - 97];
+  }
+  const place = PLACE.exec(said)?.[1]?.toLowerCase();
+  if (!place) return undefined;
+  return own[place === "last" ? own.length - 1 : (PLACES.indexOf(place) + 1 || Number(place[0])) - 1];
+}
+
 export function replyTurns(messages: readonly Message[], ids: string[], attachments: string): Map<string, ReplyPictures> {
   const wanted = new Set(ids);
   const found = new Map<string, ReplyPictures>();
@@ -113,8 +137,8 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
       const text = answer.text ?? "";
       const said = (text.startsWith(answerPrefix(answered)) ? text.slice(answerPrefix(answered).length) : text).trim();
       reply.answer = said;
-      const choice = answered.card?.options?.find((option) => option.trim() === said);
-      if (choice) reply.choice = choice.trim();
+      const choice = cardChoice(said, answered.card?.options?.length ? answered.card.options : labeledOptions(answered.card?.subtitle));
+      if (choice !== undefined) reply.choice = choice;
     }
     found.set(answer.id, reply);
   }

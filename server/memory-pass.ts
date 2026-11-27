@@ -7,7 +7,7 @@ import type { ProviderInstance } from "./contracts.ts";
 import { AGY_TEXT_MODEL, exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
 import { isSignOut } from "./drivers/signout.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
-import { offersOption, replyTurns, validatePickBinding, type PickBinding, type ReplyPictures } from "./pick-sources.ts";
+import { labeledOptions, offersOption, replyTurns, validatePickBinding, type PickBinding, type ReplyPictures } from "./pick-sources.ts";
 import { applyPicks, currentPicks, KEY_MAX, LABELED, parseTimeline, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { loadProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
@@ -434,8 +434,6 @@ const CLAUSE = /[,;.!?]+|\s(?:and|but|or)\s|\s-\s/g;
 const NEGATED = /(?:^|\s)(?:not|no|nope|nah|don't|dont|never|without|hate|dislike|except|skip|instead of|rather than|other than)(?:\s|$)/;
 const ASKING = /^(?:what|which|how|why|should|shall|would|could|can|is|are|does|did|will|maybe)$/;
 const CHOOSING = /(?:^|\s)(?:yes|yeah|yep|yup|sure|definitely|absolutely|agreed|perfect|sounds good|do it|go ahead|go with it|that one|this one|first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|네|넵|응|좋아|좋아요|그래|그래요)(?:\s|$)/;
-const labeledOptions = (context = "") => [...context.matchAll(/(?:^|\s)([a-h]|\d{1,2})\s*[-.):]\s+(.+?)(?=\s+(?:or\s+)?(?:[a-h]|\d{1,2})\s*[-.):]\s+|$)/gi)]
-  .map((match) => `${match[1]} - ${match[2]!.replace(/[?,;]+$/, "").trim()}`);
 
 /** The quote is in the text, a short one as whole words, so "c" never matches inside "cards". */
 export function quotes(text: string, said: string): boolean {
@@ -668,19 +666,6 @@ function questionKey(question: string, held: (key: string) => boolean): string {
 // what userTyping leaves of answerPrefix: the quote, or nothing once a long quote was cut
 const ANSWER_PREFIX = /^Re: (?:“[^\n]*”)?[ \t]*\n/;
 const tapAnswer = (source: UserLine) => source.text.replace(ANSWER_PREFIX, "").trim();
-const PLACES = ["first", "second", "third", "fourth", "fifth"];
-const PLACE = /^(?:the\s+)?(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)(?:\s+(?:one|option|choice))?(?:,?\s+please)?[.!]?$/i;
-// the option a card answer points to, in the card's own words: by its letter or number, its place, or its name; a card with no buttons offers the options its question lists
-const tapChoice = (source: UserLine) => {
-  const text = tapAnswer(source);
-  const options = source.options?.length ? source.options : labeledOptions(source.context);
-  const label = /^(?:option\s+)?([a-z]|\d{1,2})[.)]?$/i.exec(text)?.[1]?.toLowerCase();
-  const place = PLACE.exec(text)?.[1]?.toLowerCase();
-  const named = label ? options.filter((option) => LABELED.exec(option.trim())?.[1]?.toLowerCase() === label)
-    : place ? [options[place === "last" ? options.length - 1 : (PLACES.indexOf(place) + 1 || Number(place[0])) - 1]].filter((option) => option !== undefined)
-    : options.filter((option) => pickKey(option) === pickKey(text));
-  return named.length === 1 ? named[0]!.replace(/\s+/g, " ").trim() : text;
-};
 
 type CardNote = { key: string; over: string[]; binding: PickBinding; replaces?: string };
 
@@ -696,11 +681,13 @@ function cardAnswers(sources: UserLine[], noted: Map<string, CardNote>, archived
   return sources.flatMap((source) => {
     const question = source.question?.replace(/\s+/g, " ").trim();
     const said = tapAnswer(source);
-    const picked = tapChoice(source);
+    // the option replyTurns read off the card itself, else the user's words as typed
+    const picked = source.choice ?? said;
     // screened on the value filed too: a letter's option was not in the typed text
     if (!source.tap || !source.id || !question || !said || secretValue(question) || secretValue(said) || secretValue(picked)) return [];
     const note = noted.get(source.id);
-    const binding = note?.binding ?? validatePickBinding({ key: question, picked, over: [] }, source);
+    // bound by the card's own question and options: bot words before a card with no buttons never decide it
+    const binding = note?.binding ?? validatePickBinding({ key: question, picked, over: [] }, { ...source, context: [question, ...(source.options ?? [])].join("\n") });
     if (!binding) return [];
     const held = (key: string) => [...keys].some(([id, other]) => id !== binding.questionId && pickKey(other) === pickKey(key))
       || entries.some((entry) => !entry.replacedBy && !entry.kind && entry.questionId !== binding.questionId && pickKey(entry.key) === pickKey(key));
@@ -1117,7 +1104,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       const reply = replies.get(id);
       // a pasted tag cannot open or close a prompt block
       // a card answer is the user's own words after the question it quotes, whole
-      const text = userTyping(reply?.answer ?? row.text!, true, false, reply?.choice !== undefined ? "option" : reply?.answer !== undefined ? "answer" : undefined).replace(CONTEXT_TAGS, " ").trim();
+      const text = userTyping(reply?.answer ?? row.text!, true, false, reply?.answer === undefined ? undefined : reply.choice === reply.answer ? "option" : "answer").replace(CONTEXT_TAGS, " ").trim();
       return text ? [{ id, text, at: row.actedAt ?? row.at, tap: Boolean(row.answersCard || reply?.cardId), files: attachedImages(row.text ?? "") }] : [];
     });
     const lines = typed.sort((a, b) => a.at - b.at).map(({ id, text, at, tap, files }) => {
@@ -1132,6 +1119,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         line.previousAnswerId = reply.previousAnswerId;
         line.invalidCard = reply.invalidCard;
         line.question = reply.question;
+        line.choice = reply.choice;
         if (reply.prior) line.prior = { ...reply.prior, context: reply.prior.context ? replyContext(reply.prior.context) : undefined };
       }
       if (files.length) line.files = files;

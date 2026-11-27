@@ -20,8 +20,6 @@ const GOAL_TOKENS_MIN = 16;
 const SAID_MAX = PICKED_MAX;
 const TWEAKS_SHOWN = 3;
 const TWEAK_SHOWN_MAX = 80;
-// room for the head and every shown tweak, so a long answer never hides a later restriction
-const LINE_MAX = KEY_MAX + PICKED_MAX + TWEAKS_SHOWN * (TWEAK_SHOWN_MAX + 16) + 80;
 const KEYS_LISTED = 40;
 const KEYS_DETAILED = 10;
 const CAPTION_MAX = 80;
@@ -119,7 +117,9 @@ const slotOf = (entry: { kind?: string; key: string }) => `${entry.kind === "goa
 
 // a verified tap's card: its answers replace each other and never another card's, whatever the keys
 const cardSlot = ({ thread, questionId }: { thread?: string; questionId?: string }) => `card\0${thread}\0${questionId}`;
-const cardOf = (entry: PickEntry) => (entry.tapped && entry.binding === "verified" && entry.thread && entry.questionId && entry.questionId !== entry.messageId ? cardSlot(entry) : undefined);
+const questionOf = (entry: PickEntry) => (entry.binding === "verified" && entry.thread && entry.questionId && entry.questionId !== entry.messageId ? cardSlot(entry) : undefined);
+const cardOf = (entry: PickEntry) => (entry.tapped ? questionOf(entry) : undefined);
+const apart = (answer: PickEntry, other: PickEntry) => Boolean(cardOf(answer) && questionOf(other) && questionOf(other) !== cardOf(answer));
 
 const stems = (text: string) => new Set(pickKey(text).split(" ").filter((word) => word.length >= 3).map((word) => word.slice(0, 4)));
 
@@ -256,7 +256,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
         }
       } else {
         // a typed pick on this card beats its tap; another question's pick under the same key stays beside it
-        if (entries.some((entry) => !entry.replacedBy && slotOf(entry) === slot && !entry.tapped && entry.thread === card.thread && entry.questionId === card.questionId)) continue;
+        if (entries.some((entry) => !entry.replacedBy && !entry.kind && !entry.tapped && questionOf(entry) === own)) continue;
         for (let n = 2; entries.some((entry) => !entry.replacedBy && slotOf(entry) === slotOf({ key })); n += 1) key = `${clip(asked, KEY_MAX - ` (${n})`.length)} (${n})`;
         if (key !== asked) moved.set(slot, slotOf({ key }));
       }
@@ -280,11 +280,13 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
       picks += 1;
       continue;
     }
-    // a later answer to the same card is that card's pick, whatever key the note-taker gave it
-    const answers = card ? entries.filter((entry) => !entry.replacedBy && !entry.kind && entry.questionId === card.questionId && entry.thread === card.thread && entry.messageId !== card.messageId) : [];
-    const current = (answers.length === 1 ? answers[0] : undefined) ?? entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === (moved.get(slot) ?? slot));
-    if (card && current && slotOf(current) !== slot) moved.set(slot, slotOf(current));
-    const key = current?.key ?? asked;
+    // a later answer to the same question is that question's pick, whatever key the note-taker gave it; an answer to another question never replaces a card's answer by key
+    const current = (card ? entries.findLast((entry) => !entry.replacedBy && !entry.kind && questionOf(entry) === cardSlot(card) && entry.messageId !== card.messageId) : undefined)
+      ?? entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === (moved.get(slot) ?? slot) && !(card && cardOf(entry)));
+    let key = current?.key ?? asked;
+    // another question's pick under the same key stays beside it, under its own label
+    if (change.kind === "pick" && !current) for (let n = 2; entries.some((entry) => !entry.replacedBy && slotOf(entry) === slotOf({ key })); n += 1) key = `${clip(asked, KEY_MAX - ` (${n})`.length)} (${n})`;
+    if (current ? slotOf(current) !== slot : key !== asked) moved.set(slot, slotOf({ key }));
     if (change.kind === "goal") {
       // a replayed batch from before the current entry never lands on it
       if (current && change.at < entryTime(current)) continue;
@@ -485,13 +487,15 @@ export function mergeTimelines(a: string, b: string): string | null {
     ids.add(id);
     entry.id = id;
     entry.replacedBy = undefined;
-    const before = current.get(slotOf(entry));
+    const card = cardOf(entry);
+    const held = current.get(slotOf(entry));
+    // a key never links a card's answer to an answer to another question
+    const before = held && !apart(held, entry) && !apart(entry, held) ? held : undefined;
     if (before && entry.tapped && !before.tapped) {
       entry.replacedBy = before.id;
       continue;
     }
-    // a card's newest answer replaces only that card's last one; another card's answer under the same key stays beside it
-    const card = cardOf(entry);
+    // a card's newest answer replaces only that card's last one; another question's answer under the same key stays beside it
     const answer = card ? answers.get(card) : undefined;
     if (card) answers.set(card, entry);
     if (answer && !answer.replacedBy) answer.replacedBy = id;
@@ -522,10 +526,8 @@ function pickLine(entry: PickEntry): string {
   const earlier = entry.tweaks.length - shown.length;
   const tweaks = shown.length ? ` + tweaks: ${shown.join(", ")}${earlier ? ` (+${earlier} earlier in memory/${PICKS_FILE})` : ""}` : "";
   const head = `- ${pickHead(entry)}${entry.picture ? ` (${entry.picture.path})` : ""}`;
-  const line = `${head}${tweaks}`;
-  // a card answer shows whole; only its tweaks give way
-  const max = Math.max(LINE_MAX, head.length + 3);
-  return line.length > max ? `${line.slice(0, max - 3)}...` : line;
+  // never cut: a later condition in a tweak shows however long the pick is
+  return `${head}${tweaks}`;
 }
 
 const pickHead = (entry: PickEntry) => (pickKey(entry.key) === pickKey(entry.picked) ? `${entry.picked} (${monthDay(entry.id)})` : `${entry.key} (${monthDay(entry.id)}): ${entry.picked}`);

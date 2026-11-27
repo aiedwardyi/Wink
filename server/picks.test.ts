@@ -200,6 +200,15 @@ describe("card answers", () => {
     expect(currentPicks(tweaked).map(({ picked, tweaks }) => [picked, tweaks.map(({ said }) => said)])).toEqual([["Local signing", []], ["Cloud signing", ["use the EV certificate"]]]);
   });
 
+  it("keeps a card's tap beside a typed answer to another question under its key, in either order", () => {
+    const typed = pick("Signing service", "Local signing", "Use Local signing for desktop builds", at(26, 12, 1), { binding: { at: at(26, 12, 1), messageId: "a2", questionId: "q2", thread: "t1", files: [], overPictures: [], named: true } as never });
+    const card = tap("q1", "a1", "Signing service", "Cloud signing", at(26, 12));
+    for (const text of [applyPicks(applyPicks("", [card])!.text, [typed])!.text, applyPicks(applyPicks("", [typed])!.text, [{ ...card, at: at(26, 12, 2) }])!.text]) {
+      expect(currentPicks(text).map(({ picked }) => picked).sort()).toEqual(["Cloud signing", "Local signing"]);
+      expect(`${picksBlock(text)}\n`).toContain(": Cloud signing\n");
+    }
+  });
+
   it("shows a pick an older build marked retired, and keeps the line on file", () => {
     const text = "# Decision timeline\n\n## 2026-11-18 17:32 | memory audit fix timing | current\n- Picked: Fix tonight\n- Retired: 2026-11-19\n";
     expect(picksBlock(text)).toContain("memory audit fix timing (11-18): Fix tonight");
@@ -218,6 +227,14 @@ describe("card answers across PCs", () => {
     for (const merged of [mergeTimelines(desktop, mobile)!, mergeTimelines(mobile, desktop)!]) {
       expect(currentPicks(merged).map(({ picked, questionId }) => [picked, questionId])).toEqual([["Local signing", "q1"], ["Cloud signing", "q2"]]);
     }
+  });
+
+  it("keeps a card's tap and another question's typed answer under one key apart when two PCs merge", () => {
+    const mobile = applyPicks("", [tap("q1", "a1", "Signing service", "Cloud signing", at(25, 14, 9))])!.text;
+    const desktop = applyPicks("", [pick("Signing service", "Local signing", "Use Local signing for desktop builds", at(25, 14, 10), { binding: { at: at(25, 14, 10), messageId: "a2", questionId: "q2", thread: "t1", files: [], overPictures: [], named: true } as never })])!.text;
+    const merged = mergeTimelines(mobile, desktop)!;
+    expect(mergeTimelines(desktop, mobile)).toBe(merged);
+    expect(currentPicks(merged).map(({ picked, questionId }) => [picked, questionId])).toEqual([["Cloud signing", "q1"], ["Local signing", "q2"]]);
   });
 
   it("keeps only a card's newest answer when PCs filed its answers under different keys", () => {
