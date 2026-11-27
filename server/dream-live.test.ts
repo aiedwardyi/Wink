@@ -129,7 +129,6 @@ describe("dreaming, dry", () => {
   let gh: Record<string, GhView>;
   let typed: Map<string, Message[]>;
   let waiting: boolean;
-  let incoming: boolean;
   // where each row sits in the store: one first read later was stored later
   const places = new WeakMap<Message, number>();
   let place = 0;
@@ -167,7 +166,6 @@ describe("dreaming, dry", () => {
         return below;
       },
       waiting: () => waiting,
-      incoming: () => incoming,
       packet: (threadId) => pending.get(threadId) ?? packets.get(threadId) ?? null,
       busy: (_botId, threadId) => busy.has(threadId),
       cite: async () => {},
@@ -212,7 +210,6 @@ describe("dreaming, dry", () => {
     gh = {};
     typed = new Map();
     waiting = false;
-    incoming = false;
     reverts = new Set();
     enabled = true;
     busy = new Set();
@@ -971,29 +968,91 @@ describe("dreaming, dry", () => {
       expect(memoryFileRaw(bot)).toBe(raw);
     });
 
-    it("refuses an OK while another device's update to the chats is still coming, and takes it once that lands with nothing new", async () => {
+    // another PC took the owner's withdrawal before this OK and it reached this PC after: a new chat, the same chat with the peer's clock behind, or a sync that failed first
+    const landsLate = (chat: string, okAt: number) => {
+      const at = chat === "t1" ? NOW - DAY - 60_000 : okAt - 30_000;
+      typed.set(chat, [...typed.get(chat) ?? [], said("withdraw", at, "Disregard March and keep the saved date.")]);
+    };
+    const settled = async (how: "import" | "pass" | "restart") => {
+      if (how === "pass") {
+        sleep.onSettled(bot);
+        await quiet(SLEEP_GAP_MS);
+        return;
+      }
+      if (how === "restart") {
+        sleep.dispose();
+        sleep = start().sleep;
+      }
+      start().dream.settle(bot);
+    };
+
+    it.each((["t1", "t2"] as const).flatMap((chat) => (["import", "pass", "restart"] as const).map((how) => [chat, how] as const)))("puts the exact old bytes back once a withdrawal typed before the OK lands in %s, on %s", async (chat, how) => {
       await quiet();
-      incoming = true;
-      expect(approve(false)).toEqual({ ok: false, error: "outdated" });
-      expect(memoryFileRaw(bot)).toBe(raw);
-      expect(history()).toBe("");
-      expect(plans()[0]!.fixes!.items[0]!.outdated).toBeUndefined();
-      incoming = false;
       expect(approve(false).ok).toBe(true);
+      const okAt = Date.now();
       expect(memoryFileRaw(bot)).toBe(raw.replace(OLD, NEW));
+      vi.advanceTimersByTime(60_000);
+      landsLate(chat, okAt);
+      await settled(how);
+      expect(Buffer.compare(Buffer.from(memoryFileRaw(bot)), Buffer.from(raw))).toBe(0);
+      expect(history()).toContain(OLD);
+      expect(history()).toMatch(/\(run [0-9a-f]{8}\), put back 2026-11-25: the user wrote before this OK and it reached this PC later\n/);
+      const item = plans()[0]!.fixes!.items.find((each) => each.text === OLD)!;
+      expect(item.done).toMatchObject({ undoneAt: expect.any(Number), putBack: { message: "withdraw" } });
+      expect(approve(true)).toEqual({ ok: false, error: "undone" });
+      expect(approve(false)).toEqual({ ok: false, error: "undone" });
+      expect(start().dream.settle(bot)).toBe(false);
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(Buffer.compare(Buffer.from(memoryFileRaw(bot)), Buffer.from(raw))).toBe(0);
     });
 
-    it.each(["t1", "t2"])("writes no value once the incoming update lands a withdrawal in %s", async (chat) => {
+    it.each([
+      ["its evidence message edited", () => typed.set("t1", [said("m1", NOW - DAY, `${M1} or January`)])],
+      ["its evidence message gone", () => typed.set("t1", [])],
+    ] as const)("puts the old bytes back once a sync shows %s", async (_, change) => {
       await quiet();
-      incoming = true;
-      expect(approve(false)).toEqual({ ok: false, error: "outdated" });
-      // the peer's clock runs behind this one
-      const withdraw = said("withdraw", NOW - DAY - 60_000, "Disregard March and keep the saved date.");
-      typed.set(chat, [...typed.get(chat) ?? [], withdraw]);
-      incoming = false;
-      expect(approve(false)).toEqual({ ok: false, error: "outdated" });
-      expect(memoryFileRaw(bot)).toBe(raw);
-      expect(history()).toBe("");
+      expect(approve(false).ok).toBe(true);
+      change();
+      expect(start().dream.settle(bot)).toBe(true);
+      expect(Buffer.compare(Buffer.from(memoryFileRaw(bot)), Buffer.from(raw))).toBe(0);
+      expect(plans()[0]!.fixes!.items[0]!.done!.putBack).toMatchObject({ message: "m1" });
+    });
+
+    it.each(["t1", "t2"])("keeps the fix for an owner line typed in %s after the OK", async (chat) => {
+      await quiet();
+      expect(approve(false).ok).toBe(true);
+      const fixed = memoryFileRaw(bot);
+      const archive = history();
+      typed.set(chat, [...typed.get(chat) ?? [], said("after", Date.now() + 1000, "Disregard March and keep the saved date.")]);
+      vi.advanceTimersByTime(2000);
+      expect(start().dream.settle(bot)).toBe(false);
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(memoryFileRaw(bot)).toBe(fixed);
+      expect(history()).toBe(archive);
+      expect(plans()[0]!.fixes!.items[0]!.done!.undoneAt).toBeUndefined();
+    });
+
+    it("leaves MEMORY.md as the owner edited it when a withdrawal lands after they changed the fixed line", async () => {
+      await quiet();
+      expect(approve(false).ok).toBe(true);
+      const edited = raw.replace(OLD, "- The main account's plan ends in May (noted 2026-11-26)");
+      writeMemoryFile(bot, edited);
+      landsLate("t2", Date.now());
+      expect(start().dream.settle(bot)).toBe(false);
+      expect(memoryFileRaw(bot)).toBe(edited);
+      expect(plans()[0]!.fixes!.items[0]!.done!.undoneAt).toBeUndefined();
+    });
+
+    it("puts back with an unrelated line edited since, keeping that edit", async () => {
+      await quiet();
+      expect(approve(false).ok).toBe(true);
+      const other = raw.replace("\r\n", "\r\n- Keeps tea in the blue tin\r\n");
+      writeMemoryFile(bot, memoryFileRaw(bot).replace("\r\n", "\r\n- Keeps tea in the blue tin\r\n"));
+      landsLate("t2", Date.now());
+      expect(start().dream.settle(bot)).toBe(true);
+      expect(Buffer.compare(Buffer.from(memoryFileRaw(bot)), Buffer.from(other))).toBe(0);
     });
 
     it("judges nothing and drops a waiting fix while an owner send waits", async () => {
@@ -1126,7 +1185,14 @@ describe("dreaming's wiring", () => {
     expect(call).toContain("stored: (threadId) => userMarks(threadId)");
     expect(call).toContain("under: (threadId, id) => rowsUnder(threadId, id)");
     expect(call).toContain("waiting: (botId) => hasQueuedSends(botId)");
-    expect(call).toContain("syncHold.incoming(botSyncId, ownerChats(bot, notOwnerChats()))");
+    expect(call).not.toContain("incoming");
+  });
+
+  it("puts an OK'd fix back after each chat import and at startup, and refreshes recall when it does", () => {
+    const imported = index.slice(index.indexOf("    imported: (botId) => {"), index.indexOf("    maintenance: () => {"));
+    expect(imported).toContain("settleFixes(botId);");
+    expect(index).toMatch(/function settleFixes\(botId: string\): void \{\s*if \(!dreamLive\.settle\(botId\)\) return;\s*broadcast\(\{ kind: "memory\.changed", botId \}\);\s*void memoryLookup\.refresh\(botId, true\);/);
+    expect(index).toMatch(/startupTiming\.afterPaint\("dreamFixes", async \(\) => \{\s*for \(const bot of store\.bots\) settleFixes\(bot\.id\);/);
   });
 
   it("writes no packet in dry mode", () => {

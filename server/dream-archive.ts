@@ -68,6 +68,11 @@ export function markUndone(text: string, runId: string, now: number): string {
   return text.replace(`${RUN(runId)}\n`, `${RUN(runId)}, undone ${pickStamp(now).slice(0, 10)}\n`);
 }
 
+/** The archive with this fix's heading marked put back: a line the user wrote before the OK reached this PC after it. */
+export function markPutBack(text: string, id: string, now: number): string {
+  return text.replace(`${RUN(id)}\n`, `${RUN(id)}, put back ${pickStamp(now).slice(0, 10)}: the user wrote before this OK and it reached this PC later\n`);
+}
+
 /** raw with each move back under its anchor, with its own line ending; a copy beyond what the move left is one someone already put back, so that move is skipped. */
 export function putBack(raw: string, moves: readonly ArchivedMove[]): { text: string; restored: number; skipped: number } {
   const lines = raw.split("\n");

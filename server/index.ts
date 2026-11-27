@@ -2361,6 +2361,7 @@ function initializeThreadSyncV2() {
     imported: (botId) => {
       if (botHasActiveTurn(botId)) pendingSyncFollows.add(botId);
       else store.followNewestTask(botId, sideThreadIds());
+      settleFixes(botId);
     },
     maintenance: () => {
       const pending = syncProfiles();
@@ -3225,11 +3226,6 @@ const dreamLive = createDreamLive({
   stored: (threadId) => userMarks(threadId),
   under: (threadId, id) => rowsUnder(threadId, id),
   waiting: (botId) => hasQueuedSends(botId),
-  incoming: (botId) => {
-    const bot = store.bot(botId);
-    const botSyncId = chatSyncBotId(profileSyncSettings, botId);
-    return !!bot && !!botSyncId && syncHold.incoming(botSyncId, ownerChats(bot, notOwnerChats()));
-  },
   checked: () => askPrs.settled(),
   reverted: async (botId, threadId) => {
     const pinned = store.taskByThread(botId, threadId)?.cwd;
@@ -3238,6 +3234,12 @@ const dreamLive = createDreamLive({
     return (pr) => Boolean(dir && revertIndex.undid(dir, pr));
   },
 });
+// an owner line typed before an OK'd fix that reaches this PC later puts the old note back
+function settleFixes(botId: string): void {
+  if (!dreamLive.settle(botId)) return;
+  broadcast({ kind: "memory.changed", botId });
+  void memoryLookup.refresh(botId, true);
+}
 // the same switch as Auto Notes: it edits the same file
 const memorySleep = createMemorySleep({
   dataDir: DATA_DIR,
@@ -10167,6 +10169,9 @@ startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; }
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
 startupTiming.afterPaint("usageStats", async () => usageStats.start());
 startupTiming.afterPaint("droppedAsks", async () => sweepDroppedAsks());
+startupTiming.afterPaint("dreamFixes", async () => {
+  for (const bot of store.bots) settleFixes(bot.id);
+});
 startupTiming.afterPaint("probes", async () => {
   await startupTiming.waitFor("accounts");
   return describeInstances("refresh")

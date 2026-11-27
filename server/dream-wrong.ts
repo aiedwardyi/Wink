@@ -44,7 +44,7 @@ export type FixItem = {
   /** when an OK found the owner wrote or sent since, or its own line changed; it never takes an OK again */
   outdated?: number;
 };
-export type FixDone = { at: number; line: number; cr: boolean; nth: number; count: number; heading: string; id: string; undoneAt?: number };
+export type FixDone = { at: number; line: number; cr: boolean; nth: number; count: number; heading: string; id: string; undoneAt?: number; view?: string[]; putBack?: { at: number; message: string } };
 export type JudgeLog = { input: number; output: number; ms: number };
 type Pair = { note: NoteLine; row: OwnerRow; sentence: string; turning: number; score: number };
 export type StoredRow = UserMark & { thread: string };
