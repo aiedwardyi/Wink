@@ -641,7 +641,7 @@ describe("a teammate on 1.0.256 and video or audio files", () => {
   const mp4 = (size: number) => Buffer.concat([Buffer.from("\0\0\0\x18ftypisom\0\0\x02\0isomiso2", "latin1"), randomBytes(size - 24)]);
   const mp3 = (size: number) => Buffer.concat([Buffer.from("ID3\x04\0\0\0\0\0\0", "latin1"), randomBytes(size - 10)]);
 
-  it.each(["host", "guest"])("serves %s room video ranges", async (side) => {
+  it.each(["host", "guest"])("serves %s room video ranges, and ends one quietly when the viewer closes while it opens", async (side) => {
     const { roomId } = await joinedTeam();
     const bytes = mp4(4096);
     const file = await hostUpload(roomId, bytes, "clip.mp4");
@@ -656,23 +656,7 @@ describe("a teammate on 1.0.256 and video or audio files", () => {
     expect([bad.status, bad.headers["content-range"]]).toEqual([416, "bytes */4096"]);
     const all = await call("GET", path);
     expect([all.status, all.headers["content-type"], all.body]).toEqual([200, "video/mp4", bytes]);
-    const other = path.replace(roomId, "other-room");
-    expect((await call("GET", other, undefined, { range: "bytes=100-199" })).status).toBe(404);
-    if (side === "guest") {
-      const otherRoom = createPeopleOnlyRoom("Other").id;
-      store.createGroup("Other", [], false, undefined, undefined, { roomId: otherRoom });
-      const privateFile = await hostUpload(otherRoom, bytes, "private.mp4");
-      expect((await call("GET", `/api/joined/rooms/${otherRoom}/files/${privateFile.id}`, undefined, { range: "bytes=100-199" })).status).toBe(404);
-    }
-  });
-
-  it.each(["host", "guest"])("ends a %s video quietly, its file closed, when the viewer closes while it opens", async (side) => {
-    const { roomId } = await joinedTeam();
-    const file = await hostUpload(roomId, mp4(4096), "clip.mp4");
-    expect((await call("POST", `/api/rooms/${roomId}/send`, Buffer.from(JSON.stringify({ text: "clip", fileIds: [file.id] })))).status).toBe(200);
-    await until(() => filesOf(roomId, "clip").length === 1);
-    const path = side === "host" ? `/api/rooms/${roomId}/files/${file.id}` : `/api/joined/rooms/${roomId}/files/${file.id}`;
-    expect((await call("GET", path)).status).toBe(200);
+    // The viewer closing while the file opens ends the answer quietly, its file closed.
     const blob = join(DATA_DIR, side === "host" ? "room-files" : "joined-files", roomId, file.id);
     let opening!: () => void;
     let gone!: () => void;
@@ -691,6 +675,14 @@ describe("a teammate on 1.0.256 and video or audio files", () => {
     req.destroy();
     await expect(served).resolves.toBeUndefined();
     expect(disk.opened.get(blob)?.fd).toBe(-1);
+    const other = path.replace(roomId, "other-room");
+    expect((await call("GET", other, undefined, { range: "bytes=100-199" })).status).toBe(404);
+    if (side === "guest") {
+      const otherRoom = createPeopleOnlyRoom("Other").id;
+      store.createGroup("Other", [], false, undefined, undefined, { roomId: otherRoom });
+      const privateFile = await hostUpload(otherRoom, bytes, "private.mp4");
+      expect((await call("GET", `/api/joined/rooms/${otherRoom}/files/${privateFile.id}`, undefined, { range: "bytes=100-199" })).status).toBe(404);
+    }
   });
 
   it("keeps the room live and loadable, with the media named in the line", async () => {
