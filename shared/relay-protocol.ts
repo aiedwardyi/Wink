@@ -10,6 +10,8 @@
 import { createHash, createPublicKey, sign, verify, randomBytes, type KeyObject } from "node:crypto";
 import { z } from "zod";
 
+import { RELAY_BASE_RE } from "./relay-host.mjs";
+
 // ---------------------------------------------------------------------------
 // ALPN ids
 
@@ -83,12 +85,14 @@ export const pokeMessageSchema = z.object({ type: z.literal("poke") });
 /** Relay to PC, only after an auth with `pokes`: another PC of the same Google account uploaded a change. */
 export const pokedMessageSchema = z.object({ type: z.literal("poked") });
 
-/** A short room join code: 6 characters with no 0, O, 1 or I. */
+/** A short room join code: 8 characters with no 0, O, 1 or I. 6-character codes minted earlier stay valid until they expire. */
 export const ROOM_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-export const ROOM_CODE_RE = /^[2-9A-HJ-NP-Z]{6}$/;
+export const ROOM_CODE_LENGTH = 8;
+export const ROOM_CODE_RE = /^[2-9A-HJ-NP-Z]{6}(?:[2-9A-HJ-NP-Z]{2})?$/;
 export const ROOM_CODE_TTL_MS = 7 * 24 * 60 * 60_000;
-/** PC to relay, only after a ready with `roomCodes`: a new short code that points at this PC. */
-export const roomCodeMessageSchema = z.object({ type: z.literal("roomcode"), id: z.string().max(64) });
+/** PC to relay, only after a ready with `roomCodes`: a new short code that points at this PC.
+ * `long` asks for 8 characters; an older relay drops it and mints 6, and an older PC never sends it because it can't read 8. */
+export const roomCodeMessageSchema = z.object({ type: z.literal("roomcode"), id: z.string().max(64), long: z.literal(true).optional() });
 /** Relay to PC: the code and when it expires, or neither when the relay refused. */
 export const roomCodedMessageSchema = z.object({ type: z.literal("roomcoded"), id: z.string(), code: z.string().regex(ROOM_CODE_RE).optional(), exp: count.optional() });
 
@@ -511,8 +515,7 @@ export function verifyInvite(
  * relay's base domain so no build has to name one. Neither part contains ":".
  */
 export const SETUP_PREFIX = "wks1";
-/** A relay base domain, lowercase: at least two dot-separated DNS labels. */
-export const RELAY_BASE_RE = /^(?=.{3,200}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+export { RELAY_BASE_RE };
 const SETUP_INVITE_RE = new RegExp(`^${INVITE_PREFIX}\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$`);
 
 export interface SetupCode {

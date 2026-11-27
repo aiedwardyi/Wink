@@ -4,10 +4,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { removeTempDir } from "./testing/cleanup.ts";
-import { EngineLogin } from "./engine-login.ts";
+import { EngineLogin, signInOwner } from "./engine-login.ts";
+import * as envPath from "./env-path.ts";
 import * as procs from "./procs.ts";
 
 const managers: EngineLogin[] = [];
+const ME = { mode: "code", owner: "pc:" } as const;
 const dirs: string[] = [];
 
 afterEach(async () => {
@@ -15,6 +17,66 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => removeTempDir(dir)));
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it("logs one CLI exit with its parsed reason and none of the CLI's text", async () => {
+  const { manager, cli } = fixture();
+  const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await manager.start("added", cli, ["stderr-exit"], {}, [], { ...ME, logExit: true });
+  await manager.wait("added");
+  expect(log.mock.calls).toEqual([["sign-in CLI exit code=3 reason=-"]]);
+});
+
+it("logs no device code from a failed sign-in in any letter case", async () => {
+  const { manager, cli } = fixture();
+  const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await manager.start("added", cli, ["stderr-code"], {}, [], { ...ME, logExit: true });
+  await manager.wait("added");
+  expect(log).toHaveBeenCalledOnce();
+  expect(JSON.stringify(log.mock.calls)).not.toMatch(/abcd-?efgh/i);
+});
+
+it("does not log a CLI exit for a successful sign-in", async () => {
+  const { manager, cli } = fixture();
+  const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await manager.start("added", cli, ["exit"], {}, [], { ...ME, logExit: true });
+  await manager.wait("added");
+  expect(manager.state("added")).toBe("complete");
+  expect(log).not.toHaveBeenCalled();
+});
+
+describe("Windows Claude version probe", () => {
+  async function stuckProbe() {
+    vi.useFakeTimers();
+    vi.stubEnv("PATH", process.env.PATH ?? "");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(envPath, "findCliCandidates").mockReturnValue(["claude-a", "claude-b"]);
+    const spawned = vi.spyOn(envPath, "resolveCliSpawn").mockReturnValue({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] });
+    vi.spyOn(procs, "cliVersion").mockImplementation(() => {});
+    const manager = new EngineLogin(60_000, 100);
+    managers.push(manager);
+    const start = manager.start("added", "claude", ["auth", "login"], {}, [], { ...ME, scope: "claudeAgent" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawned).not.toHaveBeenCalled();
+    return { manager, start, spawned };
+  }
+
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("continues to sign in when the probe callback never arrives", async () => {
+    const { start, spawned } = await stuckProbe();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(100);
+    await start;
+    expect(spawned).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops waiting on the probe when the job is cancelled", async () => {
+    const { manager, start, spawned } = await stuckProbe();
+    await manager.cancel("added");
+    await expect(start).resolves.toEqual({});
+    expect(spawned).not.toHaveBeenCalled();
+  });
 });
 
 function fixture(timeout = 15000, capture = 2500) {
@@ -25,6 +87,14 @@ function fixture(timeout = 15000, capture = 2500) {
     const fs = require('node:fs');
     const { spawn } = require('node:child_process');
     const [mode, file] = process.argv.slice(2);
+    if (mode === 'stderr-code') {
+      process.stderr.write('Enter the code abcd-efgh\\nOr Abcd-EfGh, then retry', () => process.exit(3));
+      return;
+    }
+    if (mode === 'stderr-exit') {
+      process.stderr.write('Earlier diagnostic\\r\\n\\x1b[31mOAuth failed: https://example.test/private-fixture-token?code=private accessToken=short ABCD-EFGH\\x1b[0m', () => process.exit(3));
+      return;
+    }
     if (mode === 'tree') {
       const child = spawn(process.execPath, ['-e',
         'setInterval(() => require("node:fs").appendFileSync(process.argv[1], "."), 25)', file], { stdio: 'ignore', windowsHide: true });
@@ -63,6 +133,10 @@ const REAL_OUTPUT = {
   muse: "Open this page to sign in:\n  https://auth.meta.com/oauth/device/?code=BBDN-DDKV\nconfirm this code matches:\n  BBDN-DDKV\n\nWaiting for approval…\n",
   claude: "Opening browser to sign in…\nIf the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=x"
     + "&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=x\nPaste code here if prompted > ",
+  claudePhone: "Opening browser to sign in…\nIf the browser didn't open, visit:\nhttps://claude.ai/oauth/authorize?z-urKJghPMIEbsa4ZY8DSczY9mVrkak\nPaste code here if prompted > ",
+  agy: "Open this link in a browser to log in with Google:\n  https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=x.apps.googleusercontent.com&code_challenge=x"
+    + "&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=openid&state=x\n"
+    + "Then paste the authorization code, or the full URL of the page you land on, and press Enter:\n",
 };
 
 async function replay(engine: string, output: string, authHosts?: string[]) {
@@ -71,7 +145,7 @@ async function replay(engine: string, output: string, authHosts?: string[]) {
   const script = join(dir, "replay.cjs");
   writeFileSync(file, output);
   writeFileSync(script, "process.stdout.write(require('node:fs').readFileSync(process.argv[2], 'utf8')); setInterval(() => {}, 1000);");
-  return manager.start(engine, `"${process.execPath}" "${script}"`, [file], {}, authHosts);
+  return manager.start(engine, `"${process.execPath}" "${script}"`, [file], {}, authHosts, ME);
 }
 
 describe("EngineLogin", () => {
@@ -81,8 +155,8 @@ describe("EngineLogin", () => {
     const received = join(dir, "received.txt");
     writeFileSync(script, `process.stdout.write(${JSON.stringify(REAL_OUTPUT.claude)});
       process.stdin.once('data', (code) => { require('node:fs').writeFileSync(${JSON.stringify(received)}, code); process.exit(0); });`);
-    const capture = await manager.start("added", `"${process.execPath}" "${script}"`, ["auth", "login"], {}, [], {
-      scope: "claudeAgent", account: { id: "added", of: "claude", home: dir, generation: 1 },
+    const capture = await manager.start("added", `"${process.execPath}" "${script}"`, ["auth", "login"], {}, [], { ...ME,
+      scope: "claudeAgent", account: { id: "added", of: "claude", home: dir, generation: 1 }, paste: true,
     });
     expect(capture.url).toContain("https://claude.com/cai/oauth/authorize?code=true");
     expect(capture.inputGeneration).toBe(manager.generation("added"));
@@ -107,10 +181,61 @@ describe("EngineLogin", () => {
     const { manager, dir } = fixture(15000, 100);
     const script = join(dir, "unsafe-claude.cjs");
     writeFileSync(script, `process.stdout.write(${JSON.stringify(url + "\nPaste code here if prompted > ")}); setInterval(() => {}, 1000);`);
-    const capture = await manager.start("added", `"${process.execPath}" "${script}"`, ["auth", "login"], {}, [], {
-      scope: "claudeAgent", account: { id: "added", of: "claude", home: dir, generation: 1 },
+    const capture = await manager.start("added", `"${process.execPath}" "${script}"`, ["auth", "login"], {}, [], { ...ME,
+      scope: "claudeAgent", account: { id: "added", of: "claude", home: dir, generation: 1 }, paste: true,
     });
     expect(capture.url).toBeUndefined();
+  });
+
+  it.each([
+    ["claudeAgent", "claudePhone", [], "https://claude.ai/oauth/authorize?z-urKJghPMIEbsa4ZY8DSczY9mVrkak"],
+    ["antigravityAgent", "agy", ["accounts.google.com"], "https://accounts.google.com/o/oauth2/auth?"],
+  ] as const)("takes a phone's pasted code for %s only when asked to", async (scope, output, hosts, url) => {
+    const { manager, dir } = fixture();
+    const script = join(dir, "phone.cjs");
+    const received = join(dir, "received.txt");
+    writeFileSync(script, `process.stdout.write(${JSON.stringify(REAL_OUTPUT[output])});
+      process.stdin.once('data', (code) => { require('node:fs').writeFileSync(${JSON.stringify(received)}, code); process.exit(code.toString().startsWith('good') ? 0 : 1); });`);
+    const cli = `"${process.execPath}" "${script}"`;
+    expect((await manager.start("desktop", cli, [], {}, [...hosts], { ...ME, scope: `${scope}-desktop` })).inputGeneration).toBeUndefined();
+    const capture = await manager.start("phone", cli, [], {}, [...hosts], { ...ME, scope, paste: true });
+    expect(capture.url?.startsWith(url)).toBe(true);
+    expect(capture.inputGeneration).toBe(manager.generation("phone"));
+    expect(manager.submit("phone", capture.inputGeneration!, "good-code#state")).toBe(true);
+    await manager.wait("phone");
+    expect(manager.state("phone")).toBe("complete");
+    expect(readFileSync(received, "utf8")).toBe("good-code#state\n");
+    expect(JSON.stringify(manager.capture("phone"))).not.toContain("good-code");
+    const retry = await manager.start("phone", cli, [], {}, [...hosts], { ...ME, scope, paste: true });
+    expect(manager.submit("phone", retry.inputGeneration!, "wrong-code")).toBe(true);
+    await manager.wait("phone");
+    expect(manager.state("phone")).toBe("failed");
+  });
+
+  it("names a sign-in's session by its phone and the browser's own id", () => {
+    const id = "0123456789abcdef0123456789abcdef";
+    expect(signInOwner({ "x-wink-client": id }, "phone-1")).toBe(`phone:phone-1:${id}`);
+    expect(signInOwner({ "x-wink-client": id })).toBe(`pc:${id}`);
+    expect(signInOwner({ "x-wink-client": id }, "phone-2")).not.toBe(signInOwner({ "x-wink-client": id }, "phone-1"));
+    for (const client of [undefined, "short", id.toUpperCase(), [id, id]]) expect(signInOwner({ "x-wink-client": client })).toBe("pc:");
+  });
+
+  it.each([
+    ["claudeAgent", "claudePhone", true], ["codex", "codex", false], ["grokAgent", "grok", false], ["museAgent", "muse", false],
+  ] as const)("lets only the session that started a %s sign-in answer or cancel it", async (scope, output, paste) => {
+    const { manager, dir } = fixture();
+    const script = join(dir, "owned.cjs");
+    writeFileSync(script, `process.stdout.write(${JSON.stringify(REAL_OUTPUT[output])}); setInterval(() => {}, 1000);`);
+    const phone = signInOwner({ "x-wink-client": "a".repeat(32) }, "phone-1");
+    const others = [signInOwner({ "x-wink-client": "a".repeat(32) }, "phone-2"), signInOwner({ "x-wink-client": "b".repeat(32) }), signInOwner({}), undefined];
+    expect(manager.owns(scope, phone)).toBe(true);
+    const capture = await manager.start(scope, `"${process.execPath}" "${script}"`, [], {}, [], { ...ME, scope, paste, owner: phone });
+    expect(manager.state(scope)).toBe("pending");
+    expect(JSON.stringify(capture)).not.toContain("phone-1");
+    expect(manager.owns(scope, phone)).toBe(true);
+    for (const other of others) expect(manager.owns(scope, other)).toBe(false);
+    await manager.cancel(scope);
+    for (const other of others) expect(manager.owns(scope, other)).toBe(true);
   });
 
   it("releases a finished login scope when neither kill nor close completes", async () => {
@@ -156,7 +281,7 @@ describe("EngineLogin", () => {
     vi.stubEnv("SIGNIN_REVIEW_SECRET", "review-secret");
     const { manager, cli, dir } = fixture();
     const file = join(dir, "credentials");
-    await manager.start("claude", cli, ["credentials", file], { CLAUDE_CONFIG_DIR: dir });
+    await manager.start("claude", cli, ["credentials", file], { CLAUDE_CONFIG_DIR: dir }, [], ME);
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ config: dir });
   });
 
@@ -170,7 +295,7 @@ describe("EngineLogin", () => {
       if (event === "close") { closeListeners.push(listener); return this; }
       return original.call(this, event, listener);
     });
-    await manager.start("fake", cli, ["normal"]);
+    await manager.start("fake", cli, ["normal"], {}, [], ME);
     expect(closeListeners.length).toBeGreaterThan(0);
     const settled = await Promise.race([
       manager.cancel("fake").then(() => true),
@@ -183,14 +308,14 @@ describe("EngineLogin", () => {
 
   it.each(["normal", "chunks", "stdout"])("captures only URL and code from %s output", async (mode) => {
     const { manager, cli } = fixture();
-    expect(await manager.start("fake", cli, [mode])).toEqual({ url: "https://auth.example/device", code: "ABCD-EFGH" });
+    expect(await manager.start("fake", cli, [mode], {}, [], ME)).toEqual({ url: "https://auth.example/device", code: "ABCD-EFGH" });
     expect(JSON.stringify(manager.capture("fake"))).not.toContain("private-token");
     expect(manager.state("fake")).toBe("pending");
   });
 
   it("keeps stdin open until cancellation", async () => {
     const { manager, cli } = fixture();
-    await manager.start("fake", cli, ["normal"]);
+    await manager.start("fake", cli, ["normal"], {}, [], ME);
     await new Promise((resolve) => setTimeout(resolve, 180));
     expect(manager.state("fake")).toBe("pending");
     await manager.cancel("fake");
@@ -199,34 +324,34 @@ describe("EngineLogin", () => {
 
   it("drops unanchored codes and URLs carrying credentials", async () => {
     const { manager, cli } = fixture(5000, 150);
-    expect(await manager.start("fake", cli, ["unsafe"])).toEqual({});
+    expect(await manager.start("fake", cli, ["unsafe"], {}, [], ME)).toEqual({});
   });
 
   it("starts one replacement after a cancelled job", async () => {
     const { manager, cli, dir } = fixture();
-    await manager.start("fake", cli, ["normal"]);
+    await manager.start("fake", cli, ["normal"], {}, [], ME);
     await manager.cancel("fake");
     const file = join(dir, "restarted");
-    await Promise.all([manager.start("fake", cli, ["count", file]), manager.start("fake", cli, ["count", file])]);
+    await Promise.all([manager.start("fake", cli, ["count", file], {}, [], ME), manager.start("fake", cli, ["count", file], {}, [], ME)]);
     expect(readFileSync(file, "utf8")).toBe(".");
   });
 
   it("starts another account's sign-in once a cancelled one on the engine closes", async () => {
     const { manager, cli, dir } = fixture();
-    await manager.start("a", cli, ["normal"], {}, [], { scope: "claude" });
+    await manager.start("a", cli, ["normal"], {}, [], { ...ME, scope: "claude" });
     void manager.cancel("a");
     manager.clear("a");
     const file = join(dir, "next");
-    await manager.start("b", cli, ["count", file], {}, [], { scope: "claude" });
+    await manager.start("b", cli, ["count", file], {}, [], { ...ME, scope: "claude" });
     expect(readFileSync(file, "utf8")).toBe(".");
   });
 
   it("does not launch a queued replacement during shutdown", async () => {
     const { manager, cli, dir } = fixture();
-    await manager.start("fake", cli, ["normal"]);
+    await manager.start("fake", cli, ["normal"], {}, [], ME);
     const cancel = manager.cancel("fake");
     const file = join(dir, "unexpected-start");
-    const restart = manager.start("fake", cli, ["count", file]);
+    const restart = manager.start("fake", cli, ["count", file], {}, [], ME);
     await Promise.all([cancel, restart, manager.dispose()]);
     expect(existsSync(file)).toBe(false);
     expect(manager.state("fake")).toBeUndefined();
@@ -235,7 +360,7 @@ describe("EngineLogin", () => {
   it("reuses one running job for simultaneous starts", async () => {
     const { manager, cli, dir } = fixture();
     const file = join(dir, "count");
-    const captures = await Promise.all([manager.start("fake", cli, ["count", file]), manager.start("fake", cli, ["count", file])]);
+    const captures = await Promise.all([manager.start("fake", cli, ["count", file], {}, [], ME), manager.start("fake", cli, ["count", file], {}, [], ME)]);
     expect(captures[0]).toEqual(captures[1]);
     expect(readFileSync(file, "utf8")).toBe(".");
   });
@@ -243,7 +368,7 @@ describe("EngineLogin", () => {
   it.each(["cancel", "timeout", "shutdown"])("kills the process tree on %s", async (action) => {
     const { manager, cli, dir } = fixture(action === "timeout" ? 2500 : 15000);
     const file = join(dir, "heartbeat");
-    await manager.start("fake", cli, ["tree", file]);
+    await manager.start("fake", cli, ["tree", file], {}, [], ME);
     await expect.poll(() => existsSync(file), { timeout: 5000 }).toBe(true);
     if (action === "cancel") await manager.cancel("fake");
     else if (action === "shutdown") await manager.dispose();
@@ -260,20 +385,77 @@ describe("EngineLogin", () => {
   it("passes the Muse launcher environment", async () => {
     const { manager, cli, dir } = fixture();
     const file = join(dir, "env");
-    await manager.start("muse", cli, ["env", file], { MUSE_LOGIN: "0" });
+    await manager.start("muse", cli, ["env", file], { MUSE_LOGIN: "0" }, [], ME);
     expect(readFileSync(file, "utf8")).toBe("0");
   });
 
   it.each(["exit", "fail"])("records the %s outcome without returning output", async (mode) => {
     const { manager, cli } = fixture();
-    const result = await manager.start("fake", cli, [mode]);
+    const result = await manager.start("fake", cli, [mode], {}, [], ME);
     await expect.poll(() => manager.state("fake")).toBe(mode === "exit" ? "complete" : "failed");
     expect(Object.keys(result).sort()).toEqual(["code", "url"]);
   });
 
   it("handles an absent CLI without exposing its error", async () => {
     const { manager, dir } = fixture();
-    expect(await manager.start("missing", join(dir, "absent.exe"), [])).toEqual({});
+    expect(await manager.start("missing", join(dir, "absent.exe"), [], {}, [], ME)).toEqual({});
     expect(manager.state("missing")).toBe("failed");
+  });
+});
+
+describe("newest Sign In wins", () => {
+  const tab = signInOwner({ "x-wink-client": "a".repeat(32) }, "phone-1");
+  const owners = {
+    "same tab": tab,
+    "other device": signInOwner({ "x-wink-client": "b".repeat(32) }),
+    "new tab": signInOwner({ "x-wink-client": "c".repeat(32) }, "phone-1"),
+  };
+  const modes = ["browser", "code"] as const;
+  const cases = modes.flatMap((first) => modes.flatMap((second) => (["same tab", "other device", "new tab"] as const)
+    .flatMap((who) => (["same id", "other account"] as const).map((target) => [first, second, who, target] as const))));
+
+  it.each(cases)("%s sign-in, then %s Sign In from the %s on the %s", async (first, second, who, target) => {
+    const { manager, cli, dir } = fixture();
+    const spawns = join(dir, "spawns");
+    await manager.start("a", cli, ["count", spawns], {}, [], { scope: "claudeAgent", mode: first, owner: tab });
+    const before = manager.generation("a");
+    const id = target === "same id" ? "a" : "b";
+    const owner = owners[who];
+    const capture = await manager.start(id, cli, ["count", spawns], {}, [], { scope: "claudeAgent", mode: second, owner });
+    const joined = id === "a" && who === "same tab" && first === second;
+    expect(readFileSync(spawns, "utf8")).toBe(joined ? "." : "..");
+    expect(capture.url).toBe("https://auth.example/device");
+    expect(manager.state(id)).toBe("pending");
+    if (id === "a") expect(manager.generation("a") === before).toBe(joined);
+    else expect(manager.state("a")).toBe("cancelled");
+    expect(manager.owns(id, owner)).toBe(true);
+    expect(manager.opensBrowser(id)).toBe(second === "browser");
+    expect(manager.joins(id, owner, second)).toBe(true);
+  });
+
+  it("never replaces a running sign-out", async () => {
+    const { manager, cli } = fixture();
+    await manager.start("a", cli, ["normal"], {}, [], { scope: "claudeAgent", mode: "sign-out" });
+    for (const id of ["a", "b"]) {
+      await expect(manager.start(id, cli, ["normal"], {}, [], { scope: "claudeAgent", mode: "code", owner: tab })).rejects.toThrow("Another sign-in");
+    }
+    expect(manager.state("a")).toBe("pending");
+  });
+
+  it("answers a browser sign-in as soon as its link is out", async () => {
+    const { manager, dir } = fixture(15000, 5000);
+    const script = join(dir, "url-only.cjs");
+    writeFileSync(script, "process.stdout.write('Visit: https://auth.example/device\\n'); setInterval(() => {}, 1000);");
+    const started = Date.now();
+    expect(await manager.start("a", `"${process.execPath}" "${script}"`, [], {}, [], { mode: "browser", owner: tab })).toEqual({ url: "https://auth.example/device" });
+    expect(Date.now() - started).toBeLessThan(4000);
+  });
+
+  it("requires a sign-in's owner and mode", () => {
+    const { manager, cli } = fixture();
+    // @ts-expect-error a sign-in start names its session and flow
+    void (() => manager.start("a", cli, ["normal"], {}, [], { scope: "claudeAgent" }));
+    // @ts-expect-error a sign-in start names its session and flow
+    void (() => manager.start("a", cli, ["normal"], {}, [], { mode: "code" }));
   });
 });

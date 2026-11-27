@@ -9,9 +9,9 @@ const watchers = new Set<() => void>();
 function readRainbowBox(): RainbowBox {
   try {
     const value = localStorage.getItem(RAINBOW_BOX_KEY);
-    return value === "on" ? "rainbow" : value === "theme" ? "theme" : "off";
+    return value === "on" ? "rainbow" : value === "theme" || value === null ? "theme" : "off";
   } catch {
-    return "off";
+    return "theme";
   }
 }
 

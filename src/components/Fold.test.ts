@@ -90,6 +90,24 @@ describe("Fold", () => {
     expect(fold()?.dataset.fold).toBe("open");
   });
 
+  it("calls onOpened once the open motion ends, or at once without one, never at mount or on closing", async () => {
+    const opened = vi.fn();
+    const show = (open: boolean, props: { instant?: boolean } = {}) =>
+      act(async () => root.render(createElement(Fold, { open, onOpened: opened, ...props, children: createElement("p", null, "Notes") })));
+    await show(true);
+    expect(opened).not.toHaveBeenCalled();
+    await show(false);
+    await show(true);
+    expect(opened).not.toHaveBeenCalled();
+    await settle();
+    expect(opened).toHaveBeenCalledTimes(1);
+    await show(false);
+    await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+    expect(opened).toHaveBeenCalledTimes(1);
+    await show(true, { instant: true });
+    expect(opened).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps closing content in place, inert, for the exit, then unmounts it", async () => {
     await render(true);
     await render(false);

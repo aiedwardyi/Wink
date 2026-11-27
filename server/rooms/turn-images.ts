@@ -8,7 +8,7 @@ import { roomFile } from "./files.ts";
 import { holdRoomFiles, roomFilesRoot } from "./files-folder.ts";
 
 export async function roomTurnMessages(roomId: string | undefined, messages: Message[]): Promise<Message[]> {
-  if (!roomId || !messages.some((message) => message.roomFiles?.some((file) => !file.deleted && file.type.startsWith("image/")))) return messages;
+  if (!roomId || !messages.some((message) => message.kind === "text" && message.roomFiles?.some((file) => !file.deleted && file.type.startsWith("image/")))) return messages;
   let release: () => void;
   try {
     release = holdRoomFiles();
@@ -20,6 +20,10 @@ export async function roomTurnMessages(roomId: string | undefined, messages: Mes
     if (!folder) return messages;
     const out: Message[] = [];
     for (const message of messages) {
+      if (message.kind !== "text") {
+        out.push(message);
+        continue;
+      }
       const tags: string[] = [];
       for (const attached of message.roomFiles ?? []) {
         if (attached.deleted) continue;

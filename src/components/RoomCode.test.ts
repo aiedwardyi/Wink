@@ -33,6 +33,14 @@ describe("RoomCode", () => {
     expect(text.className).toContain("select-all");
   });
 
+  it("never lets the short code shrink to nothing in a narrow row", async () => {
+    const row = await mount({ code: LONG, short: "6LD5N6" });
+    const cls = row.querySelector("[data-room-code-text]")!.className.split(/\s+/);
+    expect(cls).not.toContain("min-w-0");
+    expect(cls).not.toContain("truncate");
+    expect(row.className.split(/\s+/)).toContain("flex-wrap");
+  });
+
   it("keeps the short code selectable when copy fails", async () => {
     vi.stubGlobal("navigator", { clipboard: undefined });
     const row = await mount({ code: LONG, short: "6LD5N6" });

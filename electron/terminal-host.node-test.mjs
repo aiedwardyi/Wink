@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { EventEmitter } from "node:events";
 import test, { describe } from "node:test";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { createTerminalHost, createTerminalOutputParser, resolveBotSession, terminalEnvironment, terminalReadyTimeoutMs, trustedTerminalSender, workerShellArgs } from "./terminal-host.mjs";
+import { createTerminalHost, createTerminalOutputParser, paneProcesses, resolveBotSession, terminalEnvironment, terminalReadyTimeoutMs, trustedTerminalSender, workerShellArgs } from "./terminal-host.mjs";
 import { createPaneCleanup } from "./pane-cleanup.mjs";
 import { createRemoteHosts } from "./terminal-remote.mjs";
 import { installOrbitMsg, mailboxGrant, postPaneNote } from "./terminal-mailbox.mjs";
@@ -62,6 +63,42 @@ describe("captured worker account projections", () => {
     assert.deepEqual(f.host.liveAccountRuns().map((run) => run.accountId), ["claude.fixture", "claude.other"]);
   });
 
+  test("an empty shell is no worker on any login; a pane that runs one on a login it can't name is unknown", async (t) => {
+    let owner;
+    let table = [];
+    const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "unrouted" }), processes: { list: async () => { if (!table) throw new Error("unreadable"); return table; }, stop() {} } });
+    owner = f.owner;
+    t.after(() => f.host.dispose());
+    const shell = await f.host.openForBot("bot-1", { label: "shell" });
+    // No prompt mark yet (a shell without them, such as sh): nothing shows it idle.
+    assert.deepEqual(await f.host.livePanesForAccount("claude"), { count: 0, unknown: 1, generations: {} });
+    f.children[0].data(`\x1b]133;D;${shell.sessionId};0\x07`);
+    assert.deepEqual(await f.host.livePanesForAccount("claude"), { count: 0, unknown: 0, generations: {} });
+    // A job the shell left running at its prompt, then gone with no new prompt.
+    table = [{ pid: f.children[0].pid + 1000, ppid: f.children[0].pid, created: Date.now() }];
+    assert.equal((await f.host.livePanesForAccount("claude")).unknown, 1);
+    table = [];
+    assert.equal((await f.host.livePanesForAccount("claude")).unknown, 0);
+    table = null;
+    assert.equal((await f.host.livePanesForAccount("claude")).unknown, 1);
+    table = [];
+    await f.host.openForBot("bot-1", { label: "worker", command: "claude" });
+    assert.deepEqual(await f.host.livePanesForAccount("claude"), { count: 0, unknown: 1, generations: {} });
+    // The shell's own mark: the user started a command in it.
+    f.children[0].data(`\x1b]133;C;${shell.sessionId};${"A".repeat(43)}=\x07`);
+    assert.deepEqual(await f.host.livePanesForAccount("claude"), { count: 0, unknown: 2, generations: {} });
+  });
+
+  test("an idle shell is unknown when the host can't read its processes", async (t) => {
+    let owner;
+    const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "unrouted" }) });
+    owner = f.owner;
+    t.after(() => f.host.dispose());
+    const shell = await f.host.openForBot("bot-1", { label: "shell" });
+    f.children[0].data(`\x1b]133;D;${shell.sessionId};0\x07`);
+    assert.equal((await f.host.livePanesForAccount("claude")).unknown, 1);
+  });
+
   test("projects busy, idle and limit states without changing the captured account", async (t) => {
     let owner;
     const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "managed", executable: "claude", args: [], account: { id: "claude.fixture", generation: 1 }, environment: {} }) });
@@ -80,6 +117,34 @@ describe("captured worker account projections", () => {
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+test("desktop input reclaims its size from a browser on the same PTY without waiting for the resize reply", async (t) => {
+  const f = fixture();
+  t.after(() => f.host.dispose());
+  const { id, generation } = await f.host.open(f.event, f.input);
+  await f.host.resize(f.event, id, 85, 34);
+  const remote = { sessionId: id, generation, cols: 47, rows: 25 };
+  await f.host.resizeBot("bot-1", remote);
+  await f.host.inputBot("bot-1", { ...remote, data: "remote" });
+
+  const calls = [];
+  let ack;
+  f.children[0].resize = (...size) => {
+    calls.push(["size", ...size]);
+    return new Promise((resolve) => { ack = resolve; });
+  };
+  f.children[0].write = (data) => calls.push(["input", data]);
+  try {
+    await f.host.write(f.event, id, "\x1b[?1;2c");
+    await f.host.write(f.event, id, "ls\r");
+    await f.host.write(f.event, id, "pwd\r");
+    assert.deepEqual(calls, [["input", "\x1b[?1;2c"], ["size", 85, 34], ["input", "ls\r"], ["input", "pwd\r"]]);
+    assert.equal(f.host.read(f.event, id).cols, 85);
+    assert.equal(f.host.read(f.event, id).rows, 34);
+  } finally {
+    ack?.();
+  }
+});
 
 test("retired panes leave one owner listener and destruction closes every live pane", async (t) => {
   let owner;
@@ -4974,6 +5039,86 @@ test("the compact hook signals only a confirmed compact SessionStart",{ skip: pr
   }
 });
 
+describe("ConPTY start", () => {
+  function winFixture(t) {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "wink-conpty-pwsh-"));
+    fs.mkdirSync(path.join(programFiles, "PowerShell", "7"), { recursive: true });
+    fs.writeFileSync(path.join(programFiles, "PowerShell", "7", "pwsh.exe"), "");
+    t.after(() => fs.rmSync(programFiles, { recursive: true, force: true }));
+    const f = fixture({ platform: "win32", env: { ProgramFiles: programFiles } });
+    t.after(() => f.host.dispose());
+    return f;
+  }
+
+  test("answers the shell's startup device query before any panel is attached", async (t) => {
+    const f = winFixture(t);
+    await f.host.open(f.event, f.input);
+    f.children[0].data("\x1b[1t");
+    f.children[0].data("\x1b[c\x1b[?1004h\x1b[?9001h");
+    assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
+  });
+
+  test("answers a pre-started shell with no panel at all", async (t) => {
+    const f = winFixture(t);
+    assert.equal(await f.host.prestart(f.event, f.input), true);
+    f.children[0].data("\x1b[c");
+    assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
+  });
+
+  test("answers a device query split across two chunks", async (t) => {
+    const f = winFixture(t);
+    await f.host.open(f.event, f.input);
+    f.children[0].data("\x1b[");
+    f.children[0].data("c\x1b[?1004h");
+    assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
+  });
+
+  test("leaves device queries after the prompt to the panel", async (t) => {
+    const f = winFixture(t);
+    await f.host.open(f.event, f.input);
+    f.children[0].data("\x1b[c");
+    f.children[0].data("PS C:\\> ");
+    f.children[0].data("\x1b[c");
+    assert.deepEqual(f.children[0].writes, ["\x1b[?1;2c"]);
+    const late = winFixture(t);
+    await late.host.open(late.event, late.input);
+    late.children[0].data("PS C:\\> ");
+    late.children[0].data("\x1b[c");
+    assert.deepEqual(late.children[0].writes, []);
+  });
+
+  test("keeps the device query it answered from the panel, whole or split", async (t) => {
+    const shown = (f) => f.events.filter(([channel]) => channel === "terminal:data").map(([, event]) => event.data).join("");
+    const f = winFixture(t);
+    await f.host.open(f.event, f.input);
+    f.children[0].data("\x1b[1t");
+    f.children[0].data("\x1b[c\x1b[?1004h");
+    assert.equal(shown(f), "\x1b[1t\x1b[?1004h");
+    const split = winFixture(t);
+    await split.host.open(split.event, split.input);
+    split.children[0].data("\x1b[1t\x1b[");
+    split.children[0].data("c\x1b[?1004h");
+    assert.equal(shown(split), "\x1b[1t\x1b[?1004h");
+  });
+
+  test("answers a replacement shell's device query sent before it is ready", async (t) => {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "wink-conpty-pwsh-"));
+    fs.mkdirSync(path.join(programFiles, "PowerShell", "7"), { recursive: true });
+    fs.writeFileSync(path.join(programFiles, "PowerShell", "7", "pwsh.exe"), "");
+    t.after(() => fs.rmSync(programFiles, { recursive: true, force: true }));
+    const f = slowRespawnFixture({ platform: "win32", env: { ProgramFiles: programFiles } });
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { label: "AGENT", command: "codex go" });
+    f.children[0].exit({ exitCode: DLL_INIT_FAILED });
+    await f.settle();
+    f.children[1].data("\x1b[c");
+    f.release();
+    await f.settle();
+    assert.deepEqual(f.children[1].writes, ["\x1b[?1;2c", "codex go\r"]);
+    assert.equal(f.host.readBot("bot-1", { sessionId: pane.sessionId }).exited, false);
+  });
+});
+
 describe("remote panes", () => {
   const GB = 1024 ** 3;
   const HOSTS = { work: { ssh: "work", root: "D:/wink-remote", account: "me@example.com", enabled: true }, far: { ssh: "far", root: "D:/wink-remote", account: "me@example.com", enabled: true }, dad: { ssh: "dad", root: "D:/wink-remote", account: "me@example.com", enabled: false } };
@@ -5017,7 +5162,7 @@ describe("remote panes", () => {
     child.data("\x1b[2J\x1b[H" + CLAUDE_FOLDER_TRUST_YES.replaceAll("\n", "\r\n"));
     t.mock.timers.tick(500);
     await Promise.resolve();
-    assert.deepEqual(child.writes.slice(1), ["\x1b[B", "\r"]);
+    assert.deepEqual(child.writes.slice(1), ["\x1b[?1;2c", "\x1b[B", "\r"]);
   });
 
   test("needs only a shell's memory at home", async (t) => {
@@ -5149,4 +5294,103 @@ test("a user typing at a blip leaves the pane to the STALLED note", async (t) =>
   assert.equal(child.writes.includes("Continue from where you were."), false);
   assert.equal(f.notes.length, 1);
   assert.match(f.notes[0].text, /^STALLED: /);
+});
+
+const UNIX_SHELLS = [["bash", process.platform === "win32" ? path.join(process.env.ProgramFiles || "C:\\Program Files", "Git", "bin", "bash.exe") : "/bin/bash"], ["zsh", "/bin/zsh"]];
+for (const [name, shell] of UNIX_SHELLS) for (const platform of ["linux", "darwin"]) {
+  // The pane's own shell, args and env, read over pipes: it loads the user's file, then marks each prompt and command.
+  const marked = async (t, input) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-unix-home-"));
+    const rc = name === "zsh" ? ".zshrc" : platform === "darwin" ? ".bash_profile" : ".bashrc";
+    fs.writeFileSync(path.join(home, rc), "PS1='user-rc$ '\n");
+    let owner;
+    const f = fixture({ platform, env: { SHELL: shell, HOME: home, PATH: process.env.PATH, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) }, owner: () => owner, workerLaunch: async () => ({ kind: "unrouted" }), processes: { list: async () => [], stop() {} } });
+    owner = f.owner;
+    t.after(async () => { await f.host.dispose(); fs.rmSync(home, { recursive: true, force: true }); });
+    await f.host.openForBot("bot-1", { label: "shell" });
+    const child = f.children[0];
+    const output = await new Promise((resolve, reject) => {
+      const run = spawn(child.shell, [...child.args, "-i"], { cwd: home, env: child.options.env, windowsHide: true });
+      let text = "";
+      run.stdout.on("data", (chunk) => { text += chunk; });
+      run.stderr.on("data", (chunk) => { text += chunk; });
+      run.on("error", reject);
+      run.on("close", () => resolve(text));
+      run.stdin.end(input);
+    });
+    assert.match(output, /user-rc\$ /);
+    // Bash writes the prompt mark to stdout and PS0 to stderr, so only each kind's own order is fixed.
+    const marks = output.match(/\x1b\]133;[CD];[^\x07]*\x07/g) ?? [];
+    const [prompts, starts] = ["D", "C"].map((kind) => marks.filter((mark) => mark[6] === kind));
+    return { child, prompts, starts, output, unknown: async () => (await f.host.livePanesForAccount("claude")).unknown };
+  };
+
+  test(`a ${platform} ${name} pane reads idle at its own prompt and unknown while a command runs`, { skip: !fs.existsSync(shell) }, async (t) => {
+    const { child, prompts, starts, output, unknown } = await marked(t, "true\nexit\n");
+    assert.ok(prompts.length >= 2 && starts.length >= 1, JSON.stringify(output.slice(-300)));
+    assert.equal(await unknown(), 1);
+    child.data(prompts[0]);
+    assert.equal(await unknown(), 0);
+    child.data(starts[0]);
+    assert.equal(await unknown(), 1);
+    child.data(prompts[1]);
+    assert.equal(await unknown(), 0);
+  });
+
+  test(`a ${platform} ${name} pane is unknown while a background job runs and idle once it exits, with no new prompt`, { skip: !fs.existsSync(shell), timeout: 60_000 }, async (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-unix-home-"));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    // Git's bin/bash.exe is a launcher; the shell whose children count is the one it starts.
+    const real = process.platform === "win32" && name === "bash" ? path.join(path.dirname(path.dirname(shell)), "usr", "bin", "bash.exe") : shell;
+    const pane = await livePane(t, { platform, env: { SHELL: real, HOME: home, PATH: [path.dirname(real), process.env.PATH].join(path.delimiter), ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) } });
+    await until(() => pane.marks("D") >= 1);
+    assert.equal(await pane.unknown(), 0);
+    await pane.write(`(sleep 2; : > '${path.join(home, "job-done").replaceAll("\\", "/")}') &\r`);
+    await until(() => pane.marks("D") >= 2);
+    assert.equal(await pane.unknown(), 1);
+    await until(() => fs.existsSync(path.join(home, "job-done")));
+    await until(async () => await pane.unknown() === 0);
+    assert.equal(pane.marks("D"), 2);
+  });
+}
+
+const until = async (check, ms = 30_000) => {
+  for (const end = Date.now() + ms; !(await check());) {
+    if (Date.now() > end) throw new Error("Timed out");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+};
+
+// A real shell in a real PTY, as the host launches it; the raw output keeps the marks the host reads.
+async function livePane(t, options) {
+  let output = "";
+  let owner;
+  const f = fixture({ ...options, owner: () => owner, workerLaunch: async () => ({ kind: "unrouted" }), processes: paneProcesses,
+    loadPty: () => ({ spawn: (shell, args, ptyOptions) => {
+      const pty = spawnTerminalPty(createRequire(import.meta.url).resolve("node-pty"), shell, args, ptyOptions);
+      pty.onData((data) => { output += data; });
+      return pty;
+    } }) });
+  owner = f.owner;
+  t.after(() => f.host.dispose());
+  const { sessionId } = await f.host.openForBot("bot-1", { label: "shell" });
+  return {
+    marks: (kind) => output.split(`\x1b]133;${kind};${sessionId};`).length - 1,
+    unknown: async () => (await f.host.livePanesForAccount("claude")).unknown,
+    write: (text) => f.host.write(f.event, sessionId, text),
+  };
+}
+
+test("a PowerShell pane is unknown while a Start-Job runs and idle once it ends, with no new prompt", { skip: process.platform !== "win32", timeout: 90_000 }, async (t) => {
+  const pane = await livePane(t, { platform: "win32", env: { ...process.env } });
+  await until(() => pane.marks("D") >= 1);
+  assert.equal(await pane.unknown(), 0);
+  await pane.write("$job = Start-Job { Start-Sleep 3 }\r");
+  await until(() => pane.marks("D") >= 2);
+  assert.equal(await pane.unknown(), 1);
+  await until(async () => await pane.unknown() === 0);
+  assert.equal(pane.marks("D"), 2);
+  await pane.write("Start-Sleep 5\r");
+  await until(() => pane.marks("C") >= 2);
+  assert.equal(await pane.unknown(), 1);
 });

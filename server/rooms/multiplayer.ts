@@ -1,9 +1,11 @@
 // A shared bot group's runtime: what the answering bot is told about who
 // asked, and the one room entry each finished turn leaves for every viewer.
+import { lineWords } from "../replies.ts";
 import type { Message, Store } from "../store.ts";
 import { askById, settleAsk, type HostedGroup, type RoomAsk } from "./asks.ts";
 import { appendRoomEntry, committedRoomText, roomEntry, roomPeople } from "./db.ts";
 import { broadcastDoorEntry } from "./door-streams.ts";
+import { alertHostMention } from "./send.ts";
 import { teamBots } from "./team-bots.ts";
 
 /** The turn's last line to the bot: the teammates and words it answers, in order, so a delayed turn never answers the host's task instead. */
@@ -11,7 +13,7 @@ export function askNote(askId: string | undefined, botName: string, riders: read
   const ask = askId ? askById(askId) : null;
   const asked = (ask ? [ask, ...riders] : []).flatMap((row) => roomEntry(row.roomId, row.entryId) ?? []);
   if (!asked.length) return `(Reply to the conversation above as ${JSON.stringify(botName)}.)`;
-  const lines = asked.map((entry) => `${JSON.stringify(entry.author.name)} asked you: ${JSON.stringify(entry.text)}`).join(". Then ");
+  const lines = asked.map((entry) => `${JSON.stringify(entry.author.name)} asked you: ${JSON.stringify(lineWords(entry, entry.text, true))}`).join(". Then ");
   return `(${lines}. Reply to them as ${JSON.stringify(botName)}.)`;
 }
 
@@ -19,7 +21,7 @@ export function askNote(askId: string | undefined, botName: string, riders: read
 export function laneAsk(askId: string): { asker: string; ask: string } | null {
   const ask = askById(askId);
   const entry = ask && roomEntry(ask.roomId, ask.entryId);
-  return entry ? { asker: entry.author.name, ask: entry.text } : null;
+  return entry ? { asker: entry.author.name, ask: lineWords(entry, entry.text, true) } : null;
 }
 
 /** `refusal` is what the bot says when someone read-only asks it to do more than read. */
@@ -53,9 +55,11 @@ const shown = (message: Message, botId: string) =>
 /** A settled turn's shown words as one bot entry. Its thread row is linked by `roomEntryId`, never copied. */
 export function publishTurnAnswer(store: Pick<Store, "messagesFor" | "patchMessage">, group: HostedGroup, threadId: string, bot: { id: string; name: string }, since: number, askId?: string): void {
   if (threadId !== group.threadId) return;
-  const rows = store.messagesFor(threadId).slice(since).filter((message) => shown(message, bot.id));
+  const turn = store.messagesFor(threadId).slice(since);
+  const rows = turn.filter((message) => shown(message, bot.id));
   const text = committedRoomText("bot", rows.map((row) => row.text).join("\n\n"));
-  const ask = askId ? settleAsk(askId, Boolean(text)) : null;
+  const pictured = turn.some((message) => message.kind === "screen" && message.from?.botId === bot.id && message.roomEntryId);
+  const ask = askId ? settleAsk(askId, Boolean(text) || pictured) : null;
   if (!text || (askId && !ask)) return;
   const entry = appendRoomEntry(group.hosted.roomId, {
     author: { kind: "bot", id: bot.id, name: bot.name },
@@ -64,4 +68,5 @@ export function publishTurnAnswer(store: Pick<Store, "messagesFor" | "patchMessa
   });
   broadcastDoorEntry(group.hosted.roomId, entry);
   store.patchMessage(threadId, rows.at(-1)!.id, { roomEntryId: entry.id });
+  alertHostMention(group, entry);
 }

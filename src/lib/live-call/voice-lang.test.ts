@@ -612,7 +612,7 @@ describe("11-16 call c-21351ca21949, in its own order", () => {
     if (order === "the result lands first") await tick(10);
     speak(e, "On it.");
     await tick(10);
-    expect(e.results).toEqual([{ id: "p1", result: "sent. They already heard you answer: say nothing more." }]);
+    expect(e.results).toEqual([{ id: "p1", result: "sent" }]);
     const played = audio.played;
     // Google speaks after every tool result and after his yes; one of the two turns had no transcript.
     e.events.answering();
@@ -709,7 +709,7 @@ describe("11-16 call c-21351ca21949, in its own order", () => {
     e.events.heard("And even though I said yes. The card is still up showing the question for yes or no.");
     speak(e, "I'll add the issue of me speaking while quiet to the room fixes for you now.");
     await tick(0);
-    expect(fixes(e)).toEqual([`[Wink] Not done: "${add}" starts only once they say yes, and its question is on their screen. Say that plainly in one short line; don't ask it again or offer it again.`]);
+    expect(fixes(e)).toEqual([`[Wink] Not sent: "${add}" starts only once they say yes. A spoken yes is enough. Say that plainly in one short line; don't ask it again or offer it again.`]);
   });
 });
 

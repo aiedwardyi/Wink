@@ -5,10 +5,11 @@
 // phone's own selection.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { createPortal, flushSync } from "react-dom";
-import { ArrowUp, Copy, MessageSquareReply, Pin, PinOff, SmilePlus, TextCursor, X } from "lucide-react";
+import { ArrowUp, Copy, MessageSquareReply, Pin, PinOff, SmilePlus, TextCursor, Trash2, X } from "lucide-react";
 import { EXTENDED_REACTIONS } from "../../shared/reactions";
 import type { Message } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
+import { isBottomFollowScroll } from "@/lib/bottom-follow";
 import { cn } from "@/lib/cn";
 import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -150,8 +151,8 @@ function cancelPress(): void {
   document.removeEventListener("scroll", pressScrolled, true);
 }
 
-function pressScrolled(): void {
-  if (press?.timer) cancelPress();
+function pressScrolled(event: Event): void {
+  if (press?.timer && !isBottomFollowScroll(event)) cancelPress();
 }
 
 /** Row props that open the menu after a still, one-finger hold on touch-first devices. */
@@ -176,7 +177,6 @@ export function holdToOpen(open: ((x: number, y: number, opener: HTMLElement) =>
           open(x, y, opener);
         }, HOLD_MS),
       };
-      // the transcript can scroll under a still finger, like following a streaming reply
       document.addEventListener("scroll", pressScrolled, true);
     },
     onTouchMove: (e: React.TouchEvent<HTMLElement>) => {
@@ -329,7 +329,9 @@ function useMenuDismiss(ref: React.RefObject<HTMLDivElement | null>, opener: HTM
     // a scroll moves the message without moving the pointer, so the menu
     // would point at the wrong row
     const transcript = opener.closest("[data-orbit-transcript]");
-    const onScroll = () => onClose();
+    const onScroll = (event: Event) => {
+      if (!isBottomFollowScroll(event)) onClose();
+    };
     window.addEventListener("mousedown", onDown);
     window.addEventListener("touchstart", onDown);
     window.addEventListener("keydown", onKey);
@@ -391,6 +393,8 @@ export function MessageMenu({
   onReply,
   onPin,
   onReact,
+  onDelete,
+  selectText = true,
   onClose,
   closing = false,
 }: {
@@ -398,9 +402,11 @@ export function MessageMenu({
   y: number;
   opener: HTMLElement;
   target: MessageMenuTarget;
-  onReply: (message: Message) => void;
-  onPin: (message: Message) => void;
+  onReply?: (message: Message) => void;
+  onPin?: (message: Message) => void;
   onReact?: (emoji: string) => void;
+  onDelete?: () => void;
+  selectText?: boolean;
   onClose: () => void;
   closing?: boolean;
 }) {
@@ -559,7 +565,7 @@ export function MessageMenu({
           role="menuitem"
           data-menu-pin
           onClick={() => {
-            onPin(message);
+            onPin?.(message);
             closeMenu(opener, ref.current, onClose);
           }}
           className={cn(ROW_CLASS, touch && "min-h-10")}
@@ -570,7 +576,7 @@ export function MessageMenu({
           {target.notice ? t(pinned ? "teamRoom.unpinNotice" : "teamRoom.pinNotice") : t(pinned ? "chat.unpinMessage" : "chat.pinMessage")}
         </button>
       )}
-      {message.kind === "text" && message.quick?.state !== "answer" && (
+      {onReply && message.kind === "text" && (
         <button
           type="button"
           role="menuitem"
@@ -598,7 +604,22 @@ export function MessageMenu({
         <Copy size={16} className="text-ink-secondary" />
         {t("chat.copy")}
       </button>
-      {touch && (
+      {onDelete && (
+        <button
+          type="button"
+          role="menuitem"
+          data-menu-delete
+          onClick={() => {
+            onDelete();
+            closeMenu(opener, ref.current, onClose);
+          }}
+          className={cn(ROW_CLASS, "text-danger", touch && "min-h-10")}
+        >
+          <Trash2 size={16} />
+          {t("chrome.delete")}
+        </button>
+      )}
+      {touch && selectText && (
         <button
           type="button"
           role="menuitem"

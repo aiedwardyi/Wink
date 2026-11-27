@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { applyPicks, currentOnly, currentPicks, parseTimeline, pickKeysList, picksBlock, promptTokens, renderTimeline, type PickChange } from "./picks.ts";
+import { withSystemChanges } from "./turn-context.ts";
+import { applyPicks, currentOnly, currentPicks, GOALS_PROMPT_TOKENS, mergeTimelines, parseTimeline, pickKeysList, picksBlock, PICKS_PROMPT_TOKENS, pinnedGoals, promptTokens, renderTimeline, timelineEntries, type PickChange } from "./picks.ts";
 
 const at = (day: number, hour: number, minute = 0) => new Date(2026, 10, day, hour, minute).getTime();
 const pick = (key: string, picked: string, said: string, when: number, extra: Partial<Extract<PickChange, { kind: "pick" }>> = {}): PickChange =>
@@ -8,6 +9,68 @@ const pick = (key: string, picked: string, said: string, when: number, extra: Pa
 const tweak = (key: string, said: string, when: number): PickChange => ({ kind: "tweak", at: when, key, said });
 
 describe("applyPicks", () => {
+  it("keeps precise action time in metadata readable by older timeline parsers", () => {
+    const time = at(17, 10) + 5_000;
+    const text = applyPicks("", [pick("forum", "C - Reddit cards", "c", time)])!.text;
+    expect(text).toContain("## 2026-11-17 10:00 | forum | current");
+    expect(text).toContain(`- At: ${time}`);
+    expect(parseTimeline(text).entries[0]?.at).toBe(time);
+  });
+  it("merges a legacy roll file with a timeline without losing either", () => {
+    const timeline = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10))])!.text;
+    const merged = mergeTimelines("# Older decisions\n- Keep the old note\n", timeline)!;
+    expect(currentPicks(merged)[0]?.picked).toBe("C - Reddit cards");
+    expect(merged).toContain("Keep the old note");
+    expect(mergeTimelines(timeline, "# Older decisions\n- Keep the old note\n")).toBe(merged);
+  });
+
+  it("preserves known replacement order for old minute ids", () => {
+    const text = '# Decision timeline\n\n## 2026-11-17 10:00 | palette | replaced by 2026-11-17 10:00 (2)\n- Picked: ~~Zinc~~\n- Said: "zinc"\n\n## 2026-11-17 10:00 (2) | palette | current\n- Picked: Amber\n- Said: "amber"\n';
+    const other = applyPicks("", [pick("layout", "Cards", "cards", at(17, 11))])!.text;
+    const merged = mergeTimelines(text, other)!;
+    expect(currentPicks(merged).find(({ key }) => key === "palette")?.picked).toBe("Amber");
+    expect(mergeTimelines(merged, text)).toBe(merged);
+  });
+  it("never lets a card tap from another PC replace a typed pick", () => {
+    const typed = applyPicks("", [pick("theme", "Dark", "dark", at(17, 10))])!.text;
+    const tapped = applyPicks("", [pick("theme", "Light", "light", at(17, 10) + 5_000, { tapped: true })])!.text;
+    const merged = mergeTimelines(typed, tapped)!;
+    expect(currentPicks(merged).map(({ picked }) => picked)).toEqual(["Dark"]);
+    expect(parseTimeline(merged).entries).toHaveLength(2);
+    expect(mergeTimelines(tapped, typed)).toBe(merged);
+    expect(mergeTimelines(merged, typed)).toBe(merged);
+    expect(mergeTimelines(merged, merged)).toBe(merged);
+  });
+  it("keeps same-minute tweaks in the order the user said them through a merge", () => {
+    const first = applyPicks("", [pick("header", "Big header", "big header", at(17, 12))])!.text;
+    const text = applyPicks(first, [tweak("header", "make the header smaller", at(17, 12, 1)), tweak("header", "keep the header large", at(17, 12, 1) + 20_000)])!.text;
+    expect(currentPicks(mergeTimelines(text, text))[0]!.tweaks.map(({ said }) => said)).toEqual(["make the header smaller", "keep the header large"]);
+  });
+  it("keeps the later choice when two PCs pick within the same minute", () => {
+    const early = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10) + 5_000)])!.text;
+    const late = applyPicks("", [pick("forum", "A - plain list", "a", at(17, 10) + 10_000)])!.text;
+    expect(currentPicks(mergeTimelines(early, late))[0]?.picked).toBe("A - plain list");
+  });
+  it("merges colliding ids deterministically without duplicating picks on replay", () => {
+    const a = applyPicks("", [pick("forum", "A - plain list", "a", at(17, 10)), tweak("forum", "smaller header", at(17, 10, 1))])!.text;
+    const b = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10)), pick("theme", "Dark", "dark", at(17, 10))])!.text;
+    const merged = mergeTimelines(a, b)!;
+    expect(mergeTimelines(b, a)).toBe(merged);
+    expect(mergeTimelines(merged, a)).toBe(merged);
+    expect(mergeTimelines(merged, b)).toBe(merged);
+    expect(parseTimeline(merged).entries).toHaveLength(3);
+    expect(new Set(parseTimeline(merged).entries.map(({ id }) => id)).size).toBe(3);
+    expect(currentPicks(merged)).toHaveLength(2);
+    expect(parseTimeline(merged).entries.find(({ picked }) => picked === "A - plain list")?.tweaks).toHaveLength(1);
+  });
+  it("keeps same-time snapshots separate when their source messages differ", () => {
+    const first = applyPicks("", [pick("forum", "B", "b", at(17, 10), { thread: "t1", messageId: "m1", questionId: "q1", files: ["/shots/first.png"] })])!.text;
+    const next = applyPicks("", [pick("forum", "B", "b", at(17, 10), { thread: "t2", messageId: "m2", questionId: "q2", files: ["/shots/next.png"] })])!.text;
+    const merged = mergeTimelines(first, next)!;
+    expect(parseTimeline(merged).entries).toHaveLength(2);
+    expect(mergeTimelines(merged, first)).toBe(merged);
+    expect(mergeTimelines(merged, next)).toBe(merged);
+  });
   it("replaces the current pick on the same question in one write, the old one struck with a pointer", () => {
     const first = applyPicks("", [pick("Forum look", "A - plain list", "a looks cleanest", at(17, 10))])!;
     const next = applyPicks(first.text, [pick("forum  LOOK!", "C - Reddit cards", "actually c", at(17, 10, 40))])!;
@@ -37,6 +100,48 @@ describe("applyPicks", () => {
     expect(currentPicks(next.text)).toMatchObject([{ picked: "C - Reddit cards", tweaks: [{ at: "2026-11-17 10:41", said: "make the header smaller" }] }]);
   });
 
+  it("never lets a card tap replace a typed pick, however late", () => {
+    const typed = applyPicks("", [pick("forum", "A - plain list", "a", at(17, 10))])!.text;
+    expect(applyPicks(typed, [pick("forum", "C - Reddit cards", "c", at(17, 11), { tapped: true })])).toBeNull();
+    expect(applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 11), { tapped: true }), pick("forum", "A - plain list", "a", at(17, 10))])!.text).toContain("- Picked: A - plain list");
+  });
+  it("lets typing replace a card tap even when the tap is stamped later", () => {
+    const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 11), { tapped: true })])!.text;
+    expect(parseTimeline(tapped).entries[0]?.tapped).toBe(true);
+    const next = applyPicks(tapped, [pick("forum", "A - plain list", "a", at(17, 10))])!.text;
+    expect(currentPicks(next).map(({ picked }) => picked)).toEqual(["A - plain list"]);
+    expect(currentPicks(next)[0]?.tapped).toBeUndefined();
+  });
+  it("makes a tap's option typed when the user types the same option", () => {
+    const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10), { tapped: true })])!.text;
+    const typed = applyPicks(tapped, [pick("forum", "C - Reddit cards", "c please", at(17, 11))])!.text;
+    expect(applyPicks(typed, [pick("forum", "B - tiles", "b", at(17, 12), { tapped: true })])).toBeNull();
+  });
+  it("keeps a retyped pick's binding and attachments after it syncs with the tap", () => {
+    const tapped = applyPicks("", [pick("forum", "B", "b", at(17, 10), { tapped: true, thread: "t1", messageId: "m1", questionId: "q1", files: ["/shots/tap.png"] })])!.text;
+    const typed = applyPicks(tapped, [pick("forum", "B", "I choose B", at(17, 11), { thread: "t2", messageId: "m2", questionId: "q2", files: ["/shots/typed.png"] })])!.text;
+    expect(parseTimeline(mergeTimelines(tapped, typed)!).entries).toMatchObject([
+      { thread: "t2", messageId: "m2", questionId: "q2", files: ["/shots/typed.png"] },
+    ]);
+  });
+  it("merges a retyped tap with another PC's copy of the typed pick", () => {
+    const tapped = applyPicks("", [pick("forum", "B", "b", at(17, 10), { tapped: true, thread: "t1", messageId: "m1", questionId: "q1" })])!.text;
+    const typing = pick("forum", "B", "I choose B", at(17, 11), { thread: "t2", messageId: "m2", questionId: "q2" });
+    const retyped = applyPicks(tapped, [typing])!.text;
+    const copy = applyPicks("", [typing])!.text;
+    for (const merged of [mergeTimelines(retyped, copy)!, mergeTimelines(copy, retyped)!, mergeTimelines(mergeTimelines(copy, retyped)!, tapped)!]) {
+      expect(parseTimeline(merged).entries).toMatchObject([{ messageId: "m2", picked: "B" }]);
+    }
+  });
+  it("dates a retyped tap at the typing, so an older delayed pick never replaces it", () => {
+    const tapped = applyPicks("", [pick("forum", "C - Reddit cards", "c", at(17, 10), { tapped: true })])!.text;
+    const typed = applyPicks(tapped, [pick("forum", "C - Reddit cards", "c please", at(17, 11))])!.text;
+    expect(applyPicks(typed, [pick("forum", "B - tiles", "b", at(17, 10, 30))])).toBeNull();
+    const merged = mergeTimelines(tapped, typed)!;
+    expect(parseTimeline(merged).entries).toHaveLength(1);
+    expect(currentPicks(merged)[0]?.tapped).toBeUndefined();
+    expect(applyPicks(merged, [pick("forum", "B - tiles", "b", at(17, 10, 30))])).toBeNull();
+  });
   it("changes nothing for a restated pick, a repeated tweak or a tweak with no pick", () => {
     const first = applyPicks("", [pick("forum look", "C - Reddit cards", "c", at(17, 10)), tweak("forum look", "make the header smaller", at(17, 11))])!;
     expect(applyPicks(first.text, [pick("Forum Look", "C - Reddit cards", "c again", at(17, 12)), tweak("forum look", "make the header smaller", at(17, 13))])).toBeNull();
@@ -100,7 +205,7 @@ describe("picksBlock", () => {
     expect(promptTokens("답변")).toBe(2);
     for (const word of ["answer", "답변"]) {
       const text = applyPicks("", Array.from({ length: 40 }, (_, i) => pick(`question ${i + 1}`, Array(6).fill(`${word} ${i + 1}`).join(" "), "yes", at(1 + Math.floor(i / 4), i % 4))))!.text;
-      const block = picksBlock(text);
+      const block = picksBlock(text, PICKS_PROMPT_TOKENS);
       expect(promptTokens(block)).toBeLessThanOrEqual(300);
       expect(block).toContain("- question 40 (11-10):");
       expect(block).toMatch(/\nAlso current, on file: question 39; .* \(\+\d+ more\)$/);
@@ -110,6 +215,99 @@ describe("picksBlock", () => {
   it("is empty without a current pick", () => {
     expect(picksBlock("")).toBe("");
     expect(picksBlock("# Older decisions\n\n- GIT ROW LOOK (11-14): rows show the branch first\n")).toBe("");
+  });
+});
+
+describe("goals", () => {
+  const GOAL = "Glasses v1 = CEO meeting tool: person brief + top 3 competitors + 1 news line";
+  const at = new Date(2026, 10, 22, 15, 38).getTime();
+  const picks = (count: number) => Array.from({ length: count }, (_, i) => ({ kind: "pick" as const, at: at + (i + 1) * 60_000, key: `question ${i}`, picked: `option ${i}`, said: `go with ${i}` }));
+
+  it("shows an open goal in words beside 74 newer picks, until it is done", () => {
+    const text = applyPicks("", [{ kind: "goal", at, key: "Glasses v1", goal: GOAL }, ...picks(74)])!.text;
+    expect(text).toContain("## 2026-11-22 15:38 | Glasses v1 | current\n- Picked: Glasses v1 = CEO meeting tool: person brief + top 3 competitors + 1 news line\n- Kind: goal");
+    expect(picksBlock(text)).toContain(`- Glasses v1 (11-22): ${GOAL}`);
+    expect(pinnedGoals(text)).toEqual([{ name: "Glasses v1", goal: GOAL }]);
+    expect(picksBlock(text, PICKS_PROMPT_TOKENS).split("\n\n")[1]!.length).toBe(picksBlock(applyPicks("", picks(74))!.text, PICKS_PROMPT_TOKENS).length);
+    const done = applyPicks(text, [{ kind: "goal", at: at + 100 * 60_000, key: "glasses v1", done: true }])!.text;
+    expect(picksBlock(done)).not.toContain("competitors");
+    expect(pinnedGoals(done)).toEqual([]);
+    expect(applyPicks(done, [{ kind: "goal", at: at + 101 * 60_000, key: "Glasses v1", done: true }])).toBeNull();
+  });
+
+  it("keeps a goal through a merge and changes nothing when it is pinned again in the same words", () => {
+    const text = applyPicks("", [{ kind: "goal", at, key: "Glasses v1", goal: GOAL }])!.text;
+    expect(applyPicks(text, [{ kind: "goal", at: at + 60_000, key: "Glasses v1", goal: ` ${GOAL} ` }])).toBeNull();
+    expect(pinnedGoals(mergeTimelines(text, applyPicks("", picks(3))!.text))).toEqual([{ name: "Glasses v1", goal: GOAL }]);
+  });
+
+  it("shows every one of 12 long goals in words within its own budget", () => {
+    const goals = Array.from({ length: 12 }, (_, i) => ({ kind: "goal" as const, at: at + i * 60_000, key: `goal ${i}`, goal: `${"spec words ".repeat(18)}${i}` }));
+    const block = picksBlock(applyPicks("", goals)!.text);
+    expect(promptTokens(block)).toBeLessThanOrEqual(GOALS_PROMPT_TOKENS);
+    expect(block).not.toContain("more");
+    for (let i = 0; i < 12; i += 1) expect(block).toContain(`- goal ${i} (11-22): spec words`);
+  });
+
+  it("keeps goal words on every line when 20 open goals have long names", () => {
+    const goals = Array.from({ length: 20 }, (_, i) => ({ kind: "goal" as const, at: at + i * 60_000, key: `${i} Glasses v1 meeting tool for the CEO`, goal: `spec ${i}: person brief + top 3 competitors + 1 news line` }));
+    const block = picksBlock(applyPicks("", goals)!.text);
+    const lines = block.split("\n").filter((line) => line.startsWith("- "));
+    expect(promptTokens(block)).toBeLessThanOrEqual(GOALS_PROMPT_TOKENS);
+    expect(lines.length).toBeGreaterThan(10);
+    for (const line of lines) expect(line).toMatch(/: spec \d+: person/);
+  });
+
+  it("leaves a goal open when Auto Notes lands a pick on its key", () => {
+    const text = applyPicks("", [{ kind: "goal", at, key: "Glasses v1", goal: GOAL }])!.text;
+    expect(pickKeysList(text)).toBe("");
+    const picked = applyPicks(text, [{ kind: "pick", at: at + 60_000, key: "glasses v1", picked: "B - dark frame", said: "b, the dark frame" }])!.text;
+    expect(pinnedGoals(picked)).toEqual([{ name: "Glasses v1", goal: GOAL }]);
+    expect(picksBlock(picked)).toContain(`- Glasses v1 (11-22): ${GOAL}`);
+    expect(currentPicks(picked).map(({ picked }) => picked)).toEqual(["B - dark frame"]);
+    expect(pinnedGoals(mergeTimelines(picked, text))).toEqual([{ name: "Glasses v1", goal: GOAL }]);
+  });
+
+  it("leaves a current pick current when pin_goal uses its key", () => {
+    const text = applyPicks("", [{ kind: "pick", at, key: "Glasses v1", picked: "B - dark frame", said: "b, the dark frame" }])!.text;
+    const pinned = applyPicks(text, [{ kind: "goal", at: at + 60_000, key: "Glasses v1", goal: GOAL }])!.text;
+    expect(pinned).toContain("## 2026-11-22 15:38 | Glasses v1 | current\n- Picked: B - dark frame");
+    expect(currentPicks(pinned).map(({ picked }) => picked)).toEqual(["B - dark frame"]);
+    expect(picksBlock(pinned)).toContain("- Glasses v1 (11-22): B - dark frame");
+    expect(pinnedGoals(pinned)).toEqual([{ name: "Glasses v1", goal: GOAL }]);
+    expect(currentPicks(mergeTimelines(pinned, text)).map(({ picked }) => picked)).toEqual(["B - dark frame"]);
+  });
+
+  it("drops a finished goal from the current entries and the Timeline", () => {
+    const text = applyPicks("", [{ kind: "goal", at, key: "Glasses v1", goal: GOAL }, { kind: "goal", at: at + 60_000, key: "Glasses v1", goal: `${GOAL}, dark frame` }])!.text;
+    const done = applyPicks(text, [{ kind: "goal", at: at + 120_000, key: "Glasses v1", done: true }])!.text;
+    expect(currentPicks(done)).toEqual([]);
+    expect(pickKeysList(done)).toBe("");
+    expect(timelineEntries(parseTimeline(done).entries)).toEqual([]);
+    const again = applyPicks(done, [{ kind: "goal", at: at + 180_000, key: "Glasses v1", goal: "Glasses v2" }])!.text;
+    expect(timelineEntries(parseTimeline(again).entries).map(({ picked }) => picked)).toEqual(["Glasses v2"]);
+  });
+
+  it("fits 1, 5, 20 or 100 open goals in about 400 tokens, Korean counted by its own cost", () => {
+    for (const words of [`${GOAL}. `, "안경 v1은 CEO 미팅 도구다: 소개 요약 + 상위 경쟁사 3곳 + 뉴스 한 줄. "]) {
+      for (const count of [1, 5, 20, 100]) {
+        const goals = Array.from({ length: count }, (_, i) => ({ kind: "goal" as const, at: at + i * 60_000, key: `goal ${i}`, goal: words.repeat(12) }));
+        const block = picksBlock(applyPicks("", goals)!.text);
+        expect(promptTokens(block), `${count} ${words}`).toBeLessThanOrEqual(GOALS_PROMPT_TOKENS);
+        expect(block).toContain(`- goal ${count - 1} (11-22): ${words.slice(0, 10)}`);
+        expect(block).toContain("its whole text is in memory/decisions.md");
+      }
+    }
+  });
+
+  it("keeps a short goal whole and gives a long one what is left", () => {
+    const long = "Glasses v1 is the CEO meeting tool: show a person brief when they say their name, then top 3 competitors and 1 news line per topic. ".repeat(14);
+    const text = applyPicks("", [{ kind: "goal", at, key: "Glasses v1", goal: long }, { kind: "goal", at: at + 60_000, key: "Ship", goal: "ship the call fix" }])!.text;
+    const block = picksBlock(text);
+    expect(block).toContain("- Ship (11-22): ship the call fix\n");
+    expect(block.split("\n").find((line) => line.startsWith("- Glasses v1"))!.length).toBeGreaterThan(800);
+    expect(block).toContain('A goal ending in "..." is cut here; its whole text is in memory/decisions.md.');
+    expect(promptTokens(block)).toBeLessThanOrEqual(GOALS_PROMPT_TOKENS);
   });
 });
 
@@ -129,7 +327,7 @@ describe("picks index", () => {
 
   it("names every current pick's key within the cap at 34 picks", () => {
     const text = applyPicks("", keys(34).map((key, i) => pick(key, `answer ${i + 1} with a few words`, "yes", at(1 + Math.floor(i / 4), i % 4))))!.text;
-    const block = picksBlock(text);
+    const block = picksBlock(text, PICKS_PROMPT_TOKENS);
     expect(promptTokens(block)).toBeLessThanOrEqual(300);
     expect(block).toContain("- area 34 look (11-09): answer 34 with a few words");
     for (const key of keys(34)) expect(block).toContain(key);
@@ -141,7 +339,7 @@ describe("picks index", () => {
       tweak(key, "make the header a bit smaller", at(10 + i, 10)),
       tweak(key, "and use a blue accent instead of orange", at(10 + i, 11)),
     ]))!.text;
-    const block = picksBlock(text);
+    const block = picksBlock(text, PICKS_PROMPT_TOKENS);
     expect(promptTokens(block)).toBeLessThanOrEqual(300);
     expect(block).toContain('- area 8 look (11-17): C - option 8 cards (C:\\Users\\me\\Desktop\\Orbit-cards\\day-117\\mock\\C.png) + tweaks: "make the header a bit smaller" (11-17), "and use a blue accent instead of orange" (11-17)');
     for (const key of keys(8)) expect(block).toContain(key);
@@ -154,7 +352,7 @@ describe("picks index", () => {
       pick("포럼 화면 모양", korean, "그걸로 해", at(17, 10)),
       ...["헤더를 더 작게 해 줘 지금보다 반 정도로", "주황 대신 파란 포인트 색으로 바꿔 줘", "댓글 수는 오른쪽 위에 작게 보여 줘"].map((said, i) => tweak("포럼 화면 모양", said, at(17, 11, i))),
     ])!.text;
-    const block = picksBlock(text);
+    const block = picksBlock(text, PICKS_PROMPT_TOKENS);
     expect(promptTokens(block)).toBeLessThanOrEqual(300);
     expect(block).toContain("- 포럼 화면 모양 (11-17): 포럼 화면은");
     for (const key of keys(9)) expect(block).toContain(key);
@@ -165,6 +363,15 @@ describe("applyPicks order", () => {
   it("treats the same option in other words as a restatement that keeps its tweaks", () => {
     const first = applyPicks("", [pick("forum look", "C - Reddit cards", "c", at(17, 10)), tweak("forum look", "make the header smaller", at(17, 11))])!;
     expect(applyPicks(first.text, [pick("forum look", "C - Reddit-style cards", "yes, c with the reddit style cards", at(17, 12))])).toBeNull();
+  });
+
+  it("replaces a pick when the same letter names a changed option", () => {
+    const blue = applyPicks("", [pick("Header color", "A - blue header", "a", at(17, 10))])!;
+    const red = applyPicks(blue.text, [pick("Header color", "A - red header", "For Header color, pick A - red header instead.", at(17, 10, 2))])!;
+    expect(red).toMatchObject({ picks: 1, replaced: 1 });
+    expect(red.text).toContain("- Picked: ~~A - blue header~~");
+    expect(currentPicks(red.text).map(({ picked }) => picked)).toEqual(["A - red header"]);
+    expect(applyPicks(red.text, [pick("Header color", "A - red header bar", "a, the red header bar", at(17, 10, 3))])).toBeNull();
   });
 
   it("lands a tweak the user asks for again after reversing it", () => {
@@ -178,5 +385,35 @@ describe("applyPicks order", () => {
     const a = applyPicks("", [pick("forum look", "A - plain list", "a", at(17, 10))])!;
     const c = applyPicks(a.text, [pick("forum look", "C - Reddit cards", "actually c", at(17, 10, 1))])!;
     expect(applyPicks(c.text, [pick("forum look", "A - plain list", "a", at(17, 10))])).toBeNull();
+    const first = { ...pick("forum look", "A - plain list", "a", at(17, 10)), thread: "t1", messageId: "m1", questionId: "q1" };
+    const second = { ...pick("forum look", "C - Reddit cards", "actually c", first.at), thread: "t1", messageId: "m2", questionId: "q1" };
+    const tied = applyPicks("", [first, second])!;
+    expect(currentPicks(tied.text)[0]?.messageId).toBe("m2");
+    expect(applyPicks(tied.text, [first, second])).toBeNull();
+  });
+});
+
+describe("the picks block size", () => {
+  it("shows every current pick in full, not the newest one and the rest by name", () => {
+    const changes = [
+      ...Array.from({ length: 78 }, (_, n) => pick(`topic number ${n}`, `Option ${n} - plain words`, `option ${n}`, at(1 + Math.floor(n / 20), n % 20))),
+      tweak("topic number 0", "make the header a bit smaller", at(1, 0, 30)),
+    ];
+    const block = picksBlock(applyPicks("", changes)!.text);
+    expect(block.split("\n").filter((line) => line.startsWith("- "))).toHaveLength(78);
+    expect(block).not.toMatch(/\(\+\d+ more\)/);
+    expect(block).toContain('- topic number 0 (11-01): Option 0 - plain words + tweaks: "make the header a bit smaller" (11-01)');
+  });
+});
+
+describe("all picks in the system prompt", () => {
+  it("a new tweak or pick rides as a small change, never a session recycle", () => {
+    const before = applyPicks("", Array.from({ length: 78 }, (_, n) => pick(`topic number ${n}`, `Option ${n} - plain words`, `option ${n}`, at(1 + Math.floor(n / 20), n % 20))))!.text;
+    for (const change of [tweak("topic number 3", "make the header a bit smaller", at(9, 9)), pick("topic number 3", "Option X - other words", "actually x", at(9, 9)), pick("new topic", "Option N - new words", "n", at(9, 9))]) {
+      const after = applyPicks(before, [change])!.text;
+      const update = withSystemChanges("hi", picksBlock(before), picksBlock(after));
+      expect(update).not.toBeNull();
+      expect(update!.length).toBeLessThan(1_000);
+    }
   });
 });

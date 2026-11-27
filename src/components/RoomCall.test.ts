@@ -105,7 +105,7 @@ async function mount(bots: Bot[] = [bot("first"), bot("Wink", true)], phone = fa
   const render = (group?: TeamRoom) => act(async () => root.render(createElement(StoreProvider, null, group && createElement(TeamRoomView, { group }), createElement(CallHostSlot))));
   await render(room());
   await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "qa:1" }), lastEventId: "qa:1" }));
-  await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", gemini: { configured: true, introSeen: true } }), lastEventId: "qa:2" }));
+  await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", gemini: { configured: true, introSeen: true }, features: { voiceCalls: true } }), lastEventId: "qa:2" }));
   unmount = async () => { await act(async () => root.unmount()); host.remove(); };
   return { host, render, sse: (frame: { kind: string; threadId: string; message: Partial<Message> }, n: number) => act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ cursor: `qa:${n}`, ...frame }), lastEventId: `qa:${n}` })) };
 }

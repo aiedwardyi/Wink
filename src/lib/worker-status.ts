@@ -1,9 +1,12 @@
 import type { Translate } from "./i18n";
 import { parseWorkerLabel, workerRuns, type WorkerShownState } from "./worker-runs";
 
+/** Every open worker, whatever its state; the sidebar line and the side pane badge both say this number. */
+export const openWorkerCount = (runs: readonly unknown[]): number => runs.length;
+
 export function workerStatusText(runs: readonly { state: WorkerShownState }[], t: Translate): string {
   if (!runs.some(({ state }) => state === "working" || state === "waiting")) return "";
-  const count = runs.length;
+  const count = openWorkerCount(runs);
   return t(count === 1 ? "workers.countOne" : "workers.countMany", { count });
 }
 

@@ -47,6 +47,25 @@ function fixture(t, short = false) {
   return { home, tempRoot, worktreeRoot, session, scratch, cleanup, options, jobs, warnings, priorities, ledger, advance: (ms) => { time += ms; }, open: (panes) => { open = panes; } };
 }
 
+function paneHost(t, f, cleanup = f.cleanup) {
+  const owner = { id: 1, send() {}, isDestroyed: () => false };
+  const host = createTerminalHost({
+    authorize() {}, owner: () => owner, resolveCwd: async () => f.home, now: f.options.now, scratchRoot: f.tempRoot,
+    platform: "linux", env: { SHELL: "/bin/sh", TEMP: f.tempRoot }, freeMemory: () => 64 * 1024 ** 3,
+    paneCleanup: cleanup,
+    loadPty: () => ({ spawn: () => ({ onData() {}, onExit() {}, write() {}, resize() {}, kill() {} }) }),
+  });
+  t.after(() => host.dispose());
+  return host;
+}
+
+async function sweeps(f) {
+  for (let pass = 0; pass < 3; pass++) {
+    await f.cleanup.sweep();
+    f.advance(2 * DAY_MS);
+  }
+}
+
 function repo(f, name = "worker") {
   const main = path.join(f.home, "repo");
   fs.mkdirSync(main);
@@ -1192,11 +1211,112 @@ test("an old scratch row cannot expire a newer hand-off", async (t) => {
   assert.equal(fs.existsSync(f.scratch), false);
 });
 
+test("closed, kept, open and row-less marked scratch each go on their day and junction targets survive", async (t) => {
+  const f = fixture(t);
+  const precious = path.join(f.home, "precious");
+  fs.mkdirSync(precious);
+  fs.writeFileSync(path.join(precious, "file"), "safe");
+  const pane = (name) => ({ ...f.session, id: name, label: `${name} | model | high`, reportAt: null });
+  const scratch = (name, linked = false) => {
+    const dir = path.join(f.tempRoot, `wink-${name}`);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, "file"), name);
+    if (linked) fs.symlinkSync(precious, path.join(dir, "link"), process.platform === "win32" ? "junction" : "dir");
+    return dir;
+  };
+  const folders = [f.scratch, scratch("DONE", true), scratch("KEPT"), scratch("LIVE"), scratch("LOST", true), scratch("GHOST")];
+  for (const dir of folders.slice(4)) f.cleanup.mark(dir);
+  for (const name of ["DONE", "KEPT", "LIVE"]) f.cleanup.opened(pane(name));
+  await f.cleanup.closed(pane("DONE"));
+  await f.cleanup.closed(pane("KEPT"), true);
+  f.open([pane("LIVE"), pane("GHOST")]);
+  const left = () => folders.filter((dir) => fs.existsSync(dir)).map((dir) => path.basename(dir));
+  await f.cleanup.sweep();
+  assert.equal(left().length, 6);
+  f.advance(2 * DAY_MS);
+  const written = new Date(Date.now() + 2 * DAY_MS);
+  fs.utimesSync(path.join(folders[4], "file"), written, written);
+  await f.cleanup.sweep();
+  assert.deepEqual(left(), ["wink-TEST", "wink-KEPT", "wink-LIVE", "wink-LOST", "wink-GHOST"]);
+  f.advance(2 * DAY_MS);
+  await f.cleanup.sweep();
+  assert.deepEqual(left(), ["wink-TEST", "wink-LIVE", "wink-GHOST"]);
+  assert.equal(fs.readFileSync(path.join(precious, "file"), "utf8"), "safe");
+  assert.deepEqual(f.warnings, []);
+});
+
 test("scratch absent from the ledger is never swept", async (t) => {
   const f = fixture(t);
   f.advance(10 * DAY_MS);
   await f.cleanup.sweep();
+  f.advance(2 * DAY_MS);
+  await f.cleanup.sweep();
   assert.equal(fs.existsSync(f.scratch), true);
+});
+
+test("a bot pane's new scratch gets Wink's mark and a folder already there gets none", async (t) => {
+  const f = fixture(t);
+  const marked = [];
+  const host = paneHost(t, f, { ...f.cleanup, mark: (dir) => marked.push(dir) });
+  await host.openForBot("bot", { label: "NEW", command: "codex test" });
+  await host.openForBot("bot", { label: "TEST", command: "codex test" });
+  assert.deepEqual(marked, [path.join(f.tempRoot, "wink-NEW")]);
+});
+
+test("a scratch the cleanup worker marks goes a quiet day after its row is gone", async (t) => {
+  const f = fixture(t);
+  const worker = createPaneCleanupWorker({ home: f.home, tempRoot: f.tempRoot, worktreeRoot: f.worktreeRoot, dataDir: path.join(f.home, ".orbit"), instance: "app", warn: (error) => f.warnings.push(error) });
+  t.after(() => worker.dispose());
+  worker.mark(f.scratch);
+  await worker.flush();
+  await sweeps(f);
+  assert.equal(fs.existsSync(f.scratch), false);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a folder made in place of a row-less Wink scratch is kept on that scratch's day", async (t) => {
+  const f = fixture(t);
+  f.cleanup.mark(f.scratch);
+  await f.cleanup.sweep();
+  fs.rmSync(f.scratch, { recursive: true });
+  fs.mkdirSync(f.scratch);
+  fs.writeFileSync(path.join(f.scratch, "notes"), "mine");
+  await sweeps(f);
+  assert.equal(fs.existsSync(f.scratch), true);
+});
+
+test("a pane's safety copy stays while the pane is open, even with the pane's mark copied in", async (t) => {
+  const f = fixture(t);
+  await paneHost(t, f).openForBot("bot", { label: "LIVE", command: "codex test" });
+  const safety = path.join(f.tempRoot, "wink-safety-LIVE-1119");
+  fs.cpSync(path.join(f.tempRoot, "wink-LIVE"), safety, { recursive: true });
+  fs.writeFileSync(path.join(safety, "status.txt"), " M file");
+  await sweeps(f);
+  assert.equal(fs.existsSync(safety), true);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("another Wink's live and kept scratch is never swept", async (t) => {
+  const f = fixture(t);
+  const host = paneHost(t, f, createPaneCleanup({ ...f.options, instance: "other" }));
+  await host.openForBot("bot", { label: "THEIRS", command: "codex test" });
+  const kept = await host.openForBot("bot", { label: "HANDOFF", command: "codex test" });
+  await host.closeForBot("bot", kept.sessionId, true);
+  await sweeps(f);
+  assert.deepEqual(["wink-THEIRS", "wink-HANDOFF"].filter((name) => !fs.existsSync(path.join(f.tempRoot, name))), []);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("device downloads, release builds and a user's own wink- folder are never swept", async (t) => {
+  const f = fixture(t);
+  const folders = [fs.mkdtempSync(path.join(f.tempRoot, "wink-device-")), path.join(f.tempRoot, "wink-1.0.288-release"), path.join(f.tempRoot, "wink-notes")];
+  for (const dir of folders) {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "file"), "not a pane's");
+  }
+  await sweeps(f);
+  assert.deepEqual(folders.filter((dir) => !fs.existsSync(dir)), []);
+  assert.deepEqual(f.warnings, []);
 });
 
 test("startup and six-hour sweeps use unreferenced timers", (t) => {

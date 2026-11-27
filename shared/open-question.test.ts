@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { answerPrefix, answerText, isSentByPerson, scanQuestion, typedReply } from "./open-question.ts";
+import { ANSWERED_IN_CHAT, answerText, isSentByPerson, scanQuestion } from "./open-question.ts";
 
 const ask = { role: "bot", kind: "options", card: { askUser: true as const } };
 
@@ -25,46 +25,25 @@ describe("team room rows and open questions", () => {
   });
 });
 
-describe("a question settled with the person's line", () => {
-  const folder = { role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Which folder?", staysOpen: true as const } };
-  const branch = (card: object) => ({ role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Which branch?", staysOpen: true as const, ...card } });
-  const line = (text: string) => ({ role: "user", kind: "text", text });
-
-  it("takes that line, so an older question stays open", () => {
-    expect(scanQuestion([folder, branch({}), line("main")])).toBe(folder);
-    expect(scanQuestion([folder, branch({ answered: "main" }), line("main")])).toBe(folder);
-    expect(scanQuestion([folder, branch({ options: ["main", "dev"], answered: "Answered in chat" }), line("release")])).toBe(folder);
-  });
-
-  it("a tapped line answers its own card, even after a newer one arrived", () => {
-    const ship = { id: "ship", role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Ship it?", staysOpen: true as const, options: ["Yes", "No"] } };
-    const tap = { ...line("Yes"), answersCard: "ship" };
-    expect(scanQuestion([ship, branch({}), tap])?.card.subtitle).toBe("Which branch?");
-    expect(scanQuestion([{ ...ship, card: { ...ship.card, answered: "Yes" } }, branch({}), tap])?.card.subtitle).toBe("Which branch?");
-  });
-
-  it("leaves the next line to the older question", () => {
-    expect(scanQuestion([folder, branch({ answered: "main" }), line("main"), line("docs")])).toBeNull();
-    expect(scanQuestion([folder, branch({ dismissed: true }), line("docs")])).toBeNull();
-  });
-});
-
 describe("an answer to an older question", () => {
   it("names its question only when a newer question follows", () => {
     const older = { role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Ship\n it?", staysOpen: true as const } };
     const newer = { role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Which branch?", staysOpen: true as const } };
-    expect(answerText(older, "Yes")).toBe("Re: “Ship it?”\nYes");
-    expect(answerText(newer, "main")).toBe(`${answerPrefix(newer)}main`);
+    expect(answerText([older, newer], older, "Yes")).toBe("Re: “Ship it?”\nYes");
+    expect(answerText([older, newer], newer, "main")).toBe("main");
   });
 });
 
-
-describe("a typed line on an open question", () => {
-  const card = (options: string[]) => ({ role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Ship it?", staysOpen: true as const, options } });
-
-  it("answers a card without choices or with a choice's text, and never one it only types past", () => {
-    expect(typedReply(card([]), "after lunch\nthanks")).toBe("after lunch");
-    expect(typedReply(card(["Yes", "No"]), " Yes ")).toBe("Yes");
-    expect(typedReply(card(["Yes", "No"]), "is this the review thing?")).toBeNull();
+describe("a settled card", () => {
+  it("never hands a line typed past it to an older question", () => {
+    const folder = { role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Which folder?", staysOpen: true as const } };
+    const branch = { role: "bot", kind: "options", card: { askUser: true as const, subtitle: "Which branch?", staysOpen: true as const, options: ["main", "dev"] } };
+    const said = (text: string) => ({ role: "user", kind: "text", text });
+    expect(scanQuestion([folder, branch, said("release")])).toBe(branch);
+    expect(scanQuestion([folder, { ...branch, card: { ...branch.card, answered: ANSWERED_IN_CHAT } }, said("release")])).toBe(folder);
+    const tapped = { ...branch, card: { ...branch.card, answered: "main" } };
+    expect(scanQuestion([folder, tapped, said("release"), said("main")])).toBe(folder);
+    expect(scanQuestion([folder, tapped, said("main"), said("src/app")])).toBeNull();
   });
 });
+

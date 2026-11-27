@@ -4,19 +4,42 @@
 // its choices, and a tap on the row opens the card again. It arrives as the row
 // when the box already holds a draft, a reply or attachments. Unlike an approval
 // it never takes the composer over: the bot keeps working, and typing a reply
-// answers it only when it has no choices. The x on the row and a sideways swipe
-// across it dismiss the question, exactly like the open card's x.
-import { memo, useEffect, useLayoutEffect, useRef, type MouseEvent } from "react";
+// answers it only when it has no choices. A sideways swipe hides the row here;
+// the bot still waits, and a count on the composer brings it back.
+import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, X } from "lucide-react";
 import type { Message } from "@/state/store";
 import { ARRIVAL_GLOW_ANIMATION } from "@/lib/arrival-glow";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
-import { useQuestionView } from "@/lib/open-question";
-import { lockAxis, reducedMotion, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
+import { isPhone, lockAxis, reducedMotion, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
 import { markCut } from "@/lib/scroll-cut";
 import { Fold } from "./Fold";
 import { QUOTE_LABEL, QUOTE_TEXT } from "./ReplyQuote";
+
+// Per question id, outside the store, so each chat's question stays as it was left.
+const rowQuestions = new Set<string>();
+const shrunkQuestions = new Set<string>();
+const hiddenQuestions = new Set<string>();
+const glowedQuestions = new Set<string>();
+const watchers = new Set<() => void>();
+function subscribe(notify: () => void) {
+  watchers.add(notify);
+  return () => { watchers.delete(notify); };
+}
+function mark(questions: Set<string>, id: string, value: boolean) {
+  if (value) questions.add(id);
+  else questions.delete(id);
+  for (const notify of watchers) notify();
+}
+const useMarked = (questions: Set<string>, id: string) => useSyncExternalStore(subscribe, () => questions.has(id), () => false);
+export const useQuestionHidden = (id: string) => useMarked(hiddenQuestions, id);
+
+/** Shows a question as its row (or, with `folded` false, as the card) from now on; it never shrinks by itself after that. */
+export function foldQuestion(id: string, folded = true) {
+  shrunkQuestions.add(id);
+  mark(rowQuestions, id, folded);
+}
 
 // the arrow pressed unmounts with its question, so the next question's row takes the focus
 let stepFocus = 0;
@@ -39,6 +62,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   count,
   index = count - 1,
   onStep,
+  onJump,
   typed = "",
   attached = 0,
   replying = false,
@@ -52,8 +76,10 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   count: number;
   /** this question's place among them, oldest first */
   index?: number;
-  /** shows the question `step` places away */
-  onStep?: (step: number) => void;
+  /** shows the question `step` places away, folded as this one is */
+  onStep?: (step: number, folded: boolean) => void;
+  /** scrolls the chat to the message behind this question; absent when none is there */
+  onJump?: () => void;
   /** the message box's text and attachment count: a change after arrival shrinks the card */
   typed?: string;
   attached?: number;
@@ -64,8 +90,20 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   onDismiss: () => void;
 }) {
   const { t } = useI18n();
-  const view = useQuestionView(message.id, { typed, attached, replying, movedOn }, reducedMotion());
-  const { folded, glowing } = view;
+  const drafting = Boolean(typed.trim()) || attached > 0 || replying;
+  // read in render so a question arriving over a draft never paints as the card first
+  const folded = useMarked(rowQuestions, message.id) || (drafting && !shrunkQuestions.has(message.id));
+  const hidden = useMarked(hiddenQuestions, message.id);
+  const [glowing, setGlowing] = useState(() => !glowedQuestions.has(message.id) && !reducedMotion());
+  useEffect(() => { glowedQuestions.add(message.id); }, [message.id]);
+  const draft = useRef({ typed, attached });
+  useEffect(() => {
+    const was = draft.current;
+    draft.current = { typed, attached };
+    if (shrunkQuestions.has(message.id) || !(drafting || movedOn || typed !== was.typed || attached > was.attached)) return;
+    setGlowing(false);
+    foldQuestion(message.id);
+  }, [typed, attached, drafting, movedOn, message.id]);
   const touch = useRef<{ x: number; y: number; id: string } | null>(null);
   const slide = useRef<{ x: number; y: number; at: number; axis: SwipeAxis } | null>(null);
   const rowButton = useRef<HTMLButtonElement>(null);
@@ -86,17 +124,24 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
     }
     stepFocus = 0;
   }, []);
+  // a question that leaves mid-glow must not pulse again when it comes back;
   // focus follows only a key press, as a scripted move after a click inherits the ring of any earlier key press
   const fold = (value: boolean, keyboard = false) => {
+    setGlowing(false);
     moveFocus.current = keyboard;
-    view.fold(value);
+    if (value) foldQuestion(message.id);
+    else mark(rowQuestions, message.id, false);
+  };
+  const hide = () => {
+    setGlowing(false);
+    mark(hiddenQuestions, message.id, true);
   };
   const step = (by: number) => {
     stepFocus = by;
-    onStep?.(by);
+    onStep?.(by, folded);
   };
   const card = message.card;
-  if (!card) return null;
+  if (!card || hidden) return null;
   const lead = count > 1 ? (
     <span ref={arrows} className="flex shrink-0 items-center gap-0.5">
       <button type="button" onClick={() => step(-1)} disabled={index <= 0} aria-label={t("ask.previousQuestion")} title={t("ask.previousQuestion")} className={ARROW}>
@@ -160,7 +205,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
             if (!start || !end) return;
             const dx = end.clientX - start.x;
             if ((start.axis ?? lockAxis(dx, end.clientY - start.y)) !== "x") return;
-            if (swipeStep(dx, dx / Math.max(1, event.timeStamp - start.at), event.currentTarget.offsetWidth)) onDismiss();
+            if (swipeStep(dx, dx / Math.max(1, event.timeStamp - start.at), event.currentTarget.offsetWidth)) hide();
           }}
           onTouchCancel={(event) => {
             slide.current = null;
@@ -192,7 +237,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
           aria-label={label}
           data-pending-question={message.id}
           onAnimationEnd={(event) => {
-            if (event.target === event.currentTarget && event.animationName === ARRIVAL_GLOW_ANIMATION) view.endGlow();
+            if (event.target === event.currentTarget && event.animationName === ARRIVAL_GLOW_ANIMATION) setGlowing(false);
           }}
           onTouchStart={(event) => {
             touch.current = null;
@@ -221,7 +266,12 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
                 {controls(true)}
               </div>
               {/* only a long question's text scrolls, so the card stays a third of the chat with its choices in sight */}
-              <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} className="mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]">{card.subtitle}</div>
+              <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} onClick={onJump && (() => { if (!window.getSelection()?.toString()) onJump(); })} onKeyDown={onJump && ((event) => {
+                // Space scrolls a question that overflows, so only Enter jumps from there
+                const body = event.currentTarget;
+                const key = event.key === "Enter" || (event.key === " " && body.scrollHeight <= body.clientHeight);
+                if (event.target === body && key && !window.getSelection()?.toString()) { event.preventDefault(); onJump(); }
+              })} className={cn(onJump && "cursor-pointer", "mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}>{card.subtitle}</div>
               <AskChoices options={card.options} onPick={onPick} />
             </div>
           </div>
@@ -245,8 +295,13 @@ function fitChoices(card: HTMLDivElement | null) {
   let pane = card.parentElement;
   while (pane && !/auto|scroll/.test(getComputedStyle(pane).overflowY)) pane = pane.parentElement;
   const fit = () => {
+    const line = parseFloat(getComputedStyle(body).lineHeight) || LINE;
+    const phone = isPhone();
+    // the tray's own cap (30dvh on a phone) is below what three lines and the choices need, and would read as no room
+    if (choices && pane) pane.style.maxHeight = phone ? "none" : "";
+    // the last fit's snap would be read back as the window's own height
+    body.style.maxHeight = "";
     if (choices) {
-      const line = parseFloat(getComputedStyle(body).lineHeight) || LINE;
       // the last fit's min-height would be read back as the text's own height
       body.style.minHeight = "";
       const kept = Math.min(body.scrollHeight, KEPT_LINES * line);
@@ -267,6 +322,10 @@ function fitChoices(card: HTMLDivElement | null) {
         }
       }
     }
+    // a cut question on a phone ends on a whole line, never half of one; a desktop card keeps its 30dvh window
+    const shown = body.getBoundingClientRect().height;
+    const whole = Math.floor(shown / line + 0.02) * line;
+    if (phone && body.scrollHeight > shown + 1 && whole >= line && whole < shown) body.style.maxHeight = `${whole}px`;
     markCut(body);
   };
   fit();
@@ -280,6 +339,7 @@ function fitChoices(card: HTMLDivElement | null) {
     watch.disconnect();
     window.removeEventListener("resize", fit);
     fold?.removeEventListener("animationend", fit);
+    if (choices && pane) pane.style.maxHeight = "";
   };
 }
 
@@ -323,6 +383,25 @@ function RowChoices({ options, onPick, onMore }: { options: string[]; onPick: (c
       {/* its count and label are set by the fit above */}
       <button ref={more} hidden type="button" onClick={onMore} className={ROW_CHIP} />
     </span>
+  );
+}
+
+/** A hidden question's count on the composer's edge: a tap brings its row back. */
+export function HiddenQuestionDot({ id, count }: { id: string; count: number }) {
+  const { t } = useI18n();
+  const hidden = useMarked(hiddenQuestions, id);
+  if (!hidden) return null;
+  return (
+    <button
+      type="button"
+      data-hidden-question={id}
+      onClick={() => mark(hiddenQuestions, id, false)}
+      aria-label={t("ask.showQuestion")}
+      title={t("ask.showQuestion")}
+      className={cn(BADGE, "absolute -left-0.5 -top-0.5 z-10 pointer-coarse:after:absolute pointer-coarse:after:-inset-3.5")}
+    >
+      {count}
+    </button>
   );
 }
 

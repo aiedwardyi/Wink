@@ -94,6 +94,16 @@ export function sendText(res: ServerResponse, status: number, headers: OutgoingH
   sendEncoded(res, status, headers, body, ["br", "gzip"], (encoding) => compress(body, encoding));
 }
 
+/** One `bytes=` range as inclusive offsets; null serves the whole file (no header, several ranges, or not bytes). */
+export function byteRange(header: string | undefined, size: number): [number, number] | "unsatisfiable" | null {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header?.trim() ?? "");
+  if (!match || (!match[1] && !match[2])) return null;
+  const suffix = !match[1];
+  const start = suffix ? Math.max(0, size - Number(match[2])) : Number(match[1]);
+  const end = suffix || !match[2] ? size - 1 : Math.min(Number(match[2]), size - 1);
+  return start > end || start >= size ? "unsatisfiable" : [start, end];
+}
+
 /** A built UI file. Throws like readFileSync when it is missing. */
 export function sendStaticFile(res: ServerResponse, file: string, pathname: string, contentType: string): void {
   const stat = statSync(file);
@@ -101,10 +111,21 @@ export function sendStaticFile(res: ServerResponse, file: string, pathname: stri
   const data = readFileSync(file);
   if (!STATIC_TEXT_EXTENSIONS.has(extname(file).toLowerCase())) {
     // Cached for a year like hashed assets, so new mascot art needs a new file name.
-    res.writeHead(200, pathname.startsWith("/assets/") || pathname.startsWith("/avatars/")
-      ? { "content-type": contentType, "cache-control": IMMUTABLE_CACHE }
-      : { "content-type": contentType });
-    res.end(data);
+    const headers: OutgoingHttpHeaders = pathname.startsWith("/assets/") || pathname.startsWith("/avatars/")
+      ? { "content-type": contentType, "cache-control": IMMUTABLE_CACHE, "accept-ranges": "bytes" }
+      : { "content-type": contentType, "accept-ranges": "bytes" };
+    // Safari plays a <video> only from a server that answers byte ranges.
+    const range = byteRange(res.req?.headers.range, data.length);
+    if (range === "unsatisfiable") {
+      res.writeHead(416, { "content-range": `bytes */${data.length}` });
+      res.end();
+    } else if (range) {
+      res.writeHead(206, { ...headers, "content-range": `bytes ${range[0]}-${range[1]}/${data.length}` });
+      res.end(data.subarray(range[0], range[1] + 1));
+    } else {
+      res.writeHead(200, headers);
+      res.end(data);
+    }
     return;
   }
   let entry = staticCache.get(file);

@@ -41,7 +41,7 @@ describe("room files", () => {
     await render(createElement(MediaViewerProvider, { threadId: "room", messages: [], children: createElement(RoomFileRows, { base, files }) }));
     const button = [...host.querySelectorAll("button")].find((item) => item.textContent?.includes("clip.mp4"));
     expect(button).toBeDefined();
-    expect(host.querySelector('a[download="plan.pdf"]')).not.toBeNull();
+    expect([...host.querySelectorAll("[data-room-file]")].map((row) => row.textContent?.includes("plan.pdf"))).toEqual([false, true]);
     await act(async () => button!.click());
     expect(document.querySelector("[data-media-viewer] video")?.getAttribute("src")).toBe(`${base}/files/${files[0]!.id}`);
   });

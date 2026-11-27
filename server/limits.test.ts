@@ -5,6 +5,8 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 import { KEPT_LIMITS, NAMED_GUARDS, PENDING_LIMITS, PROMPT_WORDING } from "./limits.ts";
+import { asksBlock, asksNudge, type TaskAsk } from "./task-asks.ts";
+import { taskRecordBlock } from "./turn-context.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const scanned = /^(?:server|src|electron|shared)\/(?!vendor\/|testing\/).+\.(?:[cm]?[jt]s|tsx)$/;
@@ -87,6 +89,17 @@ describe("limits registry", () => {
 
   it("holds every limit in the repo", () => {
     expect(checkLimits(tracked(), readTracked)).toEqual([]);
+  });
+
+  it("shows bots every open ask, never a count cap or a ceiling under 300 full-length asks", () => {
+    const now = Date.now();
+    const asks: TaskAsk[] = Array.from({ length: 300 }, (_, index) => ({ id: `A${index + 1}`, ask: "가".repeat(80), status: "open", ref: "r".repeat(80), at: now, changedAt: now }));
+    const unjudged = asks.map(({ ref: _, ...ask }) => ({ ...ask, changedAt: 0 }));
+    const record = (list: TaskAsk[]) => ({ goal: "Ship", plan: [], completed: [], blockers: [], nextAction: "", asks: list });
+    const rule = "Bots see every open ask on every turn that carries the list (ASKS-OPEN, 11-19). Remove the count cap or slice; MAX_STATUS_ASKS_BYTES is only a crash ceiling and must fit 300 full-length asks.";
+    for (const block of [asksBlock(asks, now), asksNudge(asks, now, "status?"), asksNudge(unjudged, now, "thanks"), taskRecordBlock(record(asks), 512, { now }), taskRecordBlock(record(unjudged), 512, { now, recovering: true })]) {
+      expect(block.split("\n").filter((line) => line.startsWith("- A")).length, rule).toBe(300);
+    }
   });
 
   it("keeps every named guard in place", () => {

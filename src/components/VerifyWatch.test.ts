@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { Fragment, act, createElement } from "react";
 import { readFileSync } from "node:fs";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -7,7 +7,7 @@ import type { VerifyCardData, VerifyIssue } from "../../shared/live-verify";
 import { chunk } from "../../electron/verify-replay.mjs";
 import { applyLocale } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
-import { chooseVerifyTab } from "@/lib/verify-watch";
+import { chooseVerifyTab, useVerifyShowing } from "@/lib/verify-watch";
 import { VerifyWatchShow } from "@/lib/verify-watch-show";
 import { ShowPane } from "./ShowPane";
 import { VerifyWatchFrame } from "./VerifyWatch";
@@ -28,7 +28,7 @@ beforeEach(() => {
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => {
     calls.push({ url, signal: init.signal! });
-    if (url.includes("old-")) return Promise.resolve(new Response(null, { status: 404 }));
+    if (url.includes("old-")) return Promise.resolve(Response.json({ error: "not-here" }, { status: 404 }));
     return Promise.resolve(new Response(new ReadableStream({ start(controller) { init.signal!.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError"))); } })));
   }));
   host = document.createElement("div");
@@ -59,12 +59,13 @@ it("streams live only while the chat is shown and the window is visible, abortin
   root = createRoot(host);
 });
 
-it("plays the card's kept runs from the replay route and says Replay expired on 404", async () => {
+it.each([["en", "Replay unavailable on this PC"], ["ko", "이 PC에서 다시보기를 사용할 수 없어요"]] as const)("shows an unavailable replay on this PC in %s", async (locale, message) => {
+  applyLocale(locale);
   await render({ live: false, hidden: false });
   await act(async () => { await new Promise(r => setTimeout(r, 20)); });
   expect(calls.map(c => c.url)).toEqual(["/api/verify/runs/old-1/replay"]);
   await act(async () => { await new Promise(r => setTimeout(r, 60)); });
-  expect(host.textContent).toContain("Replay expired");
+  expect(host.textContent).toContain(message);
   expect(host.querySelector(".verify-watch-url")?.textContent).toBe("luna/index.html");
   expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
 });
@@ -174,7 +175,7 @@ it.each(["en", "ko"] as const)("plays silently without sound controls in %s", as
 
 it("switches both viewport tabs after recorded playback finishes", async () => {
   const tick = animationClock();
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ fillRect() {} } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ fillRect() {}, setTransform() {} } as unknown as CanvasRenderingContext2D);
   vi.stubGlobal("fetch", vi.fn(async () => recorded(shot("desktop"), shot("phone"))));
   await act(async () => root.render(createElement(VerifyWatchFrame, { card: { ...card, replay: ["old-1"] }, threadId: "t", live: false, hidden: false, onClose() {} })));
   await tick(100);
@@ -186,6 +187,17 @@ it("switches both viewport tabs after recorded playback finishes", async () => {
     expect(host.querySelector(".verify-watch-stage")?.getAttribute("data-tile")).toBe(index ? "phone" : "desktop");
     expect(host.querySelector("canvas")?.width).toBe(index ? 392 : 1280);
   }
+});
+
+it.each([[2, 2560, 1440], [1, 1280, 720]])("draws the replay at the screen's pixels, not the page's (ratio %s)", async (ratio, width, height) => {
+  const tick = animationClock(), setTransform = vi.fn();
+  vi.stubGlobal("devicePixelRatio", ratio);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ fillRect() {}, drawImage() {}, setTransform } as unknown as CanvasRenderingContext2D);
+  vi.stubGlobal("fetch", vi.fn(async () => recorded(shot("desktop"), shot("phone"))));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: { ...card, replay: ["old-1"] }, threadId: "t", live: false, hidden: false, onClose() {} })));
+  await tick(100);
+  expect([host.querySelector("canvas")?.width, host.querySelector("canvas")?.height]).toEqual([width, height]);
+  expect(setTransform).toHaveBeenLastCalledWith(ratio, 0, 0, ratio, 0, 0);
 });
 
 it.each(["en", "ko"] as const)("reuses card rule wording for the %s reel caption", async locale => {
@@ -205,7 +217,88 @@ it("puts phone inline captions after the stage", async () => {
   await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: false, hidden: false, inline: true, onClose() {} })));
   await tick(2);
   expect(host.querySelector(".verify-watch-stage .verify-watch-caption")).toBeNull();
-  expect(host.querySelector(".verify-watch-stage + .verify-watch-caption")).not.toBeNull();
+  expect(host.querySelector(".verify-watch-stage + .verify-watch-captions > .verify-watch-caption:not([aria-hidden])")).not.toBeNull();
+});
+
+it("holds the phone inline caption's room for the whole replay, desktop unchanged", async () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {} })));
+  const tick = animationClock();
+  const issue: VerifyIssue = { checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "#apply has no target; click the link", box: [10, 20, 80, 30] };
+  const done: VerifyCardData = { ...card, status: "completed", live: undefined, replay: ["run-1"], issues: [issue] };
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", [issue])));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: done, threadId: "t", live: false, hidden: false, inline: true, onClose() {} })));
+  expect(host.querySelector(".verify-watch-caption:not([aria-hidden])")).toBeNull();
+  expect(host.querySelector(".verify-watch-stage + .verify-watch-captions > .verify-watch-caption[aria-hidden]")?.textContent).toContain("#apply");
+  await tick(2);
+  expect(host.querySelector(".verify-watch-captions > .verify-watch-caption:not([aria-hidden])")?.textContent).toContain("#apply");
+  await tick(60);
+  expect(host.querySelector(".verify-watch-captions, .verify-watch-caption")).toBeNull();
+  await act(async () => root.render(createElement(VerifyWatchFrame, { key: "desktop", card: done, threadId: "t", live: false, hidden: false, onClose() {} })));
+  expect(host.querySelector(".verify-watch-stage")).not.toBeNull();
+  expect(host.querySelector(".verify-watch-captions")).toBeNull();
+});
+
+it("holds the phone inline caption's room through a bot-fixed chain", async () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {} })));
+  const tick = animationClock();
+  const issue: VerifyIssue = { checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "#apply has no target; click the link", box: [10, 20, 80, 30] };
+  const fixed: VerifyCardData = { ...card, status: "completed", live: undefined, replay: ["run-1", "run-2"], issues: [] };
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => bufferedRun("completed", url.includes("run-1") ? [issue] : [])));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: fixed, threadId: "t", live: false, hidden: false, inline: true, onClose() {} })));
+  const seen: string[] = [];
+  let fixedShown = false;
+  for (let i = 0; i < 200 && !host.querySelector(".verify-watch-again"); i++) {
+    await tick(1);
+    const state = host.querySelector(".verify-watch-again") ? "end" : host.querySelector(".verify-watch-captions") ? "slot" : "bare";
+    if (seen.at(-1) !== state) seen.push(state);
+    fixedShown ||= host.textContent!.includes("Bot fixed it");
+  }
+  expect(fixedShown).toBe(true);
+  expect(seen).toEqual(["slot", "end"]);
+});
+
+it("keeps the card's check rows up through each handoff of a bot-fixed chain", async () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {} })));
+  const tick = animationClock();
+  const issue: VerifyIssue = { checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "#apply has no target; click the link", box: [10, 20, 80, 30] };
+  const fixed: VerifyCardData = { ...card, status: "completed", live: undefined, replay: ["run-1", "run-2"], issues: [] };
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => bufferedRun("completed", url.includes("run-1") ? [issue] : [])));
+  let showing = false;
+  const Rows = () => { showing = useVerifyShowing(fixed.runId) !== null; return null; };
+  await act(async () => root.render(createElement(Fragment, null, createElement(VerifyWatchFrame, { card: fixed, threadId: "t", live: false, hidden: false, inline: true, onClose() {} }), createElement(Rows))));
+  const seen: string[] = [];
+  for (let i = 0; i < 200 && !host.querySelector(".verify-watch-again"); i++) {
+    await tick(1);
+    const state = host.querySelector(".verify-watch-again") ? "end" : showing ? "rows" : "result";
+    if (seen.at(-1) !== state) seen.push(state);
+  }
+  expect(seen).toEqual(["rows", "end"]);
+  expect(showing).toBe(false);
+});
+
+it("holds the tallest stage through a phone inline reel that turns from desktop to phone", async () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {} })));
+  const tick = animationClock();
+  const issues: VerifyIssue[] = [
+    { checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "#apply has no target; click the link", box: [10, 20, 80, 30] },
+    { checker: "NAV", tile: "phone", rule: "phone menu gone", where: "header nav", measured: "Navigation links disappear at phone width", box: [0, 0, 300, 40] },
+  ];
+  const done: VerifyCardData = { ...card, runId: "run-mixed", status: "completed", live: undefined, replay: ["run-1"], issues };
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", issues)));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: done, threadId: "t", live: false, hidden: false, inline: true, onClose() {} })));
+  const stage = () => host.querySelector<HTMLElement>(".verify-watch-stage")!;
+  const seen: string[] = [], tiles = new Set<string>();
+  for (let i = 0; i < 200 && !host.querySelector(".verify-watch-again"); i++) {
+    if (seen.at(-1) !== stage().style.aspectRatio) seen.push(stage().style.aspectRatio);
+    tiles.add(stage().dataset.tile!);
+    await tick(1);
+  }
+  expect(tiles).toEqual(new Set(["desktop", "phone"]));
+  expect(seen).toEqual(["392 / 800"]);
+});
+
+it("caps the phone inline stage to the chat view's room", () => {
+  expect(watchRule(".verify-watch-frame[data-inline] .verify-watch-stage")).toContain("var(--verify-room, 460px)");
 });
 
 it.each([false, true])("keeps docked captions outside the target's stage (live=%s)", async live => {
@@ -220,7 +313,7 @@ it.each([false, true])("keeps docked captions outside the target's stage (live=%
 it.each([false, true])("draws reel boxes at the selected screenshot's scroll (live=%s)", async live => {
   const tick = animationClock();
   const strokeRect = vi.fn();
-  const context = { fillRect() {}, strokeRect, drawImage() {} };
+  const context = { fillRect() {}, strokeRect, drawImage() {}, setTransform() {} };
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
   vi.spyOn(VerifyWatchShow.prototype, "frame").mockReturnValue({ jpeg: new Uint8Array([1]), ms: 0, scrollY: 500 });
   vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", [{ checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "missing", box: [10, 20, 80, 30], scrollY: 600 }])));
@@ -553,18 +646,30 @@ it("holds the docked panel for its exit and gives the chat its column back at on
   expect(app).toContain("usePresence(paneWatch || showing || mediaOn");
   expect(app).toContain("closing={watchShown.closing}");
   expect(app).not.toContain('watchCard ? " verify-watch-dock"');
-  expect(watchCss).toMatch(/\.verify-watch\[data-closing\] \{[^}]*margin-left: calc\(-1 \* var\(--dock\)\); transition: none;/);
+  expect(watchCss).toMatch(/\.verify-watch\[data-closing\] \{[^}]*position: absolute; inset: 0 0 0 auto; transition: none;/);
 });
 
-it("grows and shrinks the maximized panel on the shared tokens, never switching between flow and absolute", () => {
-  const dock = watchRule(".verify-watch");
-  for (const prop of ["width", "margin-left"]) expect(dock).toContain(`${prop} var(--motion-large) var(--ease-standard)`);
-  const maximized = watchRule(".verify-watch:has(> .verify-watch-frame[data-maximized])");
-  expect(maximized).toContain("width: 100cqi;");
+it("raises the pane before the maximize motion starts and preserves the chat's column", () => {
+  const maximized = watchRule(".verify-watch:not([data-closing]):has(> .verify-watch-frame[data-maximized])");
+  expect(maximized).toContain("z-index: 15;");
+  expect(maximized).toContain("transition-property: --dock-overhang, border-left-width;");
+  expect(maximized).toContain("--dock-overhang: calc(100cqi - var(--dock));");
   expect(maximized).not.toMatch(/position:|inset:|align-items/);
+  const dock = watchRule(".verify-watch");
+  expect(dock).toContain("width: calc(var(--dock) + var(--dock-overhang));");
+  expect(dock).toContain("margin-left: calc(-1 * var(--dock-overhang));");
+  expect(dock).toContain("transition: --dock-overhang var(--motion-large) var(--ease-standard)");
   expect(watchRule(".verify-watch-frame")).toContain("transition: min-height var(--motion-large) var(--ease-standard);");
   expect(watchRule(".verify-watch-frame[data-maximized]")).toContain("min-height: calc(100% - 24px);");
   expect(watchCss).not.toMatch(/\d\s?ms\b/);
+});
+
+it("wraps a held phone caption at the slot's width, as a lone one wraps at the frame's", () => {
+  expect(watchRule(".verify-watch-captions")).toContain("grid-template-columns: minmax(0, 1fr);");
+});
+
+it("keeps each held phone caption its own height, as a lone one", () => {
+  expect(watchRule(".verify-watch-captions > .verify-watch-caption")).toContain("align-self: start;");
 });
 
 it("lets the phone inline frame take its content height inside the replay fold", () => {

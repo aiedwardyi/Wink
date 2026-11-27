@@ -74,7 +74,7 @@ describe("video cards", () => {
     expect(video.controls).toBe(true);
     expect(document.querySelector("[data-media-viewer] img")).toBeNull();
     expect(window.ogb!.openFile).not.toHaveBeenCalled();
-    document.querySelector<HTMLElement>("[data-media-viewer] a[download]")!.focus();
+    document.querySelector<HTMLElement>("[data-media-viewer] [data-viewer-download]")!.focus();
     await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true })));
     expect(document.activeElement).toBe(video);
   });

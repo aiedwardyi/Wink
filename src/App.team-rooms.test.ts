@@ -140,7 +140,7 @@ async function openPlus() {
   await click(button("New or share") ?? button("새로 만들기 또는 공유"));
 }
 
-const joinedSource = () => FakeEventSource.all.find((source) => source.url.includes("screens=off"));
+const joinedSource = () => FakeEventSource.all.at(-1);
 
 async function joinedFrame(roomId: string) {
   await act(async () => joinedSource()!.onmessage?.({ data: JSON.stringify({ kind: "joined", hosted: true, roomId }), lastEventId: `${Date.now()}` }));
@@ -256,6 +256,33 @@ describe.each(["host", "joined"] as const)("Team room message menu on %s", (side
 });
 
 describe("Team rooms for the host", () => {
+  it.each([true, false])("shows one Edward in People and mentions with owner seat %s", async (owner) => {
+    const fromHome = { ...joinedEntries[0], files: [], text: "Welcome" };
+    const fromWork = { ...fromHome, seq: 2, id: "j2", text: "Sent from Work" };
+    const view = {
+      ...joinedView("joined", "live"),
+      me: owner ? { id: "p-work", name: "Edward", host: true } : { id: "p-mina", name: "Mina" },
+      state: { roomName: "Design team", host: "Edward", people: [{ id: "p-mina", name: "Mina" }] },
+      lastEntry: fromWork,
+    };
+    await boot({ route: (call) => {
+      if (call.path === "/api/joined/rooms") return reply({ rooms: [view] });
+      if (call.path === "/api/joined/rooms/r9") return reply({ room: { ...view, entries: [fromHome, fromWork] } });
+      return undefined;
+    } });
+    await act(async () => store.dispatch!({ type: "select", id: "joined:r9" }));
+    await found(() => $("[data-mid=j2][data-team-room-line]"));
+    expect(["j1", "j2"].map((id) => $(`[data-mid=${id}]`)?.getAttribute("data-team-room-line"))).toEqual(owner ? ["mine", "mine"] : ["theirs", "theirs"]);
+    expect($("[data-joined-room-row]")?.textContent).toContain(owner ? "You: Sent from Work" : "Edward: Sent from Work");
+    await type($("main textarea"), "@Ed");
+    expect([...document.querySelectorAll('[role="option"]')].map((option) => option.textContent?.trim())).toEqual(["EdwardPerson"]);
+    const details = await openDetails();
+    const people = details.querySelectorAll('[data-room-details-section="people"] li');
+    expect(people).toHaveLength(2);
+    expect(people[0]?.textContent).toContain("Edward");
+    expect(people[0]?.firstElementChild?.textContent).toBe("E");
+  });
+
   it("reads joined lines only on an active room and clears the row on every client frame", async () => {
     const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     let unread = 3;
@@ -291,7 +318,7 @@ describe("Team rooms for the host", () => {
     } });
     await vi.waitFor(() => expect($('[data-joined-room-row]')).not.toBeNull());
     expect($('[data-joined-room-row] [data-sidebar-unread-count]')?.textContent).toBe("3");
-    expect($('[data-menu-unread]')?.textContent).toBe("3");
+    expect($('[data-menu-unread]')?.textContent).toBe("");
     expect($('[data-joined-room-row]')?.textContent).toContain("Edward: Welcome");
     unread = 0;
     await joinedFrame("r9");
@@ -415,7 +442,7 @@ describe("Team rooms for the host", () => {
     expect(main.textContent).not.toMatch(/Nova|Find in conversation|approve|hold|level/i);
   });
 
-  it("opens the room's Media from its header and shuts it again", async () => {
+  it("opens the room's Media from the header's tool list and shuts it again", async () => {
     const id = "F".repeat(24);
     // the sidebar folds for the pane, and happy-dom reports a canceled fold as unhandled
     const matchMedia = window.matchMedia.bind(window);
@@ -426,6 +453,7 @@ describe("Team rooms for the host", () => {
     await boot({ groups: [teamRoom()], route: (call) => call.path === "/api/rooms/r1/files" ? Response.json({ files: [{ id, name: "map.png", type: "image/png", bytes: 2048, at: 1, sender: "Edward" }], used: 0, capacity: 1, error: null }) : undefined });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
     await click(button("Show and media"));
+    await click(document.querySelector("[data-pane-tool=media]"));
     await vi.waitFor(() => expect($("[data-media-grid] img")?.getAttribute("src")).toBe(`/api/rooms/r1/files/${id}/preview`));
     await click(button("Show and media"));
     await vi.waitFor(() => expect($("[data-show-media]")).toBeNull());
@@ -536,11 +564,9 @@ describe("Team rooms for the host", () => {
     expect([...rows].map((row) => row.getAttribute("data-team-room-line"))).toEqual(["mine", "theirs"]);
     expect($('[data-team-room="host"]')!.textContent).toContain("Mina");
     expect($<HTMLImageElement>('[data-team-room-line="theirs"] img')!.getAttribute("src")).toBe(`/api/rooms/r1/files/${"P".repeat(24)}/preview`);
-    const download = $<HTMLAnchorElement>('[data-team-room-line="theirs"] a[download]')!;
-    expect(download.getAttribute("href")).toBe(`/api/rooms/r1/files/${"D".repeat(24)}`);
-    expect(download.getAttribute("download")).toBe("plan.pdf");
-    expect(download.textContent).toContain("plan.pdf");
-    expect(download.textContent).toContain("4.0 KB");
+    const plan = $<HTMLButtonElement>('[data-team-room-line="theirs"] [data-room-file]')!;
+    expect(plan.textContent).toContain("plan.pdf");
+    expect(plan.textContent).toContain("4.0 KB");
 
     const box = $<HTMLTextAreaElement>('[data-team-room="host"] textarea')!;
     await type(box, "hello");
@@ -761,7 +787,10 @@ describe("Team rooms for a teammate", () => {
     await vi.waitFor(() => expect(asked("POST", "/api/joined/rooms/r9/send")).toHaveLength(1));
     expect([...main().querySelectorAll("[data-team-room-line]")].map((row) => row.getAttribute("data-team-room-line"))).toEqual(["theirs", "mine"]);
     expect(main().querySelector("img")!.getAttribute("src")).toBe(`/api/joined/rooms/r9/files/${"F".repeat(24)}/preview`);
-    expect(main().querySelector("a[download]")!.getAttribute("href")).toBe(`/api/joined/rooms/r9/files/${"G".repeat(24)}`);
+    const saved = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    await act(async () => main().querySelector<HTMLButtonElement>("[data-room-file]")!.click());
+    expect((saved.mock.contexts as HTMLAnchorElement[]).map((link) => link.getAttribute("href"))).toEqual([`/api/joined/rooms/r9/files/${"G".repeat(24)}`]);
+    saved.mockRestore();
 
     view = joinedView("joined", "offline");
     await joinedFrame("r9");

@@ -14,8 +14,19 @@ main[data-scene] .\@container\/chathead button.text-ink {
 main[data-scene] .thinking-sheen { text-shadow: none; }
 /* The model chip is see-through; over a scene it needs a solid face. */
 main[data-scene] .\@container\/chathead button:has([data-model-label]) { background-color: var(--color-raised); }
-/* The phone menu button floats beside main, so it finds the scene by what follows it. */
-[data-phone-menu]:is(:has(~ main[data-scene]), :has(~ * main[data-scene])) { background-color: var(--color-raised); }
+/* The phone menu button floats beside main, so it finds the scene by what follows it. No box: its lines carry a soft shadow to read over the scene. */
+[data-phone-menu]:is(:has(~ main[data-scene]), :has(~ * main[data-scene])) > svg { filter: drop-shadow(0 1px 3px rgb(0 0 0 / 0.7)); }
+/* Only Samurai Ink's painted moon sits under the button, and only when the drawer opens from the right and no terminal covers it: dark lines and a dark unread dot there, no shadow. Everything else, the unpainted fallback and the terminal included, has dark behind it. scripts/check-skin-contrast.mjs measures each case. */
+[data-skin="samurai-ink"] [data-phone-menu][data-side="right"]:not([data-terminal-covers]):is(:has(~ main[data-scene][data-scene-painted]), :has(~ * main[data-scene][data-scene-painted])) { color: var(--color-accent-ink); }
+[data-skin="samurai-ink"] [data-phone-menu][data-side="right"]:not([data-terminal-covers]):is(:has(~ main[data-scene][data-scene-painted]), :has(~ * main[data-scene][data-scene-painted])) > svg { filter: none; }
+[data-skin="samurai-ink"] [data-side="right"]:not([data-terminal-covers]):is(:has(~ main[data-scene][data-scene-painted]), :has(~ * main[data-scene][data-scene-painted])) > [data-menu-unread] { background-color: var(--color-accent-ink); }
+/* The side pane toggle ends the header, where a scene's moon or light can sit. The desktop keeps its face; the phone gets bare lines with the menu's shadow. */
+@media (min-width: 768px) { main[data-scene] [data-show-pane-button] { background-color: var(--color-raised); } }
+@media (max-width: 767px) {
+  main[data-scene] [data-show-pane-button] > svg { filter: drop-shadow(0 1px 3px rgb(0 0 0 / 0.7)); }
+  [data-skin="samurai-ink"] main[data-scene][data-scene-painted] [data-show-pane-button] { color: var(--color-accent-ink); }
+  [data-skin="samurai-ink"] main[data-scene][data-scene-painted] [data-show-pane-button] > svg { filter: none; }
+}
 /* The composer's bottom bg-app slab would cut a band out of the scene. */
 main[data-scene] [data-orbit-composer-host] > .bg-app[aria-hidden="true"] { background: transparent; }
 

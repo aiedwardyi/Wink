@@ -6,6 +6,8 @@ export interface LiveTurn {
   rootId: string | null;
   nowWatch: unknown[];
   docFix?: string;
+  /** A typed user turn with the terminal mounted: a big plan saved in it gets the helper hint. */
+  helperHint?: boolean;
 }
 
 type TurnStart = Omit<LiveTurn, "nowWatch" | "rootId"> & { rootId?: string | null };

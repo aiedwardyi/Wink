@@ -1,5 +1,4 @@
 // @vitest-environment happy-dom
-import { rmSync } from "node:fs";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +22,7 @@ import { _resetPeerUserReplies, beginPeerUserReply, persistPeerUserReply } from 
 import { Store, type BotRecord, type GroupRecord } from "../../server/store.ts";
 
 import { ChatView } from "./ChatView";
+import { removeTestData } from "../../server/testing/test-home.ts";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -76,7 +76,7 @@ describe("a user's reply during a peer turn", () => {
   let commsBus: CommsBus;
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     _resetPending();
     _resetPeerUserReplies();
     store = new Store(() => ({ instanceId: "claude", model: "fake-model" }));

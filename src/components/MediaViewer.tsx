@@ -3,8 +3,10 @@ import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, Download, ImageOff, LoaderCircle, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import type { PreviewImage } from "@/lib/media-viewer";
+import { saveFile } from "@/lib/open-file";
 import { reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING } from "@/lib/phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { holdVideoKeys } from "@/lib/video-keys";
 import {
   atFit, fitView, imageFrame, KEY_STEP, panBy, resizeView, toggleZoomAt,
   wheelZoomFactor, zoomAround, zoomKeyAction, type ZoomFrame, type ZoomKeyAction, type ZoomView,
@@ -51,7 +53,9 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
   // a removed video keeps its decoder and connection until collected, so let go of both now
   const play = useCallback((video: HTMLVideoElement) => {
     video.setAttribute("src", src);
+    const release = holdVideoKeys(video);
     return () => {
+      release();
       video.pause();
       video.removeAttribute("src");
       video.load();
@@ -353,7 +357,7 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
       <header data-viewer-controls="" className="relative z-10 flex shrink-0 items-center justify-between gap-3 border-b border-white/15 bg-black/80 px-4 backdrop-blur-sm">
         <div className="min-w-0 truncate text-[13px] font-medium" aria-live="polite">{image.name}</div>
         <div className="flex shrink-0 items-center gap-1">
-          <a href={image.src} download={image.name} target="_blank" rel="noreferrer" className="media-viewer-button" aria-label={t("viewer.download", { name: image.name })} title={t("viewer.downloadTitle")}><Download size={18} /></a>
+          <button type="button" data-viewer-download="" onClick={() => saveFile(image.src, image.name)} className="media-viewer-button" aria-label={t("viewer.download", { name: image.name })} title={t("viewer.downloadTitle")}><Download size={18} /></button>
           <button onClick={close} data-viewer-close="" className="media-viewer-button" aria-label={t("viewer.close")} title={t("viewer.close")}><X size={20} /></button>
         </div>
       </header>

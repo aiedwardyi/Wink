@@ -55,6 +55,24 @@ describe("RoutineRunCard", () => {
     expect(markup).not.toContain("Open run");
   });
 
+  it("renders nothing for a bot's own wake and still renders a user routine", () => {
+    const wake = renderToStaticMarkup(createElement(RoutineRunCard, {
+      message: message("completed", { routineName: "Wake", wake: true, scheduledFor: at(21, 0) }),
+    }));
+    const routine = renderToStaticMarkup(createElement(RoutineRunCard, {
+      message: message("completed", { scheduledFor: at(21, 0) }),
+    }));
+
+    expect(wake).toBe("");
+    expect(routine).toContain("Morning brief");
+    expect(routine).toContain("Rang at 21:00");
+  });
+
+  it("still renders a peer's routine card in a room", () => {
+    const peer = { ...message("completed", { executionThreadId: undefined, scheduledFor: at(7, 0) }), from: { botId: "peer", name: "Peer", color: "teal" as const } };
+    expect(renderToStaticMarkup(createElement(RoutineRunCard, { message: peer }))).toContain("Morning brief");
+  });
+
   it("shows a compact completion receipt and a path to the isolated run", () => {
     const markup = renderToStaticMarkup(createElement(RoutineRunCard, {
       message: message("completed", { scheduledFor: at(8, 0), summary: "The brief is ready with three follow-ups." }),

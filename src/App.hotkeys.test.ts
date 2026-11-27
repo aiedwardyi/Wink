@@ -14,7 +14,9 @@ import {
   DRAWER_HEADER_RIGHT,
 } from "@/lib/drawer-button";
 import { PHONE_HEADER_MENU_GAP, PHONE_MENU_BUTTON_PX } from "@/lib/phone-header";
+import { closeShow } from "@/lib/show-pane";
 import { LIGHT_SKIN_IDS, SKINS, SKIN_IDS, nextSkin, type SkinId } from "@/lib/skins";
+import { lastViewedPanes } from "@/lib/terminal-panes";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
 
 const app = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "App.tsx"), "utf8");
@@ -44,9 +46,37 @@ describe("phone drawer menu button", () => {
     expect(button).toContain("sidebarOnRight ? DRAWER_BUTTON_RIGHT : DRAWER_BUTTON_LEFT");
     expect(button).toContain("md:hidden");
     expect(button).toContain("data-phone-menu");
+    // The scene CSS picks the line color by this side.
+    expect(button).toContain('data-side={sidebarOnRight ? "right" : "left"}');
     // Both sides share one inset and one top, so neither can drift from the header row.
     expect(DRAWER_BUTTON_LEFT).toBe(DRAWER_BUTTON_RIGHT.replace("right-3.5", "left-3.5"));
     expect(DRAWER_BUTTON_LEFT).toContain("top-[15px]");
+  });
+
+  it("has no box behind it, hovered or over a scene", () => {
+    expect(menuButtonSource().split("<Menu")[0]).not.toMatch(/(?:^|[\s"`:])(?:hover:)?bg-/);
+    const scenes = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "scenes", "scenes.css"), "utf8");
+    const backed = [...scenes.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, selector, body]) => selector.includes("[data-phone-menu]") && /background/.test(body));
+    expect(backed.map(([, selector]) => selector.trim())).toEqual([]);
+  });
+
+  it("keeps the unread dot visible, and tells the scene rules when the terminal covers the menu", () => {
+    const button = menuButtonSource();
+    const dot = button.match(/<span data-menu-unread[^>]*className=\{`([^`]*)`\}/)?.[1] ?? "";
+    expect(dot).toContain("absolute ${DRAWER_BADGE}");
+    expect(dot.split(/\s+/)).toEqual(expect.arrayContaining(["h-2", "w-2", "rounded-full", "bg-accent"]));
+    expect(dot).not.toMatch(/opacity|invisible|hidden|sr-only/);
+    expect(button).toContain("data-terminal-covers={terminalCovers || undefined}");
+  });
+
+  it("leaves the side pane toggle a bare icon on the phone", () => {
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const scenes = readFileSync(join(dir, "scenes", "scenes.css"), "utf8");
+    const backed = scenes.split("\n").filter((line) => line.includes("[data-show-pane-button]") && /background/.test(line));
+    expect(backed.length).toBeGreaterThan(0);
+    for (const line of backed) expect(line.trimStart()).toMatch(/^@media \(min-width: 768px\)/);
+    const toggle = readFileSync(join(dir, "components", "ShowPaneButton.tsx"), "utf8");
+    expect(toggle).not.toMatch(/(?:^|[\s"`])hover:bg-/);
   });
 
   it("centers on the same leading row every page header reserves", () => {
@@ -70,7 +100,7 @@ describe("phone drawer menu button", () => {
   it("badges other unread chats, excluding the open one", () => {
     const button = menuButtonSource();
     expect(button).toContain("data-menu-unread");
-    expect(button).toContain("{menuUnreadBadge}");
+    expect(button).not.toMatch(/\{menuUnread\w*\}/);
     expect(app).toContain("collapsedUnreadCount(state.bots, state.groups, state.selectedId, joinedRooms)");
   });
 
@@ -169,7 +199,7 @@ describe("worker list shortcut", () => {
         return event;
       },
       unmount: async () => {
-        await act(async () => root.unmount());
+        await act(async () => { root.unmount(); closeShow(); });
         host.remove();
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
@@ -234,26 +264,97 @@ describe("worker list shortcut", () => {
     }
   });
 
-  it("toggles the terminal's own list, not the chat's, while the terminal is open", async () => {
+  it("hands the side pane to the terminal when Ctrl+` follows Alt+W", async () => {
     const { host, press, unmount } = await mount();
     try {
+      await press();
+      await paneList();
+      await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+      expect(host.querySelector('.orbit-terminal-overlay[data-open="true"]')?.hasAttribute("data-side")).toBe(true);
+      expect(openLists()).toHaveLength(0);
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("hands the side pane to Workers when Alt+W follows Ctrl+`", async () => {
+    const { host, press, unmount } = await mount();
+    try {
+      await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+      expect(host.querySelector('.orbit-terminal-overlay[data-open="true"]')?.hasAttribute("data-side")).toBe(true);
       expect((await press()).defaultPrevented).toBe(true);
+      expect((await paneList()).textContent).toContain("Scout's workers");
+      expect(host.querySelector('.orbit-terminal-overlay[data-open="true"]')).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("holds the last committed desktop dock width through close", async () => {
+    const { host, press, unmount } = await mount();
+    const backquote = () => press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+    const measure = Element.prototype.getBoundingClientRect;
+    const widths: number[] = [];
+    let width = 715;
+    let onResize: (() => void) | undefined;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (!this.matches(".orbit-terminal-overlay")) return measure.call(this);
+      widths.push(width);
+      return new DOMRect(0, 0, width, 900);
+    });
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private readonly callback: () => void) {}
+      observe(target: Element) {
+        if (target.matches(".orbit-terminal-overlay")) onResize = this.callback;
+      }
+      disconnect() {}
+    });
+    try {
+      await backquote();
+      const overlay = host.querySelector<HTMLElement>('.orbit-terminal-overlay[data-open="true"]')!;
+      width = 632;
+      await act(async () => onResize?.());
+      width = 582;
+      await backquote();
+      expect(overlay.hasAttribute("data-closing")).toBe(true);
+      expect(widths).toEqual([715, 632]);
+      expect(overlay.style.getPropertyValue("--dock-exit-width")).toBe("632px");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("shuts the terminal's own list when the docked terminal closes", async () => {
+    const { host, press, unmount } = await mount();
+    const backquote = () => press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
+    try {
+      await backquote();
+      const overlay = host.querySelector('.orbit-terminal-overlay[data-open="true"]')!;
+      const chip = await vi.waitFor(() => {
+        const found = overlay.querySelector<HTMLButtonElement>("[data-worker-strip]");
+        if (!found) throw new Error("no worker strip in the terminal");
+        return found;
+      }, { timeout: 5000 });
+      await act(async () => chip.click());
+      expect(overlay.querySelector("[data-worker-list]")).not.toBeNull();
+      await backquote();
+      await backquote();
+      expect(overlay.getAttribute("data-open")).toBe("true");
+      expect(overlay.querySelector("[data-worker-list]")).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it.each([false, true])("opens chat search on Ctrl+F from the terminal only beside the chat with phone=%s", async (phone) => {
+    const { host, press, unmount } = await mount(false, phone);
+    try {
       await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
       const overlay = host.querySelector('.orbit-terminal-overlay[data-open="true"]')!;
-      expect(overlay).not.toBeNull();
-      expect((openLists()[0] ?? null)).toBeNull();
-      await vi.waitFor(async () => {
-        await act(async () => {});
-        expect(overlay.querySelector("[data-worker-strip]")).not.toBeNull();
-      }, { timeout: 5000 });
-      const event = await press();
-      expect(event.defaultPrevented).toBe(true);
-      expect(event.cancelBubble).toBe(true);
-      expect(openLists()).toHaveLength(1);
-      expect(overlay.querySelector("[data-worker-list]")).not.toBeNull();
-      expect(overlay.querySelector("[data-worker-strip]")?.getAttribute("aria-expanded")).toBe("true");
-      await press();
-      expect((openLists()[0] ?? null)).toBeNull();
+      const key = new KeyboardEvent("keydown", { code: "KeyF", key: "f", ctrlKey: true, bubbles: true, cancelable: true });
+      await act(async () => overlay.dispatchEvent(key));
+      expect(key.defaultPrevented).toBe(!phone);
+      expect(host.querySelector("[data-chat-find]") !== null).toBe(!phone);
     } finally {
       await unmount();
     }
@@ -433,6 +534,7 @@ describe("split number shortcuts", () => {
       unmount: async () => {
         await act(async () => root.unmount());
         host.remove();
+        lastViewedPanes.clear();
         vi.unstubAllGlobals();
         localStorage.clear();
       },
@@ -622,7 +724,7 @@ describe("terminal pane shortcuts", () => {
 describe("conversation layout", () => {
   it("clips the hidden terminal overlay instead of making the chat scrollable", () => {
     // overflow-hidden is still programmatically scrollable: a terminal tab scrollIntoView shifted the chat under the sidebar.
-    expect(app).toContain('ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip"');
+    expect(app).toMatch(/ref=\{conversationRef\} className=\{[^}]*\boverflow-clip md:flex-row /);
   });
 });
 

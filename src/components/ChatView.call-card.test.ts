@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, useStore, type Bot, type Message } from "@/state/store";
+import type { ConfigStatus } from "@/state/store-types";
 
 import { ChatView } from "./ChatView";
 
@@ -44,6 +45,8 @@ function View({ seed }: { seed: Bot }) {
   const { state, dispatch } = useStore();
   useEffect(() => {
     dispatch({ type: "hydrate", bots: [seed], groups: [], computerControl: {}, sidebarOrder: { sectionOrder: [], itemOrder: {} } });
+    // SAFETY: only the team flag is read here.
+    dispatch({ type: "configStatus", config: { features: { voiceCalls: true } } as ConfigStatus });
   }, [dispatch, seed]);
   const shown = state.bots.find((b) => b.id === seed.id);
   return shown ? createElement(ChatView, { bot: shown }) : null;

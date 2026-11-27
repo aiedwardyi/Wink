@@ -40,9 +40,22 @@ export class MessageBoundary extends Component<{ children: ReactNode; fallbackTe
 
 export type ReplyDock = { slot: string; live: boolean; avatar: ReactNode; label: string; since?: number; quiet?: boolean; wrap?: boolean; onSwitch?: () => void };
 
+const legacyParents = new WeakMap<Message[], Map<Message, string>>();
+
 // The parent identifies a reply slot before the server assigns its message id.
 export function replySlot(threadId: string, message: Message, transcript: Message[]) {
-  return `reply:${threadId}:${message.parentId ?? transcript[transcript.indexOf(message) - 1]?.id ?? ""}`;
+  // null is a chat's first row: the row drawn above it may be a line sorted there, whose reply owns that slot
+  if (message.parentId !== undefined) return `reply:${threadId}:${message.parentId ?? ""}`;
+  let parents = legacyParents.get(transcript);
+  if (!parents) {
+    parents = new Map();
+    for (let i = 0; i < transcript.length; i++) {
+      const row = transcript[i];
+      if (!parents.has(row)) parents.set(row, transcript[i - 1]?.id ?? "");
+    }
+    legacyParents.set(transcript, parents);
+  }
+  return `reply:${threadId}:${parents.get(message) ?? ""}`;
 }
 
 /** Docks in the streaming reply, and only keeps a finished one to fade out.

@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
-import { closeMessageDb, readThread } from "./message-db.ts";
+import { finishDelegatedTurn } from "./delegations.ts";
+import { applySyncedRows, closeMessageDb, readThread } from "./message-db.ts";
+import { replyActivity } from "./reply-activity.ts";
 import { Store, type Message } from "./store.ts";
 import type { ModelSelection } from "./contracts.ts";
 import {
@@ -29,6 +31,7 @@ import {
   type ThreadSyncHost,
   type ThreadSyncLedger,
 } from "./thread-sync.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const BOT_SYNC_ID = "sync-bot-1";
 const roots: string[] = [];
@@ -101,6 +104,37 @@ function conflictMessages(folder: string, writer: string): string[][] {
 }
 
 describe("thread sync", () => {
+  it("preserves the source engines of peer replies when syncing to another PC", () => {
+    const store = new Store(() => ({ instanceId: "local", model: "local" }));
+    const sender = store.createBot({}, { seedMessages: false });
+    const peer = store.createBot({}, { seedMessages: false });
+    const channel = store.createGroup("Exchange", [sender.id, peer.id], true);
+    const bus = { store, broadcast: () => {} };
+    const engines = ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"];
+    for (const [index, engine] of engines.entries()) {
+      const turn = { toBotId: peer.id, taskId: `${channel.id}-${index}`, sourceThreadId: sender.threadId, sourceBotId: sender.id, channelId: channel.id, engine };
+      finishDelegatedTurn(bus, turn, true, `Answer ${index}`);
+    }
+    const folder = temp("thread-sync-engines-");
+    const a = pc("device-a", folder);
+    const messages = [...store.messagesFor(channel.threadId), msg("legacy", "Old reply", store.activeLeaf(channel.threadId), { role: "bot" })];
+    a.threads.set("exchange", { title: "Exchange", createdAt: messages[0]!.at, messages, activeLeafId: "legacy" });
+    expect(uploadThread(a.host, BOT_SYNC_ID, "exchange")).toBe("written");
+    const b = pc("device-b", folder);
+    expect(pullThread(b.host, "local-bot", BOT_SYNC_ID, "exchange")).toBe("imported");
+    const imported = b.threads.get("exchange")!.messages;
+    expect(imported.map((row) => row.engine)).toEqual([...engines, undefined]);
+    const now = Date.now();
+    const before = replyActivity(now);
+    applySyncedRows("exchange", imported);
+    const after = replyActivity(now);
+    expect(after.total - before.total).toBe(6);
+    const previous = new Map(before.engines.map((row) => [row.engine, row.count]));
+    const changed = after.engines.filter(({ engine, count }) => previous.get(engine) !== count);
+    expect(Object.fromEntries(changed.map(({ engine, count }) => [engine, count - (previous.get(engine) ?? 0)])))
+      .toEqual(Object.fromEntries(engines.map((engine) => [engine, 1])));
+  });
+
   it("round-trips a summarized room note", () => {
     const folder = temp("thread-sync-summary-");
     const a = pc("device-a", folder);
@@ -126,7 +160,7 @@ describe("thread sync", () => {
 
   it("round trips a thread into a real store and clears per-device session fields", () => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
     const folder = temp("thread-sync-folder-");
     const a = pc("device-a", folder);
@@ -602,7 +636,7 @@ describe("thread sync", () => {
 
   it("marks the ledger dirty before a message write reaches SQLite", () => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
     const store = new Store((): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const { threadId } = store.createBot();
@@ -781,7 +815,7 @@ describe("thread sync", () => {
 describe("thread sync follow", () => {
   function setup() {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
     const store = new Store((): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const { id, threadId } = store.createBot();
@@ -855,7 +889,7 @@ describe("thread sync follow", () => {
 describe("one chat per bot", () => {
   function setup() {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
     const store = new Store((): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" }));
     const { id, threadId: older } = store.createBot({}, { seedMessages: false });
@@ -901,7 +935,7 @@ describe("one chat per bot", () => {
 describe("thread sync delete", () => {
   function setup() {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
     const folder = temp("thread-sync-folder-");
     const a = pc("device-a", folder);

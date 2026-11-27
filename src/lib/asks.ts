@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { latestTaskAsks } from "../../shared/task-ask-list";
 import type { Bot } from "@/state/store";
 
 export const ASK_STATUSES = ["open", "building", "waiting-for-user", "done", "declined"] as const;
@@ -35,16 +36,15 @@ export const isClosed = (ask: Ask) => CLOSED.has(ask.status);
 
 /** Every ask in the bot's task records, oldest first; a shared ask keeps its newest record's status. */
 export function botAsks(bot: Bot): Ask[] {
-  const records = (bot.tasks ?? []).flatMap((task) => (task.taskState ? [task.taskState] : [])).sort((a, b) => (a.updatedAt ?? 0) - (b.updatedAt ?? 0));
-  const asks = new Map<string, Ask>();
-  for (const record of records) {
-    if (!Array.isArray(record.asks)) continue;
-    for (const raw of record.asks) {
+  const records = (bot.tasks ?? []).flatMap(({ taskState }) => {
+    if (!Array.isArray(taskState?.asks)) return [];
+    const asks = taskState.asks.flatMap((raw) => {
       const parsed = Ask.safeParse(raw);
-      if (parsed.success) asks.set(`${parsed.data.at}\0${parsed.data.text}`, parsed.data);
-    }
-  }
-  return [...asks.values()].sort((a, b) => a.at - b.at);
+      return parsed.success ? [parsed.data] : [];
+    });
+    return [{ updatedAt: taskState.updatedAt, asks }];
+  });
+  return latestTaskAsks(records, (ask) => ask.text);
 }
 
 export const askCounts = (asks: readonly Ask[]) => {

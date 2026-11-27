@@ -5,12 +5,14 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VerifyCardData } from "../../shared/live-verify";
 import { applyLocale } from "@/lib/i18n";
+import { noteMemoryFrame } from "@/lib/memory-clean-events";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
-import { closeShow, showItem, showMap, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
+import { closeShow, closeTab, paneTabs, showCheck, showItem, showMap, showMedia, showTimeline, tabKey, useCheckThread, useShowItem, useTimelineThread, type ShowItem } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
+import { applyPicks, parseTimeline } from "../../server/picks";
 import { ShowPane } from "./ShowPane";
 
-const pdf = vi.hoisted(() => ({ pages: [] as number[], params: undefined as unknown, gate: Promise.resolve() }));
+const pdf = vi.hoisted(() => ({ pages: [] as number[], broken: [] as number[], params: undefined as unknown, gate: Promise.resolve() }));
 vi.mock("pdfjs-dist", () => ({
   GlobalWorkerOptions: {},
   getDocument: (params: unknown) => (pdf.params = params, {
@@ -18,6 +20,7 @@ vi.mock("pdfjs-dist", () => ({
       numPages: 8,
       getPage: async (n: number) => {
         pdf.pages.push(n);
+        if (pdf.broken.includes(n)) throw new Error("bad page");
         return { getViewport: ({ scale }: { scale: number }) => ({ width: 960 * scale, height: 540 * scale }), render: () => ({ promise: Promise.resolve(), cancel() {} }) };
       },
       destroy() {},
@@ -37,6 +40,7 @@ let host: HTMLElement;
 
 beforeEach(() => {
   pdf.pages = [];
+  pdf.broken = [];
   pdf.gate = Promise.resolve();
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     const response = new Response(null, { status: url.includes("linked-file") ? 206 : 404 });
@@ -47,13 +51,26 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); closeShow(); closeVerifyWatch(); applyLocale("en"); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); closeShow(); closeVerifyWatch(); for (const tab of paneTabs("t1")) closeTab("t1", tabKey(tab), null); applyLocale("en"); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const render = (props: Parameters<typeof ShowPane>[0]) => act(async () => root.render(createElement(ShowPane, props)));
 const until = async (done: () => boolean | undefined) => {
   for (let i = 0; i < 200 && !done(); i++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
 };
 const button = (name: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`);
+
+it("puts the desktop pane toggle after Maximize in the pane header", async () => {
+  const shown = item("C:\\w\\a.png", "image");
+  await act(async () => showItem(shown));
+  await render({ item: shown, source: { threadId: "t1", messages: [] }, hidden: false });
+  const head = host.querySelector(".show-pane-head")!;
+  const toggle = head.querySelector<HTMLButtonElement>("[data-show-pane-button]");
+  expect(toggle).not.toBeNull();
+  expect(toggle?.previousElementSibling?.getAttribute("aria-label")).toBe("Maximize");
+  expect(toggle?.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => toggle?.click());
+  expect(host.querySelector("[data-show-pane-button]")?.getAttribute("aria-pressed")).toBe("false");
+});
 
 it("fits an image in the pane", async () => {
   await render({ item: item("C:\\w\\signups.png", "image"), hidden: false });
@@ -94,6 +111,16 @@ it("pages a PDF one page at a time", async () => {
   await until(() => host.querySelector("[data-show-pager]")?.textContent?.includes("2 / 8"));
   expect(host.querySelector("[data-show-pager]")?.textContent).toContain("2 / 8");
   expect(pdf.pages).toEqual([1, 2]);
+});
+
+it("says a page it could not draw could not be shown, not a blank or stale page", async () => {
+  pdf.broken = [2];
+  await render({ item: item("C:\\w\\launch-deck.pdf", "pdf"), hidden: false });
+  await until(() => host.querySelector("[data-show-pager]")?.textContent?.includes("1 / 8"));
+  await act(async () => button("Next page")!.click());
+  await until(() => host.textContent?.includes("Could not show this file"));
+  expect(host.textContent).toContain("Could not show this file");
+  expect(host.querySelector("canvas.show-pdf")).toBeNull();
 });
 
 let clock = 0;
@@ -205,13 +232,13 @@ it.each(["missing", "offline"])("offers Open instead of navigating a %s page", a
   expect(host.querySelector("[data-show-fallback]")).not.toBeNull();
 });
 
-it("hosts the checker with its Maximize and Close in the pane header", async () => {
+it("hosts the checker with its Maximize and pane toggle in the header", async () => {
   await render({ watch: { card, threadId: "t1", live: false }, hidden: false });
   expect(host.querySelector(".verify-watch-frame .verify-watch-bar")).not.toBeNull();
-  expect(host.querySelectorAll('button[aria-label="Close"]')).toHaveLength(1);
+  expect(host.querySelectorAll(".show-pane-head [data-show-pane-button]")).toHaveLength(1);
   expect(host.querySelectorAll('button[aria-label="Maximize"]')).toHaveLength(1);
   expect(host.querySelector(".verify-watch-bar button[aria-label='Close']")).toBeNull();
-  expect(host.querySelector("aside")!.hasAttribute("data-wide")).toBe(false);
+  expect(host.querySelector("aside")!.hasAttribute("data-wide")).toBe(true);
   await act(async () => button("Maximize")!.click());
   expect(host.querySelector(".verify-watch-frame")!.hasAttribute("data-maximized")).toBe(true);
 });
@@ -222,21 +249,21 @@ it("docks files wide and closes from the header", async () => {
   const aside = host.querySelector("aside")!;
   expect(aside.hasAttribute("data-wide")).toBe(true);
   expect(aside.classList.contains("md:animate-panel-slide")).toBe(true);
-  expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Show");
-  await act(async () => button("Close")!.click());
+  expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("a.png");
+  await act(async () => host.querySelector<HTMLButtonElement>(".show-pane-head [data-show-pane-button]")!.click());
   let shown: ShowItem | null = item("x", "image");
   function Probe() { shown = useShowItem(); return null; }
   await act(async () => root.render(createElement(Probe)));
   expect(shown).toBeNull();
 });
 
-it.each([false, true])("closes from one X at the far right of the header, phone %s", async (phone) => {
+it.each([false, true])("closes from the far right of the header, phone %s", async (phone) => {
   vi.stubGlobal("matchMedia", () => ({ matches: phone, addEventListener() {}, removeEventListener() {} }));
   await act(async () => showItem(item("C:\\w\\a.png", "image")));
   await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
   const head = document.querySelector(".show-pane-head")!;
   const buttons = [...head.querySelectorAll<HTMLButtonElement>(":scope > button")];
-  expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(phone ? ["Close"] : ["Maximize", "Close"]);
+  expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(phone ? ["Open a tool", "Close"] : ["Open a tool", "Maximize", "Show and media"]);
   expect(head.lastElementChild).toBe(buttons.at(-1));
   expect(head.querySelector(".lucide-chevron-right")).toBeNull();
   await act(async () => buttons.at(-1)!.click());
@@ -246,13 +273,76 @@ it.each([false, true])("closes from one X at the far right of the header, phone 
   expect(shown).toBeNull();
 });
 
+const phoneMotion = (reduced = false) => vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width") || reduced && query.includes("reduced-motion"), addEventListener() {}, removeEventListener() {} })));
+
+it("a right swipe on a phone slides the pane off to the right and closes it with the Bot Details tick; a short drag springs back", async () => {
+  phoneMotion();
+  const vibrate = vi.fn();
+  Object.defineProperty(navigator, "vibrate", { configurable: true, value: vibrate });
+  await act(async () => showItem(item("C:\\w\\a.png", "image")));
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  const aside = document.querySelector<HTMLElement>("aside.show-pane")!;
+  const stage = aside.querySelector(".show-stage")!;
+  await touch("touchstart", [[100, 300]], stage, 400);
+  await touch("touchmove", [[140, 302]], stage, 200);
+  expect(aside.style.transform).toMatch(/^translate3d\(40px/);
+  await touch("touchend", [], stage, 200);
+  await until(() => !aside.style.transform);
+  expect(aside.style.transform).toBe("");
+  expect(vibrate).not.toHaveBeenCalled();
+  await touch("touchstart", [[100, 300]], stage, 400);
+  await touch("touchmove", [[200, 300]], stage);
+  await touch("touchmove", [[300, 300]], stage);
+  await touch("touchend", [], stage);
+  expect(aside.style.transform).toMatch(new RegExp(`^translate3d\\(${window.innerWidth}px`));
+  await until(() => vibrate.mock.calls.length > 0);
+  expect(vibrate).toHaveBeenCalledWith(10);
+  let shown: ShowItem | null = item("x", "image");
+  function Probe() { shown = useShowItem(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(shown).toBeNull();
+  Reflect.deleteProperty(navigator, "vibrate");
+});
+
+it("a right swipe under reduced motion closes the phone pane without the slide", async () => {
+  phoneMotion(true);
+  await act(async () => showItem(item("C:\\w\\a.png", "image")));
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  const aside = document.querySelector<HTMLElement>("aside.show-pane")!;
+  const stage = aside.querySelector(".show-stage")!;
+  await touch("touchstart", [[100, 300]], stage, 400);
+  await touch("touchmove", [[300, 300]], stage);
+  expect(aside.style.transform).toBe("");
+  await touch("touchend", [], stage);
+  let shown: ShowItem | null = item("x", "image");
+  function Probe() { shown = useShowItem(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(shown).toBeNull();
+});
+
+it("a right swipe on the desktop pane does nothing", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+  await act(async () => showItem(item("C:\\w\\a.png", "image")));
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  const aside = host.querySelector<HTMLElement>("aside.show-pane")!;
+  const stage = aside.querySelector(".show-stage")!;
+  await touch("touchstart", [[100, 300]], stage, 400);
+  await touch("touchmove", [[300, 300]], stage);
+  expect(aside.style.transform).toBe("");
+  await touch("touchend", [], stage);
+  let shown: ShowItem | null = null;
+  function Probe() { shown = useShowItem(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(shown).not.toBeNull();
+});
+
 it("speaks Korean", async () => {
   applyLocale("ko");
   await render({ item: item("C:\\w\\sync-flow.html", "page"), hidden: false });
-  expect(host.querySelector('[role="tab"]')?.textContent).toBe("보기");
+  expect(button("도구 열기")).not.toBeNull();
   expect(button("새로고침")).not.toBeNull();
-  expect(button("닫기")).not.toBeNull();
-  expect(host.querySelectorAll(".show-pane-head > button")).toHaveLength(2);
+  expect(button("보기와 미디어")).not.toBeNull();
+  expect(host.querySelectorAll(".show-pane-head > button")).toHaveLength(3);
 });
 
 it("shares one pane with the checker, and Bot Details still takes the spot", async () => {
@@ -274,13 +364,15 @@ it("shares one pane with the checker, and Bot Details still takes the spot", asy
   await act(async () => root.render(createElement(Slot)));
   expect(seen.at(-1)).toEqual([false, false]);
   const app = readFileSync("src/App.tsx", "utf8");
-  expect(app).toContain('...(watch || show || media || mapping || crewThread ? ["show" as const] : [])');
+  expect(app).toContain("const paneThreads = [watch?.threadId, show?.threadId, media, mapping, crewThread, timelineThread, toolsThread];");
+  expect(app).toContain('...(paneThreads.some(Boolean) ? ["show" as const] : [])');
 });
 
 const tabs = () => [...document.querySelectorAll(".show-pane-tabs [role='tab']")].map((tab) => tab.textContent);
 const selected = () => host.querySelector(".show-pane-tabs [aria-selected='true']")?.textContent;
 const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>(".show-pane-tabs [role='tab']")].find((el) => el.textContent === name)!;
 const source = { threadId: "t1", messages: [], hasMore: false };
+const openTabs = () => act(async () => { showItem(item("C:\\w\\a.png", "image")); for (const open of [showMedia, showCheck, showMap, showTimeline]) open("t1"); closeShow(); });
 const probe = async (read: () => void) => {
   const box = createRoot(document.createElement("div"));
   function Probe() { read(); return null; }
@@ -289,25 +381,29 @@ const probe = async (read: () => void) => {
 };
 
 it("has no Check tab without a check", async () => {
+  await openTabs();
   await render({ item: item("C:\\w\\a.png", "image"), source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Map"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Map", "Timeline"]);
 });
 
 it("renders the Map tab in Korean with the surrounding labels", async () => {
   await act(async () => applyLocale("ko"));
+  await openTabs();
   await render({ item: item("C:\\w\\a.png", "image"), source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["보기", "미디어", "맵"]);
+  expect(tabs()).toEqual(["a.png", "미디어", "맵", "타임라인"]);
 });
 
 it("the checker opens on Check, and Show keeps its file", async () => {
   const shown = item("C:\\w\\a.png", "image");
+  await openTabs();
   await act(async () => showItem(shown));
+  await render({ item: shown, source, botId: "b1", hidden: false });
   await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
   let check: string | null = null;
   await probe(() => { check = useCheckThread(); });
   expect(check).toBe("t1");
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check", "Map"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Check", "Map", "Timeline"]);
   expect(selected()).toBe("Check");
   const aside = host.querySelector("aside")!;
   expect(aside.dataset.tab).toBe("check");
@@ -318,18 +414,19 @@ it("the checker opens on Check, and Show keeps its file", async () => {
 it("switching tabs keeps the check alive and never reloads Show's file", async () => {
   const shown = item("C:\\w\\a.png", "image");
   await act(async () => showItem(shown));
+  await render({ item: shown, source, botId: "b1", hidden: false });
   await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
   const img = host.querySelector("img")!;
   const checker = host.querySelector(".verify-watch-frame:not(.show-frame)")!;
-  await act(async () => tab("Show").click());
+  await act(async () => tab("a.png").click());
   let check: string | null = "x";
   let watching = false;
   await probe(() => { check = useCheckThread(); watching = Boolean(useVerifyWatch()); });
   expect(check).toBeNull();
   expect(watching).toBe(true);
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, botId: "b1", hidden: false });
-  expect(selected()).toBe("Show");
+  expect(selected()).toBe("a.png");
   expect(host.querySelector("aside")!.dataset.tab).toBe("show");
   expect(host.querySelector("img")).toBe(img);
   expect(host.querySelector(".verify-watch-frame:not(.show-frame)")).toBe(checker);
@@ -342,8 +439,9 @@ it("switching tabs keeps the check alive and never reloads Show's file", async (
 
 it("the Check tab opens the chat's finished check", async () => {
   const done = { ...card, live: undefined, replay: ["run-0"] };
+  await openTabs();
   await render({ item: item("C:\\w\\a.png", "image"), card: done, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check", "Map"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Check", "Map", "Timeline"]);
   await act(async () => tab("Check").click());
   let watching: unknown = null;
   await probe(() => { watching = useVerifyWatch(); });
@@ -370,19 +468,68 @@ it("speaks Korean on the Check tab", async () => {
   expect(selected()).toBe("검사");
 });
 
-it("hides only Show and Check behind the other tabs, never the Media list", () => {
+it("keeps Check behind the other tabs like any kept tab, never display: none, which replays the pane's fade-in", async () => {
+  const shown = item("C:\\w\\a.png", "image");
+  await act(async () => showItem(shown));
+  await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
+  const open = () => [...host.querySelectorAll("aside > .verify-watch-frame:not([data-kept])")].map((body) => body.matches(".show-frame") ? "a.png" : "Check");
+  expect(open()).toEqual(["Check"]);
+  await act(async () => tab("a.png").click());
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, botId: "b1", hidden: false });
+  expect(open()).toEqual(["a.png"]);
+  expect(readFileSync("src/components/ShowPane.css", "utf8")).not.toMatch(/\.show-pane[^{}]*>[^{}]*\{[^}]*display:\s*none/);
+});
+
+it("a kept site check stops drawing until its tab is open again", async () => {
+  const shown = item("C:\\w\\a.png", "image");
+  await act(async () => showItem(shown));
+  await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
+  await act(async () => tab("a.png").click());
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, botId: "b1", hidden: false });
+  const frames = vi.spyOn(globalThis, "requestAnimationFrame");
+  await act(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  expect(frames).toHaveBeenCalledTimes(2);
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
+  await until(() => frames.mock.calls.length > 2);
+});
+
+it("a phone tap near an unselected tab's x opens the tab: its x takes no tap and the label reaches under it", () => {
+  const phone = readFileSync("src/components/ShowPane.css", "utf8").split("@media (max-width: 767px)")[1]!;
+  expect(phone).toMatch(/\.show-pane-tab:not\(\[data-selected\]\) \.show-pane-tab-close \{ pointer-events: none; \}/);
+  expect(phone).toMatch(/\.show-pane-tab > \[role="tab"\]::after \{[^}]*inset: -6px -22px -6px 0/);
+});
+
+it("the pane head's buttons point and take focus like the chat header's", () => {
   const css = readFileSync("src/components/ShowPane.css", "utf8");
-  const rule = css.slice(css.indexOf(".show-pane:not([data-tab"), css.indexOf("{ display: none; }"));
-  expect(rule).toContain('.show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane, .show-workers)');
+  expect(css).toMatch(/\.show-pane-head \.verify-watch-icon \{[^}]*cursor: default/);
+  expect(css).toMatch(/\.show-pane-head \.verify-watch-icon:focus-visible \{[^}]*color: var\(--color-ink-secondary\)/);
+});
+
+it("keeps Maximize and Close in the pane: tabs scroll instead of growing the row, and the sheet starts under the Windows caption", () => {
+  const css = readFileSync("src/components/ShowPane.css", "utf8");
+  const row = css.match(/^\.show-pane-tabs \{[^}]*\}/m)![0];
+  expect(row).toContain("min-width: 0");
+  expect(row).toContain("overflow-x: auto");
+  expect(css).toMatch(/\.show-pane-tab \{[^}]*flex-shrink: 0[^}]*white-space: nowrap/);
+  expect(css).toMatch(/\.show-pane-tab > \[role="tab"\] \{[^}]*outline-offset: -2px/);
+  expect(css).toContain('html[data-orbit-caption="win32"] .verify-watch.show-pane { top: var(--orbit-caption-height); }');
+});
+
+it("the tab row never scrolls up and down: the phone tap area hangs past the buttons and would lift the selected pill off center", () => {
+  const css = readFileSync("src/components/ShowPane.css", "utf8");
+  expect(css).toMatch(/^\.show-pane-tabs \{[^}]*overflow-y: (hidden|clip)/m);
 });
 
 it("a phone gets the Check tab for a running doc check, not a running site check", async () => {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
   const running = { ...card, status: "running" as const, live: true as const, replay: [] };
+  await openTabs();
   await render({ item: item("C:\\w\\a.png", "image"), card: running, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Map"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Map", "Timeline"]);
   await render({ item: item("C:\\w\\a.png", "image"), card: { ...running, doc: { pages: 2, lines: 40, chunks: [0, 2] } }, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check", "Map"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Check", "Map", "Timeline"]);
 });
 
 it.each([["en", "Save a copy"], ["ko", "사본 저장"]] as const)("saves the shown file through the desktop dialog in %s", async (locale, label) => {
@@ -438,4 +585,752 @@ it("pulses the pane once when its file is clicked again, and not when a click on
   await act(async () => showMap("t1"));
   await act(async () => showItem(shown));
   expect(lit()).toBe(false);
+});
+
+const timeline = readFileSync("test/fixtures/decision-timeline/decisions.md", "utf8");
+const picks = (reply: () => Response) => vi.mocked(fetch).mockImplementation(async (url) => (String(url).endsWith("/memory/topics/decisions.md") ? reply() : new Response(null, { status: 404 })));
+// each test names its own bot: a replaced pick's fold and the search are kept for the session, per bot
+const openTimeline = (botId = "b1", closing = false) => render({ timeline: true, profileName: "Edward", botId, source: { threadId: "t1", messages: [] }, hidden: false, closing });
+const picked = () => [...host.querySelectorAll<HTMLElement>(".timeline-pane:not([data-sample]) [data-timeline-pick]:not([data-old])")];
+const sampled = () => [...host.querySelectorAll<HTMLElement>(".timeline-pane[data-sample] [data-timeline-pick]")];
+const named = (key: string) => picked().find((pick) => pick.querySelector(".timeline-key")?.textContent === key)!;
+const strokes = (kind: string) => host.querySelectorAll(`.timeline-ink path[data-ink="${kind}"]`).length;
+const pickList = () => picks(() => new Response(JSON.stringify({ name: "decisions.md", text: timeline, entries: parseTimeline(timeline).entries }), { status: 200 }));
+const type = (input: HTMLInputElement, text: string) => act(async () => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+});
+
+it("draws the bot's picks on the Timeline canvas, oldest day first, each pick circled and the rest struck, a replaced pick folded under the newer one", async () => {
+  pickList();
+  await openTimeline("b-canvas");
+  const tab = [...host.querySelectorAll(".show-pane-tabs [role=tab]")].find((each) => each.textContent === "Timeline");
+  expect(tab?.getAttribute("aria-selected")).toBe("true");
+  await until(() => picked().length > 0);
+  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-14", "2026-11-17"]);
+  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Speed board look", "Map on phone", "Forum look", "Model Index on phone", "Timeline place"]);
+  const forum = named("Forum look");
+  expect(forum.querySelector("[data-won] .timeline-caption")?.textContent).toBe("Reddit-style list (mock 2)");
+  expect([...forum.querySelectorAll("[data-timeline-out]")].map((out) => out.textContent)).toEqual(["A - Needs you header", "B - Needs you chip"]);
+  expect(named("Timeline place").querySelector("[data-won] .timeline-pic")?.textContent).toBe("Tab in the side pane");
+  const outs = host.querySelectorAll("[data-timeline-out]").length;
+  expect(outs).toBe(10);
+  expect(strokes("ring")).toBe(2 * 5);
+  expect(strokes("strike")).toBe(2 * outs);
+  expect(strokes("tick")).toBe(0);
+  expect(strokes("link")).toBe(4);
+  expect(strokes("replaced")).toBe(0);
+  const fold = forum.querySelector<HTMLButtonElement>("[data-timeline-replaced]")!;
+  expect(fold.textContent).toBe("Replaced pick · 11:05 · Bot to bot, like Reddit");
+  expect(host.textContent).not.toContain("i thot this is bot to bot forum");
+  await act(async () => fold.click());
+  const old = host.querySelector<HTMLElement>("[data-timeline-pick][data-old]")!;
+  expect(old.querySelector(".timeline-key")?.textContent).toBe("Bot to bot, like Reddit");
+  expect(old.textContent).toContain("i thot this is bot to bot forum, not me?");
+  expect(old.querySelector(".timeline-said span")?.textContent).toMatch(/^Edward · /);
+  expect(old.querySelector(".timeline-label time")?.textContent).toMatch(/^replaced · (?:2026-)?11-17 11:18$/);
+  expect(strokes("replaced")).toBe(1);
+  expect(strokes("route")).toBe(1);
+  expect([...forum.querySelectorAll(".timeline-tweaks q")].map((tweak) => tweak.textContent)).toEqual(["im wondering if it should have a small title up top so ppl know what it is", "humans can reply too if they want, but its made for the bots"]);
+  expect(host.querySelector(".timeline-hint")?.textContent).toMatch(/^Scroll to move · Ctrl\+scroll to zoom\d+%$/);
+  const search = host.querySelector<HTMLInputElement>(".timeline-search input")!;
+  expect(search.placeholder).toBe("Search picks and your words");
+  await type(search, "reddit");
+  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Forum look"]);
+});
+
+it("pairs a crossed picture by its caption, and an uncaptioned one only with the option left over", async () => {
+  const text = "# Decision timeline\n\n## 2026-11-17 10:00 | Header look | current\n- Picked: C - big title\n- Over: A - no title; B - small title\n- Over pictures: C:\\Users\\me\\.orbit\\attachments\\b.png (B - small title); C:\\Users\\me\\.orbit\\attachments\\a.png\n";
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text, entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline("b-pair");
+  await until(() => picked().length > 0);
+  expect([...picked()[0]!.querySelectorAll("[data-timeline-out]")].map((out) => [out.textContent, out.querySelector("img")?.getAttribute("src")?.split("/").pop()])).toEqual([["A - no title", "a.png"], ["B - small title", "b.png"]]);
+});
+
+it("loads a room pick's own file through the room it was picked in", async () => {
+  const text = "# Decision timeline\n\n## 2026-11-17 10:00 | Header look | current\n- Picked: C - big title\n- Picture: C:\\w\\c.png (C - big title)\n- Over: A - no title\n- Over pictures: C:\\w\\a.png (A - no title)\n- Files: C:\\w\\shot.png\n- Thread: room1\n";
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text, entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline("b-room");
+  await until(() => picked().length > 0);
+  expect([...picked()[0]!.querySelectorAll("img")].map((img) => img.getAttribute("src"))).toEqual(
+    ["C:\\w\\a.png", "C:\\w\\c.png", "C:\\w\\shot.png"].map((path) => `/api/threads/room1/linked-file?path=${encodeURIComponent(path)}`),
+  );
+});
+
+it("keeps the search text and an open replaced pick after a tab switch and back", async () => {
+  pickList();
+  await openTimeline("b-switch");
+  await until(() => host.querySelector(".timeline-search input") !== null);
+  await type(host.querySelector<HTMLInputElement>(".timeline-search input")!, "forum");
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-timeline-replaced]")!.click());
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  expect(host.querySelector(".timeline-pane")).toBeNull();
+  await openTimeline("b-switch");
+  await until(() => host.querySelector(".timeline-search input") !== null);
+  expect(host.querySelector<HTMLInputElement>(".timeline-search input")!.value).toBe("forum");
+  expect(host.querySelector("[data-timeline-replaced]")?.getAttribute("aria-expanded")).toBe("true");
+});
+
+it("opens on the newest pick again after panning, reopening, and clearing search", async () => {
+  pickList();
+  const newestAtStart = () => {
+    expect(picked().at(-1)?.querySelector(".timeline-key")?.textContent).toBe("Timeline place");
+    expect(host.querySelector<HTMLElement>(".timeline-sheet")?.style.transform).toBe("translate(4px, 0px) scale(0.86)");
+  };
+  await openTimeline("b-reopen");
+  await until(() => picked().length > 0);
+  newestAtStart();
+  await act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 500 }), { ctrlKey: { value: false } }));
+  });
+  expect(host.querySelector<HTMLElement>(".timeline-sheet")?.style.transform).toBe("translate(4px, -500px) scale(0.86)");
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  expect(host.querySelector(".timeline-canvas")).toBeNull();
+  await openTimeline("b-reopen");
+  await until(() => picked().length > 0);
+  newestAtStart();
+
+  const search = host.querySelector<HTMLInputElement>(".timeline-search input")!;
+  await type(search, "speed board");
+  expect(picked()[0]?.querySelector(".timeline-key")?.textContent).toBe("Speed board look");
+  await act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -100 }), { ctrlKey: { value: true }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  expect(host.querySelector(".timeline-hint b")?.textContent).toBe("110%");
+  await type(search, "");
+  newestAtStart();
+});
+
+it("returns to the newest pick if reopened before the pane finishes closing", async () => {
+  pickList();
+  await openTimeline("b-reopen-during-exit");
+  await until(() => picked().length > 0);
+  const sheet = host.querySelector<HTMLElement>(".timeline-sheet")!;
+  await act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 500 }), { ctrlKey: { value: false } }));
+  });
+  await openTimeline("b-reopen-during-exit", true);
+  expect(sheet.style.transform).toBe("translate(4px, -500px) scale(0.86)");
+  await openTimeline("b-reopen-during-exit");
+  expect(sheet.style.transform).toBe("translate(4px, 0px) scale(0.86)");
+});
+
+it("opens at the newest pick at the bottom, and keeps it there as picks land unless scrolled up", async () => {
+  // happy-dom lays nothing out: the canvas is 600px tall and each pick 300px
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-canvas") ? 600 : 0; });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-sheet") ? 100 + 300 * this.querySelectorAll("[data-timeline-pick]").length : 0; });
+  let text = timeline;
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+  const y = () => Number(/translate\(4px, (-?[\d.]+)px\) scale\(0\.86\)/.exec(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform)![1]);
+  const bottom = (count: number) => 600 - (100 + 300 * count) * 0.86;
+  const newest = () => picked().at(-1)?.querySelector(".timeline-key")?.textContent;
+  const wheel = (deltaY: number) => act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  const land = async (key: string, at: string, count: number) => {
+    text += `\n## 2026-11-18 ${at} | ${key} | current\n- Picked: A\n`;
+    await act(async () => noteMemoryFrame({ kind: "memory.changed", botId: "b-bottom" }, { hydrated: true, bots: [{ id: "b-bottom", threadId: "t1" }] }));
+    await until(() => picked().length === count);
+    expect(newest()).toBe(key);
+  };
+
+  await openTimeline("b-bottom");
+  await until(() => picked().length === 5);
+  expect(newest()).toBe("Timeline place");
+  expect(y()).toBeCloseTo(bottom(5));
+  await wheel(-300);
+  expect(y()).toBeCloseTo(bottom(5) + 300);
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  await openTimeline("b-bottom");
+  await until(() => picked().length === 5);
+  expect(y()).toBeCloseTo(bottom(5));
+
+  const search = host.querySelector<HTMLInputElement>(".timeline-search input")!;
+  await type(search, "forum");
+  // one result is shorter than the pane, so it rests at the top padding
+  expect(y()).toBe(44);
+  await type(search, "");
+  expect(y()).toBeCloseTo(bottom(5));
+
+  await land("New look", "09:00", 6);
+  expect(y()).toBeCloseTo(bottom(6));
+  await wheel(-200);
+  await land("Newer look", "10:00", 7);
+  expect(y()).toBeCloseTo(bottom(6) + 200);
+
+  await openTimeline("b-bottom-2");
+  await until(() => picked().length === 7);
+  expect(y()).toBeCloseTo(bottom(7));
+});
+
+it("follows the newest pick down when a tweak grows it, unless scrolled up", async () => {
+  let extra = 0;
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-canvas") ? 600 : 0; });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-sheet") ? 100 + 300 * this.querySelectorAll("[data-timeline-pick]").length + extra : 0; });
+  let text = timeline;
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+  const y = () => Number(/translate\(4px, (-?[\d.]+)px\) scale\(0\.86\)/.exec(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform)![1]);
+  const bottom = (count: number) => 600 - (100 + 300 * count + extra) * 0.86;
+  const tweak = async (said: string, grew: number) => {
+    extra += grew;
+    text += `\n- Tweak 2026-11-17 12:3${extra / 100}: "${said}"`;
+    await act(async () => noteMemoryFrame({ kind: "memory.changed", botId: "b-tweak" }, { hydrated: true, bots: [{ id: "b-tweak", threadId: "t1" }] }));
+    await until(() => host.querySelectorAll(".timeline-tweaks q").length > 0 && picked().at(-1)?.textContent?.includes(said) === true);
+  };
+
+  await openTimeline("b-tweak");
+  await until(() => picked().length === 5);
+  expect(y()).toBeCloseTo(bottom(5));
+  await tweak("one more thing", 100);
+  expect(y()).toBeCloseTo(bottom(5));
+  await tweak("and another", 100);
+  expect(y()).toBeCloseTo(bottom(5));
+
+  await act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -300 }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  const up = y();
+  await tweak("a third", 100);
+  expect(y()).toBe(up);
+});
+
+it("keeps the newest pick at the bottom when the pane resizes, unless scrolled up", async () => {
+  let tall = 600;
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-canvas") ? tall : 0; });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-sheet") ? 100 + 300 * this.querySelectorAll("[data-timeline-pick]").length : 0; });
+  const watchers: (() => void)[] = [];
+  vi.stubGlobal("ResizeObserver", class { constructor(run: () => void) { watchers.push(run); } observe() {} disconnect() {} });
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(timeline).entries }), { status: 200 }));
+  const y = () => Number(/translate\(4px, (-?[\d.]+)px\) scale\(0\.86\)/.exec(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform)![1]);
+  const bottom = (count: number) => tall - (100 + 300 * count) * 0.86;
+  const resize = (to: number) => act(async () => { tall = to; for (const run of watchers) run(); });
+
+  await openTimeline("b-resize");
+  await until(() => picked().length === 5);
+  await resize(400);
+  expect(y()).toBeCloseTo(bottom(5));
+  await resize(800);
+  expect(y()).toBeCloseTo(bottom(5));
+
+  await act(async () => {
+    host.querySelector(".timeline-canvas")!.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -300 }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  const up = y();
+  await resize(500);
+  expect(y()).toBe(up);
+});
+
+it("orders days and picks by the current pick, even when a newer tap lost to it", async () => {
+  const text = `# Decision timeline
+
+## 2026-11-14 10:00 | Old choice | current
+- Picked: A
+
+## 2026-11-17 09:00 | Morning choice | current
+- Picked: A
+
+## 2026-11-17 10:00 | Latest choice | current
+- Picked: B
+- At: ${new Date(2026, 10, 17, 10, 0, 35).getTime()}
+
+## 2026-11-17 10:00 (2) | Earlier choice | current
+- Picked: A
+- At: ${new Date(2026, 10, 17, 10, 0, 15).getTime()}
+
+## 2026-11-18 10:00 | Old choice | replaced by 2026-11-14 10:00
+- Picked: B
+- Tapped: yes
+`;
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline("b-order");
+  await until(() => picked().length > 0);
+  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-14", "2026-11-17"]);
+  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Old choice", "Morning choice", "Earlier choice", "Latest choice"]);
+});
+
+it("opens with the retyped pick at its latest action time even when its heading still dates the tap", async () => {
+  for (const day of [17, 18]) {
+    const pick = (key: string, messageId: string, date: number, hour: number, tapped = false) => ({
+      kind: "pick" as const, key, messageId, questionId: `${key}-question`, thread: "t1", at: new Date(2026, 10, date, hour).getTime(),
+      picked: "B - blue cards", said: "I choose B", tapped,
+    });
+    const text = applyPicks("", [pick("Forum", "m1", 17, 10, true), pick("Settings", "m2", 17, 11), pick("Forum", "m3", day, 12)])!.text;
+    expect(text).toContain("## 2026-11-17 10:00 | Forum | current");
+    picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+    await openTimeline(`b-retyped-${day}`);
+    await until(() => named("Forum")?.querySelector("q")?.textContent === "I choose B" && picked().length === 2);
+    expect(picked().map((row) => row.querySelector(".timeline-key")?.textContent)).toEqual(["Settings", "Forum"]);
+    expect(named("Forum").closest("section")?.querySelector("[data-timeline-day]")?.getAttribute("data-timeline-day")).toBe(`2026-11-${day}`);
+    expect(named("Forum").querySelector("time")?.textContent).toContain("12:00");
+    expect(named("Forum").querySelector(".timeline-said span")?.textContent).toContain("12:00");
+    await render({ hidden: true });
+  }
+});
+
+it("shows the text of an unbound pick without printing its heading time", async () => {
+  const text = '# Decision timeline\n\n## 2026-11-17 10:00 | Forum | current\n- Picked: B - blue cards\n- Said: "I choose B"\n- Binding: unbound\n';
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline("b-unbound");
+  await until(() => picked().length === 1);
+  expect(named("Forum").querySelector("[data-won]")?.textContent).toBe("B - blue cards");
+  expect(named("Forum").querySelector(".timeline-said span")?.textContent).toBe("Edward");
+  expect(named("Forum").querySelector("time, img")).toBeNull();
+  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-17"]);
+});
+
+it("sorts a text-only pick by its day, below an older day's timed pick", async () => {
+  const text = '# Decision timeline\n\n## 2026-11-14 10:00 | Header | current\n- Picked: A - small\n\n## 2026-11-17 | Forum | current\n- Picked: B - blue cards\n- Said: "I choose B"\n- Binding: unbound\n';
+  picks(() => new Response(JSON.stringify({ entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline("b-unbound-day");
+  await until(() => picked().length === 2);
+  expect(picked().map((pick) => pick.querySelector(".timeline-key")?.textContent)).toEqual(["Header", "Forum"]);
+  expect([...host.querySelectorAll("[data-timeline-day]")].map((day) => day.getAttribute("data-timeline-day"))).toEqual(["2026-11-14", "2026-11-17"]);
+  expect(named("Forum").querySelector("time")).toBeNull();
+});
+
+it("a right drag on a phone that starts on the tab strip or the Timeline canvas stays theirs: the pane neither moves nor closes", async () => {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
+  pickList();
+  await act(async () => showTimeline("t1"));
+  await openTimeline("b-phone-swipe");
+  await until(() => Boolean(document.querySelector(".timeline-canvas")));
+  const aside = document.querySelector<HTMLElement>("aside.show-pane")!;
+  for (const from of [document.querySelector(".show-pane-tabs [role='tab']")!, document.querySelector(".timeline-canvas")!]) {
+    await touch("touchstart", [[100, 300]], from, 400);
+    await touch("touchmove", [[200, 300]], from);
+    expect(aside.style.transform).toBe("");
+    await touch("touchmove", [[300, 300]], from);
+    await touch("touchend", [], from);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
+    expect(aside.style.transform).toBe("");
+  }
+  let thread: string | null = null;
+  function Probe() { thread = useTimelineThread(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(thread).toBe("t1");
+});
+
+it("moves with scroll and a drag, zooms with Ctrl+scroll and a pinch, and shows the zoom in the corner", async () => {
+  pickList();
+  await openTimeline("b-move");
+  await until(() => picked().length > 0);
+  const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
+  const sheet = () => host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform;
+  const zoom = () => host.querySelector(".timeline-hint b")?.textContent;
+  expect(sheet()).toBe("translate(4px, 0px) scale(0.86)");
+  expect(zoom()).toBe("86%");
+  // happy-dom's WheelEvent drops its modifier keys and point
+  const wheel = (init: WheelEventInit) => act(async () => {
+    canvas.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init }), { ctrlKey: { value: init.ctrlKey ?? false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  await wheel({ deltaY: 100 });
+  expect(sheet()).toBe("translate(4px, -100px) scale(0.86)");
+  await wheel({ deltaY: -100, ctrlKey: true });
+  expect(zoom()).toBe("110%");
+  const pointer = (kind: string, x: number, y: number, pointerId = 1) => canvas.dispatchEvent(new PointerEvent(kind, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y, pointerId, pointerType: "touch" }));
+  const scale = () => Number(/scale\(([\d.]+)\)/.exec(sheet())![1]);
+  const before = scale();
+  await act(async () => { pointer("pointerdown", 100, 100); pointer("pointermove", 102, 101); });
+  expect(scale()).toBe(before);
+  const still = sheet();
+  await act(async () => { pointer("pointermove", 160, 140); pointer("pointerup", 160, 140); });
+  expect(sheet()).not.toBe(still);
+  await act(async () => { pointer("pointerdown", 100, 200, 1); pointer("pointerdown", 200, 200, 2); pointer("pointermove", 50, 200, 1); pointer("pointermove", 250, 200, 2); pointer("pointerup", 50, 200, 1); pointer("pointerup", 250, 200, 2); });
+  expect(scale()).toBeGreaterThan(before * 1.5);
+  const open = named("Map on phone").querySelector<HTMLButtonElement>("[data-won] button")!;
+  await act(async () => { pointer("pointerdown", 10, 10); pointer("pointermove", 80, 80); pointer("pointerup", 80, 80); open.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
+  expect(document.querySelector("[data-media-viewer]")).toBeNull();
+});
+
+it("keeps a pinch's move at the canvas edge, and moves the canvas with the arrow keys", async () => {
+  pickList();
+  await openTimeline("b-edge");
+  await until(() => picked().length > 0);
+  const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
+  const sheet = host.querySelector<HTMLElement>(".timeline-sheet")!;
+  Object.defineProperties(canvas, { clientWidth: { value: 400 }, clientHeight: { value: 600 } });
+  Object.defineProperties(sheet, { offsetWidth: { value: 1000 }, offsetHeight: { value: 2000 } });
+  const view = () => /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/.exec(sheet.style.transform)!.slice(1).map(Number);
+  expect(view()).toEqual([4, 0, 0.86]);
+  const pointer = (kind: string, x: number, pointerId: number) => canvas.dispatchEvent(new PointerEvent(kind, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: 200, pointerId, pointerType: "touch" }));
+  await act(async () => { pointer("pointerdown", 100, 1); pointer("pointerdown", 200, 2); pointer("pointermove", 260, 2); pointer("pointerup", 100, 1); pointer("pointerup", 260, 2); });
+  const [x, y, scale] = view();
+  expect(scale).toBeCloseTo(1.376);
+  expect(x).toBeCloseTo(180 - (180 - 34) * 1.6);
+  expect(y).toBeCloseTo(200 - 200 * 1.6);
+  const label = named("Forum look").querySelector<HTMLElement>("[data-label]")!;
+  await act(async () => { label.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })); });
+  expect(view()[0]).toBeCloseTo(x - 40);
+  await act(async () => { label.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true })); });
+  expect(view()[1]).toBeCloseTo(y - 40);
+});
+
+const glideSetup = async (botId: string, mounting = false) => {
+  const frames = new Map<number, FrameRequestCallback>();
+  let next = 0;
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((frame) => (frames.set(++next, frame), next));
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => void frames.delete(id));
+  if (mounting) {
+    const many = "# Decision timeline\n\n" + Array.from({ length: 40 }, (_, i) => `## 2026-10-${String(1 + (i % 28)).padStart(2, "0")} ${10 + Math.floor(i / 28)}:00 | Question ${i} | current\n- Picked: A${i}\n- Over: B${i}\n`).join("\n");
+    picks(() => new Response(JSON.stringify({ name: "decisions.md", text: many, entries: parseTimeline(many).entries }), { status: 200 }));
+  } else pickList();
+  await openTimeline(botId);
+  await until(() => picked().length > 0);
+  const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
+  const sheet = host.querySelector<HTMLElement>(".timeline-sheet")!;
+  Object.defineProperties(canvas, { clientWidth: { value: 400 }, clientHeight: { value: 600 } });
+  // a sheet that grows with the rows mounted, so older rows landing above can move the view
+  Object.defineProperties(sheet, { offsetWidth: { value: 1000 }, offsetHeight: mounting ? { get: () => 100 * picked().length } : { value: 2000 } });
+  const y = () => Number(/translate\(-?[\d.]+px, (-?[\d.]+)px\)/.exec(sheet.style.transform)![1]);
+  const chip = (end: string) => host.querySelector<HTMLElement>(`.timeline-canvas > [data-end="${end}"]`)!;
+  const tap = (end: string) => act(async () => { chip(end).dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
+  const play = async (ms: number) => {
+    const seen: number[] = [];
+    for (let at = 0; at <= ms; at += 40) {
+      const due = [...frames.values()];
+      frames.clear();
+      await act(async () => { due.forEach((frame) => frame(at)); });
+      seen.push(y());
+    }
+    return seen;
+  };
+  return { canvas, frames, y, tap, play };
+};
+
+it("glides from the top to the newest pick and back to the oldest, through the positions between", async () => {
+  const { y, tap, play } = await glideSetup("b-glide");
+  expect(y()).toBe(0);
+  await tap("newest");
+  const down = await play(600);
+  expect(down.at(-1)).toBe(-1120);
+  expect(down.filter((at) => at < 0 && at > -1120).length).toBeGreaterThan(3);
+  expect(down).toEqual(down.toSorted((a, b) => b - a));
+  await tap("oldest");
+  const up = await play(600);
+  expect(up.at(-1)).toBe(44);
+  expect(up.filter((at) => at > -1120 && at < 44).length).toBeGreaterThan(3);
+});
+
+it("stops the glide at once when a wheel or a drag takes over", async () => {
+  const { canvas, frames, y, tap, play } = await glideSetup("b-glide-stop");
+  await tap("newest");
+  await play(120);
+  const held = y();
+  expect(held).toBeLessThan(0);
+  expect(held).toBeGreaterThan(-1120);
+  await act(async () => {
+    canvas.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 10 }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  expect(frames.size).toBe(0);
+  expect(y()).toBe(held - 10);
+  await tap("oldest");
+  await play(80);
+  await act(async () => { canvas.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, clientX: 100, clientY: 100, pointerId: 1, pointerType: "touch" })); });
+  expect(frames.size).toBe(0);
+});
+
+it("jumps instead under reduced motion", async () => {
+  const { frames, y, tap } = await glideSetup("b-glide-still");
+  const media = window.matchMedia;
+  // SAFETY: reducedMotion() reads only .matches.
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => query === "(prefers-reduced-motion: reduce)" ? { matches: true } as MediaQueryList : media.call(window, query));
+  await tap("newest");
+  expect(y()).toBe(-1120);
+  expect(frames.size).toBe(0);
+});
+
+it("jumps onto the oldest pick under reduced motion when older rows are still to mount", async () => {
+  const { y, tap } = await glideSetup("b-glide-mount-still", true);
+  expect(picked().length).toBe(8);
+  const media = window.matchMedia;
+  // SAFETY: reducedMotion() reads only .matches.
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => query === "(prefers-reduced-motion: reduce)" ? { matches: true } as MediaQueryList : media.call(window, query));
+  await tap("oldest");
+  expect(picked().length).toBe(40);
+  expect(picked()[0]?.querySelector(".timeline-key")?.textContent).toBe("Question 0");
+  expect(y()).toBe(44);
+});
+
+it("glides onto the oldest pick when older rows are still to mount", async () => {
+  const { y, tap, play } = await glideSetup("b-glide-mount", true);
+  await tap("oldest");
+  expect(picked().length).toBe(40);
+  expect((await play(600)).at(-1)).toBe(44);
+  expect(y()).toBe(44);
+});
+
+it("draws the newest picks first and the rest a batch a frame", async () => {
+  const many = "# Decision timeline\n\n" + Array.from({ length: 40 }, (_, i) => `## 2026-10-${String(1 + (i % 28)).padStart(2, "0")} ${10 + Math.floor(i / 28)}:00 | Question ${i} | current\n- Picked: A${i}\n- Over: B${i}\n`).join("\n");
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text: many, entries: parseTimeline(many).entries }), { status: 200 }));
+  const frames: FrameRequestCallback[] = [];
+  const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((frame) => frames.push(frame));
+  await openTimeline("b-many");
+  await until(() => picked().length > 0);
+  expect(picked().length).toBe(8);
+  expect(picked().at(-1)?.querySelector(".timeline-key")?.textContent).toBe("Question 27");
+  // the ends wear the hint bar's own class, pinned to the pane, not drawn on the sheet
+  const ends = () => [...host.querySelectorAll(".timeline-canvas > button.timeline-hint[data-end]")].map((label) => [label.getAttribute("data-end"), label.textContent]);
+  expect(ends()).toEqual([["oldest", "Oldest"], ["newest", "Newest"]]);
+  expect(host.querySelector(".timeline-sheet .timeline-hint")).toBeNull();
+  while (frames.length) await act(async () => frames.shift()!(0));
+  expect(picked().length).toBe(40);
+  expect(picked()[0]?.querySelector(".timeline-key")?.textContent).toBe("Question 0");
+  expect(ends()).toEqual([["oldest", "Oldest"], ["newest", "Newest"]]);
+  raf.mockRestore();
+});
+
+it("starts a new search at the newest end, even after one with no results", async () => {
+  pickList();
+  await openTimeline("b-stale");
+  await until(() => picked().length > 0);
+  const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
+  await act(async () => {
+    canvas.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 100 }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  expect(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform).toBe("translate(4px, -100px) scale(0.86)");
+  const search = host.querySelector<HTMLInputElement>(".timeline-pane input")!;
+  await type(search, "zzzz");
+  expect(host.querySelector(".timeline-canvas")).toBeNull();
+  await type(search, "reddit");
+  await until(() => picked().length > 0);
+  expect(host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform).toBe("translate(4px, 0px) scale(0.86)");
+});
+
+it("gives every pick a keyboard stop, and a mouse let go outside the canvas does not drag on its way back", async () => {
+  pickList();
+  await openTimeline("b-keys");
+  await until(() => picked().length > 0);
+  expect(picked().map((pick) => pick.querySelector<HTMLElement>("[data-label]")!.tabIndex)).toEqual(picked().map(() => 0));
+  const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
+  const sheet = () => host.querySelector<HTMLElement>(".timeline-sheet")!.style.transform;
+  const before = sheet();
+  await act(async () => {
+    canvas.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1, pointerType: "mouse" }));
+    canvas.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, button: -1, buttons: 0, clientX: 180, clientY: 160, pointerId: 1, pointerType: "mouse" }));
+    canvas.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, button: -1, buttons: 0, clientX: 220, clientY: 200, pointerId: 1, pointerType: "mouse" }));
+  });
+  expect(sheet()).toBe(before);
+});
+
+it("stops a fling at the sheet's edges", async () => {
+  pickList();
+  await openTimeline("b-edge");
+  await until(() => picked().length > 0);
+  const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
+  const sheet = host.querySelector<HTMLElement>(".timeline-sheet")!;
+  Object.defineProperties(canvas, { clientWidth: { value: 300 }, clientHeight: { value: 600 } });
+  Object.defineProperties(sheet, { offsetWidth: { value: 500 }, offsetHeight: { value: 1000 } });
+  const wheel = (deltaY: number) => act(async () => {
+    canvas.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  await wheel(5000);
+  expect(sheet.style.transform).toBe("translate(4px, -260px) scale(0.86)");
+  await wheel(-9000);
+  expect(sheet.style.transform).toBe("translate(4px, 44px) scale(0.86)");
+});
+
+it("opens a screenshot, or a picked or crossed picture, in the viewer on one click", async () => {
+  pickList();
+  await openTimeline("b-viewer");
+  await until(() => picked().length > 0);
+  const opener = (selector: string) => named("Map on phone").querySelector<HTMLButtonElement>(selector)!;
+  expect(document.querySelector("[data-media-viewer]")).toBeNull();
+  for (const [selector, name] of [[".timeline-shots button", "map-shot1.png"], ["[data-won] button", "map-pick.png"], ["[data-timeline-out] button", "map-a2.png"]] as const) {
+    expect(opener(selector).getAttribute("aria-label")).toBe(`Open Image ${name}`);
+    await act(async () => opener(selector).click());
+    expect(document.querySelector("[data-media-viewer] img")?.getAttribute("src")).toContain(name);
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await until(() => !document.querySelector("[data-media-viewer]"));
+    expect(document.querySelector("[data-media-viewer]")).toBeNull();
+  }
+});
+
+it("consumes Escape when it closes the Timeline, so a card behind it stays", async () => {
+  pickList();
+  await openTimeline("b-esc");
+  await until(() => picked().length > 0);
+  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  await act(async () => { window.dispatchEvent(escape); });
+  expect(escape.defaultPrevented).toBe(true);
+});
+
+const press = (key: string) => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+const viewed = () => document.querySelector("[data-media-viewer] img")?.getAttribute("src") ?? "";
+const thumb = (button?: HTMLElement) => button!.querySelector("img")!.getAttribute("src")!;
+
+it("moves to the next and previous picture of the same pick with the arrow keys", async () => {
+  pickList();
+  await openTimeline("b-arrows");
+  await until(() => picked().length > 0);
+  const [first, second] = [...named("Map on phone").querySelectorAll<HTMLButtonElement>("button.timeline-open")];
+  await act(async () => first!.click());
+  expect(viewed()).toBe(thumb(first));
+  await press("ArrowLeft");
+  expect(viewed()).toBe(thumb(first));
+  await press("ArrowRight");
+  expect(viewed()).toBe(thumb(second));
+  await press("ArrowLeft");
+  expect(viewed()).toBe(thumb(first));
+});
+
+it("steps through the same attachment in the winner and the screenshots", async () => {
+  const entries = [{ id: "2026-11-18", key: "Mock layout", picked: "A", picture: { path: "/attachments/A.png" }, over: [], overPictures: [], files: ["/attachments/A.png", "/attachments/B.png"], tweaks: [] }];
+  picks(() => new Response(JSON.stringify({ entries }), { status: 200 }));
+  await openTimeline("b-duplicate-pictures");
+  await until(() => picked().length > 0);
+  const [winner, screenshot] = [...picked()[0]!.querySelectorAll<HTMLButtonElement>("button.timeline-open")];
+  await act(async () => winner!.click());
+  await press("ArrowRight");
+  expect(viewed()).toContain("A.png");
+  await press("ArrowRight");
+  expect(viewed()).toContain("B.png");
+  await press("ArrowLeft");
+  expect(viewed()).toContain("A.png");
+  await act(async () => screenshot!.click());
+  await press("ArrowRight");
+  expect(viewed()).toContain("B.png");
+});
+
+it("leaves right-click on a picture to the image's own menu, with nothing drawn over it", async () => {
+  pickList();
+  await openTimeline("b-menu");
+  await until(() => picked().length > 0);
+  const images = [...named("Map on phone").querySelectorAll("img")];
+  expect(images.length).toBeGreaterThan(5);
+  for (const img of images) {
+    const click = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    await act(async () => { img.dispatchEvent(click); });
+    expect(click.defaultPrevented).toBe(false);
+  }
+  const css = readFileSync("src/components/TimelinePane.css", "utf8");
+  expect(css).toMatch(/\.timeline-ink \{[^}]*pointer-events: none/);
+  expect(css).not.toMatch(/\.timeline-canvas\[data-grabbing\] \{/);
+});
+
+it("pairs a crossed picture whose caption drops its option's letter", async () => {
+  const text = "# Decision timeline\n\n## 2026-11-17 10:00 | Forum | current\n- Picked: B - blue cards\n- Over: A - red cards\n- Over pictures: C:\\Users\\me\\.orbit\\attachments\\red.png (red cards)\n";
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text, entries: parseTimeline(text).entries }), { status: 200 }));
+  await openTimeline("b-pair-bare");
+  await until(() => picked().length > 0);
+  expect([...picked()[0]!.querySelectorAll("[data-timeline-out]")].map((out) => [out.textContent, out.querySelector("img")?.getAttribute("src")?.split("/").pop()])).toEqual([["A - red cards", "red.png"]]);
+});
+
+it("shows a pick Auto Notes saves while the pane is open", async () => {
+  picks(() => new Response(JSON.stringify({ error: "no such topic file" }), { status: 404 }));
+  await openTimeline("b-live");
+  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
+  expect(picked()).toHaveLength(0);
+  pickList();
+  const saved = { id: "save-1", tool: { name: "memory.save", ok: true } };
+  await act(async () => noteMemoryFrame({ kind: "message", threadId: "t1", message: saved }, { hydrated: true, bots: [{ id: "b-live", threadId: "t1" }] }));
+  await until(() => picked().length === 5);
+  expect(picked()).toHaveLength(5);
+});
+
+it.each([
+  ["a room save for this bot", "room", false, "b-refresh"],
+  ["a save on an earlier task", "earlier", false, undefined],
+  ["a save replayed after reconnect", "t1", true, undefined],
+] as const)("refreshes the open Timeline after %s", async (_label, threadId, replayed, memoryBotId) => {
+  const botId = "b-refresh";
+  const bots = [{ id: botId, threadId: "t1", tasks: [{ threadId: "earlier" }] }];
+  picks(() => new Response(null, { status: 404 }));
+  await openTimeline(botId);
+  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
+  pickList();
+  const save = (id: string, owner?: string) => ({ id, tool: { name: "memory.save", ok: true, memoryBotId: owner } });
+  await act(async () => noteMemoryFrame({ kind: "message", threadId, replayed, message: save("other-save", "other-bot") }, { hydrated: true, bots }));
+  expect(picked()).toHaveLength(0);
+  await act(async () => noteMemoryFrame({ kind: "message", threadId, replayed, message: save("bot-save", memoryBotId) }, { hydrated: true, bots }));
+  await until(() => picked().length === 5);
+  expect(picked()).toHaveLength(5);
+});
+
+it("refreshes the open Timeline when its bot receives a synced pick", async () => {
+  const botId = "b-peer-sync";
+  const bots = [{ id: botId, threadId: "t1" }];
+  const sync = (id: string) => act(async () => noteMemoryFrame({ kind: "memory.changed", botId: id }, { hydrated: true, bots }));
+  picks(() => new Response(null, { status: 404 }));
+  await openTimeline(botId);
+  await until(() => host.querySelector(".timeline-pane .show-media-empty") !== null);
+  pickList();
+  await sync("other-bot");
+  expect(picked()).toHaveLength(0);
+  await sync(botId);
+  await until(() => picked().length === 5);
+  expect(picked()).toHaveLength(5);
+});
+
+it.each([503, 404])("keeps the loaded Timeline rows when a save refresh fails with %i", async (status) => {
+  const botId = `b-failed-refresh-${status}`;
+  pickList();
+  await openTimeline(botId);
+  await until(() => picked().length === 5);
+  const refresh = vi.fn(() => new Response(null, { status }));
+  picks(refresh);
+  const message = { id: "fact-save", tool: { name: "memory.save", ok: true } };
+  await act(async () => noteMemoryFrame({ kind: "message", threadId: "t1", message }, { hydrated: true, bots: [{ id: botId, threadId: "t1" }] }));
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(picked()).toHaveLength(5);
+  expect(host.querySelector(".timeline-pane .show-media-empty")).toBeNull();
+});
+
+it("keeps the demo on yesterday and today when opened just after midnight", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 10, 19, 0, 45));
+  try {
+    picks(() => new Response(JSON.stringify({ name: "decisions.md", text: "", entries: [] }), { status: 200 }));
+    await openTimeline("b-sample-midnight");
+    await until(() => sampled().length > 0);
+    const days = [...host.querySelectorAll<HTMLElement>(".timeline-pane[data-sample] section")];
+    expect(days.map((day) => [day.querySelector("[data-timeline-day]")?.getAttribute("data-timeline-day"), day.querySelectorAll("[data-timeline-pick]").length])).toEqual([["2026-11-18", 3], ["2026-11-19", 3]]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("never flashes the demo while a bot's picks are still loading", async () => {
+  let reply!: (response: Response) => void;
+  vi.mocked(fetch).mockImplementation((url) => (String(url).endsWith("/memory/topics/decisions.md") ? new Promise<Response>((resolve) => { reply = resolve; }) : Promise.resolve(new Response(null, { status: 404 }))));
+  let flashed = false;
+  const watch = new MutationObserver(() => { flashed ||= host.querySelector(".timeline-sample") !== null; });
+  watch.observe(host, { childList: true, subtree: true });
+  await openTimeline("b-no-flash");
+  expect(host.querySelector(".timeline-pane")?.getAttribute("aria-busy")).toBe("true");
+  await act(async () => reply(new Response(JSON.stringify({ name: "decisions.md", text: timeline, entries: parseTimeline(timeline).entries }), { status: 200 })));
+  await until(() => picked().length === 5);
+  watch.disconnect();
+  expect(flashed).toBe(false);
+});
+
+it.each([
+  ["en", "Demo. Your picks replace this.", "When you pick an option in a chat, it lands here.", [["Pick a name for the app", "Wink"], ["Where should Settings live?", "Side panel"], ["Font size for chats", "Medium"], ["Dark or light theme?", "Dark"], ["Onboarding: tour or skip?", "Short tour"], ["Ship today or tomorrow?", "Today"]]],
+  ["ko", "데모예요. 내 선택이 생기면 바뀌어요.", "채팅에서 고른 선택이 여기에 쌓여요.", [["앱 이름 정하기", "Wink"], ["설정은 어디에 둘까요?", "사이드 패널"], ["채팅 글자 크기", "보통"], ["다크 테마, 라이트 테마?", "다크"], ["온보딩: 둘러보기, 건너뛰기?", "짧은 둘러보기"], ["오늘 출시할까요, 내일 출시할까요?", "오늘"]]],
+] as const)("draws a labeled demo Timeline in %s until the first real pick replaces it", async (locale, label, line, rows) => {
+  applyLocale(locale);
+  const botId = `b-sample-${locale}`;
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text: "", entries: [] }), { status: 200 }));
+  await openTimeline(botId);
+  await until(() => sampled().length > 0);
+  expect(host.querySelector(".timeline-sample small")?.textContent).toBe(label);
+  expect(host.querySelector(".timeline-sample .show-media-empty")?.textContent).toBe(line);
+  expect(sampled().map((pick) => [pick.querySelector(".timeline-key")?.textContent, pick.querySelector("[data-won]")?.textContent])).toEqual(rows);
+  expect(host.querySelectorAll(".timeline-pane[data-sample] [data-timeline-day]")).toHaveLength(2);
+  expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=ring]").length).toBe(2 * rows.length);
+  const outs = host.querySelectorAll(".timeline-pane[data-sample] [data-timeline-out]").length;
+  expect(outs).toBeGreaterThan(0);
+  expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=strike]").length).toBe(2 * outs);
+  expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=tick]")).toHaveLength(0);
+  expect(host.querySelector(".timeline-pane[data-sample] .timeline-canvas")?.closest("[inert]")).toBeNull();
+  expect(picked()).toHaveLength(0);
+  expect(host.querySelector(".timeline-search")).toBeNull();
+  expect(host.querySelectorAll(".timeline-sheet button, .timeline-sheet a")).toHaveLength(0);
+  expect(vi.mocked(fetch).mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+  const text = "# Decision timeline\n\n## 2026-11-17 10:00 | Header look | current\n- Picked: C - big title\n- Over: A - no title\n";
+  picks(() => new Response(JSON.stringify({ name: "decisions.md", text, entries: parseTimeline(text).entries }), { status: 200 }));
+  await act(async () => noteMemoryFrame({ kind: "memory.changed", botId }, { hydrated: true, bots: [{ id: botId, threadId: "t1" }] }));
+  await until(() => picked().length === 1);
+  expect(sampled()).toHaveLength(0);
+  expect(host.querySelector(".timeline-sample")).toBeNull();
+  expect(host.querySelector(".timeline-search")).not.toBeNull();
 });

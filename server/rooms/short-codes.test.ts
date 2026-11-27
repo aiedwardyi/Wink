@@ -1,9 +1,10 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "../config.ts";
 import { addPerson, closeRoomsDb, createRoom } from "./db.ts";
 import { barRoomPerson, closeInvitesDb, joinRoom, roomCode, shortCodeTarget, shortRoomCode } from "./invites.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const DAY = 24 * 60 * 60_000;
 const DEVICE = "device-0123456789abcdef";
@@ -14,7 +15,7 @@ let roomId: string;
 beforeEach(() => {
   closeInvitesDb();
   closeRoomsDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   vi.useFakeTimers({ toFake: ["Date"] });
   clock += 30 * DAY;

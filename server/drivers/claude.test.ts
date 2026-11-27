@@ -32,6 +32,8 @@ import { createQuietEnd } from "../quiet-end.ts";
 import { inputDigest } from "../repeat-detector.ts";
 import type { Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
+import { spawnTestNode } from "../testing/harness-auth.ts";
+import { removeTestData } from "../testing/test-home.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-claude-cli.ts");
@@ -261,11 +263,11 @@ describe("ClaudeDriver.decodeConfig", () => {
     expect(ClaudeDriver.decodeConfig(undefined)).toEqual({ cli: "claude", permissionMode: "acceptEdits" });
   });
 
-  it("publishes the native Windows installer and npm on macOS/Linux", () => {
+  it("publishes the native installers, which need no Node", () => {
     expect(ClaudeDriver.install).toMatchObject({
       command: {
-        darwin: "npm install -g @anthropic-ai/claude-code",
-        linux: "npm install -g @anthropic-ai/claude-code",
+        darwin: "curl -fsSL https://claude.ai/install.sh | bash",
+        linux: "curl -fsSL https://claude.ai/install.sh | bash",
         win32: "irm https://claude.ai/install.ps1 | iex",
       },
       docsUrl: "https://claude.com/claude-code",
@@ -409,6 +411,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.FAKE_CLAUDE_RETRY_SCALE;
     delete process.env.FAKE_CLAUDE_RATE_LIMITS;
     delete process.env.FAKE_CLAUDE_USER_ALLOW;
+    delete process.env.FAKE_CLAUDE_TOOL;
     delete process.env.FAKE_CLAUDE_TASK_GATE;
     delete process.env.FAKE_CLAUDE_WAKE_DELAY_MS;
     delete process.env.FAKE_CLAUDE_NOTIFY_REPEAT_MS;
@@ -1242,7 +1245,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv[seen.argv.indexOf("--disallowedTools") + 1].split(",")).toContain("AskUserQuestion");
 
     const server = seen.mcpConfig.mcpServers.agents;
-    const child = spawnChild(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
+    const child = spawnTestNode(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
     const listed = new Promise<{ name: string; description: string; inputSchema: object; _meta?: Record<string, unknown> }[]>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("agents proxy never answered tools/list")), 10_000);
@@ -1261,8 +1264,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     child.kill();
     const eager = tools.filter((tool) => tool._meta?.["anthropic/alwaysLoad"] !== false);
     const chars = JSON.stringify(eager.map((tool) => ({ name: `mcp__agents__${tool.name}`, description: tool.description, input_schema: tool.inputSchema }))).length;
-    expect(tools.filter((tool) => !eager.includes(tool)).map((tool) => tool.name)).toEqual(["board_search", "board_post", "create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "wake_me", "link_room_fix"]);
-    expect(chars, `Claude re-reads ${chars} chars of agents tool schemas on every call. Defer a rarely used tool (tool-catalog.ts OPTIONAL, deferOptional) or shorten a description; raise this budget only with measured token numbers.`).toBeLessThanOrEqual(16_000);
+    expect(tools.filter((tool) => !eager.includes(tool)).map((tool) => tool.name)).toEqual(["web_read", "board_search", "board_post", "create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "wake_me", "link_room_fix", "post_to_group"]);
+    expect(chars, `Claude re-reads ${chars} chars of agents tool schemas on every call. Defer a rarely used tool (tool-catalog.ts OPTIONAL, deferOptional) or shorten a description; raise this budget only with measured token numbers.`).toBeLessThanOrEqual(16_500);
   });
 
   it("pre-allows terminal_read but leaves terminal_send to the permission prompt", async () => {
@@ -1313,7 +1316,37 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(existsSync(join(scratch, "ran.txt"))).toBe(false);
     expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
     const { argv } = JSON.parse(readFileSync(dump, "utf8"));
-    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("AskUserQuestion,Bash(git *),Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit");
+    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("AskUserQuestion,Bash(git *),Bash,PowerShell,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,LSP");
+  });
+
+  it("turns off @file attach on a guest's read-only turn, not on an owner turn or the owner's own lane", async () => {
+    await create();
+    const mentions = async (threadId: string, extra: { readOnly?: true; ownerText?: true }) => {
+      const dump = join(scratch, `${threadId}.json`);
+      process.env.FAKE_CLAUDE_DUMP = dump;
+      const { turnId } = await instance.adapter.sendTurn({ threadId, text: "summarize @C:/Users/someone/Documents/secret.txt", cwd: scratch, ...extra });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      return JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_DISABLE_FILE_MENTIONS;
+    };
+    expect(await mentions("t-guest", { readOnly: true })).toBe("1");
+    expect(await mentions("t-owner", {})).toBeUndefined();
+    expect(await mentions("t-lane", { readOnly: true, ownerText: true })).toBeUndefined();
+  });
+
+  it("never hands a guest's read-only turn the owner lane's warm process", async () => {
+    await create();
+    const dump = join(scratch, "lane-then-guest.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-lane-guest", text: "owner", cwd: scratch, readOnly: true, ownerText: true });
+    await recorder.until((e) => e.type === "turn.completed");
+    const lane = JSON.parse(readFileSync(dump, "utf8")) as { pid: number };
+    const cursor = (recorder.events.find((e) => e.type === "session.started") as { sessionId: string }).sessionId;
+
+    const guest = await instance.adapter.sendTurn({ threadId: "t-lane-guest", text: "guest", cwd: scratch, readOnly: true, resumeCursor: cursor });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === guest.turnId);
+    const seen = JSON.parse(readFileSync(dump, "utf8")) as { pid: number; env: Record<string, string> };
+    expect(seen.pid).not.toBe(lane.pid);
+    expect(seen.env.CLAUDE_CODE_DISABLE_FILE_MENTIONS).toBe("1");
   });
 
   it("passes an explicit empty available set to disable every Claude built-in", async () => {
@@ -1379,6 +1412,23 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     // the user's Composio key must not be readable via `ps`
     expect(JSON.stringify(seen.argv)).not.toContain("ak_test");
     expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1]).toContain("mcp__composio");
+  });
+
+  it("leaves connected apps unallowed in Ask, so each call reaches the Ask card", async () => {
+    await create(undefined, {}, { permissionMode: "acceptEdits" });
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.adapter.sendTurn({
+      threadId: "t-composio-ask",
+      text: "hi",
+      approval: "ask",
+      integrations: { composio: { command: process.execPath, args: ["/tmp/connector-proxy.js"], env: {} } },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpConfig.mcpServers.composio).toBeDefined();
+    expect(seen.argv[seen.argv.indexOf("--allowedTools") + 1].split(",")).not.toContain("mcp__composio");
+    expect(seen.argv[seen.argv.indexOf("--permission-prompt-tool") + 1]).toBe("mcp__ogb__approve");
   });
 
   // the config file holds live credentials, so it must not outlive the turn —
@@ -2203,6 +2253,22 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   });
 
   it.each([
+    "Failed to authenticate: OAuth session expired and could not be refreshed",
+    "Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs",
+    "Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+  ])("marks an expired login result as a sign-out: %s", async (result) => {
+    const fixture = join(scratch, "expired-login.json");
+    writeFileSync(fixture, JSON.stringify([{ type: "result", subtype: "success", is_error: true, result }]));
+    process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+    await create();
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-expired-login", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toEqual([
+      expect.objectContaining({ turnId, message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true }),
+    ]);
+  });
+
+  it.each([
     ["network", "Network error: connection reset after 401 files", undefined],
     ["usage", "Invalid API key: usage limit reached", undefined],
     ["rate", "HTTP 429 Too Many Requests", undefined],
@@ -2217,6 +2283,23 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     await instance.adapter.sendTurn({ threadId: "ordinary-auth-error", text: "hi", model });
     await recorder.until((e) => e.type === "turn.completed");
     expect(recorder.events.some((e) => e.type === "runtime.error" && e.signedOut)).toBe(false);
+  });
+
+  it.each([
+    ["the CLI's past-due subscription result", "Claude Code can't use your Claude subscription, usually because a payment is past due · Pay or renew at https://claude.ai/settings/billing (if you just paid, try again shortly), or use an Anthropic API key instead", true],
+    ["another subscription error", "Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account", false],
+    ["a rate limit", "HTTP 429 Too Many Requests", false],
+  ])("marks payment due only for %s", async (_kind, result, due) => {
+    const fixture = join(scratch, "payment-due.json");
+    writeFileSync(fixture, JSON.stringify([{ type: "result", subtype: "success", is_error: true, result }]));
+    process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+    await create();
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-payment-due", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    const errors = recorder.events.filter((e) => e.type === "runtime.error");
+    expect(errors).toEqual([expect.objectContaining({ turnId, message: result })]);
+    expect(errors.some((e) => e.paymentDue)).toBe(due);
+    expect(errors.some((e) => e.signedOut)).toBe(false);
   });
 
   it("refuses a turn on a blocked base Claude instance", async () => {
@@ -2534,8 +2617,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
   });
 
-  it("replaces and resumes a live process when its spawn contract changes", async () => {
-    await create();
+  it("replaces and resumes a live process that refuses a model switch", async () => {
+    await create(undefined, { FAKE_CLAUDE_MODEL_REPLY: "error" });
     const dumpPath = join(scratch, "dump.json");
     process.env.FAKE_CLAUDE_DUMP = dumpPath;
     await instance.adapter.sendTurn({ threadId: "t-switch", text: "one" });
@@ -2552,6 +2635,98 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     const dump = JSON.parse(readFileSync(dumpPath, "utf8"));
     expect(dump.argv).toContain("--resume");
     expect(dump.argv).toContain("claude-other");
+  });
+
+  it("switches model and effort on the idle kept process", async () => {
+    const efforts = join(scratch, "efforts.log");
+    process.env.FAKE_CLAUDE_PROMPT_LOG = join(scratch, "prompts.jsonl");
+    await create(undefined, { FAKE_CLAUDE_EFFORT_LOG: efforts });
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const first = await instance.adapter.sendTurn({ threadId: "t-live", text: "one", model: "claude-one", effort: "max" });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
+    const cursor = (recorder.events.find((e) => e.type === "session.started") as { sessionId: string }).sessionId;
+    const switched = [{ model: "claude-other", effort: "max" as const }, { model: "claude-other", effort: "high" as const }];
+    for (const change of switched) {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-live", text: change.effort, resumeCursor: cursor, ...change });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    }
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(recorder.events.filter((e) => e.type === "turn.started")).toHaveLength(3);
+    const prompts = readFileSync(join(scratch, "prompts.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { pid: number; text: string });
+    expect(prompts.map(({ pid, text }) => [pid, text])).toEqual(["one", "max", "high"].map((text) => [spawn.mock.results[0]!.value.pid, text]));
+    const started = recorder.events.flatMap((e) => (e.type === "session.started" ? [[e.sessionId, e.model]] : []));
+    expect(started).toEqual([[cursor, "claude-one"], [cursor, "claude-other"], [cursor, "claude-other"]]);
+    expect(readFileSync(efforts, "utf8").split("\n").filter(Boolean)).toEqual(["max", "max", "high"]);
+    vi.restoreAllMocks();
+  });
+
+  describe("an idle switch", () => {
+    afterEach(() => vi.restoreAllMocks());
+    const firstCursor = () => (recorder.events.find((e) => e.type === "session.started") as { sessionId: string }).sessionId;
+    const stdin = () => readFileSync(join(scratch, "stdin.log"), "utf8").split("\n").filter(Boolean);
+    const stalled = async (threadId: string) => {
+      process.env.OMB_CLAUDE_EFFORT_REPLY_MS = "300";
+      process.env.FAKE_CLAUDE_PROMPT_LOG = join(scratch, "prompts.jsonl");
+      await create(undefined, { FAKE_CLAUDE_MODEL_REPLY: "none", FAKE_CLAUDE_STDIN_LOG: join(scratch, "stdin.log") });
+      const first = await instance.adapter.sendTurn({ threadId, text: "one", model: "claude-one", effort: "max" });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
+      const cursor = firstCursor();
+      const pending = instance.adapter.sendTurn({ threadId, text: "switched", model: "claude-other", effort: "max", resumeCursor: cursor });
+      await vi.waitFor(() => expect(stdin()).toContain("set_model"));
+      return { cursor, pending };
+    };
+    const prompts = () => readFileSync(join(scratch, "prompts.jsonl"), "utf8").trim().split("\n").map((line) => (JSON.parse(line) as { text: string }).text);
+
+    it("is stopped before its prompt reaches Claude", async () => {
+      const { cursor, pending } = await stalled("t-switch-stop");
+      await instance.adapter.interruptTurn("t-switch-stop");
+      const { turnId } = await pending;
+      expect(await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId)).toMatchObject({ ok: false, stopReason: "interrupted" });
+      const again = await instance.adapter.sendTurn({ threadId: "t-switch-stop", text: "again", model: "claude-one", effort: "max", resumeCursor: cursor });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === again.turnId);
+      expect(prompts()).toEqual(["one", "again"]);
+    });
+
+    it("turns away a second send", async () => {
+      const { cursor, pending } = await stalled("t-switch-overlap");
+      await expect(instance.adapter.sendTurn({ threadId: "t-switch-overlap", text: "overlap", model: "claude-one", effort: "max", resumeCursor: cursor }))
+        .rejects.toThrow("already running");
+      const { turnId } = await pending;
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      expect(prompts()).toEqual(["one", "switched"]);
+    });
+
+    it("respawns without the injected credentials when leaving an injected model on the same base URL", async () => {
+      await create(undefined, { ANTHROPIC_BASE_URL: "http://127.0.0.1:8888", UNSLOTH_STUDIO_AUTH_TOKEN: "unsloth-secret" });
+      const spawn = vi.spyOn(procs, "spawnCli");
+      const first = await instance.adapter.sendTurn({ threadId: "t-leave-inject", text: "one", model: "unsloth::local-model", effort: "max" });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
+      const cursor = firstCursor();
+      const second = await instance.adapter.sendTurn({ threadId: "t-leave-inject", text: "two", model: "claude-sonnet-5-5", effort: "max", resumeCursor: cursor });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === second.turnId);
+      expect(spawn.mock.calls.map(([, , opts]) => [opts?.env?.ANTHROPIC_BASE_URL, opts?.env?.ANTHROPIC_AUTH_TOKEN])).toEqual([
+        ["http://127.0.0.1:8888", "unsloth-secret"],
+        ["http://127.0.0.1:8888", undefined],
+      ]);
+    });
+
+    it("forks Quick Helper on the model and effort an idle switch moved to", async () => {
+      await create();
+      const spawn = vi.spyOn(procs, "spawnCli");
+      const first = await instance.adapter.sendTurn({ threadId: "t-switch-helper", text: "one", model: "claude-one", effort: "max" });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
+      const cursor = firstCursor();
+      const second = await instance.adapter.sendTurn({ threadId: "t-switch-helper", text: "two", model: "claude-other", effort: "high", resumeCursor: cursor });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === second.turnId);
+      expect(spawn).toHaveBeenCalledOnce();
+      const side = instance.fork!({ threadId: "t-switch-helper", text: "q" })!;
+      try {
+        const argv = spawn.mock.calls[1]![1];
+        expect([argv[argv.indexOf("--model") + 1], argv[argv.indexOf("--effort") + 1], argv[argv.indexOf("--resume") + 1]]).toEqual(["claude-other", "high", cursor]);
+      } finally {
+        await side.close(1000);
+      }
+    });
   });
 
   it("closes an idle session after the configured window", async () => {
@@ -2639,12 +2814,36 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       expect(await exited(prepared)).toBe(true);
     });
 
-    it("prepares nothing without a closed session, once the bot's settings moved, or twice", async () => {
+    it("re-opens the closed session on the bot's new model and effort", async () => {
+      const { spawn, cursor } = await closed();
+      await instance.prepare!(undefined, { ...focus, model: "claude-other", effort: "high" });
+      expect(spawn).toHaveBeenCalledTimes(2);
+      const argv = spawn.mock.calls[1]![1];
+      expect([argv[argv.indexOf("--resume") + 1], argv[argv.indexOf("--model") + 1], argv[argv.indexOf("--effort") + 1]]).toEqual([cursor, "claude-other", "high"]);
+      const { turnId } = await instance.adapter.sendTurn({ threadId: focus.threadId, text: "two", approval: "ask", resumeCursor: cursor, model: "claude-other", effort: "high" });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      expect(spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["model", { model: "claude-other", effort: "max" as const }],
+      ["effort", { model: "claude-one", effort: "high" as const }],
+    ])("switches a prepared process's %s in place when the pick moves before Send", async (_name, pick) => {
+      const { spawn, cursor } = await closed();
+      await instance.prepare!(undefined, { ...focus, model: "claude-one", effort: "max" });
+      expect(spawn).toHaveBeenCalledTimes(2);
+      const started = Date.now();
+      const { turnId } = await instance.adapter.sendTurn({ threadId: focus.threadId, text: "two", approval: "ask", resumeCursor: cursor, ...pick });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(prompts().at(-1)).toMatchObject({ pid: spawn.mock.results[1]!.value.pid, text: "two" });
+    });
+
+    it("prepares nothing without a closed session, once the approval moved, or twice", async () => {
       const { spawn } = await closed();
       await instance.prepare!(undefined, { ...focus, threadId: "t-never" });
-      await instance.prepare!(undefined, { ...focus, effort: "high" });
       await instance.prepare!(undefined, { ...focus, approval: "auto" });
-      await instance.prepare!(undefined, { ...focus, model: "claude-other" });
       await instance.prepare!();
       const release = warmPool.barrier({ instanceId: "claude-test" }, "test");
       await instance.prepare!(undefined, focus);
@@ -2957,6 +3156,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 
   it("denies a destructive ask from a helper an unattended Auto turn left running", async () => {
     await create("background-task");
+    mkdirSync(join(scratch, "build"), { recursive: true });
+    writeFileSync(join(scratch, "build", "out.js"), "keep");
     const harness = instance.adapter.onEvent((e) => {
       if (e.type !== "request.opened" || !e.requestId) return;
       const verdict = autoVerdict({ autoApprove: true }, e.tool, e.summary, { unattended: e.unattended, workspace: scratch });
@@ -3598,6 +3799,54 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     expect(argv).not.toContain("--settings");
   });
 
+  describe("Wink tools in Ask and Auto", () => {
+    const stdio = { command: process.execPath, args: ["/fake/proxy.js"], env: {} };
+    const play = async (approval: "ask" | "auto", tool: string) => {
+      process.env.FAKE_CLAUDE_TOOL = tool;
+      await create("wink-tool");
+      const threadId = `t-wink-${approval}-${tool}`;
+      await instance.adapter.sendTurn({ threadId, text: "go", cwd: scratch, approval, integrations: { agents: stdio, phone: stdio } });
+      return { threadId, first: await recorder.until((e) => e.type === "turn.completed" || e.type === "request.opened") };
+    };
+    it.each(["mcp__agents__generate_image", "mcp__agents__call_api", "mcp__agents__create_bot", "mcp__phone__tap"])(
+      "Ask holds %s for the Ask card and never runs it on a deny",
+      async (tool) => {
+        const { threadId, first } = await play("ask", tool);
+        expect(first).toMatchObject({ type: "request.opened", requestType: "permission", tool });
+        await instance.adapter.respondToRequest(threadId, first.requestId!, { behavior: "deny" });
+        await recorder.until((e) => e.type === "turn.completed");
+        expect(existsSync(join(scratch, "ran-tool.txt"))).toBe(false);
+      },
+    );
+
+    it.each(["mcp__agents__generate_image", "mcp__phone__tap"])("Ask holds %s for the card over the user's own allow rule", async (tool) => {
+      process.env.FAKE_CLAUDE_USER_ALLOW = "mcp__agents,mcp__phone";
+      const { threadId, first } = await play("ask", tool);
+      expect(first).toMatchObject({ type: "request.opened", requestType: "permission", tool });
+      await instance.adapter.respondToRequest(threadId, first.requestId!, { behavior: "deny" });
+      await recorder.until((e) => e.type === "turn.completed");
+      expect(existsSync(join(scratch, "ran-tool.txt"))).toBe(false);
+    });
+
+    it.each(["mcp__agents__list_bots", "mcp__agents__ask_user", "mcp__agents__update_task_state", "mcp__phone__read_screen"])(
+      "Ask runs read-only %s with no card",
+      async (tool) => {
+        const { first } = await play("ask", tool);
+        expect(first.type).toBe("turn.completed");
+        expect(readFileSync(join(scratch, "ran-tool.txt"), "utf8")).toBe(tool);
+      },
+    );
+
+    it.each(["mcp__agents__generate_image", "mcp__agents__create_bot", "mcp__phone__tap", "mcp__agents__list_bots"])(
+      "Auto still runs %s with no card",
+      async (tool) => {
+        const { first } = await play("auto", tool);
+        expect(first.type).toBe("turn.completed");
+        expect(readFileSync(join(scratch, "ran-tool.txt"), "utf8")).toBe(tool);
+      },
+    );
+  });
+
   it("leaves the permission mode to a defaultMode in the user's own settings", async () => {
     const configDir = join(scratch, "own-claude-config");
     mkdirSync(configDir, { recursive: true });
@@ -4038,6 +4287,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     for (const name of names) expect(seen.env[name]).toBeUndefined();
   });
 
+  it.each([{}, { ephemeral: true, lean: true }])("turns off @file attach in a helper call %o", async (opts) => {
+    await create();
+    const dump = join(scratch, "helper-mentions.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    await instance.generateText?.("Mina: summarize @C:/Users/someone/.ssh/id_ed25519", opts);
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_DISABLE_FILE_MENTIONS).toBe("1");
+  });
+
   it.each(["summary", "notes", "review"] as const)("runs the %s helper with its own argv and cwd", async (kind) => {
     await create();
     const spawn = vi.spyOn(procs, "spawnCli");
@@ -4051,7 +4308,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       const [cli, argv, options] = spawn.mock.calls[0]!;
       expect(cli).toBe(FAKE_CLI);
       expect(argv).toEqual([
-        "-p", "--model", "claude-haiku-5-5", "--output-format", "text",
+        "-p", "--model", "claude-haiku-5-5", "--output-format", "json",
         ...(kind === "summary" ? [] : ["--safe-mode", "--tools", "", "--strict-mcp-config"]),
         ...(kind === "review" ? [] : ["--effort", "low"]),
         ...(kind === "summary" ? [] : ["--no-session-persistence"]),
@@ -4066,9 +4323,16 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
   });
 
+  it("reads the reply and usage from a verbose CLI's json array", async () => {
+    await create(undefined, { FAKE_CLAUDE_VERBOSE: "1" });
+    const onUsage = vi.fn();
+    await expect(instance.generateText?.("summarize", { onUsage })).resolves.toBe("fake generated text");
+    expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ input: 6188, output: 1436, cacheCreation: 468 }));
+  });
+
   it("creates the lean helper folder when it is missing", async () => {
     await create();
-    rmSync(join(DATA_DIR, "helper"), { recursive: true, force: true });
+    removeTestData(join(DATA_DIR, "helper"));
     await instance.generateText?.("notes prompt", { ephemeral: true, lean: true });
     expect(readdirSync(join(DATA_DIR, "helper"))).toEqual([]);
   });
@@ -4083,7 +4347,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       await expect(instance.generateText?.("notes prompt", { ephemeral: true, lean: true })).resolves.toBe("fake generated text");
       await expect(instance.reviewPermission?.("review prompt")).resolves.toBe("fake generated text");
 
-      const base = ["-p", "--model", "claude-haiku-5-5", "--output-format", "text"];
+      const base = ["-p", "--model", "claude-haiku-5-5", "--output-format", "json"];
       expect(spawn.mock.calls.map(([, argv]) => argv)).toEqual([
         [...base, "--safe-mode", "--tools", "", "--strict-mcp-config", "--no-session-persistence"],
         [...base, "--no-session-persistence"],
@@ -4199,7 +4463,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.prompt).toBe("summarize");
-    expect(seen.argv[seen.argv.indexOf("--output-format") + 1]).toBe("text");
+    expect(seen.argv[seen.argv.indexOf("--output-format") + 1]).toBe("json");
     expect(seen.mcpConfig).toBeNull();
   });
 

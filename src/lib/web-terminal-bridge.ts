@@ -114,6 +114,7 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
   let lease: ReturnType<typeof setInterval> | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
   let paneTimer: ReturnType<typeof setInterval> | undefined;
+  let paneRequest: AbortController | null = null;
   let retries = 0;
   let visible = true;
   let paused = false;
@@ -213,7 +214,7 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     close();
     const abort = new AbortController();
     stream = abort;
-    const qs = sessionId ? `?${new URLSearchParams({ sessionId })}` : "";
+    const qs = `?${new URLSearchParams(sessionId ? { sessionId } : { main: "1" })}`;
     return new Promise((resolve, reject) => {
       let first = true;
       void (async () => {
@@ -342,6 +343,9 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     close();
     watchPage(false);
     clearInterval(paneTimer);
+    paneTimer = undefined;
+    paneRequest?.abort();
+    paneRequest = null;
     attached = null;
     paused = false;
     unparsed = 0;
@@ -353,12 +357,24 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     for (const item of dropped) item.reject(new Error("Terminal is not attached"));
   };
 
+  const readPanes = async () => {
+    const controller = new AbortController();
+    paneRequest = controller;
+    try {
+      // Uncached: Chromium would queue it behind the workspace's identical read still waiting on headers.
+      return await request(`${base}?panes=1`, { signal: controller.signal, cache: "no-store" }).catch(() => null);
+    } finally {
+      if (paneRequest === controller) paneRequest = null;
+    }
+  };
+
   const refreshPanes = async () => {
-    if (!panes) return;
+    if (!panes || paneRequest || paneTimer === undefined) return;
     const known = panes;
-    const snapshot = await request(`${base}?panes=1`).catch(() => null);
+    const mine = epoch;
+    const snapshot = await readPanes();
     // A failed check says nothing about which panes closed.
-    if (panes !== known || !Array.isArray(snapshot?.panes)) return;
+    if (mine !== epoch || panes !== known || !Array.isArray(snapshot?.panes)) return;
     const list: Array<{ sessionId: string; label: string | null; generation: number; main: boolean }> = snapshot.panes;
     const now = new Set(list.filter((pane) => !pane.main).map((pane) => pane.sessionId));
     for (const pane of list) {
@@ -372,8 +388,8 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     panes = now;
   };
 
-  const readBot = async (id: string) => {
-    const snapshot = await request(`/api/bots/${encodeURIComponent(id)}/terminal`);
+  const readBot = async (id: string, options?: { panesOnly?: boolean }) => {
+    const snapshot = await request(`/api/bots/${encodeURIComponent(id)}/terminal${options?.panesOnly ? "?panes=1" : ""}`);
     if (id === botId && Array.isArray(snapshot?.panes)) panes = new Set(snapshot.panes.filter((pane: { main: boolean }) => !pane.main).map((pane: { sessionId: string }) => pane.sessionId));
     return snapshot;
   };
@@ -397,7 +413,8 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
       };
       if (!input.sessionId) {
         // The host attaches a bare open to any live pane, so a bot with only workers needs its main shell first.
-        const roster = await request(`${base}?panes=1`).catch(() => null);
+        const roster = await readPanes();
+        if (mine !== epoch) throw new Error("Terminal open was canceled");
         const list: Array<{ main: boolean }> = Array.isArray(roster?.panes) ? roster.panes : [];
         if (list.length && !list.some((pane) => pane.main)) await request(`${base}/start`, { method: "POST" });
         if (mine !== epoch) throw new Error("Terminal open was canceled");

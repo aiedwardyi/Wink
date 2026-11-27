@@ -185,6 +185,19 @@ async function mountApp(bots: unknown[]) {
   };
 }
 
+it("keeps the desktop sidebar toggle before the other controls in both states", async () => {
+  stubViewportWidth();
+  const view = await mountSidebar({ bots: [bot("open")], groups: [] });
+  try {
+    const toggle = () => view.host.querySelector<HTMLButtonElement>('button[title="Collapse sidebar to avatars"], button[title="Expand sidebar"]')!;
+    const board = () => view.host.querySelector("[data-board-button]")!;
+    expect(toggle().compareDocumentPosition(board()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await act(async () => toggle().click());
+    expect(toggle().title).toBe("Expand sidebar");
+    expect(toggle().compareDocumentPosition(board()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  } finally { await view.unmount(); }
+});
+
 describe("Sidebar unread count", () => {
   it.each(["en", "ko"])("announces unread counts on icon-only controls in %s", async (locale) => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "1");
@@ -537,7 +550,7 @@ describe("Sidebar arrival glow", () => {
     const { host, unmount } = await mountApp([bot("open", picked), bot("closed", { ...picked, unread: true })]);
     try {
       await vi.waitFor(() => expect(host.querySelector('[data-sidebar-row-id="closed"]')).not.toBeNull());
-      expect(host.querySelector("[data-menu-unread]")?.textContent).toBe("1");
+      expect(host.querySelector("[data-menu-unread]")?.textContent).toBe("");
       const menu = () => host.querySelector("[data-phone-menu]");
       expect(menu()?.hasAttribute("data-arrival-glow")).toBe(false);
       await sendFrame(replyFrame("closed-thread", botText("live-1", 11)));
@@ -545,7 +558,7 @@ describe("Sidebar arrival glow", () => {
       expect(menu()?.className).toContain("arrival-glow");
       await endGlow(menu()!);
       expect(menu()?.hasAttribute("data-arrival-glow")).toBe(false);
-      expect(host.querySelector("[data-menu-unread]")?.textContent).toBe("1");
+      expect(host.querySelector("[data-menu-unread]")?.textContent).toBe("");
     } finally {
       await unmount();
     }

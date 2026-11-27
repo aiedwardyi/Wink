@@ -17,7 +17,7 @@ const javascript = ts.transpileModule(`switch (event.type) { case "runtime.error
 function errorRow(event: Extract<RuntimeEvent, { type: "runtime.error" }>) {
   const rows: Message[] = [];
   const run = new Function("event", "unreadTurns", "store", "pushMessage", "bot", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", "runtimeErrorTool", "accounts", "refreshCodexPromo", "usageBoard", javascript);
-  run(event, { start() {} }, { messagesFor: () => [] }, (row: Message) => rows.push(row), null, () => {}, null, INCOMPLETE_LOG_MESSAGE, runtimeErrorTool, new Map(), refreshCodexPromo, { touch() {} });
+  run(event, { start() {} }, { messagesFor: () => [], rowMark: () => ({ count: 0 }) }, (row: Message) => rows.push(row), null, () => {}, null, INCOMPLETE_LOG_MESSAGE, runtimeErrorTool, new Map(), refreshCodexPromo, { touch() {} });
   return rows[0];
 }
 

@@ -54,11 +54,13 @@ function Probe() {
 
 let unmount: (() => Promise<void>) | null = null;
 let renderChat: ((next: Bot) => Promise<void>) | null = null;
+let resizeTranscript: ResizeObserverCallback | undefined;
 
 afterEach(async () => {
   await unmount?.();
   unmount = null;
   renderChat = null;
+  resizeTranscript = undefined;
   FakeEventSource.last = null;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -73,7 +75,10 @@ async function mountChat(current: Bot) {
     ? Response.json({ bots: [current], groups: [], computerControl: {} })
     : new Response("{}", { status: 404 })));
   vi.stubGlobal("ResizeObserver", class {
-    observe() {}
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      if (target.hasAttribute("data-orbit-transcript")) resizeTranscript = this.callback;
+    }
     unobserve() {}
     disconnect() {}
   });
@@ -98,6 +103,25 @@ async function mountChat(current: Bot) {
     host.remove();
   };
   return host;
+}
+
+function transcriptScroll(host: HTMLElement) {
+  const el = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+  Object.defineProperty(el, "clientHeight", { value: 100 });
+  Object.defineProperty(el, "scrollHeight", { value: 400 });
+  vi.spyOn(el, "scrollTo").mockImplementation((options: ScrollToOptions | number, y?: number) => {
+    const top = typeof options === "number" ? y : options.top;
+    el.scrollTop = Math.min(top ?? 0, el.scrollHeight - el.clientHeight);
+  });
+  const notify = () => el.dispatchEvent(new Event("scroll"));
+  return {
+    follow: () => act(async () => {
+      resizeTranscript!([], {} as ResizeObserver);
+      expect(el.scrollTop).toBe(300);
+      notify();
+    }),
+    user: () => act(async () => { el.scrollTop = 250; notify(); }),
+  };
 }
 
 const member = (id: string, name: string): Bot => ({ ...bot([]), id, threadId: `thread-${id}`, name });
@@ -251,6 +275,17 @@ describe("message menu helpers", () => {
 });
 
 describe("message menu in 1:1 chats", () => {
+  it("keeps the menu through bottom follow and dismisses on a user scroll", async () => {
+    const host = await mountChat(bot([botMsg("b1", "hello")]));
+    const scroll = transcriptScroll(host);
+    await rightClick(host.querySelector('[data-mid="b1"] [data-orbit-message-content]')!);
+    expect(messageMenu()).not.toBeNull();
+    await scroll.follow();
+    expect(messageMenu()).not.toBeNull();
+    await scroll.user();
+    expect(messageMenu()).toBeNull();
+  });
+
   it("opens a bot menu with quick reactions, Reply and Copy", async () => {
     const host = await mountChat(bot([userMsg("u1", "hi"), botMsg("b1", "hello there")]));
     expect(host.querySelector('[data-message-hover-actions] .lucide-pin')).toBeNull();
@@ -267,11 +302,11 @@ describe("message menu in 1:1 chats", () => {
     expect(menu?.textContent).not.toContain("Copy ID");
   });
 
-  it("hides Reply on a quick answer and keeps Copy", async () => {
+  it("shows Reply on a quick answer", async () => {
     const quick = botMsg("b1", "yes", { quick: { state: "answer", askId: "u1" } });
     const host = await mountChat(bot([userMsg("u1", "hi"), quick]));
     await rightClick(host.querySelector('[data-mid="b1"] [data-orbit-message-content]')!);
-    expect(messageMenu()?.querySelector("[data-menu-reply]")).toBeNull();
+    expect(messageMenu()?.querySelector("[data-menu-reply]")?.textContent).toBe("Reply");
     expect(messageMenu()?.querySelector("[data-menu-copy]")).not.toBeNull();
   });
 
@@ -324,6 +359,15 @@ describe("message menu in 1:1 chats", () => {
     expect(cancel).not.toBeNull();
     expect(cancel?.parentElement?.textContent).toContain("hover target");
     expect(messageMenu()).toBeNull();
+  });
+
+  it("quotes a quick answer like any bot reply", async () => {
+    const quick = botMsg("b1", "quick words", { quick: { state: "answer", askId: "u1" } });
+    const host = await mountChat(bot([userMsg("u1", "hi"), quick]));
+    await rightClick(host.querySelector('[data-mid="b1"] [data-orbit-message-content]')!);
+    await act(async () => { document.querySelector("[data-menu-reply]")!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+
+    expect(host.querySelector('button[aria-label="Cancel reply"]')?.parentElement?.textContent).toContain("quick words");
   });
 
   it("copies the same text the hover Copy button copies", async () => {
@@ -748,6 +792,20 @@ describe("message menu on touch", () => {
     expect(menu.style.top).toBe("120px");
     expect(menu.style.left).toBe("100px");
     for (const button of menu.querySelectorAll("button")) expect(button.className).toMatch(/\b(size-10|min-h-10)\b/);
+  });
+
+  it("keeps a phone hold through bottom follow", async () => {
+    const host = await mountChat(bot([botMsg("b1", "hello")]));
+    const scroll = transcriptScroll(host);
+    stubTouchScreen();
+    const el = content(host, "b1");
+    await touch("touchstart", el, [[100, 120]]);
+    await scroll.follow();
+    await wait(500);
+    expect(messageMenu()).not.toBeNull();
+    await touch("touchend", el);
+    await scroll.user();
+    expect(messageMenu()).toBeNull();
   });
 
   it("opens his menu with Pin, Reply, Copy and Select text", async () => {

@@ -15,16 +15,26 @@ import { buildBrief, callLinesSinceLastUserTurn, capNotes, chatTail, CHAT_TAIL_T
 import { estimateContextTokens } from "./context-compaction.ts";
 import { queueSteeredMessage, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
-import { workspaceDir } from "./workspace.ts";
+import { addQuestionAsk, answerQuestionAsk, mergeTaskAsks } from "./task-asks.ts";
+import { seedTaskResumePacket } from "./task-state-fold.ts";
+import type { TaskResumePacket } from "./task-state.ts";
+import { picksPrompt, workspaceDir } from "./workspace.ts";
+import { promptTokens } from "./picks.ts";
 import { markRelaySocket } from "./phone-relay/via.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./rooms/db.ts";
 import { addJoinedEntries, closeJoinedDb, joinedEntries, saveJoined } from "./rooms/joined.ts";
 
 const KEY = "AIzaTEST-not-a-real-key-0123456789";
+const sameBot = vi.hoisted(() => ({ loads: 0 }));
+// Counts loads of the same-bot voice setup: a Gemini voice call must never pull it in.
+vi.mock("./same-bot-call.ts", async (importOriginal) => {
+  sameBot.loads += 1;
+  return importOriginal();
+});
 const dirs: string[] = [];
 afterEach(() => { closeRoomsDb(); closeJoinedDb(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppConfig["liveCall"]; roomTail?: (...args: any[]) => any } = {}) {
+function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppConfig["liveCall"]; roomTail?: (...args: any[]) => any; settled?: (botId: string, threadId: string) => void; taskPacket?: (threadId: string) => TaskResumePacket | null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "live-call-")); dirs.push(dir);
   const store = new Store(() => ({ instanceId: "claude", model: "opus", effort: "max" as const }));
   const bot = store.createBot({ name: "Juno" }, { seedMessages: false });
@@ -32,10 +42,10 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
   store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "On it." });
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => opts.reply?.() ?? Response.json({ name: "auth_tokens/abc123" }));
   const cfg: AppConfig = { gemini: { apiKey: "key" in opts ? opts.key : KEY }, liveCall: opts.liveCall };
-  const open = () => createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, ...{ roomTail: opts.roomTail } });
+  const open = () => createLiveCallRoutes({ cfg, store, dataDir: dir, fetch: fetch as unknown as typeof globalThis.fetch, taskPacket: opts.taskPacket ?? ((threadId) => store.taskPacket(threadId)), ...{ roomTail: opts.roomTail, settled: opts.settled } });
   let routes = open();
   const restart = () => { routes = open(); };
-  async function post(route: "token" | "lines" | "end", body: object = {}, botId = bot.id, relay = false) {
+  async function post(route: "token" | "task-context" | "lines" | "end", body: object = {}, botId = bot.id, relay = false) {
     let status = 0;
     let raw = "";
     const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: (text: string) => { raw = text; } } as unknown as ServerResponse;
@@ -49,6 +59,156 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
 }
 
 describe("call token", () => {
+  // First, so nothing earlier has asked for a same-bot call.
+  it("loads the same-bot code only when a same-bot call asks for its voice", async () => {
+    const h = harness();
+    expect((await h.post("token")).status).toBe(200);
+    expect(sameBot.loads).toBe(0);
+    expect((await h.post("token", { mode: "bot" })).status).toBe(200);
+    expect(sameBot.loads).toBe(1);
+  });
+
+  it("gives the voice the live waiting asks and forbids an empty to-do answer", async () => {
+    const h = harness();
+    const now = Date.now();
+    const instruction = h.store.activePath(h.bot.threadId)[0]!;
+    const packet = seedTaskResumePacket({ botId: h.bot.id, threadId: h.bot.threadId, text: instruction.text!, messageId: instruction.id, now, turnsAtWrite: 0 });
+    const asks = mergeTaskAsks(packet, [
+      { status: "waiting-for-user", ask: "Choose the billing plan" },
+      { status: "waiting-for-user", ask: "Decide whether to move Dot" },
+      { status: "building", ask: "Terminal pane fix" },
+      { status: "building", ask: "Ctrl+F fix" },
+    ], now);
+    if ("error" in asks) throw new Error(asks.error);
+    expect(h.store.writeTaskPacket({ ...packet, asks: asks.asks, lastAskId: asks.lastAskId })).toBeTruthy();
+    expect((await h.post("token")).status).toBe(200);
+    const setup = h.sent().bidiGenerateContentSetup;
+    const brief = setup.systemInstruction.parts[0].text as string;
+    console.log(`Call start: ${Buffer.byteLength(brief, "utf8")} system prompt bytes, ${Buffer.byteLength(JSON.stringify(setup.tools), "utf8")} tool definition bytes`);
+    expect(brief).toContain('waiting-for-user: "Choose the billing plan"');
+    expect(brief).toContain('waiting-for-user: "Decide whether to move Dot"');
+    expect(brief).toContain('building: "Terminal pane fix"');
+    expect(brief).toContain('building: "Ctrl+F fix"');
+    expect(brief).toContain('never say "nothing needs you" while any are waiting');
+  });
+
+  it("reads pending task changes through the same source on refresh and resume", async () => {
+    let pending: TaskResumePacket | null = null;
+    const read = vi.fn(() => pending);
+    const h = harness({ taskPacket: read });
+    const now = Date.now();
+    const instruction = h.store.activePath(h.bot.threadId)[0]!;
+    const packet = seedTaskResumePacket({ botId: h.bot.id, threadId: h.bot.threadId, text: instruction.text!, messageId: instruction.id, now, turnsAtWrite: 0 });
+    const first = await h.post("token");
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("TASK RECORD: unavailable.");
+
+    pending = packet;
+    expect((await h.post("task-context")).data.taskContext).toContain("no ask history recorded");
+
+    pending = {
+      ...packet,
+      asks: [
+        { id: "A1", ask: "Already shipped", status: "done", at: now, changedAt: now },
+        ...Array.from({ length: 11 }, (_, i) => ({ id: `A${i + 2}`, ask: `빌드 ${"가".repeat(70)} ${i}`, status: "building" as const, at: now, changedAt: now })),
+        { id: "A13", ask: "Review billing", status: "waiting-for-user", at: now, changedAt: now },
+      ],
+      blockers: [{ kind: "login", note: "Session expired" }],
+      nextAction: "Rerun tests after sign-in",
+    };
+    const { status, data: { taskContext } } = await h.post("task-context", { threadId: "other-thread" });
+    expect(status).toBe(200);
+    expect(h.fetch).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenLastCalledWith(h.bot.threadId);
+    expect(taskContext).toContain('1 waiting-for-user, 12 active asks total');
+    expect(taskContext).toContain('waiting-for-user: "Review billing"');
+    expect(taskContext).toContain('blocker login: "Session expired"');
+    expect(taskContext).toContain('Next action: "Rerun tests after sign-in"');
+    expect(taskContext).toMatch(/\+\d+ more asks omitted/);
+    expect(taskContext).not.toMatch(/Already shipped|�/);
+    expect(Buffer.byteLength(taskContext, "utf8")).toBeLessThan(1_700);
+
+    await h.post("token", { callId: first.data.callId, resume: true });
+    expect(h.sent(1).bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain(taskContext);
+  });
+
+  it("includes other tasks' live decisions without reviving a copy closed in a newer record", async () => {
+    const h = harness();
+    const priorThread = h.bot.threadId;
+    const priorMessage = h.store.activePath(priorThread)[0]!;
+    const now = Date.now();
+    const prior = seedTaskResumePacket({ botId: h.bot.id, threadId: priorThread, text: priorMessage.text!, messageId: priorMessage.id, now, turnsAtWrite: 0 });
+    const shared = { id: "A2", ask: "Old icon decision", status: "waiting-for-user" as const, at: now, changedAt: now };
+    const waiting = { ...shared, id: "A1", ask: "Approve billing" };
+    expect(h.store.writeTaskPacket({ ...prior, asks: [waiting, shared] })).toBeTruthy();
+
+    const currentThread = h.store.createTask(h.bot.id, "Release")!.threadId;
+    const currentMessage = h.store.appendMessage(currentThread, { role: "user", kind: "text", text: "Check release readiness" });
+    const current = seedTaskResumePacket({ botId: h.bot.id, threadId: currentThread, text: currentMessage.text!, messageId: currentMessage.id, now: now + 1, turnsAtWrite: 0 });
+    expect(h.store.writeTaskPacket({ ...current, asks: [{ ...shared, status: "done", changedAt: now + 1 }] })).toBeTruthy();
+    const first = await h.post("token");
+    expect(first.status).toBe(200);
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain('waiting-for-user: "Approve billing"');
+    expect(brief).not.toContain("Old icon decision");
+    expect(brief).toContain('Next action: "Check release readiness"');
+
+    expect(h.store.writeTaskPacket({ ...prior, updatedAt: now + 2, asks: [{ ...waiting, status: "done", changedAt: now + 2 }] })).toBeTruthy();
+    const refreshed = await h.post("task-context");
+    expect(refreshed.data.taskContext).toContain("0 waiting-for-user");
+    expect(refreshed.data.taskContext).not.toMatch(/Approve billing|Old icon decision/);
+  });
+
+  it("counts a saved skipped question as unanswered and carries its choices", async () => {
+    const h = harness();
+    const now = Date.now();
+    const instruction = h.store.activePath(h.bot.threadId)[0]!;
+    const packet = seedTaskResumePacket({ botId: h.bot.id, threadId: h.bot.threadId, text: instruction.text!, messageId: instruction.id, now, turnsAtWrite: 0 });
+    const question = addQuestionAsk(packet, "Ship it now?", ["Yes", "Wait"], now)!;
+    expect(h.store.writeTaskPacket({ ...packet, ...question })).toBeTruthy();
+    expect((await h.post("token")).status).toBe(200);
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    expect(brief).toContain('open question: "Ship it now?" (choices: "Yes / Wait")');
+    expect(brief).toContain("1 unanswered question");
+    expect(brief).toContain('never say "nothing needs you" while any are waiting or unanswered');
+    expect((await h.post("task-context")).data.taskContext).toContain('open question: "Ship it now?" (choices: "Yes / Wait")');
+
+    const answered = answerQuestionAsk(question.asks, "Ship it now?", now, now + 1)!;
+    expect(h.store.writeTaskPacket({ ...packet, ...question, asks: answered })).toBeTruthy();
+    expect((await h.post("task-context")).data.taskContext).not.toMatch(/unanswered question|Ship it now\?/);
+  });
+
+  it("settles saved user lines for Auto Notes, excluding voice-only batches", async () => {
+    const settled = vi.fn();
+    const h = harness({ settled });
+    const { data } = await h.post("token");
+    expect((await h.post("lines", { callId: data.callId, lines: [{ who: "user", text: "I choose C" }, { who: "voice", text: "C it is" }] })).status).toBe(200);
+    expect(settled).toHaveBeenCalledExactlyOnceWith(h.bot.id, h.bot.threadId);
+    await h.post("lines", { callId: data.callId, lines: [{ who: "voice", text: "Anything else?" }, { who: "user", text: " " }] });
+    expect(settled).toHaveBeenCalledTimes(1);
+  });
+  it("gives a same-bot call a voice that only reads: no brief, no tools, the picked voice", async () => {
+    const h = harness({ liveCall: { voice: "Alnilam" } });
+    const { status, data } = await h.post("token", { mode: "bot" });
+    expect(status).toBe(200);
+    expect(data).toMatchObject({ callId: expect.stringMatching(CALL_ID), engine: "gemini", voice: "Alnilam", locale: "en" });
+    const setup = h.sent().bidiGenerateContentSetup;
+    expect(setup.tools).toBeUndefined();
+    expect(setup).toMatchObject({ model: `models/${LIVE_MODEL}`, inputAudioTranscription: {}, outputAudioTranscription: {}, sessionResumption: {} });
+    const text = setup.systemInstruction.parts[0].text as string;
+    expect(text).toContain("You are only the voice of Juno");
+    expect(text).toContain("[READ]");
+    expect(text).not.toContain("fix the login page");
+    expect(text).not.toContain("STATUS:");
+  });
+
+  it("keeps the Gemini brief for a room call even when asked for the same bot", async () => {
+    const roomTail = vi.fn(() => ({ name: "Launch", caller: "Edward", people: [], tail: "Minji: Safari broke" }));
+    const h = harness({ roomTail });
+    expect((await h.post("token", { mode: "bot", room: { id: "launch", kind: "host" } })).status).toBe(200);
+    expect(h.sent().bidiGenerateContentSetup.tools).toEqual([{ functionDeclarations: LIVE_TOOLS }]);
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Minji: Safari broke");
+  });
+
   it("uses one room snapshot for validation and the brief", async () => {
     const roomTail = vi.fn().mockReturnValueOnce({ name: "Launch", caller: "Edward", people: [], tail: "Minji: Safari broke" });
     const h = harness({ roomTail });
@@ -225,6 +385,26 @@ describe("call token", () => {
     expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Calm.");
   });
 
+  it("a same-bot call resumes with the voice and language it started with, not the bot's newer ones", async () => {
+    const h = harness();
+    const first = await h.post("token", { mode: "bot", call: { voice: "Erinome", language: "ko" } });
+    h.store.patchBot(h.bot.id, { call: { voice: "Puck", language: "en" } });
+    const resumed = await h.post("token", { mode: "bot", callId: first.data.callId, resume: true, locale: "en" });
+    expect(resumed.data).toMatchObject({ voice: "Erinome", locale: "ko" });
+    expect(h.sent(1).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
+    await h.post("end", { callId: first.data.callId, stats: {} });
+    expect(JSON.parse(readFileSync(join(h.dir, CALL_PICKS_FILE), "utf8"))).toEqual({});
+  });
+
+  it("a same-bot swap speaks with the picks it carries, and a resume after it keeps them", async () => {
+    const h = harness();
+    const first = await h.post("token", { mode: "bot", call: { voice: "Erinome" } });
+    const swapped = await h.post("token", { mode: "bot", callId: first.data.callId, swap: true, call: { voice: "Puck", language: "ko" } });
+    expect(swapped.data).toMatchObject({ voice: "Puck", locale: "ko" });
+    const resumed = await h.post("token", { mode: "bot", callId: first.data.callId, resume: true });
+    expect(resumed.data).toMatchObject({ voice: "Puck", locale: "ko" });
+  });
+
   it("a finished call leaves no picks behind", async () => {
     const h = harness();
     const first = await h.post("token", { call: { voice: "Fenrir" } });
@@ -253,13 +433,12 @@ describe("call token", () => {
     expect(body.uses).toBe(1);
     expect(body.bidiGenerateContentSetup).toMatchObject({
       model: `models/${LIVE_MODEL}`,
-      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" })] }],
+      tools: [{ functionDeclarations: [expect.objectContaining({ name: "propose_work" }), expect.objectContaining({ name: "ask" }), expect.objectContaining({ name: "task_context" })] }],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 1_200, endOfSpeechSensitivity: "END_SENSITIVITY_LOW", startOfSpeechSensitivity: "START_SENSITIVITY_LOW", prefixPaddingMs: 300 } },
       sessionResumption: {},
     });
-    expect(body.bidiGenerateContentSetup.tools[0].functionDeclarations.map((tool: { name: string }) => tool.name)).toEqual(["propose_work", "ask"]);
     const brief = body.bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).toContain("You are Juno");
     expect(brief).toContain("fix the login page");
@@ -363,6 +542,19 @@ describe("call token", () => {
     expect(notes).not.toContain("plain list");
   });
 
+  it("brief keeps the 300-token picks cap while the chat prompt shows every pick", async () => {
+    const h = harness();
+    const bot = h.store.createBot({ name: "Picker" }, { seedMessages: false });
+    mkdirSync(join(workspaceDir(bot.id), "memory"), { recursive: true });
+    const entries = Array.from({ length: 78 }, (_, n) => `## 2026-11-${10 + Math.floor(n / 20)} ${String(10 + (n % 20)).padStart(2, "0")}:00 | topic number ${n} | current\n- Picked: Option ${n} - plain words\n- Said: "option ${n}"\n`);
+    writeFileSync(join(workspaceDir(bot.id), "memory", "decisions.md"), `# Decision timeline\n\n${entries.join("\n")}`);
+    await h.post("token", {}, bot.id);
+    const brief = String(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text);
+    const notes = brief.slice(brief.indexOf("YOUR NOTES:\n") + "YOUR NOTES:\n".length, brief.indexOf("RECENT CHAT:"));
+    expect(promptTokens(notes)).toBeLessThanOrEqual(300);
+    expect(picksPrompt(bot.id).split("\n").filter((line) => line.startsWith("- topic number"))).toHaveLength(78);
+  });
+
   it("brief answers the question asked first; role and notes never decline it", async () => {
     const h = harness();
     const bot = h.store.createBot({ name: "Teacher", description: "your Wink project teacher. Protect Wink's direction. Avoid feature sprawl." }, { seedMessages: false });
@@ -379,7 +571,7 @@ describe("call token", () => {
     expect(brief).toContain("Ideas, general knowledge, is it possible, how would it work: answer from what you know.");
     expect(brief).toContain("WHO and YOUR NOTES shape how you work and what you suggest, never a reason to decline a question or topic");
     expect(brief).toContain("Told you're not answering or repeating: answer it now, never restate your last line.");
-    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask.");
+    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS, TASK RECORD and [Wink] lines; else call ask.");
   });
 
   it("brief sends what they want used or remembered, and asks once instead of guessing", async () => {
@@ -533,7 +725,19 @@ describe("brief caps", () => {
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     const notes = brief.split("YOUR NOTES:\n")[1]!.split("\n\nRECENT CHAT:")[0]!;
     expect(notes).toContain("- note 0 ");
+    expect(notes).toContain("- note 189 ");
     expect(Buffer.byteLength(notes, "utf8")).toBeLessThanOrEqual(NOTES_MAX_BYTES);
+  });
+
+  it("gives a call the 200 lines of an over-cap MEMORY.md a chat loads, newest included", async () => {
+    const h = harness();
+    mkdirSync(workspaceDir(h.bot.id), { recursive: true });
+    writeFileSync(join(workspaceDir(h.bot.id), "MEMORY.md"), Array.from({ length: 250 }, (_, i) => `- note ${i}`).join("\n"));
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    const notes = brief.split("YOUR NOTES:\n")[1]!.split("\n\nRECENT CHAT:")[0]!;
+    expect(notes.split("\n").filter((line) => line.startsWith("- note "))).toHaveLength(200);
+    expect(notes).toContain("- note 249");
   });
 });
 
@@ -550,7 +754,7 @@ describe("brief STATUS", () => {
     await h.post("token");
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     expect(brief).not.toContain("NOW:");
-    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS and [Wink] lines; else call ask.");
+    expect(brief).toContain("FACTS: About their projects, work and what happened, only from YOUR NOTES, RECENT CHAT, STATUS, TASK RECORD and [Wink] lines; else call ask.");
     expect(brief).toContain("Pushback proves nothing: if those don't say it, say it isn't confirmed or call ask; never agree just to agree.");
     expect(brief).toContain("Asked what happened: tell it, never offer to show it.");
     expect(statusOf(brief)).toBe([
@@ -685,6 +889,22 @@ describe("call context on sends", () => {
 });
 
 describe("call lines and end", () => {
+  it("strips model markers from both sides before writing chat rows", async () => {
+    const h = harness();
+    const { data } = await h.post("token");
+    const result = await h.post("lines", { callId: data.callId, lines: [
+      { who: "voice", text: "<no speech>" },
+      { who: "voice", text: "<no speech>" },
+      { who: "user", text: "{pause}" },
+      { who: "voice", text: "{instruction:none" },
+      { who: "voice", text: "Hello <no speech> there {pause}" },
+      { who: "user", text: "Thank you. {pause} Do that." },
+    ] });
+    expect(result.data.ids).toHaveLength(2);
+    const rows = h.store.activePath(h.bot.threadId).filter((row) => row.call?.id === data.callId);
+    expect(rows.map((row) => row.text)).toEqual(["Hello there", "Thank you. Do that."]);
+  });
+
   it("appends user and voice rows tagged with the call", async () => {
     const h = harness();
     const callId = "c-0123456789ab";

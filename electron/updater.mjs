@@ -29,6 +29,7 @@ let channel = "stable";
 let checkTimer = null;
 let leavingDev = null;
 let nativeText = null;
+let workersStopped = null;
 let pendingChannel = null;
 let errorReport = () => {};
 
@@ -144,7 +145,7 @@ async function stageStable() {
   const { response } = await dialog.showMessageBox(parent, {
     type: "none",
     message: nativeText("update.ready", { version: state.version }),
-    detail: nativeText("update.restartDetail"),
+    detail: nativeText(workersStopped() > 0 ? "update.restartDetail" : "update.workersKeep"),
     buttons: [nativeText("update.restartNow"), nativeText("update.later")],
     defaultId: 0,
     cancelId: 1,
@@ -178,9 +179,10 @@ function probeFeed(choice) {
   return probe.checkForUpdates().then((result) => result?.updateInfo?.version);
 }
 
-export function startUpdater(mainWindow, text) {
+export function startUpdater(mainWindow, text, stoppedWorkers) {
   win = mainWindow;
   nativeText = text;
+  workersStopped = stoppedWorkers;
   // dev / unsigned builds can't auto-update — leave the banner dormant
   if (!app.isPackaged) {
     updaterCoordinator = null;

@@ -196,6 +196,26 @@ export async function deleteRoomFile(roomId: string, id: string): Promise<void> 
   }
 }
 
+export function discardUnpostedRoomFile(roomId: string, id: string): void {
+  if (!FILE_ID.test(id)) return;
+  const release = holdRoomFiles();
+  try {
+    withDb((db) => {
+      const unposted = db.prepare(`
+        SELECT 1 FROM room_files WHERE room_id = ? AND id = ? AND NOT EXISTS (
+          SELECT 1 FROM log, json_each(log.files) AS sent
+          WHERE log.room_id = room_files.room_id AND json_extract(sent.value, '$.id') = room_files.id
+        )
+      `).get(roomId, id);
+      if (!unposted) return;
+      rmSync(join(roomDir(roomId), id), { force: true });
+      db.prepare("DELETE FROM room_files WHERE room_id = ? AND id = ?").run(roomId, id);
+    });
+  } finally {
+    release();
+  }
+}
+
 export interface Upload {
   /** "host" or a person id. */
   owner: string;

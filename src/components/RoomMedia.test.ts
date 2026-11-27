@@ -370,7 +370,7 @@ it("a bot chat's files and pictures share the desktop menu", async () => {
   delete window.ogb;
 });
 
-it("on a phone a file it can fetch offers Save as alone, and one only its PC holds has no menu", async () => {
+it("on a phone a file it can fetch offers Save as alone, an attached one too, since the phone streams it from its PC", async () => {
   const upload = { id: "u1", role: "user" as const, kind: "text" as const, at: 1, text: '<attached-file path="C:\\att\\notes.docx" name="notes.docx" size="2048" />' };
   const reply = { id: "b1", role: "bot" as const, kind: "text" as const, at: 2, text: "Here: [deck.pdf](C:\\w\\deck.pdf)" };
   await open({ threadId: "t1", messages: [upload, reply] });
@@ -378,7 +378,7 @@ it("on a phone a file it can fetch offers Save as alone, and one only its PC hol
   await settle();
   expect(items()).toEqual(["Save as"]);
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
-  expect(rightClick(fileRow("notes.docx")).defaultPrevented).toBe(true);
+  rightClick(fileRow("notes.docx"));
   await settle();
-  expect(document.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
+  expect(items()).toEqual(["Save as"]);
 });

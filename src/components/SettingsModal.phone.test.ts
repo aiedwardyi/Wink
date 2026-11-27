@@ -9,6 +9,7 @@ import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { SWIPE_MOTION_MS } from "@/lib/phone-swipe";
 import { applyTerminalMatch, readTerminalMatch } from "@/lib/terminal-appearance";
 import { saveTerminalPopups, terminalPopupsEnabled } from "@/lib/terminal-popups";
+import { landFold, spyReveal } from "./Fold.test-land";
 
 let host: HTMLDivElement;
 let root: Root;
@@ -84,8 +85,8 @@ afterEach(async () => {
 
 describe("phone Settings navigation", () => {
   it.each([
-    ["en", ["Account", "About You", "General", "Connections", "Usage", "Devices", "Themes", "Model Index"]],
-    ["ko", ["계정", "나에 대해", "일반", "연결", "사용량", "기기", "테마", "모델 지표"]],
+    ["en", ["Account", "Import Memory", "General", "Connections", "Usage", "Devices", "Themes", "Model Index"]],
+    ["ko", ["계정", "메모리 가져오기", "일반", "연결", "사용량", "기기", "테마", "모델 지표"]],
   ])("opens the labeled list in %s without mounting a page or Shortcuts", async (locale, labels) => {
     await open(locale);
     const rows = [...dialog()!.querySelectorAll("nav button")].filter((node) => node.querySelector(".lucide-chevron-right"));
@@ -146,6 +147,25 @@ describe("phone Settings navigation", () => {
     Reflect.deleteProperty(navigator, "vibrate");
   });
 
+  it("brings the first Advanced row into view once it has opened, never while closing", async () => {
+    await open();
+    await tap("General");
+    const scrolled = spyReveal();
+    try {
+      await tap("Advanced");
+      expect(scrolled).not.toHaveBeenCalled();
+      await landFold(dialog()!.querySelector("[data-settings-preferences]")!);
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.contexts[0]).toBe(dialog()!.querySelector("[data-settings-preferences] .divide-y > *"));
+      expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+      await tap("Advanced");
+      await wait(PRESENCE_EXIT_MS + 40);
+      expect(scrolled).toHaveBeenCalledTimes(1);
+    } finally {
+      scrolled.mockRestore();
+    }
+  });
+
   it("keeps saved terminal preferences while their controls stay hidden", async () => {
     saveTerminalPopups(true);
     applyTerminalMatch(true);
@@ -170,6 +190,12 @@ describe("phone Settings navigation", () => {
     expect(dialog()!.querySelector("nav")?.textContent).toContain("Connections");
     await escape();
     expect(dialog()?.parentElement?.hasAttribute("data-closing")).toBe(true);
+  });
+
+  it("keeps the shared back look on a phone page: box on hover, regular weight", async () => {
+    await open();
+    await tap("General");
+    expect(button("Back")!.className).toBe("flex min-h-11 items-center gap-0.5 rounded-md px-1.5 text-[15px] text-accent hover:bg-control");
   });
 
   it("pops the page on Escape and closes on the next Escape", async () => {
@@ -262,7 +288,7 @@ describe("phone Settings navigation", () => {
     phone = false;
     await open();
     expect([...dialog()!.querySelectorAll("nav button")].map((node) => node.getAttribute("aria-label"))).toEqual([
-      "Account", "About You", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
+      "Account", "Import Memory", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
     ]);
     expect(button("General")?.getAttribute("aria-current")).toBe("page");
     expect(button("Back")).toBeNull();

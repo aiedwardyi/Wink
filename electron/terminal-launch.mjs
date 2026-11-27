@@ -86,6 +86,18 @@ export async function openBlankTerminal(platform = process.platform, run = execF
   return false;
 }
 
+/** Terminal opens at 80x24, which hides agy's sign-in code box below the fold. */
+function openMacTerminal(script, run) {
+  return launch("osascript", [
+    "-e", 'tell application "Terminal"',
+    "-e", `set signIn to do script ${JSON.stringify(script)}`,
+    "-e", "activate",
+    "-e", "set number of columns of signIn to 120",
+    "-e", "set number of rows of signIn to 40",
+    "-e", "end tell",
+  ], undefined, run);
+}
+
 export async function openSignInTerminal({ command, driverKind }, platform = process.platform, run = execFile) {
   const agy = driverKind === "antigravityAgent";
   if (platform === "win32") {
@@ -93,8 +105,7 @@ export async function openSignInTerminal({ command, driverKind }, platform = pro
     return launch("cmd.exe", ["/c", "start", "", "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true }, run);
   }
   if (platform === "darwin") {
-    const script = `${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${command}`;
-    return launch("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(script)}`, "-e", 'tell application "Terminal" to activate'], undefined, run);
+    return openMacTerminal(`${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${command}`, run);
   }
   return false;
 }
@@ -104,6 +115,8 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
   const agy = driverKind === "antigravityAgent";
   if (platform === "win32") {
     const refreshPath = "$env:Path=$env:Path+';'+[Environment]::GetEnvironmentVariable('Path', 'Machine')+';'+[Environment]::GetEnvironmentVariable('Path', 'User')";
+    const signInEnv = agy ? "$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; "
+      : driverKind === "claudeAgent" ? "$env:Path=(Join-Path $HOME '.local/bin')+';'+$env:Path; " : "";
     return [
       "$ErrorActionPreference='Stop'",
       ...(needsNode && /^\s*npm(?:\s|$)/.test(command) ? [
@@ -117,10 +130,12 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
       `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`$ErrorActionPreference='Stop'\n${command}`, "utf16le").toString("base64")}`,
       "if ($LASTEXITCODE -ne 0) { return }",
       refreshPath,
-      ...(signIn ? [`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`${agy ? "$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; " : ""}${signIn}`, "utf16le").toString("base64")}`] : []),
+      ...(signIn ? [`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`${signInEnv}${signIn}`, "utf16le").toString("base64")}`] : []),
     ].join("\n");
   }
-  return signIn ? `{\n${command}\n} && ${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${signIn}` : command;
+  // Native installers only edit rc files, which this already-open shell has read.
+  const path = 'export PATH="$HOME/.local/bin:$HOME/.grok/bin:$PATH"';
+  return signIn ? `{\n${command}\n} && ${path} && ${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${signIn}` : command;
 }
 
 export async function openInstallTerminal(install, platform = process.platform, run = execFile) {
@@ -128,7 +143,7 @@ export async function openInstallTerminal(install, platform = process.platform, 
     return launch("cmd.exe", ["/c", "start", "", "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-EncodedCommand", Buffer.from(buildInstallScript(install, platform), "utf16le").toString("base64")], { windowsHide: true }, run);
   }
   if (platform === "darwin") {
-    return launch("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(buildInstallScript(install, platform))}`, "-e", 'tell application "Terminal" to activate'], undefined, run);
+    return openMacTerminal(buildInstallScript(install, platform), run);
   }
   return false;
 }

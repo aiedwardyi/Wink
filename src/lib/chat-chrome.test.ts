@@ -73,7 +73,7 @@ describe("assistant message action bar", () => {
   });
 
   it("reserves its band so it cannot cover the timestamp or the reaction chips", () => {
-    expect(bubbleFn).toContain('className="relative w-fit max-w-[min(42rem,78%)] pb-8"');
+    expect(bubbleFn).toContain('className={cn("relative w-fit max-w-[min(42rem,78%)] pb-8", !user && "max-sm:max-w-full!")}');
     expect(bubbleFn).not.toContain("top-full");
   });
 });
@@ -186,6 +186,18 @@ describe("server status lines in a tool chip", () => {
   ])("shows them whole in the UI font in %s and leaves commands as they were", (_name, source) => {
     expect(source).toContain("const status = isServerLine(tool.name);");
     expect(source).toMatch(/status\s*\? "min-w-0 max-w-\[480px\] break-words"\s*: "min-w-0 max-w-\[480px\] truncate font-mono"/);
+  });
+});
+
+describe("call mark on a sent message", () => {
+  const mark = chatBubble.slice(chatBubble.indexOf("const callMark"), chatBubble.indexOf("if (user && editing"));
+
+  it("follows the bubble text color instead of the dim secondary ink", () => {
+    const [, user, bot] = mark.match(/user \? "([^"]*)" : "([^"]*)"/)!.map((c) => `className="${c}"`);
+    expect(classTokens(user).has("text-current")).toBe(true);
+    expect(classTokens(user).has("opacity-70")).toBe(true);
+    expect([...classTokens(user)].some((c) => c.startsWith("text-ink-secondary"))).toBe(false);
+    expect(classTokens(bot).has("text-ink-secondary/70")).toBe(true);
   });
 });
 

@@ -12,14 +12,18 @@ import type { Extension } from "mdast-util-from-markdown";
 import { Check, Copy, PanelRight } from "lucide-react";
 import { LinkedFolderLink } from "./LinkedFolderLink";
 import { FileMenu, type FileMenuAt } from "./MediaMenu";
-import { ReadableImage } from "./MediaViewerProvider";
+import { ImportProviderButtons } from "./ImportProviderButtons";
+import { InlineAudio } from "./InlineAudio";
+import { ReadableImage, useMediaViewer } from "./MediaViewerProvider";
 import { PhoneVideo } from "./PhoneVideo";
 import { BADGE, ShowCard } from "./ShowCard";
 import { z } from "zod";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { importOfferFence, isImportPrompt } from "@/lib/import-links";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
-import { linkedFileSrc, paneKind, saveFile, showItem, showKind, showName } from "@/lib/show-pane";
+import { fileOpen, openFile, openInApp, openOnPc, pcOffline, type FileHands } from "@/lib/open-file";
+import { linkedFileSrc, showKind, showName } from "@/lib/show-pane";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { useReplyStyle } from "@/lib/reply-style";
 import { splitReplyBlocks } from "@/lib/turn-stage";
@@ -312,7 +316,7 @@ const MarkdownBlock = memo(function MarkdownBlock({ text, components }: { text: 
   );
 });
 
-function CodeBlock({ code, lang }: { code: string; lang: string }) {
+function CodeBlock({ code, lang, importOffer = false }: { code: string; lang: string; importOffer?: boolean }) {
   const streaming = useContext(StreamingContext);
   const [html, setHtml] = useState<string | null>(() => (streaming ? null : highlightCache.get(highlightKey(code, lang)) ?? null));
   const highlighted = useMemo(() => ({ __html: html ?? "" }), [html]);
@@ -368,6 +372,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const tall = code.split("\n").length > TALL_CODE_LINES;
 
   return (
+    <>
     <div className="my-2 overflow-hidden rounded-lg border border-hairline/40 bg-inset">
       <div className="flex items-center justify-between border-b border-hairline/30 px-3 py-1">
         <span className="text-[11px] uppercase tracking-wide text-ink-secondary">{lang || "code"}</span>
@@ -399,29 +404,9 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
         </div>
       )}
     </div>
+    {importOffer && isImportPrompt(code) && <ImportProviderButtons prompt={code} />}
+    </>
   );
-}
-
-const PHONE_MEDIA = {
-  png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image",
-  mp4: "video", webm: "video", mov: "video", m4v: "video",
-  mp3: "audio", m4a: "audio", wav: "audio", ogg: "audio", aac: "audio", flac: "audio",
-  pdf: "pdf",
-} as const;
-
-type PhoneExt = keyof typeof PHONE_MEDIA;
-type PhoneKind = (typeof PHONE_MEDIA)[PhoneExt];
-
-function isPhoneExt(value: string): value is PhoneExt {
-  return Object.hasOwn(PHONE_MEDIA, value);
-}
-
-function phoneMediaKind(filePath: string): PhoneKind | null {
-  const name = filePath.split(/[\\/]/).pop() ?? "";
-  const dot = name.lastIndexOf(".");
-  if (dot <= 0) return null;
-  const ext = name.slice(dot + 1).toLowerCase();
-  return isPhoneExt(ext) ? PHONE_MEDIA[ext] : null;
 }
 
 const missingFileSchema = z.object({ deviceId: z.string().min(1).optional(), reason: z.literal("outside").optional() });
@@ -449,6 +434,7 @@ async function otherPc(deviceId: string | undefined): Promise<{ name: string; ho
 // Anything not listed shows as it came.
 const FILE_LINK_MESSAGES = new Map<string, MessageKey>([
   ["Files open in the desktop app", "chat.fileLink.desktopOnly"],
+  ["Your PC is offline", "chat.fileLink.pcOffline"],
   ["Opening files needs a newer version of the desktop app", "chat.fileLink.needsUpdate"],
   ["That file path is invalid", "chat.fileLink.invalidPath"],
   ["That file no longer exists", "chat.fileLink.missing"],
@@ -468,6 +454,8 @@ function DesktopFileLink({ filePath, base, threadId, card, inline, pictured, chi
   const [reason, setReason] = useState("");
   const [onPc, setOnPc] = useState("");
   const [menuAt, setMenuAt] = useState<FileMenuAt | null>(null);
+  const [playing, setPlaying] = useState("");
+  const viewer = useMediaViewer();
   const ref = useRef<HTMLButtonElement>(null);
   const terminal = isTerminalSkin(useSkin());
   const text = useContext(MarkdownTextContext);
@@ -488,25 +476,18 @@ function DesktopFileLink({ filePath, base, threadId, card, inline, pictured, chi
     const body = res && !res.ok ? missingFileSchema.safeParse(await res.json().catch(() => null)) : null;
     const pc = await otherPc(body?.success ? body.data.deviceId : undefined);
     if (!pc) return false;
-    const openPeerFile = pc.offline ? undefined : window.ogb?.openPeerFile;
-    const refused = openPeerFile
-      ? await openPeerFile(pc.host, thread, filePath).then(() => null, (error: unknown) => (error instanceof Error ? error.message : ""))
-      : "";
+    const peer = pc.offline ? null : openOnPc(pc.host, thread, filePath);
+    const refused = peer ? await peer.then(() => null, (error: unknown) => (error instanceof Error ? error.message : "")) : "";
     if (refused === "That file is outside the bot's folder") setReason(refused);
     else if (refused !== null) setOnPc(pc.name);
     return true;
   };
 
   const open = async () => {
-    const openFile = window.ogb?.openFile;
-    if (!openFile) {
-      setReason(desktop ? "Opening files needs a newer version of the desktop app" : "Files open in the desktop app");
-      return;
-    }
     try {
       setReason("");
       setOnPc("");
-      await openFile(filePath, base);
+      await openInApp(filePath, base);
     } catch (error) {
       const message = error instanceof Error ? error.message : "That file could not be opened";
       // A plain drive path is invalid only on a Mac or Linux desktop, where another PC wrote it.
@@ -523,19 +504,25 @@ function DesktopFileLink({ filePath, base, threadId, card, inline, pictured, chi
     setMenuAt({ x: event.clientX, y: event.clientY, opener: event.currentTarget });
   };
 
-  // A file this PC doesn't have would only fail in the pane; open it the link's way instead.
-  const show = async (thread: string) => {
+  // A file this PC doesn't have would only fail in the pane or viewer; the desktop opens it the link's way instead.
+  const tap = async (thread: string, hands: FileHands) => {
+    if (desktop && fileOpen(filePath) === "download") return open();
+    setReason("");
     const res = await fetch(linkedFileSrc(thread, filePath), { headers: { Range: "bytes=0-0" } }).catch(() => null);
-    if (res && !res.ok && res.status !== 416) await open();
-    else showItem({ threadId: thread, path: filePath, kind: paneKind(filePath)! });
+    if (!desktop && pcOffline(res)) return setReason("Your PC is offline");
+    if (!res || (!res.ok && res.status !== 416)) return desktop ? open() : setReason("That file no longer exists");
+    openFile({ threadId: thread, path: filePath }, { ...hands, rest: desktop ? () => void open() : undefined });
   };
 
   return (
     <>
-      {card && threadId && !inline ? <ShowCard threadId={threadId} path={filePath} bare={pictured} onOpen={() => void (paneKind(filePath) ? show(threadId) : open())} /> : <button
+      {playing ? <InlineAudio src={playing} autoPlay /> : card && threadId && !inline ? <ShowCard threadId={threadId} path={filePath} bare={pictured} onOpen={(hands) => void tap(threadId, hands)} /> : <button
         ref={ref}
         type="button"
-        onClick={() => void (card && threadId && paneKind(filePath) ? show(threadId) : open())}
+        onClick={(event) => {
+          const opener = event.currentTarget;
+          void (threadId ? tap(threadId, { view: viewer ? (media) => viewer.open(media, opener) : undefined, play: setPlaying }) : open());
+        }}
         onContextMenu={menu}
         title={filePath}
         data-file-link
@@ -554,21 +541,21 @@ function DesktopFileLink({ filePath, base, threadId, card, inline, pictured, chi
 function PhoneFile({
   filePath,
   threadId,
-  kind,
   inline,
   pictured,
   children,
 }: {
   filePath: string;
   threadId: string;
-  kind: PhoneKind | null;
   inline?: boolean;
   pictured?: boolean;
   children?: ReactNode;
 }) {
   const { t } = useI18n();
+  const viewer = useMediaViewer();
   const src = linkedFileSrc(threadId, filePath);
-  const [phase, setPhase] = useState<"pending" | "local" | "remote" | "desktop" | "outside">("pending");
+  const open = fileOpen(filePath);
+  const [phase, setPhase] = useState<"pending" | "local" | "remote" | "outside" | "offline" | "missing">("pending");
   const [remote, setRemote] = useState<{ name: string; host: string } | null>(null);
   const [asked, setAsked] = useState(false);
 
@@ -581,6 +568,10 @@ function PhoneFile({
           setPhase("local");
           return;
         }
+        if (pcOffline(res)) {
+          setPhase("offline");
+          return;
+        }
         const body = missingFileSchema.safeParse(await res.json().catch(() => null));
         if (body.success && body.data.reason === "outside") {
           setPhase("outside");
@@ -589,14 +580,14 @@ function PhoneFile({
         const device = await otherPc(body.success ? body.data.deviceId : undefined);
         if (!alive) return;
         if (!device) {
-          setPhase("desktop");
+          setPhase("missing");
           return;
         }
         setRemote({ name: device.name, host: device.host });
         setPhase("remote");
       })
       .catch(() => {
-        if (alive) setPhase("desktop");
+        if (alive) setPhase("offline");
       });
     return () => {
       alive = false;
@@ -611,10 +602,9 @@ function PhoneFile({
       </span>
     );
   }
-  if (phase === "desktop") {
-    return kind
-      ? <DesktopFileLink filePath={filePath}>{children}</DesktopFileLink>
-      : <LinkedFolderLink folderPath={filePath} threadId={threadId}>{children}</LinkedFolderLink>;
+  // No extension reads as a folder, which the folder sheet lists instead.
+  if (phase === "missing" && !/\.\w+$/.test(showName(filePath))) {
+    return <LinkedFolderLink folderPath={filePath} threadId={threadId}>{children}</LinkedFolderLink>;
   }
   if (phase === "remote" && remote) {
     return (
@@ -634,31 +624,21 @@ function PhoneFile({
         <button type="button" onClick={() => setAsked(true)} title={filePath} className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
           {children}
         </button>
-        {asked && <span className="ml-1.5 text-[12px] text-ink-secondary">{t("chat.fileLink.checking")}</span>}
+        {asked && <span className="ml-1.5 text-[12px] text-ink-secondary">{t(phase === "offline" ? "chat.fileLink.pcOffline" : phase === "missing" ? "chat.fileLink.missing" : "chat.fileLink.checking")}</span>}
       </>
     );
   }
-  if (kind === "image" && !inline && !pictured) {
+  if (open === "picture" && !inline && !pictured) {
     return <ReadableImage src={src} alt="" data-phone-media="image" className="rounded-lg border border-hairline/30" />;
   }
-  if (kind === "audio") return <audio src={src} controls data-phone-media="audio" className="max-w-full" />;
-  if (showKind(filePath) || (!kind && cardFile(filePath))) {
-    if (!inline) return <ShowCard threadId={threadId} path={filePath} bare={pictured} />;
-    const pane = paneKind(filePath);
-    return (
-      <button type="button" onClick={() => (pane ? showItem({ threadId, path: filePath, kind: pane }) : saveFile(src, showName(filePath), filePath))} title={filePath} data-file-link className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
-        {children}
-      </button>
-    );
-  }
-  if (!kind) {
-    return (
-      <a href={src} download rel="noreferrer" className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
-        {children}
-      </a>
-    );
-  }
-  return <PhoneVideo src={src} />;
+  if (open === "audio") return <InlineAudio src={src} />;
+  if (open === "video") return <PhoneVideo src={src} />;
+  if (!inline && (showKind(filePath) || cardFile(filePath))) return <ShowCard threadId={threadId} path={filePath} bare={pictured} />;
+  return (
+    <button type="button" onClick={(event) => { const opener = event.currentTarget; openFile({ threadId, path: filePath }, { view: viewer ? (media) => viewer.open(media, opener) : undefined }); }} title={filePath} data-file-link className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent">
+      {children}
+    </button>
+  );
 }
 
 function LocalFileLink({
@@ -680,11 +660,11 @@ function LocalFileLink({
   const picture = useContext(PictureContext);
   const linked = inline && !pictured && !streaming && showKind(filePath) === "image";
   useEffect(() => (linked ? picture?.(filePath) : undefined), [linked, picture, filePath]);
-  if (!window.ogb && !streaming && threadId) return <PhoneFile filePath={filePath} threadId={threadId} kind={phoneMediaKind(filePath)} inline={inline} pictured={pictured}>{children}</PhoneFile>;
+  if (!window.ogb && !streaming && threadId) return <PhoneFile filePath={filePath} threadId={threadId} inline={inline} pictured={pictured}>{children}</PhoneFile>;
   return <DesktopFileLink filePath={filePath} base={base} threadId={threadId} card={Boolean(window.ogb && threadId && (showKind(filePath) || cardFile(filePath)))} inline={inline} pictured={pictured}>{children}</DesktopFileLink>;
 }
 
-/** A picture a sentence links to, drawn under the reply with the card's pane mark and file menu. A click shows it in the pane; one that can't load draws nothing. */
+/** A picture a sentence links to, drawn under the reply with the card's pane mark and file menu. A click opens the viewer; one that can't load draws nothing. */
 function LinkedPicture({ threadId, path }: { threadId: string; path: string }) {
   const [failed, setFailed] = useState(false);
   const [menuAt, setMenuAt] = useState<FileMenuAt | null>(null);
@@ -697,9 +677,9 @@ function LinkedPicture({ threadId, path }: { threadId: string; path: string }) {
   };
   return (
     <div data-linked-picture onContextMenu={menu}>
-      <ReadableImage src={linkedFileSrc(threadId, path)} loading="lazy" className="rounded-lg border border-hairline/30" onOpen={() => showItem({ threadId, path, kind: "image" })} onError={() => setFailed(true)}
+      <ReadableImage src={linkedFileSrc(threadId, path)} loading="lazy" className="rounded-lg border border-hairline/30" onError={() => setFailed(true)}
         badge={<span className={`${BADGE} right-1.5 top-1.5`}><PanelRight data-show-icon size={11} aria-hidden="true" /></span>} />
-      <FileMenu at={menuAt} path={path} onOpen={() => void window.ogb?.openFile?.(path).catch(() => {})} onClose={() => setMenuAt(null)} />
+      <FileMenu at={menuAt} path={path} onOpen={() => void openInApp(path).catch(() => {})} onClose={() => setMenuAt(null)} />
     </div>
   );
 }
@@ -746,6 +726,8 @@ function Spoiler({ children }: { children?: ReactNode }) {
   );
 }
 
+const OFFER_LANG = "text-import-offer";
+
 function ChatMarkdownComponent({
   text: source,
   streaming = false,
@@ -754,6 +736,7 @@ function ChatMarkdownComponent({
   threadId,
   localLinks = true,
   pictured = false,
+  importOffer = false,
 }: {
   text: string;
   streaming?: boolean;
@@ -764,8 +747,15 @@ function ChatMarkdownComponent({
   localLinks?: boolean;
   /** The chat already shows this reply's picture, so its file links draw none. */
   pictured?: boolean;
+  /** The new-bot offer reply: its import prompt gets provider buttons. */
+  importOffer?: boolean;
 }) {
-  const text = useMemo(() => unwrapUserTags(source), [source]);
+  const { text, marked } = useMemo(() => {
+    const plain = unwrapUserTags(source);
+    // relabel the offer's own fence, so a quote of the prompt elsewhere in the reply gets no buttons
+    const at = importOffer && !plain.includes(OFFER_LANG) ? importOfferFence(plain) : -1;
+    return at < 0 ? { text: plain, marked: false } : { text: plain.slice(0, at) + "```" + OFFER_LANG + plain.slice(at + "```text".length), marked: true };
+  }, [source, importOffer]);
   const style = useReplyStyle();
   const root = useRef<HTMLDivElement>(null);
   const seen = useRef(new WeakSet<Element>());
@@ -820,7 +810,8 @@ function ChatMarkdownComponent({
       const flat = (n: any): string =>
         typeof n === "string" ? n : Array.isArray(n) ? n.map(flat).join("") : (n?.props?.children ? flat(n.props.children) : "");
       const code = flat(child?.props?.children).replace(/\n$/, "");
-      return <CodeBlock code={code} lang={lang} />;
+      const offer = marked && lang === OFFER_LANG;
+      return <CodeBlock code={code} lang={offer ? "text" : lang} importOffer={offer} />;
     },
     img({ src, alt }: { src?: string; alt?: string }) {
       return (
@@ -910,7 +901,7 @@ function ChatMarkdownComponent({
     hr() {
       return <hr className="border-hairline/40" />;
     },
-  }), [baseDir, threadId, localLinks, pictured]);
+  }), [baseDir, threadId, localLinks, pictured, marked]);
   return (
     <StreamingContext.Provider value={streaming}>
       <PictureContext.Provider value={picture}>

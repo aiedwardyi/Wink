@@ -31,7 +31,7 @@ import {
 } from "@/lib/model-index";
 import { MODEL_INDEX_SOURCES, type ModelIndexKey, type ModelPrice } from "../../shared/model-index-data.ts";
 import "./ModelIndexSection.css";
-import { PROVIDER_NAME, PhoneChart, PhoneRanked, PhoneSwitch, PhoneTabs, ProviderChips, bestValue, rankModels } from "./ModelIndexPhone";
+import { BADGE, PhoneBadge, PROVIDER_NAME, PhoneChart, crosses, dodge, useFontLoads, PhoneRanked, PhoneSwitch, PhoneTabs, ProviderChips, bestValue, rankModels } from "./ModelIndexPhone";
 import { Segmented } from "./Segmented";
 
 type View = "scatter" | "bars";
@@ -238,75 +238,61 @@ function placeLabels(
   taken: Box[],
   bounds: { left: number; top: number; right: number; bottom: number },
   measure: (text: string) => number,
+  r = 3,
 ) {
   const placed = [...taken];
+  const leaders: Array<[Spot, Spot]> = [];
   const out = new Map<string, Spot & { anchor: Spot; leader?: [Spot, Spot] }>();
   for (const item of items) {
     const w = measure(item.text) + 2;
-    const h = 12;
+    const h = 13;
     const hug = item.anchors.flatMap((anchor) => {
       const { x, y } = anchor;
+      const [side, corner] = [r + 4, r + 2];
       return [
-        { x: x + 7, y: y - h / 2 },
-        { x: x - 7 - w, y: y - h / 2 },
-        { x: x - w / 2, y: y - 8 - h },
-        { x: x - w / 2, y: y + 8 },
-        { x: x + 5, y: y - 5 - h },
-        { x: x - 5 - w, y: y - 5 - h },
-        { x: x + 5, y: y + 5 },
-        { x: x - 5 - w, y: y + 5 },
+        { x: x + side, y: y - h / 2 },
+        { x: x - side - w, y: y - h / 2 },
+        { x: x - w / 2, y: y - side - 1 - h },
+        { x: x - w / 2, y: y + side + 1 },
+        { x: x + corner, y: y - corner - h },
+        { x: x - corner - w, y: y - corner - h },
+        { x: x + corner, y: y + corner },
+        { x: x - corner - w, y: y + corner },
       ].map((spot) => ({ ...spot, anchor }));
     });
     const end = item.anchors[0]!;
-    const rings = [20, 32, 46, 62].flatMap((reach) =>
+    const rings = [r + 14, r + 26, r + 40, r + 56].flatMap((reach) =>
       [0, -30, 30, -60, 60, -90, 90, -120, 120, -150, 150, 180].map((deg) => {
         const [cos, sin] = [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)];
         return { x: end.x + cos * (reach + (w / 2) * Math.abs(cos)) - w / 2, y: end.y + sin * (reach + (h / 2) * Math.abs(sin)) - h / 2, anchor: end, from: end };
       }),
     );
-    const spot = [...hug, ...rings].find(
-      (c) =>
+    const leaderOf = (c: Spot): [Spot, Spot] | undefined => {
+      const to = { x: Math.min(Math.max(end.x, c.x), c.x + w), y: Math.min(Math.max(end.y, c.y), c.y + h) };
+      const along = Math.hypot(to.x - end.x, to.y - end.y);
+      return along ? [{ x: end.x + ((to.x - end.x) / along) * (r + 2), y: end.y + ((to.y - end.y) / along) * (r + 2) }, to] : undefined;
+    };
+    const own = (box: Box) => box.x < end.x && box.x + box.w > end.x && box.y < end.y && box.y + box.h > end.y;
+    const spot = [...hug, ...rings].find((c) => {
+      const box = { x: c.x, y: c.y, w, h };
+      const line = "from" in c ? leaderOf(c) : undefined;
+      return (
         c.x >= bounds.left &&
         c.x + w <= bounds.right &&
         c.y >= bounds.top &&
         c.y + h <= bounds.bottom &&
-        !placed.some((box) => overlaps({ x: c.x, y: c.y, w, h }, box)),
-    );
+        !placed.some((other) => overlaps(box, other)) &&
+        !leaders.some(([a, b]) => crosses(a, b, box)) &&
+        !(line && placed.some((other) => !own(other) && crosses(line[0], line[1], other)))
+      );
+    });
     if (!spot) continue;
     placed.push({ x: spot.x - 2, y: spot.y - 1, w: w + 4, h: h + 2 });
-    const to = "from" in spot ? { x: Math.min(Math.max(end.x, spot.x), spot.x + w), y: Math.min(Math.max(end.y, spot.y), spot.y + h) } : undefined;
-    const along = to && Math.hypot(to.x - end.x, to.y - end.y);
-    out.set(item.id, {
-      x: spot.x,
-      y: spot.y + 9,
-      anchor: spot.anchor,
-      leader: to && along ? [{ x: end.x + ((to.x - end.x) / along) * 7, y: end.y + ((to.y - end.y) / along) * 7 }, to] : undefined,
-    });
+    const leader = "from" in spot ? leaderOf(spot) : undefined;
+    if (leader) leaders.push(leader);
+    out.set(item.id, { x: spot.x, y: spot.y + 10, anchor: spot.anchor, leader });
   }
   return out;
-}
-
-function segmentGap(p: Spot, a: Spot, b: Spot) {
-  const [dx, dy] = [b.x - a.x, b.y - a.y];
-  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
-  return Math.hypot(a.x + t * dx - p.x, a.y + t * dy - p.y);
-}
-
-/** Liang-Barsky: does segment a-b pass through the box? */
-function crosses(a: Spot, b: Spot, box: Box) {
-  let [t0, t1] = [0, 1];
-  const [dx, dy] = [b.x - a.x, b.y - a.y];
-  for (const [p, q] of [[-dx, a.x - box.x], [dx, box.x + box.w - a.x], [-dy, a.y - box.y], [dy, box.y + box.h - a.y]] as const) {
-    if (p === 0) {
-      if (q < 0) return false;
-      continue;
-    }
-    const r = q / p;
-    if (p < 0) t0 = Math.max(t0, r);
-    else t1 = Math.min(t1, r);
-    if (t0 > t1) return false;
-  }
-  return true;
 }
 
 /** Beside the hovered mark, clear of its own effort line, hiding as few neighbors as it can. */
@@ -370,7 +356,8 @@ function Scatter({
   onHover: OnHover;
   t: Translate;
 }) {
-  const [lineFocus, setLineFocus] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
+  useFontLoads();
   const plotted = points.filter((point) => point.cost !== undefined && point.cost > 0);
   const left = MARGIN.left;
   const right = width - MARGIN.right;
@@ -422,41 +409,51 @@ function Scatter({
   for (const point of visible) byModel.set(point.model, [...(byModel.get(point.model) ?? []), point]);
   for (const list of byModel.values()) list.sort((a, b) => effortRank(a.effort) - effortRank(b.effort));
   const models = [...new Map(marks.map((mark) => [mark.model, mark])).values()];
-  const ends = new Set([...byModel.values()].filter((list) => list.length > 1).map((list) => list[list.length - 1]!.key));
+  // One badge per model at its best effort; the other efforts show only for the model in focus.
+  const best = new Map<string, ModelIndexPoint>();
+  for (const point of plotted) if (point.score > (best.get(point.model)?.score ?? -Infinity)) best.set(point.model, point);
+  const badges = new Set([...best.values()].map((point) => point.key));
   const rest = (): Spot => ({ x: left, y: bottom });
-  const focus = (hover ? marks.find((mark) => mark.key === hover)?.model : undefined) ?? lineFocus;
+  // A pick outlives a benchmark switch; only honor it while that model is plotted.
+  const kept = plotted.some((point) => point.model === picked) ? picked : null;
+  const focus = (hover ? marks.find((mark) => mark.key === hover)?.model : undefined) ?? kept;
   const dim = (model: string) => (focus && focus !== model ? "dim" : "");
+  const shown = (key: string, model: string) => badges.has(key) || model === focus;
+  const tops = [...best.values()];
+  const badgeAt = tops.filter((point) => at.has(point.key));
+  const nudged = new Map(dodge(badgeAt.map((point) => at.get(point.key)!), BADGE, { left, top, right, bottom }).map((spot, i) => [badgeAt[i]!.key, spot]));
+  const drawn = (key: string) => nudged.get(key) ?? at.get(key)!;
   const avoidFor = (key: string): Avoid => {
     const model = plotted.find((point) => point.key === key)?.model;
-    return { dots: [...at.values()], line: (byModel.get(model ?? "") ?? []).map((point) => at.get(point.key)!) };
+    return { dots: [...at.keys()].map(drawn), line: (byModel.get(model ?? "") ?? []).map((point) => drawn(point.key)) };
   };
   const nearestDot = (pointer: Spot) => {
     let nearest: string | null = null;
     let reach = 22;
-    for (const [key, spot] of at) {
+    for (const key of at.keys()) {
+      if (!shown(key, plotted.find((point) => point.key === key)!.model)) continue;
+      const spot = drawn(key);
       const gap = Math.hypot(spot.x - pointer.x, spot.y - pointer.y);
       if (gap < reach) [nearest, reach] = [key, gap];
     }
     return nearest;
   };
 
-  const quad = plotted.length >= 3 ? { x: x(10 ** median(costs.map(Math.log10))), y: y(median(scores)) } : undefined;
+  const quad = tops.length >= 3 ? { x: x(10 ** median(tops.map((point) => Math.log10(point.cost!)))), y: y(median(tops.map((point) => point.score))) } : undefined;
   const bestValue = t("modelIndex.bestValue");
-  const frontier = paretoFrontier(plotted).map((point) => allAt.get(point.key)!);
+  const frontier = paretoFrontier(tops).map((point) => allAt.get(point.key)!);
   const labels = placeLabels(
-    [...byModel.values()]
-      .sort((a, b) => Math.max(...b.map((p) => p.score)) - Math.max(...a.map((p) => p.score)))
-      .map((list) => ({
-        id: list[0]!.model,
-        text: shortLabel(list[0]!.label),
-        anchors: [list[list.length - 1]!, list[0]!, ...list.slice(1, -1)].map((point) => at.get(point.key)!),
-      })),
+    [...badgeAt]
+      .sort((a, b) => b.score - a.score)
+      .map((point) => ({ id: point.model, text: shortLabel(point.label), anchors: [drawn(point.key)] })),
     [
-      ...[...at.values()].map((spot) => ({ x: spot.x - 5, y: spot.y - 5, w: 10, h: 10 })),
+      // The badge's halo reaches 1.5px past its radius.
+      ...badgeAt.map((point) => drawn(point.key)).map((spot) => ({ x: spot.x - BADGE - 2, y: spot.y - BADGE - 2, w: BADGE * 2 + 4, h: BADGE * 2 + 4 })),
       ...(quad ? [{ x: left + 2, y: top + 2, w: bestValue.length * 7 + 10, h: 14 }] : []),
     ],
     { left, top, right, bottom },
     measurer(),
+    BADGE,
   );
 
   return (
@@ -570,8 +567,8 @@ function Scatter({
                   strokeLinecap="round"
                   style={{
                     stroke: color(mark.provider),
-                    opacity: list.length > 1 ? 0.8 : 0,
-                    d: `path("${padPath(list.length ? list.map((point) => allAt.get(point.key)!) : [rest()], LINE_SLOTS)}")`,
+                    opacity: list.length > 1 && mark.model === focus ? 0.9 : 0,
+                    d: `path("${padPath(list.length ? list.map((point) => nudged.get(point.key) ?? allAt.get(point.key)!) : [rest()], LINE_SLOTS)}")`,
                   } as React.CSSProperties}
                 />
               </g>
@@ -581,6 +578,8 @@ function Scatter({
         {marks.map((mark) => {
           const spot = at.get(mark.key);
           const actual = allAt.get(mark.key);
+          const moved = nudged.get(mark.key);
+          const nudge = moved && spot && { x: moved.x - spot.x, y: moved.y - spot.y };
           const { x: px, y: py } = actual ?? rest();
           return (
             <g key={mark.key} data-mi-focus={dim(mark.model)}>
@@ -595,34 +594,32 @@ function Scatter({
                   pointerEvents: spot ? undefined : "none",
                 }}
               >
-                <g data-mi-pop style={{ transform: `scale(${hover === mark.key ? 1.6 : 1})` }}>
+                <g transform={nudge ? `translate(${nudge.x.toFixed(1)} ${nudge.y.toFixed(1)})` : undefined}>
+                  <g data-mi-pop style={{ transform: `scale(${hover === mark.key ? (badges.has(mark.key) ? 1.2 : 1.6) : 1})` }}>
+                    <circle
+                      data-mi-paint
+                      r={2.5}
+                      strokeWidth={1}
+                      style={{ fill: color(mark.provider), stroke: "var(--color-card)", opacity: !badges.has(mark.key) && mark.model === focus ? 1 : 0 }}
+                    />
+                    <g data-mi-paint data-mi-badge={badges.has(mark.key) ? "" : undefined} style={{ opacity: badges.has(mark.key) ? 1 : 0 }}>
+                      <PhoneBadge provider={chartProvider(mark.provider)} r={BADGE} />
+                    </g>
+                  </g>
                   <circle
-                    data-mi-paint
-                    r={6}
-                    fill="none"
-                    strokeWidth={1}
-                    style={{ stroke: color(mark.provider), opacity: ends.has(mark.key) ? 0.6 : 0 }}
-                  />
-                  <path
-                    data-mi-paint
-                    d={shapeOf(mark.model)}
-                    paintOrder="stroke"
-                    style={{ fill: color(mark.provider), stroke: "var(--color-card)", strokeWidth: 3 }}
+                    ref={(el) => {
+                      if (el) dots.current.set(mark.key, el);
+                      else dots.current.delete(mark.key);
+                    }}
+                    r={12}
+                    fill="transparent"
+                    tabIndex={spot ? 0 : -1}
+                    aria-label={`${mark.label} ${mark.effort}`}
+                    className="pointer-events-none outline-none"
+                    onFocus={(e) => onHover(mark.key, e.currentTarget, avoidFor(mark.key))}
+                    onBlur={() => onHover(null)}
                   />
                 </g>
-                <circle
-                  ref={(el) => {
-                    if (el) dots.current.set(mark.key, el);
-                    else dots.current.delete(mark.key);
-                  }}
-                  r={12}
-                  fill="transparent"
-                  tabIndex={spot ? 0 : -1}
-                  aria-label={`${mark.label} ${mark.effort}`}
-                  className="pointer-events-none outline-none"
-                  onFocus={(e) => onHover(mark.key, e.currentTarget, avoidFor(mark.key))}
-                  onBlur={() => onHover(null)}
-                />
               </g>
             </g>
           );
@@ -635,32 +632,21 @@ function Scatter({
         height={bottom - top + 28}
         fill="transparent"
         onClick={(e) => {
-          if (!full || suppress.current) return;
+          if (suppress.current || !(full || input === "mouse")) return;
           const frame = svgRef.current!.getBoundingClientRect();
           const nearest = nearestDot({ x: e.clientX - frame.left, y: e.clientY - frame.top });
-          setLineFocus(null);
-          onHover(nearest, nearest ? dots.current.get(nearest) : undefined, nearest ? avoidFor(nearest) : undefined);
+          const model = nearest ? plotted.find((point) => point.key === nearest)!.model : null;
+          setPicked(model === kept ? null : model);
+          if (full) onHover(nearest, nearest ? dots.current.get(nearest) : undefined, nearest ? avoidFor(nearest) : undefined);
         }}
         onMouseMove={(e) => {
           if (suppress.current) return;
           const frame = e.currentTarget.getBoundingClientRect();
           const pointer = { x: e.clientX - frame.left + left - 14, y: e.clientY - frame.top + top - 14 };
           const nearest = nearestDot(pointer);
-          let line: string | null = null;
-          let near = 7;
-          for (const [model, list] of nearest ? [] : byModel) {
-            for (let i = 1; i < list.length; i++) {
-              const gap = segmentGap(pointer, at.get(list[i - 1]!.key)!, at.get(list[i]!.key)!);
-              if (gap < near) [line, near] = [model, gap];
-            }
-          }
-          setLineFocus(line);
           if (nearest !== hover) onHover(nearest, nearest ? dots.current.get(nearest) : undefined, nearest ? avoidFor(nearest) : undefined);
         }}
-        onMouseLeave={() => {
-          setLineFocus(null);
-          onHover(null);
-        }}
+        onMouseLeave={() => onHover(null)}
       />
       <g clipPath={zoomable ? `url(#${gradient}-clip)` : undefined}>
         {models.map((mark) => {
@@ -1138,8 +1124,10 @@ export function ModelIndexSection() {
               {lines && (
                 <span className="flex items-center gap-1.5">
                   <svg width="20" height="12" viewBox="0 0 20 12" aria-hidden>
-                    <path d="M2 10L14 4" className="stroke-ink-secondary" strokeWidth={1.25} strokeLinecap="round" />
-                    <circle cx={15} cy={3.5} r={3.5} fill="none" className="stroke-ink-secondary" strokeWidth={1} />
+                    <path d="M3 9.5L17 2.5" className="stroke-ink-secondary" strokeWidth={1.25} strokeLinecap="round" />
+                    <circle cx={3} cy={9.5} r={2.5} className="fill-ink-secondary" />
+                    <circle cx={10} cy={6} r={2.5} className="fill-ink-secondary" />
+                    <circle cx={17} cy={2.5} r={2.5} className="fill-ink-secondary" />
                   </svg>
                   {t("modelIndex.effortLine")}
                 </span>

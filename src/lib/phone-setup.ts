@@ -12,7 +12,7 @@ export interface RemotePhoneLink {
     phoneJoined?: boolean;
     https?: boolean;
   };
-  pcs?: { name: string; host: string }[];
+  pcs?: { name: string; host: string; relayHost?: string }[];
   phones?: { id: string; kind: "android" | "iphone" | "ipad" | "phone"; lastSeen: number }[];
 }
 

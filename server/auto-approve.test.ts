@@ -3,10 +3,10 @@
 // waves through, what it refuses to wave through, and the fact that a
 // question is never answered by the machine.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { basename, dirname, join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { approvalKey, autoDecision, autoVerdict, looksDestructive, looksSensitive } from "./auto-approve.ts";
 import { redactSecretsInText } from "./redact.ts";
@@ -271,8 +271,17 @@ describe("unattended turns", () => {
   const bot = { autoApprove: true, alwaysAllow: ["Bash:git"] };
   const askBot = { alwaysAllow: ["Bash:git"] };
 
-  const workspace = "/work/project";
+  const workspace = mkdtempSync(join(process.env.ORBIT_SCRATCH ?? tmpdir(), "unattended-"));
   const away = { unattended: true, workspace };
+
+  beforeAll(() => {
+    for (const path of ["build/output.js", "tmp/out.log", "build/out.js", "my notes/old.md", "src/old.ts", "notes.md", "sub/deeper/keep"]) {
+      const file = join(workspace, path);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "keep");
+    }
+  });
+  afterAll(() => rmSync(workspace, { recursive: true, force: true }));
 
   it("keeps auto mode for ordinary work when nobody started the turn", () => {
     expect(autoVerdict(bot, "Bash", "npm test", { unattended: true })).toEqual(autoVerdict(bot, "Bash", "npm test"));
@@ -313,18 +322,65 @@ describe("unattended turns", () => {
       ["Write", JSON.stringify({ file_path: "/work/project/src/a.ts", content: "x" })],
       ["Edit", JSON.stringify({ file_path: "src/a.ts", old_string: "a", new_string: "b" })],
       ["Bash", "rm build/output.js"],
-      ["Bash", "rm /work/project/tmp/out.log"],
+      ["Bash", `rm "${join(workspace, "tmp", "out.log")}"`],
       ["delete", "Delete src/old.ts"],
       ["Bash", "del /q build\\out.js"],
-      ["Bash", 'rm "/work/project/my notes/old.md"'],
+      ["Bash", `rm "${join(workspace, "my notes", "old.md")}"`],
       ["Bash", "cd src && rm old.ts"],
-      ["Bash", "cd /work/project/build; rm out.js"],
+      ["Bash", `cd "${join(workspace, "build")}"; rm out.js`],
+      ["Bash", `cd /d "${join(workspace, "build")}" & del out.js`],
+      ["Bash", "pushd src; rm old.ts; popd"],
+      ["Bash", "pushd src; pushd ../build; popd; rm old.ts"],
+      ["powershell", "Push-Location src; Remove-Item old.ts; Pop-Location"],
+      ["powershell", "Set-Location -Path src; Remove-Item old.ts"],
       ["Write", JSON.stringify({ file_path: "/work/project/cleanup.sh", content: "rm -rf dist\ngit reset --hard\n" })],
       ["Edit", JSON.stringify({ file_path: "src/docs.md", old_string: "a", new_string: "run rm -rf node_modules" })],
       ["edit", "Edit src/a.ts"],
       ["WebFetch", "https://example.com/docs"],
     ]) {
       expect(autoVerdict(bot, tool, summary, away), `${tool} ${summary}`).toMatchObject({ source: "auto-mode" });
+    }
+  });
+
+  it("denies a delete outside the workspace after a move it cannot follow", () => {
+    // home inside the workspace, so reading cd - as cd ~ would pass
+    vi.stubEnv("HOME", workspace);
+    vi.stubEnv("USERPROFILE", workspace);
+    try {
+      for (const [tool, summary] of [
+        ["Bash", "pushd sub; popd; rm ../notes.md"],
+        ["powershell", "pushd sub; popd; Remove-Item ..\\notes.md"],
+        ["powershell", "Push-Location sub; Pop-Location; Remove-Item ../notes.md"],
+        ["powershell", "Push-Location ../other; Remove-Item notes.md"],
+        ["Bash", "popd; rm notes.md"],
+        ["Bash", "pushd sub; pushd deeper; popd; rm ../../notes.md"],
+        ["Bash", "pushd -n sub; rm ../notes.md"],
+        ["Bash", "cd -; rm notes.md"],
+        ["powershell", "Set-Location -; Remove-Item notes.md"],
+        ["powershell", "cd..; Remove-Item notes.md"],
+        ["Bash", "{ cd ../other; }; rm notes.md"],
+        ["Bash", "bash -c 'cd ../other; rm notes.md; true'"],
+        ["Bash", "pushd sub; pushd -n ../../other; popd; rm notes.md"],
+        ["Bash", "pushd ..; pushd; popd; rm notes.md"],
+        ["Bash", "pushd ..; dirs -c; popd; rm notes.md"],
+        ["powershell", "pushd ..; pushd; popd; Remove-Item notes.md"],
+        ["Bash", "pushd sub; pushd missing; popd; rm ../notes.md"],
+        ["Bash", "cd missing; rm ../notes.md"],
+        ["Bash", "false && cd sub; rm ../notes.md"],
+        ["Bash", "builtin cd ..; rm notes.md"],
+        ["Bash", "if cd ..; then rm notes.md; fi"],
+        ["Bash", 'eval "cd .."; rm notes.md'],
+        ["Bash", 'cd "sub"/..; rm ../notes.md'],
+        ["Bash", "cd `pwd`/..; rm notes.md"],
+        ["Bash", `cd .. # ; cd ${basename(workspace)}\nrm notes.md`],
+        ["Bash", "env -C .. rm notes.md"],
+        ["powershell", "Remove-Item -Path:..\\notes.md"],
+        ["shell", "call cd .. & del notes.md"],
+      ]) {
+        expect(autoVerdict(bot, tool, summary, away), `${tool} ${summary}`).toMatchObject({ approve: null, source: "unattended-deny" });
+      }
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 
@@ -443,7 +499,7 @@ describe("unattended worktree cleanup", () => {
   const verdict = (command: string) => autoVerdict(bot, "PowerShell", command, away());
 
   beforeAll(() => {
-    base = realpathSync.native(mkdtempSync(join(tmpdir(), "omb-wt-clean-")));
+    base = realpathSync.native(mkdtempSync(join(process.env.ORBIT_SCRATCH ?? tmpdir(), "omb-wt-clean-")));
     home = join(base, "Desktop");
     main = join(home, "Orbit");
     elsewhere = join(base, "Documents");
@@ -453,6 +509,7 @@ describe("unattended worktree cleanup", () => {
     git(main, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
     stale = join(base, "orbit-wt", "index-2026-11-17");
     git(main, "worktree", "add", "-q", "--detach", stale);
+    mkdirSync(join(stale, "src"));
     leftover = join(base, "orbit-wt", "index-2026-11-10");
     process.env.ORBIT_WORKTREE_ROOT = join(base, "orbit-wt");
     mkdirSync(join(leftover, "src"), { recursive: true });

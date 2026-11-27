@@ -3,6 +3,22 @@ import { describe, expect, it } from "vitest";
 import { bareYes, claimsDone, consentOf } from "./consent";
 
 describe("consentOf", () => {
+  it.each(["Do that", "Thank you. Do that.", "yes do it", "go ahead", "please", "응", "해줘", "그래"])("confirms the pending note with %s", (said) => {
+    expect(consentOf(said)).toBe("yes");
+    expect(bareYes(said)).toBe(true);
+  });
+
+  it.each(["Thanks, um, yes", "Thank you, uh, okay."])("confirms past a filler after the thanks: %s", (said) => {
+    expect(consentOf(said)).toBe("yes");
+    expect(bareYes(said)).toBe(true);
+  });
+
+  it("confirms a thanked yes in another language", () => expect(bareYes("Thanks, Sí.")).toBe(true));
+
+  it.each(["Thank you.", "Thanks, but wait.", "Thanks, yes, 잠깐만.", "yes, 잠깐만", "Thank you. Do not do that.", "Thanks. Do that?", "Thank you. Please make it blue."])("does not confirm with %s", (said) => {
+    expect(consentOf(said)).not.toBe("yes");
+  });
+
   it.each([
     "yes", "Yes. Send it.", "yeah go", "ok", "go ahead", "do it",
     "응", "응, 보내.", "어", "네", "네, 보내주세요", "넵", "예", "그래", "좋아요", "해", "해줘", "보내", "고고", "ㅇㅇ",

@@ -9,6 +9,7 @@ import { CHAT_PEEK_WINDOW_SIZE, peekRows, useChatPeekRows, useChatPeekSettled, u
 import { tailWindowStart } from "@/lib/transcript-window";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { useI18n } from "@/lib/i18n";
+import { fileOpen, openFile } from "@/lib/open-file";
 import { useRoomFilesState } from "@/lib/room-files-state";
 import { useBubbleSwipe } from "@/lib/use-bubble-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -39,46 +40,38 @@ import { MessageBoundary } from "./TurnPresence";
 export const roomPictures = (base: string, files: readonly RoomFile[]) =>
   files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
 
-/** A line's deleted notes and file rows, below its words. */
-export function RoomFileRows({ base, files, className }: { base: string; files: readonly RoomFile[]; className?: string }) {
+/** A line's deleted notes and file rows, below its words; a row opens by the one rule, a clip in the viewer, else in the chat's pane or downloads. */
+export function RoomFileRows({ base, files, threadId, className }: { base: string; files: readonly RoomFile[]; threadId?: string; className?: string }) {
   const { t } = useI18n();
+  const viewer = useMediaViewer();
+  const [shown, setShown] = useState<PreviewImage | null>(null);
   const rows = files.filter((file) => !file.deleted && !isRoomPicture(file));
+  const view = (opener: HTMLElement) => (media: PreviewImage) => {
+    if (viewer) return viewer.open(media, opener);
+    opener.focus({ preventScroll: true });
+    setShown(media);
+  };
   return (
     <>
       {files.filter((file) => file.deleted).map((file) => <div key={file.id} className="text-[13px] text-ink-secondary">{t("teamRoom.fileDeleted")}</div>)}
       {rows.length > 0 && (
         <div className={cn("flex flex-col gap-1.5", className)}>
-          {rows.map((file) => file.type.startsWith("video/") ? <RoomVideoRow key={file.id} base={base} file={file} /> : (
-            <a
+          {rows.map((file) => (
+            <button
               key={file.id}
-              href={roomFileUrl(base, file, false)}
-              download={file.name}
-              target="_blank"
-              rel="noreferrer"
-              aria-label={t("viewer.download", { name: file.name })}
-              title={t("viewer.downloadTitle")}
-              className="block rounded-lg hover:bg-raised/50"
+              type="button"
+              data-room-file
+              onClick={(event) => openFile({ threadId, path: file.name, src: roomFileUrl(base, file, false) }, fileOpen(file.name) === "video" ? { view: view(event.currentTarget) } : {})}
+              className="block w-full rounded-lg text-left hover:bg-raised/50"
             >
               <FileAttachmentRow file={{ path: file.id, name: file.name, size: file.bytes }} />
-            </a>
+            </button>
           ))}
         </div>
       )}
+      {shown && <MediaViewer image={shown} onClose={() => setShown(null)} />}
     </>
   );
-}
-
-function RoomVideoRow({ base, file }: { base: string; file: RoomFile }) {
-  const viewer = useMediaViewer();
-  const [open, setOpen] = useState(false);
-  const image = { src: roomFileUrl(base, file, false), name: file.name, video: true };
-  return <>
-    <button type="button" aria-label={file.name} className="block rounded-lg text-left hover:bg-raised/50"
-      onClick={(event) => { if (viewer) viewer.open(image, event.currentTarget); else { event.currentTarget.focus({ preventScroll: true }); setOpen(true); } }}>
-      <FileAttachmentRow file={{ path: file.id, name: file.name, size: file.bytes }} />
-    </button>
-    {open && <MediaViewer image={image} onClose={() => setOpen(false)} />}
-  </>;
 }
 
 type LineTranslation = ReturnType<typeof useRoomTranslation>;

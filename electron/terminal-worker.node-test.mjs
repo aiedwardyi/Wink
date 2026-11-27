@@ -126,10 +126,10 @@ test("existing panes retain their captured id and generation across a bot accoun
   const first = await f.host.openForBot("bot-1", { label: "first", command: "codex 'task'" });
   selected = launch({ id: "acct_fourth", generation: 4 });
   await f.host.openForBot("bot-1", { label: "second", command: "codex 'task'" });
-  assert.deepEqual(f.host.livePanesForAccount?.(THIRD.id), { count: 1, unknown: 0, generations: { "3": 1 } });
-  assert.deepEqual(f.host.livePanesForAccount?.("acct_fourth"), { count: 1, unknown: 0, generations: { "4": 1 } });
+  assert.deepEqual(await f.host.livePanesForAccount?.(THIRD.id), { count: 1, unknown: 0, generations: { "3": 1 } });
+  assert.deepEqual(await f.host.livePanesForAccount?.("acct_fourth"), { count: 1, unknown: 0, generations: { "4": 1 } });
   f.children[0].exit({ exitCode: 0 });
-  assert.equal(f.host.livePanesForAccount(THIRD.id).count, 0);
+  assert.equal((await f.host.livePanesForAccount(THIRD.id)).count, 0);
   assert.equal(f.host.readBot("bot-1", { sessionId: first.sessionId }).exited, true);
 });
 
@@ -141,8 +141,8 @@ test("a trusted usage hold creates no shell", async (t) => {
 });
 
 test("no-accounts launch preserves shell, environment and command", async (t) => {
-  let called = 0;
-  const f = fixture(async () => { called++; throw new Error("unexpected account lookup"); }, { workerAccountsEnabled: false });
+  const calls = [];
+  const f = fixture(async (input) => { calls.push(input); throw new Error("launch service unavailable"); }, { workerAccountsEnabled: false });
   t.after(() => f.host.dispose());
   await f.host.openForBot("bot-1", { label: "worker", command: "codex 'task'" });
   assert.equal(f.children[0].shell, "/bin/sh");
@@ -150,8 +150,27 @@ test("no-accounts launch preserves shell, environment and command", async (t) =>
   assert.equal(f.children[0].options.env.CODEX_HOME, "inherited-wrong");
   assert.equal(f.children[0].options.env.CLAUDE_CONFIG_DIR, "inherited-wrong");
   assert.deepEqual(f.children[0].writes, ["codex 'task'\r"]);
-  assert.equal(called, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].unrouted, true);
 });
+
+for (const [platform, flag, replacement] of [
+  ["win32", "--model 'gpt-6-astra'", "--model 'gpt-6.2-astra'"],
+  ["win32", '-m "gpt-6-astra"', '-m "gpt-6.2-astra"'],
+  ["linux", "--model=gpt-6-astra", "--model=gpt-6.2-astra"],
+]) {
+  test(`no-accounts ${platform} pane updates only the model flag: ${flag}`, async (t) => {
+    assert.ok(policy, "trusted worker policy exists");
+    const unused = () => { throw new Error("unexpected account lookup"); };
+    const prepare = policy.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: unused, bases: unused, available: unused, usage: unused });
+    const f = fixture(prepare, { platform, workerAccountsEnabled: false });
+    t.after(() => f.host.dispose());
+    const prompt = "'keep --model gpt-6-astra in this prompt'";
+    await f.host.openForBot("bot-1", { command: `codex ${flag} -c model_reasoning_effort=high ${prompt}` });
+    assert.deepEqual(f.children[0].writes, [`codex ${replacement} -c model_reasoning_effort=high ${prompt}\r`]);
+    assert.equal(f.children[0].options.env.CODEX_HOME, "inherited-wrong");
+  });
+}
 
 test("later managed engine input on a plain shell is refused before submission", async (t) => {
   const f = fixture(async (input) => {
@@ -170,12 +189,12 @@ test("pending launches block removal until a plain shell is confirmed unrelated"
   t.after(() => f.host.dispose());
   const opening = f.host.openForBot("bot-1", { label: "shell" });
   try {
-    assert.equal(f.host.livePanesForAccount?.(THIRD.id).unknown, 1);
+    assert.equal((await f.host.livePanesForAccount?.(THIRD.id)).unknown, 1);
   } finally {
     release?.({ kind: "shell" });
     await opening;
   }
-  assert.deepEqual(f.host.livePanesForAccount(THIRD.id), { count: 0, unknown: 0, generations: {} });
+  assert.deepEqual(await f.host.livePanesForAccount(THIRD.id), { count: 0, unknown: 0, generations: {} });
 });
 
 test("managed command serialization preserves prompt text and expands only pane grants", () => {
@@ -305,7 +324,7 @@ test("the captured-turn resolver and core policy reach the final fake PTY enviro
   assert.match(f.children[0].writes[0], /'--no-daemon'/);
   assert.deepEqual(usageCalls[0][1], { ...THIRD, name: "Codex" });
   assert.equal(pane.line, "Captured usage.");
-  assert.equal(f.host.livePanesForAccount(THIRD.id).count, 1);
+  assert.equal((await f.host.livePanesForAccount(THIRD.id)).count, 1);
 });
 
 for (const platform of ["linux", "win32"]) {
@@ -327,6 +346,6 @@ for (const platform of ["linux", "win32"]) {
     await f.host.openForBot("bot-1", { label: "worker", command: "claude 'task'" });
     assert.equal(f.children[0].options.env.CLAUDE_CONFIG_DIR, undefined);
     assert.deepEqual(usageCalls[0][1], { id: "claude", generation: 0, name: "Claude" });
-    assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 1, unknown: 0, generations: { "0": 1 } });
+    assert.deepEqual(await f.host.livePanesForAccount("claude"), { count: 1, unknown: 0, generations: { "0": 1 } });
   });
 }

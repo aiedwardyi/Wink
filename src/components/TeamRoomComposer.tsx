@@ -1,4 +1,5 @@
 import { useReplyDraft } from "@/lib/drafts";
+import { useReplyFocus } from "@/lib/reply-focus";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { ChatPeekPart, useChatPreview } from "@/lib/chat-preview";
 import type { Message } from "@/state/store-types";
@@ -10,8 +11,9 @@ import type { useCallControls } from "./CallControls";
 export function useTeamRoomReply(base: string, draftId: string, messages: Message[]) {
   const preview = useChatPreview();
   const reply = useReplyDraft(base, draftId, messages);
+  const selectReply = useReplyFocus(reply.selectReply);
   useBackLayer(!preview && Boolean(reply.replyTo), reply.clearReply);
-  return reply;
+  return { ...reply, selectReply };
 }
 
 export function TeamRoomComposer({ name, base, draftId, people, bots, replyTo, onClearReply, onConsumeReply, onRestoreReply, offline, status, onStop, chain, onSend, call }: {

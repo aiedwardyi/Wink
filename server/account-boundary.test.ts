@@ -117,7 +117,7 @@ function fixture(kind: "claudeAgent" | "codex") {
         });
         done();
       }, final(done) {
-        if (kind === "claudeAgent" && args.includes("text")) queueMicrotask(() => { stdout.end("fixture helper answer"); process.exitCode = 0; process.emit("close", 0); });
+        if (kind === "claudeAgent" && args.includes("json")) queueMicrotask(() => { stdout.end(JSON.stringify({ type: "result", result: "fixture helper answer" })); process.exitCode = 0; process.emit("close", 0); });
         done();
       } }),
     });
@@ -220,7 +220,7 @@ describe.each(["claudeAgent", "codex"] as const)("%s account boundaries", (kind)
     const value = await instance.generateText!("fixture", { lean: true });
     if (kind === "codex") {
       expect(value).toContain("SUMMARY");
-      expect(f.catalogs[0].models).toEqual([expect.objectContaining({ slug: "gpt-6.1-sol", tool_mode: "direct", shell_type: "disabled", apply_patch_tool_type: null })]);
+      expect(f.catalogs[0].models).toEqual([expect.objectContaining({ slug: "gpt-6.2-sol", tool_mode: "direct", shell_type: "disabled", apply_patch_tool_type: null })]);
       expect(JSON.stringify(f.catalogs)).not.toMatch(/unselected|unrelated|never copy/);
     }
     else { expect(value).toBe("fixture helper answer"); await instance.reviewPermission!("fixture"); }
@@ -236,7 +236,7 @@ describe.each(["claudeAgent", "codex"] as const)("%s account boundaries", (kind)
     registries.push(registry);
     await registry.load({ [f.account.id]: { driver: kind, account: f.account, environment: f.environment, config: { cli: "fixture-cli" } } });
     f.login(login);
-    await registry.startSignIn(f.account.id);
+    await registry.startSignIn(f.account.id, false, "pc:");
     if (login === "pending") await registry.cancelSignIn(f.account.id);
     await registry.logins.wait(f.account.id);
     await registry.get(f.account.id)!.snapshot({ refresh: true });
@@ -349,14 +349,12 @@ it("gates listeners per engine and cancels only the owning account", async () =>
   f.login("pending");
   const manager = new EngineLogin(5000, 50);
   try {
-    await manager.start("account-a", "fixture-cli", ["login"], {}, [], { scope: "codex", account: f.account });
-    await expect(manager.start("account-b", "fixture-cli", ["login"], {}, [], { scope: "codex", account: f.account })).rejects.toThrow("Another sign-in");
-    await manager.start("account-c", "fixture-cli", ["login"], {}, [], { scope: "claudeAgent", account: f.account });
+    await manager.start("account-a", "fixture-cli", ["login"], {}, [], { mode: "code", owner: "pc:", scope: "codex", account: f.account });
+    await manager.start("account-c", "fixture-cli", ["login"], {}, [], { mode: "code", owner: "pc:", scope: "claudeAgent", account: f.account });
     expect(f.launches).toHaveLength(2);
-    await manager.cancel("account-a");
-    expect(manager.state("account-c")).toBe("pending");
-    await manager.start("account-b", "fixture-cli", ["login"], {}, [], { scope: "codex", account: f.account });
+    await manager.start("account-b", "fixture-cli", ["login"], {}, [], { mode: "code", owner: "pc:", scope: "codex", account: f.account });
     expect(f.launches).toHaveLength(3);
+    expect([manager.state("account-a"), manager.state("account-b"), manager.state("account-c")]).toEqual(["cancelled", "pending", "pending"]);
   } finally { await manager.dispose(); }
 });
 
@@ -371,10 +369,10 @@ it("holds the login gate until the process-tree stop before the fallback deadlin
   });
   const manager = new EngineLogin(5000, 50);
   try {
-    await manager.start("account-a", "fixture-cli", ["login"], {}, [], { scope: "codex", account: f.account });
+    await manager.start("account-a", "fixture-cli", ["login"], {}, [], { mode: "code", owner: "pc:", scope: "codex", account: f.account });
     vi.useFakeTimers();
     const cancelled = manager.cancel("account-a");
-    const next = manager.start("account-b", "fixture-cli", ["login"], {}, [], { scope: "codex", account: f.account });
+    const next = manager.start("account-b", "fixture-cli", ["login"], {}, [], { mode: "code", owner: "pc:", scope: "codex", account: f.account });
     await vi.advanceTimersByTimeAsync(4_999);
     expect(f.launches).toHaveLength(1);
     stopped.shift()!();
@@ -451,7 +449,7 @@ it("recognizes a Codex device cap once without exposing raw CLI output or retryi
   registries.push(registry);
   await registry.load({ [f.account.id]: { driver: "codex", account: f.account, config: { cli: "fixture-cli" } } });
   f.login("device_cap");
-  expect(await registry.startSignIn(f.account.id)).toEqual({ error: "device_cap" });
+  expect(await registry.startSignIn(f.account.id, false, "pc:")).toEqual({ error: "device_cap" });
   await registry.describeCached();
   await registry.describeCached();
   expect(f.launches.filter((launch) => launch.args.includes("login"))).toHaveLength(1);

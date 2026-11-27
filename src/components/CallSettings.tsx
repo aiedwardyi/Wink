@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Pause, Play } from "lucide-react";
+import { Pause, Play, Settings } from "lucide-react";
 
-import { useStore, type Bot } from "@/state/store";
+import { api, useStore, type Bot, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useActiveCall } from "@/lib/live-call/active";
@@ -15,10 +15,11 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { guardMenuTouch, useListMenuDismiss } from "@/lib/use-hold-menu";
 import { usePresence } from "@/lib/use-presence";
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
-import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
+import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallAnswer, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
 import { BotAvatar } from "./Avatar";
 import { DetailsSwitch } from "./BotDetailsRows";
 import { MENU_CLASS } from "./MessageMenu";
+import { SegmentedRow } from "./Segmented";
 import { AccountPicker } from "./UsageAccounts";
 
 const LABEL = "shrink-0 text-[14px] text-ink";
@@ -108,6 +109,31 @@ function CallLanguage({ bot }: { bot: Bot }) {
   );
 }
 
+/** Who answers calls, app-wide: the bot itself (its reply read out) or the Gemini voice. A call on now moves over once nothing is in flight. */
+function CallAnswerRow() {
+  const { t } = useI18n();
+  const { state, dispatch } = useStore();
+  const latest = useRef(0);
+  const config = useRef(state.config);
+  config.current = state.config;
+  const value = state.config?.liveCall?.answer ?? "gemini";
+  const show = (answer?: CallAnswer) => config.current && dispatch({ type: "configStatus", config: { ...config.current, liveCall: { voice: LIVE_VOICE, ...config.current.liveCall, answer } } });
+  const pick = (answer: CallAnswer) => {
+    const mine = ++latest.current;
+    const was = config.current?.liveCall?.answer;
+    // Shown at once, so a call placed before the save lands answers as picked; only the newest pick's reply counts.
+    show(answer);
+    void api("/api/config", { method: "PATCH", body: JSON.stringify({ liveCall: { answer } }) }).then(
+      (saved: ConfigStatus) => mine === latest.current && dispatch({ type: "configStatus", config: saved }),
+      () => mine === latest.current && show(was),
+    );
+  };
+  return (
+    <SegmentedRow<CallAnswer> label={t("callMenu.answer")} value={value}
+      options={(["bot", "gemini"] as const).map((id) => ({ id, label: t(`callMenu.answer.${id}`) }))} onChange={pick} />
+  );
+}
+
 /** Every voice as a card with its vibe and a preview; three rows show, and the cut-off fourth row and fade say the rest scroll. */
 export function VoiceGrid({ label, value, onPick, playing, preview, badge }: {
   label?: string;
@@ -164,6 +190,7 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   return (
     // tabIndex keeps a press on the panel from focusing the message box under it
     <div data-call-settings="" tabIndex={-1} className={cn("flex flex-col gap-2 outline-none", className)}>
+      <CallAnswerRow />
       <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
         onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
       <Slider label={t("callMenu.volume")} value={volume} range={CALL_VOLUME} text={`${Math.round(volume * 100)}%`} onChange={setCallVolume} />
@@ -195,6 +222,19 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   );
 }
 
+export const CALL_ICON = "flex size-8 shrink-0 items-center justify-center rounded-full max-md:size-10";
+
+export function CallGear({ bot, className }: { bot: Bot; className?: string }) {
+  const { t } = useI18n();
+  return (
+    <CallSettingsHold bot={bot} tap>
+      <button type="button" aria-label={t("callMenu.open")} title={t("callMenu.open")} className={cn(CALL_ICON, "text-ink-secondary hover:bg-control hover:text-ink", className)}>
+        <Settings size={17} />
+      </button>
+    </CallSettingsHold>
+  );
+}
+
 /** Right-click or long-press on the wrapped Call button opens the panel above it; a plain click still calls, or with `tap` toggles it. */
 export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: ReactNode; tap?: boolean }) {
   const { t } = useI18n();
@@ -211,8 +251,8 @@ export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: R
     return held;
   };
   useEffect(() => () => clearTimeout(press.current?.timer), []);
-  // The Language menu is portaled outside the panel.
-  useListMenuDismiss(`[data-call-settings-menu], [role="menu"]${tap ? ", [data-call-tap]" : ""}`, "[data-call-hold]", !at, close);
+  // The Language menu is portaled outside the panel; End is never a dismiss tap, it always ends the call.
+  useListMenuDismiss(`[data-call-settings-menu], [role="menu"], [data-call-end]${tap ? ", [data-call-tap]" : ""}`, "[data-call-hold]", !at, close);
   useBackLayer(Boolean(at), close);
   const rect = shown.value;
   const width = Math.min(360, window.innerWidth - 16);

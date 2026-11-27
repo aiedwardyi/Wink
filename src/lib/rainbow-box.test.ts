@@ -7,7 +7,7 @@ afterEach(() => {
 
 describe("rainbow chat box preference", () => {
   it.each([
-    [null, "off"],
+    [null, "theme"],
     ["invalid", "off"],
     ["off", "off"],
     ["on", "rainbow"],
@@ -40,8 +40,8 @@ describe("rainbow chat box preference", () => {
       setItem: () => { throw new Error("blocked"); },
     });
     const { rainbowBoxMode, saveRainbowBox } = await import("./rainbow-box");
-    expect(rainbowBoxMode()).toBe("off");
-    saveRainbowBox("theme");
     expect(rainbowBoxMode()).toBe("theme");
+    saveRainbowBox("off");
+    expect(rainbowBoxMode()).toBe("off");
   });
 });

@@ -33,12 +33,14 @@ import {
   readSyncOperationsAsync,
   readSyncOperationsFor,
   resolveSyncAvatarPath,
+  restoreSyncedAvatar,
   saveProfileSyncSettings,
   serializeSyncOperation,
   syncAvatarMatches,
   syncOperationFileName,
   syncOperationsSignature,
   syncOperationsStatus,
+  syncValueHash,
   writeSyncAvatarAsset,
   writeSyncOperation,
   type ProfileSyncOperation,
@@ -67,6 +69,28 @@ function operation(input: Partial<Parameters<typeof createSyncOperation>[0]> = {
 }
 
 describe("profile sync operations", () => {
+  it("keeps the original bot publisher across delayed and out-of-order edits", () => {
+    const original = operation({ changes: { name: "Tutor", title: "", description: "", color: "blue" } });
+    const peer = operation({ operationId: "peer", deviceId: "device-b", recordedAt: original.recordedAt + 1,
+      baseCheckpoint: original.operationId, changes: { name: "Renamed Tutor", title: "", description: "", color: "green" } });
+    expect(applySyncOperations(emptyProfileSyncState(), [peer]).botOrigins).toEqual({});
+    const state = applySyncOperations(emptyProfileSyncState(), [peer, original]);
+    expect(state.botOrigins).toEqual({ "bot-1": "device-a" });
+    expect(state.bots["bot-1"]?.name).toBe("Renamed Tutor");
+  });
+
+  it("keeps a creator with a slow clock as the bot publisher", () => {
+    const other = operation({ operationId: "other", deviceId: "device-b", recordedAt: 1_700_000_000_100, entityId: "bot-2",
+      changes: { name: "Coach", title: "", description: "", color: "red" } });
+    const created = operation({ operationId: "created", recordedAt: 1_700_000_000_090, baseCheckpoint: "other",
+      changes: { name: "Tutor", title: "", description: "", color: "blue" } });
+    const peer = operation({ operationId: "peer", deviceId: "device-b", sequence: 2, recordedAt: 1_700_000_000_105, baseCheckpoint: "created",
+      changes: { name: "Renamed Tutor", title: "", description: "", color: "green" } });
+    const origins = { "bot-1": "device-a", "bot-2": "device-b" };
+    expect(applySyncOperations(emptyProfileSyncState(), [other, created]).botOrigins).toEqual(origins);
+    expect(applySyncOperations(emptyProfileSyncState(), [other, created, peer]).botOrigins).toEqual(origins);
+  });
+
   it("replays duplicate and out-of-order records idempotently", () => {
     const newer = operation({ operationId: "op-2", deviceId: "device-b", sequence: 2, recordedAt: 1_700_000_000_002, changes: { title: "Teacher" } });
     const older = operation({ operationId: "op-1", deviceId: "device-a", sequence: 1, recordedAt: 1_700_000_000_001 });
@@ -477,6 +501,24 @@ describe("sync avatar assets", () => {
     expect(syncAvatarMatches(root, name, Buffer.from(bytes))).toBe(true);
     expect(syncAvatarMatches(root, name, Buffer.from([0x89, 0x50]))).toBe(false);
     expect(syncAvatarMatches(root, "assets/missing.png", bytes)).toBe(false);
+  });
+
+  it("restores a lost picture from the asset this PC last synced, never over a file", () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-avatar-restore-"));
+    roots.push(root);
+    const attachments = join(root, "attachments");
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x07]);
+    const asset = writeSyncAvatarAsset(root, bytes, "png");
+    writeSyncAvatarAsset(root, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x08]), "png");
+    const synced = { "bot:bot-1:avatarAsset": syncValueHash(asset) };
+    expect(restoreSyncedAvatar(root, {}, "bot-1", attachments, "lost.png")).toBe(false);
+    expect(restoreSyncedAvatar(root, synced, "bot-1", attachments, "lost.jpg")).toBe(false);
+    expect(restoreSyncedAvatar(root, synced, "bot-1", attachments, "../lost.png")).toBe(false);
+    expect(restoreSyncedAvatar(root, synced, "bot-1", attachments, "lost.png")).toBe(true);
+    expect(readFileSync(join(attachments, "lost.png")).equals(bytes)).toBe(true);
+    writeFileSync(join(attachments, "kept.png"), "kept");
+    expect(restoreSyncedAvatar(root, synced, "bot-1", attachments, "kept.png")).toBe(false);
+    expect(readFileSync(join(attachments, "kept.png"), "utf8")).toBe("kept");
   });
 });
 

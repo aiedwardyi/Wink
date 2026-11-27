@@ -3,7 +3,7 @@
 // not stop it reaching a collector; each collector applies the same rule.
 import type { RuntimeEvent } from "./contracts.ts";
 import { ENGINE_SUMMARY_PREFIX } from "./replies.ts";
-import type { Message } from "./store.ts";
+import type { Message, RowMark } from "./store.ts";
 
 export type TurnReplyStep = { text: string; replace?: boolean } | "completed" | null;
 type Phase = Extract<RuntimeEvent, { itemType: "assistant_text" }>["phase"];
@@ -115,24 +115,24 @@ export function turnAddedMessage(messages: readonly Message[], start: number): b
     if (message.kind === "options") return Boolean(message.card);
     if (message.kind === "connector") return Boolean(message.connector);
     if (message.kind === "secret") return Boolean(message.secret);
-    if (message.kind === "screen") return Boolean(message.image || message.png || message.hasImage);
+    if (message.kind === "screen") return Boolean(message.image || message.png || message.hasImage || message.roomFiles?.some((file) => !file.deleted && file.type.startsWith("image/")));
     return true;
   });
 }
 
 export function turnUnread() {
-  const turns = new Map<string, { turnId?: string; start: number }>();
+  const turns = new Map<string, { turnId?: string; start: RowMark }>();
   return {
-    start(threadId: string, turnId: string | undefined, messages: readonly Message[]) {
+    start(threadId: string, turnId: string | undefined, start: RowMark) {
       const turn = turns.get(threadId);
       if (turn && turn.turnId === turnId) return;
-      turns.set(threadId, { turnId, start: messages.length });
+      turns.set(threadId, { turnId, start });
     },
-    settle(threadId: string, turnId: string | undefined, messages: readonly Message[]): boolean {
+    settle(threadId: string, turnId: string | undefined, since: (start: RowMark) => readonly Message[]): boolean {
       const turn = turns.get(threadId);
       if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) return false;
       turns.delete(threadId);
-      return turnAddedMessage(messages, turn.start);
+      return turnAddedMessage(since(turn.start), 0);
     },
     forget(threadId: string) {
       turns.delete(threadId);
