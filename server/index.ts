@@ -204,7 +204,7 @@ import { BUSY_RESUME_DELAYS_MS, isRetryLine, retryLine } from "./drivers/retry.t
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import "./comms-visibility.ts";
 import type { CommsBus } from "./comms-visibility.ts";
-import { lastMessageAt, typedSince } from "./message-db.ts";
+import { lastMessageAt, rowsUnder, typedSince, userMarks } from "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, inertMentions, turnReplaysTranscript, unstampedAsGuest, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
@@ -3222,6 +3222,9 @@ const dreamLive = createDreamLive({
   cite: (botId) => knownRepos.cite(botId),
   merged: (botId, threadId, ask, start) => askPrs.merged(botId, threadId, ask, start),
   rows: (threadId, since) => typedSince(threadId, since, MEMORY_SAVE_TOOL),
+  stored: (threadId) => userMarks(threadId),
+  under: (threadId, id) => rowsUnder(threadId, id),
+  waiting: (botId) => hasQueuedSends(botId),
   checked: () => askPrs.settled(),
   reverted: async (botId, threadId) => {
     const pinned = store.taskByThread(botId, threadId)?.cwd;

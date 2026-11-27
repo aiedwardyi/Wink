@@ -6,11 +6,12 @@ import { z } from "zod";
 
 import { DREAMED_FILE, dreamedPath, fixedEntry, markUndone } from "./dream-archive.ts";
 import type { DreamJudges } from "./dream-judge.ts";
-import { applyFix, checkWrong, ownerRows, ownerTyped, savedNotes, undoFix, type FixDone, type FixItem, type JudgeLog, type OwnerRow, type SavedNotes } from "./dream-wrong.ts";
+import { applyFix, checkWrong, newestOwned, ownedIds, ownerRows, savedNotes, undoFix, type FixDone, type FixItem, type JudgeLog, type OwnerRow, type SavedNotes } from "./dream-wrong.ts";
 import { closedAskLine, refPrs, stepLeft, withClosed, type MergedPr } from "./ask-prs.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { cleanerSkip, runIdOf, sha8 } from "./memory-clean.ts";
 import { appendArchive, type Move } from "./memory-sleep.ts";
+import type { UserMark } from "./message-db.ts";
 import { pickStamp } from "./picks.ts";
 import { redactRoomMemory } from "./redact.ts";
 import { isOpenAsk, trimClosed, type TaskAsk } from "./task-asks.ts";
@@ -49,7 +50,7 @@ const fixItemSchema = z.object({
   listOnly: z.boolean(),
   evidence: z.object({ thread: z.string(), message: z.string(), at: z.number(), quote: z.string() }),
   done: z.object({ at: z.number(), line: z.number(), cr: z.boolean(), nth: z.number(), count: z.number(), heading: z.string(), id: z.string(), undoneAt: z.number().optional() }).optional(),
-  seen: z.object({ at: z.number(), sha: z.string() }).optional(),
+  seen: z.object({ at: z.number(), sha: z.string(), ids: z.string().optional() }).optional(),
   outdated: z.number().optional(),
 });
 const planSchema = z.object({
@@ -88,6 +89,12 @@ export interface DreamLiveDeps {
   merged(botId: string, threadId: string, ask: TaskAsk, start: boolean): MergedPr[] | null | undefined;
   /** The chat's user rows, any kind, and Auto Notes receipts from `since` on. */
   rows(threadId: string, since: number): Message[];
+  /** Every user row of the chat, whatever its time, with its place in the store. */
+  stored(threadId: string): UserMark[];
+  /** The ids of every row under this one by parent links. */
+  under(threadId: string, id: string): string[];
+  /** Whether a send from this bot's owner was taken and still waits to reach the chat. */
+  waiting(botId: string): boolean;
   /** Resolves once every gh check started so far has finished. */
   checked(): Promise<void>;
   /** After a fresh look at the thread's repo: whether a revert there undid this PR. */
@@ -205,36 +212,46 @@ export function createDreamLive(deps: DreamLiveDeps) {
     const since = new Date(through).setHours(0, 0, 0, 0);
     const rows: OwnerRow[] = [];
     const saved: SavedNotes[] = [];
-    let seen = 0;
     for (const threadId of deps.threads(botId)) {
       const messages = deps.rows(threadId, since);
       rows.push(...ownerRows(threadId, messages, through));
       saved.push(...savedNotes(messages));
-      for (const message of messages) if (ownerTyped(message) && message.at > seen) seen = message.at;
     }
     if (!judges) return { state: "off-here", through, items: [] };
     rows.sort((left, right) => left.at - right.at);
+    // nothing typed since the last pass: no judge reads, and the store is not walked
+    const before = rows.length ? owned(botId) : undefined;
     try {
-      const checked = await checkWrong({ raw, rows, seen, saved, judges, today: pickStamp(at).slice(0, 10), signal, now });
+      const newest = before && !before.waiting ? newestOwned(before.rows, deps.under) : undefined;
+      const checked = await checkWrong({ raw, rows, newest, ids: before?.ids ?? "", saved, judges, today: pickStamp(at).slice(0, 10), signal, now });
       const fields: Omit<DryFixes, keyof DreamFixes> = { pairs: checked.pairs, bytes: checked.bytes, judges: checked.logs };
       if (checked.reason) fields.reason = checked.reason;
       if (memoryFileRaw(botId) !== raw) return { state: "conflict", through, items: [], ...fields };
-      return { state: checked.state, through: checked.state === "checked" ? at : through, items: checked.items, ...fields };
+      // a message the owner typed or sent while the judges read makes what they found stale
+      const after = checked.items.length ? owned(botId) : undefined;
+      const items = after && !after.waiting && after.ids === before?.ids ? checked.items : [];
+      return { state: checked.state, through: checked.state === "checked" ? at : through, items, ...fields };
     } catch {
       return { state: signal.aborted ? "stopped" : "error", through, items: [] };
     }
   }
 
-  // any message the owner typed after the judges read the fix makes it stale, whatever it says; a fix with no record of that is stale too
-  function wroteSince(botId: string, item: FixItem) {
-    const { seen } = item;
-    return !seen || [...new Set([item.evidence.thread, ...deps.threads(botId)])].some((threadId) => deps.rows(threadId, seen.at + 1).some(ownerTyped));
+  // the owner's messages in the bot's chats as the store holds them now, whatever their time, and whether a send of theirs still waits
+  function owned(botId: string) {
+    const threads = deps.threads(botId);
+    const rows = threads.flatMap((thread) => deps.stored(thread).map((row) => ({ ...row, thread })));
+    return { threads, rows, ids: ownedIds(rows), waiting: deps.waiting(botId) };
   }
 
-  // the last plan's fixes stay listed until their line ages out, OK'd or not; a waiting one goes once its note changed or the owner wrote anything after it was judged
+  // stale once the owner's messages are not the exact set the judges saw or one waits to send, whatever it says; a fix with no record of that is stale too
+  const fresh = (item: FixItem, now: ReturnType<typeof owned>) => !!item.seen?.ids && item.seen.ids === now.ids && !now.waiting && now.threads.includes(item.evidence.thread);
+
+  // the last plan's fixes stay listed until their line ages out, OK'd or not; a waiting one goes once its note changed or the owner wrote or sent anything after it was judged
   function carried(botId: string, at: number, found: DryFixes): FixItem[] {
     const raw = memoryFileRaw(botId).split("\n").map((line) => line.replace(/\r$/, ""));
-    const kept = (plans(botId)[0]?.fixes?.items ?? []).filter((item) => item.evidence.at > at - RUN_KEEP_MS && (item.done || (!wroteSince(botId, item) && raw.some((line) => `note:${sha8(line)}` === item.target) && !found.items.some((each) => each.target === item.target))));
+    const last = plans(botId)[0]?.fixes?.items ?? [];
+    const now = last.some((item) => !item.done) ? owned(botId) : undefined;
+    const kept = last.filter((item) => item.evidence.at > at - RUN_KEEP_MS && (item.done || (!!now && fresh(item, now) && raw.some((line) => `note:${sha8(line)}` === item.target) && !found.items.some((each) => each.target === item.target))));
     return [...kept, ...found.items.filter((item) => !kept.some((each) => each.target === item.target))];
   }
 
@@ -260,11 +277,11 @@ export function createDreamLive(deps: DreamLiveDeps) {
     return saved;
   }
 
-  // the fix's line is still the one the judges read whole, and the owner wrote nothing in the bot's chats since
+  // the fix's line is still the one the judges read whole, and the owner wrote or sent nothing in the bot's chats since
   function stands(botId: string, item: FixItem) {
     const { thread, message, at } = item.evidence;
     const own = ownerRows(thread, deps.rows(thread, at), at - 1).find((row) => row.id === message);
-    return !!own?.whole && sha8(own.text) === item.seen?.sha && !wroteSince(botId, item);
+    return !!own?.whole && sha8(own.text) === item.seen?.sha && fresh(item, owned(botId));
   }
 
   /** The user's OK on one fix, or its Undo: OK swaps the note's line for the fix and archives the old line; Undo puts the old bytes back. */

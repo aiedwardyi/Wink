@@ -25,7 +25,7 @@ export type DreamFix = {
   op: "fix"; target: string; text: string; by: string; why: "wrong"; listOnly: boolean;
   evidence: { thread: string; message: string; at: number; quote: string };
   done?: { at: number; line: number; cr: boolean; nth: number; count: number; heading: string; id: string; undoneAt?: number };
-  seen?: { at: number; sha: string };
+  seen?: { at: number; sha: string; ids?: string };
   outdated?: number;
 };
 export type DreamRun = {

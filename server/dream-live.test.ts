@@ -128,6 +128,10 @@ describe("dreaming, dry", () => {
   let pending: Map<string, TaskResumePacket>;
   let gh: Record<string, GhView>;
   let typed: Map<string, Message[]>;
+  let waiting: boolean;
+  // where each row sits in the store: one first read later was stored later
+  const places = new WeakMap<Message, number>();
+  let place = 0;
   let reverts: Set<number>;
   let enabled: boolean;
   let busy: Set<string>;
@@ -151,6 +155,17 @@ describe("dreaming, dry", () => {
       pc: () => "pc-1",
       threads: () => [...new Set([...packets.keys(), ...pending.keys(), ...typed.keys()])],
       rows: (threadId, since) => (typed.get(threadId) ?? []).filter((message) => message.at >= since),
+      stored: (threadId) => (typed.get(threadId) ?? []).filter((message) => message.role === "user").map((message) => {
+        if (!places.has(message)) places.set(message, ++place);
+        return { ...message, row: places.get(message)! };
+      }),
+      under: (threadId, id) => {
+        const rows = typed.get(threadId) ?? [];
+        const below: string[] = [];
+        for (let next = [id]; next.length; below.push(...next)) next = rows.filter((row) => row.parentId && next.includes(row.parentId)).map((row) => row.id);
+        return below;
+      },
+      waiting: () => waiting,
       packet: (threadId) => pending.get(threadId) ?? packets.get(threadId) ?? null,
       busy: (_botId, threadId) => busy.has(threadId),
       cite: async () => {},
@@ -194,6 +209,7 @@ describe("dreaming, dry", () => {
     pending = new Map();
     gh = {};
     typed = new Map();
+    waiting = false;
     reverts = new Set();
     enabled = true;
     busy = new Set();
@@ -470,7 +486,7 @@ describe("dreaming, dry", () => {
       const plan = plans()[0]!;
       expect(plan.fixes).toMatchObject({ state: "checked", through: NOW + SLEEP_IDLE_MS });
       expect(plan.fixes!.items).toEqual([
-        { op: "fix", target: `note:${sha8(OLD)}`, text: OLD, by: NEW, why: "wrong", listOnly: false, evidence: { thread: "t1", message: "m1", at: NOW - DAY, quote: "It lasts till march" }, seen: { at: NOW - DAY, sha: sha8(M1) } },
+        { op: "fix", target: `note:${sha8(OLD)}`, text: OLD, by: NEW, why: "wrong", listOnly: false, evidence: { thread: "t1", message: "m1", at: NOW - DAY, quote: "It lasts till march" }, seen: { at: NOW - DAY, sha: sha8(M1), ids: expect.stringMatching(/^[0-9a-f]{64}$/) } },
         expect.objectContaining({ text: RULE, listOnly: true, evidence: expect.objectContaining({ message: "m1" }) }),
       ]);
       expect(start().dream.latest(bot)!.dream.fixes).toEqual(plan.fixes);
@@ -872,6 +888,87 @@ describe("dreaming, dry", () => {
       expect(memoryFileRaw(bot)).toBe(raw);
     });
 
+    // a reply synced from another PC: its stamp can sit after, on or before the message it answers
+    const SYNCED = [
+      "Disregard March and keep the saved date.",
+      `Please disregard March and April. The main account's plan ends in January.${" The invoice was checked.".repeat(20)}`,
+      "Jan. is correct. Ignore Mar. and Apr.",
+      "The main account's plan ends in January",
+      "U.S. billing, rev. 2.1: both March and April were estimates. The main account's plan ends in January.",
+      "The main account's plan ends in January, not March or April.",
+    ];
+    it.each(SYNCED.flatMap((text) => [1, 0, -1500, -DAY].flatMap((delta) => (["tap", "refresh", "first pass"] as const).flatMap((when) => [true, false].map((linked) => [when, delta, linked, text] as const)))))("writes no withdrawn value from a synced reply, %s, %i ms, linked %s: %s", async (when, delta, linked, text) => {
+      const reply = said("reply", NOW - DAY + delta, text);
+      if (linked) reply.parentId = "m1";
+      if (when === "first pass") typed.set("t1", [...typed.get("t1")!, reply]);
+      await quiet();
+      if (when !== "first pass") {
+        expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)?.by).toBe(NEW);
+        typed.set("t1", [...typed.get("t1")!, reply]);
+        if (when === "refresh") {
+          sleep.onSettled(bot);
+          await quiet(SLEEP_GAP_MS);
+        }
+      }
+      for (const plan of plans()) for (const item of plan.fixes?.items ?? []) start().dream.fix(bot, plan.runId, item.target, false);
+      expect(memoryFileRaw(bot)).toBe(raw);
+      expect(history()).toBe("");
+    });
+
+    it("writes no value once a synced reply stamped before a newer correction restates the saved note", async () => {
+      await quiet();
+      const april = said("april", Date.now() + 1000, "The main account plan ends in April now, instead of March.");
+      typed.set("t1", [...typed.get("t1")!, april]);
+      generator = flags([{ note: line(OLD), quote: "ends in April now", fix: NEW.replace("March", "April") }]);
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)?.evidence.message).toBe("april");
+      typed.set("t1", [...typed.get("t1")!, { ...said("restated", april.at - 1500, "The main account's plan ends in January, not March or April."), parentId: "april" }]);
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      for (const plan of plans()) for (const item of plan.fixes?.items ?? []) start().dream.fix(bot, plan.runId, item.target, false);
+      expect(memoryFileRaw(bot)).toBe(raw);
+      expect(history()).toBe("");
+    });
+
+    it("refuses an OK while an owner send waits to reach the chat, and keeps the item out of date", async () => {
+      await quiet();
+      waiting = true;
+      expect(approve(false)).toEqual({ ok: false, error: "outdated" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+      expect(history()).toBe("");
+      waiting = false;
+      expect(approve(false)).toEqual({ ok: false, error: "outdated" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+    });
+
+    it("judges nothing and drops a waiting fix while an owner send waits", async () => {
+      waiting = true;
+      await quiet();
+      expect(generate.mock.calls.some(([prompt]) => prompt.includes("<pairs>"))).toBe(false);
+      expect(plans()[0]!.fixes!.items).toEqual([]);
+      waiting = false;
+      typed.set("t1", [said("m2", Date.now() + 1000, M1)]);
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)?.by).toBe(NEW);
+      waiting = true;
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)).toBeUndefined();
+    });
+
+    it("lists nothing the judges found once the owner wrote while they read", async () => {
+      const judged = generator;
+      generator = async (prompt, ...rest) => {
+        if (prompt.includes("<pairs>")) typed.set("t1", [...typed.get("t1")!, said("during", NOW - DAY - 1, "ok")]);
+        return judged(prompt, ...rest);
+      };
+      await quiet();
+      expect(plans()[0]!.fixes!.items).toEqual([]);
+      expect(memoryFileRaw(bot)).toBe(raw);
+    });
+
     it("takes an OK while the owner wrote nothing since, a bot's own reply after it", async () => {
       await quiet();
       // SAFETY: the check reads only id, at, role, kind and text of a row.
@@ -969,6 +1066,12 @@ describe("dreaming's wiring", () => {
   it("refreshes recall whenever Sleep changes a bot's memory, so the next question finds a moved line", () => {
     const sleepCall = index.slice(index.indexOf("const memorySleep = createMemorySleep({"), index.indexOf("const projectNotesCheck = "));
     expect(sleepCall).toMatch(/changed: \(botId\) => \{\s*broadcast\(\{ kind: "memory\.changed", botId \}\);\s*void memoryLookup\.refresh\(botId, true\);/);
+  });
+
+  it("reads every owner row the store holds and the waiting sends, so no later word goes unread", () => {
+    expect(call).toContain("stored: (threadId) => userMarks(threadId)");
+    expect(call).toContain("under: (threadId, id) => rowsUnder(threadId, id)");
+    expect(call).toContain("waiting: (botId) => hasQueuedSends(botId)");
   });
 
   it("writes no packet in dry mode", () => {

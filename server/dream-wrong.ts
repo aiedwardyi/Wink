@@ -4,10 +4,11 @@
 import { z } from "zod";
 
 import { eventDays, factsSurvive, neverMoves, type DreamJudges } from "./dream-judge.ts";
-import { cleanerSkip, sha8 } from "./memory-clean.ts";
+import { cleanerSkip, sha256, sha8 } from "./memory-clean.ts";
 import { buildRecallIndex, searchable, skipped as recallSkipped } from "./memory-lookup.ts";
 import { decisionSpan, eligibleRow, quotes, userTyping, type NoteGenerator } from "./memory-pass.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
+import type { UserMark } from "./message-db.ts";
 import { negates, noteLines, tokens, type NoteLine } from "./memory-sleep.ts";
 import { pickStamp } from "./picks.ts";
 import { redactRoomMemory } from "./redact.ts";
@@ -38,14 +39,16 @@ export type FixItem = {
   evidence: { thread: string; message: string; at: number; quote: string };
   /** set once the user OKs it: where the new line went, which copy of it, the heading above it and the old line's ending, so Undo puts the old bytes back on that line only */
   done?: FixDone;
-  /** when the judges read it: the owner's newest message then, and its text's sha8; a plan from before has none and takes no OK */
-  seen?: { at: number; sha: string };
-  /** when an OK found the owner wrote since, or its own line changed; it never takes an OK again */
+  /** when the judges read it: the owner's newest message then, its text's sha8 and ids, the set of every message the owner had typed; a plan from before has none and takes no OK */
+  seen?: { at: number; sha: string; ids?: string };
+  /** when an OK found the owner wrote or sent since, or its own line changed; it never takes an OK again */
   outdated?: number;
 };
 export type FixDone = { at: number; line: number; cr: boolean; nth: number; count: number; heading: string; id: string; undoneAt?: number };
 export type JudgeLog = { input: number; output: number; ms: number };
 type Pair = { note: NoteLine; row: OwnerRow; sentence: string; turning: number; score: number };
+export type StoredRow = UserMark & { thread: string };
+export type Newest = { thread: string; id: string; at: number };
 type Wrong = { note: string; message: string; quote: string; fix: string };
 
 const replySchema = z.object({ wrong: z.array(z.object({ note: z.string(), message: z.string(), quote: z.string(), fix: z.string() })).max(FLAGS_MAX) });
@@ -59,6 +62,8 @@ const body = (text: string) => text.replace(/^\s*[-*+]\s+/, "").replace(/\s*\(no
 const lowWords = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
 
 const squash = (text: string) => text.replace(/\s+/g, " ").trim();
+// a fix line's words in order, so two judges naming one value read alike whatever their case or marks
+const value = (line: string) => lowWords(body(line)).join(" ");
 
 /** The owner's own typing in these rows after `since`; a line that may hold a login or code is marked guarded. */
 export function ownerRows(thread: string, messages: readonly Message[], since: number): OwnerRow[] {
@@ -75,8 +80,27 @@ export function ownerRows(thread: string, messages: readonly Message[], since: n
 }
 
 /** A message the owner typed into the chat, any kind or length, skipped by the check or not: a fix judged before it is stale. */
-export function ownerTyped(message: Message): boolean {
+export function ownerTyped(message: { role: string; from?: unknown; origin?: unknown; comm?: unknown; guest?: unknown }): boolean {
   return message.role === "user" && !message.from && !message.origin && !message.comm && !message.guest;
+}
+
+/** The exact set of messages the owner typed in these rows: one it lacks changes it, whatever its time or where it came from. */
+export function ownedIds(rows: readonly StoredRow[]): string {
+  return sha256(rows.filter(ownerTyped).map((row) => `${row.thread}\0${row.id}`).sort().join("\n"));
+}
+
+/** The owner's newest message, only when every order agrees: alone at the latest time, the last of theirs the store took in, and none of theirs follows it. */
+export function newestOwned(rows: readonly StoredRow[], under: (thread: string, id: string) => readonly string[]): Newest | undefined {
+  const own = rows.filter(ownerTyped);
+  const top = Math.max(...own.map((row) => row.at));
+  const [newest, ...tied] = own.filter((row) => row.at === top);
+  if (!newest || tied.length) return undefined;
+  const others = own.filter((row) => row !== newest);
+  // a synced row stamped earlier still came in later, or names the message it follows
+  if (others.some((row) => row.row > newest.row || (row.thread === newest.thread && [row.parentId, row.sentAfterId, row.replyToId].includes(newest.id)))) return undefined;
+  const below = new Set(under(newest.thread, newest.id));
+  if (others.some((row) => row.thread === newest.thread && below.has(row.id))) return undefined;
+  return { thread: newest.thread, id: newest.id, at: newest.at };
 }
 
 /** The Auto Notes receipts in these rows. */
@@ -160,8 +184,9 @@ export async function wrongPairs(raw: string, notes: ReadonlyMap<number, NoteLin
 }
 
 const clean = (text: string) => text.replace(PROMPT_TAGS, " ");
+const ownerLine = (ref: string, row: OwnerRow) => `${ref} (${pickStamp(row.at).slice(0, 16)}): ${row.text}`;
 
-/** Up to WRONG_PAIRS_MAX pairs inside WRONG_PROMPT_MAX bytes; refs names each sent pair by its M ref. */
+/** Up to WRONG_PAIRS_MAX pairs inside WRONG_PROMPT_MAX bytes; refs names each sent pair by its M ref, only when the prompt holds its owner line as typed. */
 export function wrongPrompt(pairs: readonly Pair[], today: string) {
   const head = [
     `Today is ${today}. You check a bot's notes against lines its owner typed later. Only the owner's lines are evidence.`,
@@ -177,15 +202,19 @@ export function wrongPrompt(pairs: readonly Pair[], today: string) {
   let size = Buffer.byteLength(head.join("\n")) + 20;
   for (const pair of pairs) {
     if (refs.size >= WRONG_PAIRS_MAX) break;
+    // a line the prompt would have to change reaches no judge
+    if (clean(pair.row.text) !== pair.row.text) continue;
     const ref = `M${refs.size + 1}`;
-    const text = `PAIR\nL${pair.note.at + 1} (written ${noted(pair.note, today) ?? "unknown"}): ${clean(pair.note.text)}\n${ref} (${pickStamp(pair.row.at).slice(0, 16)}): ${clean(pair.row.text)}\n`;
+    const text = `PAIR\nL${pair.note.at + 1} (written ${noted(pair.note, today) ?? "unknown"}): ${clean(pair.note.text)}\n${ownerLine(ref, pair.row)}\n`;
     const bytes = Buffer.byteLength(text) + 1;
     if (size + bytes > WRONG_PROMPT_MAX) continue;
     size += bytes;
     body.push(text);
     refs.set(ref, pair);
   }
-  return { prompt: [...head, ...body, "</pairs>"].join("\n"), refs };
+  const prompt = [...head, ...body, "</pairs>"].join("\n");
+  for (const [ref, pair] of refs) if (!prompt.includes(`\n${ownerLine(ref, pair.row)}\n`)) refs.delete(ref);
+  return { prompt, refs };
 }
 
 /** The judge's flags; null when the reply is not the JSON asked for. */
@@ -231,8 +260,8 @@ function typedSpan(text: string, quote: string): string | null {
 }
 
 export type Rejected = { note: number; message: string; why: string };
-/** seen: the owner's newest message when the judges read the pairs. */
-export type WrongContext = { all: readonly string[]; today: string; written(note: NoteLine): number | undefined; seen: number };
+/** newest: the owner's newest message when the judges read the pairs; ids: every message the owner had typed then. */
+export type WrongContext = { all: readonly string[]; today: string; written(note: NoteLine): number | undefined; newest: Newest; ids: string };
 
 /** Flags both judges agree on that pass the code gates, as items; nothing is applied. */
 export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: ReadonlyMap<string, Pair>, context: WrongContext) {
@@ -279,18 +308,23 @@ export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: Readon
       no("row is about another day's event");
       continue;
     }
-    const by = [one.fix, other.fix].map((fix) => fixLine(note.text, fix)).find((fix) => body(fix) && fix !== note.text && factsSurvive(fix, [note.text, row.text]) && redactRoomMemory(fix) === fix);
-    if (!by || redactRoomMemory(note.text) !== note.text) {
+    const by = fixLine(note.text, one.fix);
+    // both judges name the one new line, not just a pair the first that passes is taken from
+    if (value(by) !== value(fixLine(note.text, other.fix))) {
+      no("judges fix different values");
+      continue;
+    }
+    if (!body(by) || by === note.text || !factsSurvive(by, [note.text, row.text]) || redactRoomMemory(by) !== by || redactRoomMemory(note.text) !== note.text) {
       no("fix not grounded in the old line and the quote");
       continue;
     }
     const item: FixItem = {
       op: "fix", target, text: note.text, by, why: "wrong", listOnly: handOnly(note, context.all),
       evidence: { thread: row.thread, message: row.id, at: row.at, quote },
-      seen: { at: context.seen, sha: sha8(row.text) },
+      seen: { at: context.newest.at, sha: sha8(row.text), ids: context.ids },
     };
     // only the owner's newest message, read whole, may propose: nothing after it needs reading
-    if (row.at !== context.seen || !row.whole || row.guarded) {
+    if (row.thread !== context.newest.thread || row.id !== context.newest.id || !row.whole || row.guarded) {
       no("row is not the owner's newest message, read whole");
       continue;
     }
@@ -314,16 +348,16 @@ export function writtenAt(saved: readonly SavedNotes[]) {
 
 export type WrongCheck = { state: "checked" | "no-model"; items: FixItem[]; pairs: number; bytes: number; logs: Partial<Record<keyof DreamJudges, JudgeLog>>; reason?: string };
 
-/** One pass: pair the owner's newest message, when it is the only one at that time and read whole, ask both judges once, keep what both agree on and the gates pass. seen: when the owner last typed anything. */
-export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]; seen: number; saved: readonly SavedNotes[]; judges: DreamJudges; today: string; signal: AbortSignal; now(): number }): Promise<WrongCheck> {
+/** One pass: pair the owner's newest message when it is read whole, ask both judges once, keep what both agree on and the gates pass. newest: that message, none when its order is unclear; ids: every message the owner had typed. */
+export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]; newest: Newest | undefined; ids: string; saved: readonly SavedNotes[]; judges: DreamJudges; today: string; signal: AbortSignal; now(): number }): Promise<WrongCheck> {
   const logs: WrongCheck["logs"] = {};
   const notes = fixTargets(input.raw);
-  const newest = input.rows.filter((row) => row.at === input.seen);
-  const rows = newest.length === 1 && newest[0]!.whole ? newest : [];
+  const { newest } = input;
+  const rows = newest ? input.rows.filter((row) => row.thread === newest.thread && row.id === newest.id && row.whole) : [];
   const { prompt, refs } = wrongPrompt(await wrongPairs(input.raw, notes, rows, input.signal), input.today);
   const none: FixItem[] = [];
   const base = { items: none, pairs: refs.size, bytes: refs.size ? Buffer.byteLength(prompt) : 0, logs };
-  if (!refs.size) return { state: "checked", ...base };
+  if (!refs.size || !newest) return { state: "checked", ...base };
   const { claude, gemini } = input.judges;
   if (!claude || !gemini) return { state: "no-model", ...base, reason: `${[!claude && "claude", !gemini && "gemini"].filter(Boolean).join(" and ")} judge unavailable` };
   const ask = async (name: keyof DreamJudges, generate: NoteGenerator) => {
@@ -346,7 +380,7 @@ export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]
     return { state: "no-model", ...base, reason: `${failed === a ? "claude" : "gemini"} judge ${failed.status === "rejected" ? "failed" : "reply unreadable"}` };
   }
   const all = input.raw.split("\n").map(plain);
-  return { state: "checked", ...base, items: planWrong(a.value, b.value, refs, { all, today: input.today, written: writtenAt(input.saved), seen: input.seen }).items };
+  return { state: "checked", ...base, items: planWrong(a.value, b.value, refs, { all, today: input.today, written: writtenAt(input.saved), newest, ids: input.ids }).items };
 }
 
 // the lines that read as the fix, and the heading above one

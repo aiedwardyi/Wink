@@ -522,7 +522,6 @@ export function notesSinceOn(handle: DatabaseSync, threadId: string, at: number)
   })();
 }
 
-/** A thread's options rows, oldest first, from their index. */
 /** The user's rows, any kind, and one tool's activity rows in a chat from `at` on, oldest first. */
 export function typedSince(threadId: string, at: number, tool: string): Message[] {
   // SAFETY: This projection selects the stored message JSON.
@@ -530,6 +529,23 @@ export function typedSince(threadId: string, at: number, tool: string): Message[
   return rows.map(rowToMessage);
 }
 
+/** A user row as the store holds it: row is its rowid, so one stored later sorts after whatever its time. */
+export type UserMark = { row: number; id: string; at: number; role: string; parentId?: string | null; sentAfterId?: string | null; replyToId?: string | null; from?: unknown; origin?: unknown; comm?: unknown; guest?: unknown };
+
+/** Every user row in a chat, whatever its time, with what says who typed it and what it follows. */
+export function userMarks(threadId: string): UserMark[] {
+  // SAFETY: This projection selects SQLite's rowid, three columns and six JSON fields as scalars.
+  return db().prepare("SELECT rowid AS row, id, at, role, json_extract(json, '$.parentId') AS parentId, json_extract(json, '$.sentAfterId') AS sentAfterId, json_extract(json, '$.replyToId') AS replyToId, json_extract(json, '$.from') AS \"from\", json_extract(json, '$.origin') AS origin, json_extract(json, '$.comm') AS comm, json_extract(json, '$.guest') AS guest FROM messages WHERE thread_id = ? AND role = 'user'").all(threadId) as UserMark[];
+}
+
+/** The ids of every row under this one by parent links. */
+export function rowsUnder(threadId: string, id: string): string[] {
+  // SAFETY: This projection selects message ids, walked through the parent index.
+  const rows = db().prepare("WITH RECURSIVE under(id) AS (SELECT id FROM messages WHERE thread_id = ?1 AND json_extract(json, '$.parentId') = ?2 UNION SELECT messages.id FROM messages JOIN under ON messages.thread_id = ?1 AND json_extract(messages.json, '$.parentId') = under.id) SELECT id FROM under").all(threadId, id) as Array<{ id: string }>;
+  return rows.map((row) => row.id);
+}
+
+/** A thread's options rows, oldest first, from their index. */
 export function optionRows(threadId: string): Message[] {
   // SAFETY: This projection selects the stored message JSON.
   const rows = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'options' ORDER BY rowid").all(threadId) as Array<{ json: string }>;

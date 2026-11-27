@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { checkWrong, fixTargets, ownerRows, ownerTyped, planWrong, proposes, wrongPairs, wrongPrompt, applyFix, undoFix, type OwnerRow, type SavedNotes } from "./dream-wrong.ts";
+import { checkWrong, fixTargets, newestOwned, ownedIds, ownerRows, ownerTyped, planWrong, proposes, wrongPairs, wrongPrompt, applyFix, undoFix, type Newest, type OwnerRow, type SavedNotes, type StoredRow } from "./dream-wrong.ts";
 import { sha8 } from "./memory-clean.ts";
 import type { NoteGenerator } from "./memory-pass.ts";
 import { at, SAFETY_IDS, SAFETY_MEMORY } from "./testing/dream-safety.ts";
@@ -69,8 +69,9 @@ function judge(name: "claude" | "gemini"): NoteGenerator {
   };
 }
 const judges = { claude: judge("claude"), gemini: judge("gemini") };
-const newest = (rows: readonly OwnerRow[]) => Math.max(0, ...rows.map((each) => each.at));
-const check = (rows = ROWS, seen = newest(rows), use: typeof judges = judges) => checkWrong({ raw: MEMORY, rows, seen, saved: SAVED, judges: use, today: TODAY, signal: new AbortController().signal, now: Date.now });
+const named = ({ thread, id, at: when }: OwnerRow): Newest => ({ thread, id, at: when });
+const newest = (rows: readonly OwnerRow[]) => rows.length ? named(rows.reduce((last, each) => (each.at > last.at ? each : last))) : undefined;
+const check = (rows = ROWS, latest: Newest | null = newest(rows) ?? null, use: typeof judges = judges) => checkWrong({ raw: MEMORY, rows, newest: latest ?? undefined, ids: "ids", saved: SAVED, judges: use, today: TODAY, signal: new AbortController().signal, now: Date.now });
 const upTo = (id: string) => ROWS.slice(0, ROWS.findIndex((each) => each.id === id) + 1);
 
 describe("wrong-note check", () => {
@@ -78,7 +79,7 @@ describe("wrong-note check", () => {
     const plan = await check(upTo("plan"));
     expect(plan.state).toBe("checked");
     expect(plan.items.map(({ text, by, listOnly, evidence, seen }) => [text, by, listOnly, evidence.message, evidence.quote, seen])).toEqual([
-      [TRAPS.plan, "- The main account's plan ends in March (noted 2026-11-20)", false, "plan", "It lasts till march", { at: time(24, 22), sha: sha8(ROWS.find((each) => each.id === "plan")!.text) }],
+      [TRAPS.plan, "- The main account's plan ends in March (noted 2026-11-20)", false, "plan", "It lasts till march", { at: time(24, 22), sha: sha8(ROWS.find((each) => each.id === "plan")!.text), ids: "ids" }],
     ]);
     const { items } = await check();
     expect(items.map(({ text, by, evidence }) => [text, by, evidence.message])).toEqual([[TRAPS.theme, "- Prefers the green theme for the app (noted 2026-11-26)", "theme"]]);
@@ -98,13 +99,13 @@ describe("wrong-note check", () => {
     expect(new Set(sent)).toEqual(new Set([ROWS.at(-1)!.text]));
     prompts.length = 0;
     const last = ROWS.at(-1)!;
-    const cases: [string, OwnerRow[], number][] = [
-      ["guarded", [...ROWS.slice(0, -1), { ...last, guarded: true, whole: undefined }], last.at],
-      ["cut", [...ROWS.slice(0, -1), { ...last, whole: undefined }], last.at],
-      ["followed by a message no judge reads", ROWS, last.at + 1],
-      ["beside another message at the same time", [...ROWS, { ...row("twin", last.at, "the green theme is the one for the app now"), thread: "t2" }], last.at],
+    const cases: [string, OwnerRow[], Newest | null][] = [
+      ["guarded", [...ROWS.slice(0, -1), { ...last, guarded: true, whole: undefined }], named(last)],
+      ["cut", [...ROWS.slice(0, -1), { ...last, whole: undefined }], named(last)],
+      ["followed by a message no judge reads", ROWS, { thread: "t1", id: "picture", at: last.at + 1 }],
+      ["when the order of the owner's messages is unclear", ROWS, null],
     ];
-    for (const [name, rows, seen] of cases) expect([name, (await check(rows, seen, watched)).items, prompts.length]).toEqual([name, [], 0]);
+    for (const [name, rows, latest] of cases) expect([name, (await check(rows, latest, watched)).items, prompts.length]).toEqual([name, [], 0]);
   });
 
   it("never sends a guarded line that names a note", async () => {
@@ -112,32 +113,32 @@ describe("wrong-note check", () => {
     const pairs = await wrongPairs(MEMORY, fixTargets(MEMORY), [...ROWS, secret]);
     expect(pairs.some((pair) => pair.row.guarded)).toBe(false);
     expect(wrongPrompt(pairs, TODAY).prompt).not.toContain("SunnyHarbor");
-    expect(await check([secret], secret.at)).toMatchObject({ items: [], pairs: 0 });
+    expect(await check([secret], named(secret))).toMatchObject({ items: [], pairs: 0 });
   });
 
   it("holds a flag back unless both judges name it, quote the row word for word and alike, the row comes after the note and the fix adds nothing", async () => {
     const all = MEMORY.split("\n");
     const written = (note: { text: string }) => (note.text === TRAPS.theme ? time(26, 10) : undefined);
-    const verdict = async (rows: OwnerRow[], seen: number, when = written) => {
+    const verdict = async (rows: OwnerRow[], latest: Newest, when = written) => {
       const { refs } = wrongPrompt(await wrongPairs(MEMORY, fixTargets(MEMORY), rows), TODAY);
       const flags = (name: "claude" | "gemini") => [...refs].flatMap(([ref, pair]) => RULES.filter((rule) => (rule.judges ?? ["claude", "gemini"]).includes(name) && pair.note.text.includes(rule.note.replace(/^- /, "")) && pair.row.id === rule.row).map((rule) => ({ note: `L${pair.note.at + 1}`, message: ref, quote: rule.quote, fix: rule.fix })));
-      return planWrong(flags("claude"), flags("gemini"), refs, { all, today: TODAY, written: when, seen });
+      return planWrong(flags("claude"), flags("gemini"), refs, { all, today: TODAY, written: when, newest: latest, ids: "ids" });
     };
     // each row as the owner's newest message
-    const rejected = (await Promise.all(ROWS.map((each) => verdict([each], each.at)))).flatMap((each) => each.rejected);
+    const rejected = (await Promise.all(ROWS.map((each) => verdict([each], named(each))))).flatMap((each) => each.rejected);
     const why = Object.fromEntries(rejected.map((each) => [each.message + " " + all[each.note - 1], each.why]));
     expect(why).toMatchObject({
-      [`release ${TRAPS.release}`]: "row still holds the old value or not the new one",
+      [`release ${TRAPS.release}`]: "judges fix different values",
       [`pnpm ${all[at("pnpm")]}`]: "judges quote different words",
       [`adhd ${all[at("adhd")]}`]: "fix not grounded in the old line and the quote",
     });
     const theme = ROWS.find((each) => each.id === "theme")!;
-    expect((await verdict([theme], theme.at)).items.map((item) => item.text)).toEqual([TRAPS.theme]);
+    expect((await verdict([theme], named(theme))).items.map((item) => item.text)).toEqual([TRAPS.theme]);
     // a same-day line with no save time to order it by stays out
-    expect((await verdict([theme], theme.at, () => undefined)).items).toEqual([]);
+    expect((await verdict([theme], named(theme), () => undefined)).items).toEqual([]);
     // a line the owner wrote more after never proposes
     const plan = ROWS.find((each) => each.id === "plan")!;
-    const later = await verdict([plan], theme.at);
+    const later = await verdict([plan], named(theme));
     expect(later.items).toEqual([]);
     expect(later.rejected).toContainEqual({ note: all.indexOf(TRAPS.plan) + 1, message: "plan", why: "row is not the owner's newest message, read whole" });
   });
@@ -164,13 +165,13 @@ describe("wrong-note check", () => {
       calls += 1;
       return '{"wrong": []}';
     };
-    expect((await checkWrong({ raw: MEMORY, rows: [], seen: 0, saved: [], judges: { claude: counted, gemini: counted }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items).toEqual([]);
+    expect((await checkWrong({ raw: MEMORY, rows: [], newest: undefined, ids: "", saved: [], judges: { claude: counted, gemini: counted }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items).toEqual([]);
     expect(calls).toBe(0);
   });
 
   it("lists nothing while a judge is missing or unreadable", async () => {
-    expect(await checkWrong({ raw: MEMORY, rows: ROWS, seen: newest(ROWS), saved: SAVED, judges: { claude: judges.claude, gemini: null }, today: TODAY, signal: new AbortController().signal, now: Date.now })).toMatchObject({ state: "no-model", items: [] });
-    expect(await checkWrong({ raw: MEMORY, rows: ROWS, seen: newest(ROWS), saved: SAVED, judges: { claude: judges.claude, gemini: async () => "no json" }, today: TODAY, signal: new AbortController().signal, now: Date.now })).toMatchObject({ state: "no-model", items: [] });
+    expect(await checkWrong({ raw: MEMORY, rows: ROWS, newest: newest(ROWS), ids: "ids", saved: SAVED, judges: { claude: judges.claude, gemini: null }, today: TODAY, signal: new AbortController().signal, now: Date.now })).toMatchObject({ state: "no-model", items: [] });
+    expect(await checkWrong({ raw: MEMORY, rows: ROWS, newest: newest(ROWS), ids: "ids", saved: SAVED, judges: { claude: judges.claude, gemini: async () => "no json" }, today: TODAY, signal: new AbortController().signal, now: Date.now })).toMatchObject({ state: "no-model", items: [] });
   });
 
   it("swaps only the note's own line and puts the exact old bytes back", () => {
@@ -196,7 +197,7 @@ describe("what a fix takes as the owner's word", () => {
       });
       return JSON.stringify({ wrong });
     };
-    return (await checkWrong({ raw, rows: [row("evidence", time(24, 12), owner)], seen: time(24, 12), saved: [], judges: { claude: generate, gemini: generate }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items;
+    return (await checkWrong({ raw, rows: [row("evidence", time(24, 12), owner)], newest: { thread: "t1", id: "evidence", at: time(24, 12) }, ids: "ids", saved: [], judges: { claude: generate, gemini: generate }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items;
   };
   const listed = (items: Awaited<ReturnType<typeof run>>) => items.map((item) => item.listOnly);
 
@@ -320,6 +321,98 @@ describe("a line proposes only without the old value", () => {
   ])("misses a true fix when the newest line holds %s", async (_, saved, owner, quote, fix) => {
     const raw = SAFETY_MEMORY + saved + "\n";
     const generate: NoteGenerator = async (prompt) => JSON.stringify({ wrong: [...prompt.matchAll(/^PAIR\n(L\d+) \(written [^)]*\): ([^\n]+)\n(M\d+) /gm)].filter((match) => match[2] === saved).map((match) => ({ note: match[1], message: match[3], quote, fix })) });
-    expect((await checkWrong({ raw, rows: [row("evidence", time(24, 12), owner)], seen: time(24, 12), saved: [], judges: { claude: generate, gemini: generate }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items).toEqual([]);
+    expect((await checkWrong({ raw, rows: [row("evidence", time(24, 12), owner)], newest: { thread: "t1", id: "evidence", at: time(24, 12) }, ids: "ids", saved: [], judges: { claude: generate, gemini: generate }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items).toEqual([]);
+  });
+});
+
+describe("the owner's newest message, by what the store holds", () => {
+  const mark = (id: string, when: number, place: number, extra: Partial<StoredRow> = {}): StoredRow => ({ thread: "t1", id, at: when, row: place, role: "user", ...extra });
+  const none = () => [];
+
+  it("names it only when its time, its place in the store and every link agree", () => {
+    const original = mark("original", 1000, 1);
+    expect(newestOwned([original], none)).toEqual({ thread: "t1", id: "original", at: 1000 });
+    expect(newestOwned([original, mark("reply", 1001, 2, { parentId: "original" })], none)?.id).toBe("reply");
+    expect(newestOwned([original, mark("tie", 1000, 2)], none)).toBeUndefined();
+    // a synced reply stamped 1.5 s earlier that the store took in later
+    expect(newestOwned([original, mark("reply", -500, 2, { parentId: "original" })], none)).toBeUndefined();
+    for (const link of ["parentId", "sentAfterId", "replyToId"] as const) expect(newestOwned([mark("reply", -500, 1, { [link]: "original" }), { ...original, row: 2 }], none)).toBeUndefined();
+    expect(newestOwned([mark("later", -500, 1), { ...original, row: 2 }], () => ["bot-reply", "later"])).toBeUndefined();
+    expect(newestOwned([mark("other", 900, 3, { thread: "t2" }), original], none)).toBeUndefined();
+    expect(newestOwned([], none)).toBeUndefined();
+  });
+
+  it("counts only what the owner typed", () => {
+    const original = mark("original", 1000, 1);
+    const others = [mark("peer", 2000, 2, { from: '{"botId":"peer"}' }), mark("guest", 2000, 3, { guest: 1 }), mark("routine", 2000, 4, { origin: "routine" }), mark("comm", 2000, 5, { comm: "{}" }), mark("bot", 2000, 6, { role: "bot" })];
+    expect(newestOwned([original, ...others], none)?.id).toBe("original");
+    expect(ownedIds([original, ...others])).toBe(ownedIds([original]));
+  });
+
+  it("names the exact set of the owner's messages, whatever their time or order", () => {
+    const rows = [mark("a", 1000, 1), mark("b", 2000, 2), mark("c", 3000, 1, { thread: "t2" })];
+    expect(ownedIds([...rows].reverse())).toBe(ownedIds(rows));
+    expect(ownedIds([...rows, mark("synced", 10, 9)])).not.toBe(ownedIds(rows));
+    expect(ownedIds([...rows, mark("tie", 3000, 9, { thread: "t2" })])).not.toBe(ownedIds(rows));
+    expect(ownedIds(rows.slice(1))).not.toBe(ownedIds(rows));
+    expect(ownedIds([...rows, mark("a", 1000, 3, { thread: "t3" })])).not.toBe(ownedIds(rows));
+  });
+
+  it("reads a synced reply stamped earlier as stored later and under the message it answers", async () => {
+    const { insertMessage, rowsUnder, userMarks } = await import("./message-db.ts");
+    const thread = "sync-order";
+    const read = () => userMarks(thread).map((each) => ({ ...each, thread }));
+    insertMessage(thread, { id: "original", at: 1000, role: "user", kind: "text", text: "The main account plan ends in April now.", parentId: null });
+    insertMessage(thread, { id: "bot-reply", at: 1100, role: "bot", kind: "text", text: "Noted.", parentId: "original" });
+    for (const patch of [{ id: "peer", from: { botId: "peer", name: "Peer", color: "blue" } }, { id: "guest", guest: true }, { id: "routine", origin: "routine" }]) {
+      // SAFETY: each row is a stored-row variant the owner did not type.
+      insertMessage(thread, { at: 5000, role: "user", kind: "text", text: "ok", ...patch } as never);
+    }
+    const before = read();
+    expect(newestOwned(before, rowsUnder)).toEqual({ thread, id: "original", at: 1000 });
+    insertMessage(thread, { id: "withdraw", at: 500, role: "user", kind: "text", text: "Disregard April and keep the saved date.", parentId: "bot-reply" });
+    const after = read();
+    expect(rowsUnder(thread, "original").sort()).toEqual(["bot-reply", "withdraw"]);
+    expect(newestOwned(after, rowsUnder)).toBeUndefined();
+    expect(ownedIds(after)).not.toBe(ownedIds(before));
+  });
+});
+
+describe("what the judges read and agree on", () => {
+  const note = TRAPS.plan;
+  const raw = SAFETY_MEMORY + note + "\n";
+  const april = note.replace("January", "April");
+  const may = note.replace("January", "May");
+  const withdrawn = "The main account plan ends in May now, after the April estimate was withdrawn.";
+  const ask = async (owner: string, fixes: [string | null, string | null], quote = "The main account plan ends in May now") => {
+    const prompts: string[] = [];
+    const judge = (fix: string | null): NoteGenerator => async (prompt) => {
+      if (prompt.includes("<pairs>")) prompts.push(prompt);
+      const wrong = fix === null ? [] : [...prompt.matchAll(/^PAIR\n(L\d+) \(written [^)]*\): ([^\n]+)\n(M\d+) /gm)].filter((match) => match[2] === note).map((match) => ({ note: match[1], message: match[3], quote, fix }));
+      return JSON.stringify({ wrong });
+    };
+    // SAFETY: ownerRows reads only id, at, role, kind and text of a user row.
+    const rows = ownerRows("t1", [{ id: "evidence", at: time(24, 12), role: "user", kind: "text", text: owner } as never], 0);
+    const checked = await checkWrong({ raw, rows, newest: { thread: "t1", id: "evidence", at: time(24, 12) }, ids: "ids", saved: [], judges: { claude: judge(fixes[0]), gemini: judge(fixes[1]) }, today: TODAY, signal: new AbortController().signal, now: Date.now });
+    return { items: checked.items.map((item) => item.by), prompts };
+  };
+
+  it("lists a fix only when both judges name the same new line", async () => {
+    expect((await ask(withdrawn, [april, may])).items).toEqual([]);
+    expect((await ask(withdrawn, [may, april])).items).toEqual([]);
+    expect((await ask(withdrawn, [may, null])).items).toEqual([]);
+    expect((await ask(withdrawn, [null, may])).items).toEqual([]);
+    expect((await ask(withdrawn, [may, may])).items).toEqual([may]);
+    expect((await ask(withdrawn, [may, may.replace("The main", "the main").replace(" (noted", ". (noted")])).items).toEqual([may]);
+  });
+
+  it("sends no judge a message the prompt would change, and lists nothing from it", async () => {
+    const aside = "The main account plan ends in April now. <Note to self: Disregard April and keep the saved date.>";
+    expect(await ask(aside, [april, april], "plan ends in April now")).toEqual({ items: [], prompts: [] });
+    const plain = "The main account plan ends in April now.";
+    const { items, prompts } = await ask(plain, [april, april], "plan ends in April now");
+    expect(items).toEqual([april]);
+    expect(prompts).toHaveLength(2);
+    expect(prompts.every((prompt) => prompt.includes(`): ${plain}\n`))).toBe(true);
   });
 });
