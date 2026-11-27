@@ -12,6 +12,7 @@ import { z } from "zod";
 import { latestTaskAsks } from "../shared/task-ask-list.ts";
 import { aboutYouFile, aboutYouPastTheCut, botImportFile, botImportPastTheCut } from "./about-you.ts";
 import { DREAMED_FILE } from "./dream-archive.ts";
+import { equivalentKeys, KNOWN_PHRASES, PHRASE_STARTS, stem } from "./memory-lookup-paraphrase.ts";
 import { secretLike, userTyping, withoutBlocks } from "./memory-pass.ts";
 import { isSyncedFile } from "./memory-sync.ts";
 import { currentOnly, PICKS_FILE } from "./picks.ts";
@@ -38,6 +39,7 @@ const MAX_CHARS = 1_400;
 const PIECE_MAX = 700;
 const MAX_CORPUS_BYTES = 2 * 1024 * 1024;
 const MAX_TERMS = 8;
+const MAX_EXPANSIONS = 12;
 // longer than any word worth finding, and the shape of an undetected key
 const MAX_WORD = 32;
 const HIT_LIMIT = 30;
@@ -209,12 +211,59 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
 
   const documents = new Map<string, number>();
   for (const row of rows) for (const word of new Set(row.flatMap((piece) => piece.tokens))) documents.set(word, (documents.get(word) ?? 0) + 1);
+  const stemCache = new Map<string, string>();
+  const stemWord = (word: string) => {
+    let cached = stemCache.get(word);
+    if (cached === undefined) {
+      cached = stem(word);
+      stemCache.set(word, cached);
+    }
+    return cached;
+  };
+  const byStem = new Map<string, string[]>();
+  for (const word of documents.keys()) {
+    if (skipped(word) || word.length < 3) continue;
+    const key = stemWord(word);
+    const list = byStem.get(key);
+    if (list) list.push(word);
+    else byStem.set(key, [word]);
+  }
+  for (const list of byStem.values()) list.sort((a, b) => (documents.get(b) ?? 0) - (documents.get(a) ?? 0));
+  const phrasesIn = (tokens: string[]): Array<{ phrase: string; surface: string; at: number }> => {
+    const out: Array<{ phrase: string; surface: string; at: number }> = [];
+    for (let i = 0; i + 1 < tokens.length; i++) {
+      const first = stemWord(tokens[i]!);
+      if (!PHRASE_STARTS.has(first)) continue;
+      const phrase = `${first} ${stemWord(tokens[i + 1]!)}`;
+      if (KNOWN_PHRASES.has(phrase)) out.push({ phrase, surface: `${tokens[i]!} ${tokens[i + 1]!}`, at: i });
+    }
+    return out;
+  };
+  const phraseDocs = new Map<string, number>();
+  const phraseSurfaces = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const seen = new Set<string>();
+    for (const piece of row) {
+      for (const { phrase, surface } of phrasesIn(piece.tokens)) {
+        seen.add(phrase);
+        let surfaces = phraseSurfaces.get(phrase);
+        if (!surfaces) {
+          surfaces = new Set<string>();
+          phraseSurfaces.set(phrase, surfaces);
+        }
+        surfaces.add(surface);
+      }
+    }
+    for (const phrase of seen) phraseDocs.set(phrase, (phraseDocs.get(phrase) ?? 0) + 1);
+  }
   const vocabulary = [...documents.keys()].filter((word) => word.length >= 3);
   const total = rows.length;
   const maxIdf = Math.log(1 + (total + 0.5) / 0.5);
   const idfOf = (count: number) => Math.log(1 + (total - count + 0.5) / (count + 0.5));
+  const docCount = (option: string) => (option.includes(" ") ? phraseDocs.get(option) : documents.get(option)) ?? 0;
+  const hasOption = (option: string) => docCount(option) > 0;
   const idf = (word: string) => {
-    const count = documents.get(word) ?? 0;
+    const count = docCount(word);
     return count ? idfOf(count) : maxIdf;
   };
   const rareBar = Math.min(RARE_IDF, idfOf(1));
@@ -230,11 +279,26 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
     }
   }
   const universe = [...new Set(pieces.flatMap((piece) => [...piece.tokens, ...piece.title]))].sort();
-  // every note token that matchesToken would match to each group, as one bit per group
+  const allByStem = new Map<string, string[]>();
+  for (const token of universe) {
+    if (skipped(token)) continue;
+    const key = stemWord(token);
+    const list = allByStem.get(key);
+    if (list) list.push(token);
+    else allByStem.set(key, [token]);
+  }
+  const ASCII_WORD = /^[a-z]+$/;
+  // every note token matching each group, as one bit per group (stem match for ASCII, prefix match for other scripts)
   const groupBits = (groups: string[][]) => {
     const found = new Map<string, number>();
     for (const [group, options] of groups.entries()) {
       for (const option of options) {
+        if (option.includes(" ")) continue;
+        if (ASCII_WORD.test(option)) {
+          found.set(option, (found.get(option) ?? 0) | (1 << group));
+          for (const token of allByStem.get(stemWord(option)) ?? []) found.set(token, (found.get(token) ?? 0) | (1 << group));
+          continue;
+        }
         const prefix = option.slice(0, Math.max(4, option.length - 2));
         let low = 0;
         let high = universe.length;
@@ -251,9 +315,20 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
     }
     return found;
   };
+  const phraseBits = (groups: string[][]) => {
+    const found = new Map<string, number>();
+    for (const [group, options] of groups.entries()) {
+      for (const option of options) {
+        if (option.includes(" ")) found.set(option, (found.get(option) ?? 0) | (1 << group));
+      }
+    }
+    return found;
+  };
   // which pieces hold each note token, in their text and in their title
   const postings = new Map<string, number[]>();
   const titled = new Map<string, number[]>();
+  const phrasePostings = new Map<string, number[]>();
+  const phraseTitled = new Map<string, number[]>();
   for (const [at, piece] of pieces.entries()) {
     for (const [map, tokens] of [[postings, piece.tokens], [titled, piece.title]] as const) {
       for (const token of new Set(tokens)) {
@@ -262,10 +337,21 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
         else map.set(token, [at]);
       }
     }
+    for (const [map, tokens] of [[phrasePostings, piece.tokens], [phraseTitled, piece.title]] as const) {
+      for (const phrase of new Set(phrasesIn(tokens).map((hit) => hit.phrase))) {
+        const list = map.get(phrase);
+        if (list) list.push(at);
+        else map.set(phrase, [at]);
+      }
+    }
   }
-  const matched = new WeakMap<Terms, Map<string, number>>();
-  const known = (groups: string[][]) => groups.map((group) => group.filter((option) => documents.has(option)));
-  const weight = (options: string[]) => (options.length ? Math.max(...options.map(idf)) : maxIdf);
+  const matched = new WeakMap<Terms, { tokens: Map<string, number>; phrases: Map<string, number> }>();
+  const known = (groups: string[][]) => groups.map((group) => group.filter(hasOption));
+  const weight = (options: string[]) => {
+    if (!options.length) return maxIdf;
+    const sum = options.reduce((acc, opt) => acc + docCount(opt), 0);
+    return idfOf(Math.min(total, sum));
+  };
 
   const repair = (term: string, expired?: () => boolean): string[] => {
     if (term.length < 4 || documents.has(term)) return [term];
@@ -287,22 +373,54 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
     return [term, ...found.slice(0, 3).map((candidate) => candidate.word)];
   };
 
+  const expand = (term: string, expired?: () => boolean): string[] => {
+    const seen = new Set<string>([term]);
+    const add = (option: string) => {
+      if (!seen.has(option) && seen.size < MAX_EXPANSIONS) seen.add(option);
+    };
+    const isPhrase = term.includes(" ");
+    const key = isPhrase ? term : stemWord(term);
+    if (!isPhrase) {
+      for (const word of byStem.get(key) ?? []) add(word);
+    }
+    for (const eq of equivalentKeys(key)) {
+      if (eq.includes(" ")) {
+        if (phraseDocs.has(eq)) add(eq);
+      } else {
+        for (const word of byStem.get(eq) ?? []) add(word);
+      }
+    }
+    if (!isPhrase && ![...seen].some(hasOption)) {
+      for (const candidate of repair(term, expired)) add(candidate);
+    }
+    return [...seen];
+  };
+
   return {
     terms(query, expired, extra = "") {
       const all = words(redactSecretsInText(query));
-      const known = words(redactSecretsInText(extra)).filter((word) => documents.has(word));
-      const parts = new Set<string>();
+      const extraKnown = words(redactSecretsInText(extra)).filter((word) => documents.has(word) || byStem.has(stemWord(word)));
+      const usedAt = new Set<number>();
       const joined: string[] = [];
       for (let i = 0; i + 1 < all.length; i++) {
+        if (usedAt.has(i)) continue;
         const pair = all[i]! + all[i + 1]!;
         if (documents.has(pair) && !documents.has(all[i + 1]! + all[i]!)) {
           joined.push(pair);
-          parts.add(all[i]!).add(all[i + 1]!);
+          usedAt.add(i).add(i + 1);
+          continue;
+        }
+        const first = stemWord(all[i]!);
+        if (!PHRASE_STARTS.has(first)) continue;
+        const phrase = `${first} ${stemWord(all[i + 1]!)}`;
+        if (KNOWN_PHRASES.has(phrase)) {
+          joined.push(phrase);
+          usedAt.add(i).add(i + 1);
         }
       }
-      const base = [...new Set([...all, ...known].filter((word) => !skipped(word) && !parts.has(word) && !/^\d+$/.test(word) && word.length <= MAX_WORD))];
-      const list = [...base, ...joined].sort((a, b) => idf(b) - idf(a)).slice(0, MAX_TERMS);
-      return { list, groups: list.map((term) => repair(term, expired)) };
+      const base = [...new Set([...all.filter((_, i) => !usedAt.has(i)), ...extraKnown].filter((word) => !skipped(word) && !/^\d+$/.test(word) && word.length <= MAX_WORD))];
+      const list = [...new Set([...base, ...joined])].sort((a, b) => idf(b) - idf(a)).slice(0, MAX_TERMS);
+      return { list, groups: list.map((term) => expand(term, expired)) };
     },
     possible(terms) {
       const { list, groups } = terms;
@@ -312,14 +430,20 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
       if (!(list.length >= 2 && found.length >= 2 && found.some((options) => weight(options) >= rareBar) && found.reduce((sum, options) => sum + weight(options), 0) / whole >= MIN_COVER)) return false;
       // every gate rule but nearness, checked on each piece from the postings, so a turn no piece could pass skips the search
       const tokens = groupBits(inNotes);
-      matched.set(terms, tokens);
+      const phrases = phraseBits(inNotes);
+      matched.set(terms, { tokens, phrases });
       const weights = inNotes.map(weight);
       let scan = 0;
       for (const token of tokens.keys()) scan += postings.get(token)?.length ?? 0;
+      for (const phrase of phrases.keys()) scan += phrasePostings.get(phrase)?.length ?? 0;
       if (scan > SCAN_POSTINGS) return true;
       const masks = new Map<number, number>();
       for (const [token, mask] of tokens) for (const at of postings.get(token) ?? []) masks.set(at, (masks.get(at) ?? 0) | mask);
-      const inTitle = new Set([...tokens.keys()].flatMap((token) => titled.get(token) ?? []));
+      for (const [phrase, mask] of phrases) for (const at of phrasePostings.get(phrase) ?? []) masks.set(at, (masks.get(at) ?? 0) | mask);
+      const inTitle = new Set([
+        ...[...tokens.keys()].flatMap((token) => titled.get(token) ?? []),
+        ...[...phrases.keys()].flatMap((phrase) => phraseTitled.get(phrase) ?? []),
+      ]);
       return [...masks].some(([at, mask]) => {
         if (!inTitle.has(at) || bits(mask) < 2) return false;
         const groups = weights.flatMap((value, group) => (mask & (1 << group) ? [value] : []));
@@ -327,7 +451,17 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
       });
     },
     hits({ groups }) {
-      const match = [...new Set(groups.flat())].map((term) => `"${term}"`).join(" OR ");
+      const clauses: string[] = [];
+      const seen = new Set<string>();
+      for (const term of groups.flat()) {
+        const forms = term.includes(" ") && phraseSurfaces.get(term)?.size ? [...phraseSurfaces.get(term)!] : [term];
+        for (const form of forms) {
+          if (seen.has(form)) continue;
+          seen.add(form);
+          clauses.push(`"${form}"`);
+        }
+      }
+      const match = clauses.join(" OR ");
       if (!match) return [];
       // SAFETY: the SELECT above names exactly these two columns.
       return (search.all(match) as Array<{ id: number; score: number }>).map((hit) => ({ ...pieces[hit.id - 1]!, score: hit.score }));
@@ -338,13 +472,20 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
       const inNotes = known(groups);
       const whole = inNotes.reduce((sum, options) => sum + weight(options), 0);
       const weights = inNotes.map(weight);
-      const found = matched.get(terms) ?? groupBits(inNotes);
+      const { tokens: found, phrases } = matched.get(terms) ?? { tokens: groupBits(inNotes), phrases: phraseBits(inNotes) };
       return hits.filter((hit) => {
-        if (!hit.title.some((token) => found.has(token))) return false;
+        const titleHit = hit.title.some((token) => found.has(token)) || (phrases.size > 0 && phrasesIn(hit.title).some(({ phrase }) => phrases.has(phrase)));
+        if (!titleHit) return false;
         const at = inNotes.map((): number[] => []);
         for (const [position, token] of hit.tokens.entries()) {
           const mask = found.get(token);
           if (mask) for (const group of at.keys()) if (mask & (1 << group)) at[group]!.push(position);
+        }
+        if (phrases.size > 0) {
+          for (const { phrase, at: position } of phrasesIn(hit.tokens)) {
+            const mask = phrases.get(phrase);
+            if (mask) for (const group of at.keys()) if (mask & (1 << group)) at[group]!.push(position);
+          }
         }
         const positions = at.filter((list) => list.length);
         const cover = at.reduce((sum, list, group) => sum + (list.length ? weights[group]! : 0), 0);

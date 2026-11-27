@@ -93,6 +93,53 @@ describe("retrieval replay", () => {
   });
 });
 
+describe("paraphrase recall", () => {
+  it("matches morphological stem variants beyond typo edit distance", async () => {
+    const { botId, lookup } = await lookupFor([
+      FILLER,
+      "- Cobalt deployment: deploys run Tuesday morning after checks",
+      "- Copper migration: migrated the warehouse ledger to Postgres",
+      "- Amber cancellation: canceled the duplicate warehouse order",
+    ].join("\n"));
+    expect(ask(lookup, botId, "cobalt deployment window")[0]).toContain("Tuesday morning");
+    expect(ask(lookup, botId, "copper warehouse migrating")[0]).toContain("Postgres");
+    expect(ask(lookup, botId, "amber order cancellation")[0]).toContain("duplicate warehouse order");
+  });
+
+  it("matches single-word equivalents in both directions even when another note has the query word", async () => {
+    const { botId, lookup } = await lookupFor([
+      FILLER,
+      "- Warehouse printer: moved to the south hall",
+      "- Cobalt studio: relocated to the north tower in October",
+      "- Granite office: moved to the east wing in November",
+    ].join("\n"));
+    expect(ask(lookup, botId, "where did the cobalt studio move?")[0]).toContain("north tower");
+    expect(ask(lookup, botId, "where did the granite office relocate?")[0]).toContain("east wing");
+  });
+
+  it("matches multi-word phrase equivalents in both directions", async () => {
+    const { botId, lookup } = await lookupFor([
+      FILLER,
+      "- Cobalt contract: Dana signs off on every cobalt vendor contract",
+      "- Granite invoice approver: Priya handles granite invoice reviews",
+    ].join("\n"));
+    expect(ask(lookup, botId, "who is the cobalt vendor contract approver?")[0]).toContain("Dana signs off");
+    expect(ask(lookup, botId, "who signs off on granite invoices?")[0]).toContain("Priya handles");
+  });
+
+  it("does not trigger false recalls from short-prefix collisions", async () => {
+    const { botId, lookup } = await lookupFor([
+      FILLER,
+      "- Cobalt card: the blue transit card stays in the desk",
+      "- Granite report: weekly report exports on Friday",
+      "- Amber author: favorite author is Ursula",
+    ].join("\n"));
+    expect(ask(lookup, botId, "cobalt vehicle")).toEqual([]);
+    expect(ask(lookup, botId, "granite repository")).toEqual([]);
+    expect(ask(lookup, botId, "amber authentication")).toEqual([]);
+  });
+});
+
 describe("the flag", () => {
   it("does nothing for a bot that is not listed", async () => {
     const { botId, lookup } = await lookupFor(FIXTURE, { listed: false });
