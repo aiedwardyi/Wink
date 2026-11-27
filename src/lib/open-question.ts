@@ -65,7 +65,7 @@ export function chatMovedOn(messages: readonly Message[], question: Message): bo
 
 /** Where a tap on the open question lands: its own record once the pin no longer hides it, else the text of the turn that asked it, paged in when older than the loaded tail. */
 export function questionJumpId(messages: readonly Message[], question: Message, pinned: Message | null, hasMore = false): string | null {
-  if (!pinned) return messages.some((message) => message.id === question.id) ? question.id : null;
+  if (question.id !== pinned?.id) return messages.some((message) => message.id === question.id) ? question.id : null;
   const id = question.card?.replyId;
   const reply = id ? messages.find((message) => message.id === id) : undefined;
   if (reply) return isShownMessage(reply) ? reply.id : null;

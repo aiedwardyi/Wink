@@ -24,8 +24,6 @@ type ChatPlanMetersProps = {
   identity?: string;
   /** The chat is covered (the terminal is open): no quick view, and Alt+U falls through to all Usage. */
   hidden?: boolean;
-  /** Seated inside the shared bottom dock rail, which owns outer padding. */
-  compact?: boolean;
   now?: number;
   onOpenUsage: () => void;
 };
@@ -97,23 +95,23 @@ export function ChatPlanMeters(props: ChatPlanMetersProps) {
   return props.instanceId ? <BoardMeter {...props} instanceId={props.instanceId} /> : <TodayMeter {...props} />;
 }
 
-function TodayMeter({ windows, compact, now, onOpenUsage }: ChatPlanMetersProps) {
+function TodayMeter({ windows, now, onOpenUsage }: ChatPlanMetersProps) {
   // Decide visibility without the clock; chats without windows never subscribe to a tick.
   if (todayWindows(windows, now ?? Date.now()).length === 0) return null;
-  return <MeterLine windows={windows} compact={compact} now={now} onOpen={onOpenUsage} />;
+  return <MeterLine windows={windows} now={now} onOpen={onOpenUsage} />;
 }
 
-function BoardMeter({ windows, instanceId, identity = instanceId, hidden, compact, now, onOpenUsage }: ChatPlanMetersProps & { instanceId: string }) {
+function BoardMeter({ windows, instanceId, identity = instanceId, hidden, now, onOpenUsage }: ChatPlanMetersProps & { instanceId: string }) {
   const { state } = useStore();
   const board = useUsageBoard();
   const target = meterTarget(board.board, state.instances, instanceId);
   const at = now ?? Date.now();
   if (meterWindows(target, windows, at).length === 0 && !offKey(target)) return null;
-  return <MeterLine windows={windows} compact={compact} now={now} onOpen={onOpenUsage} identity={identity} hidden={hidden} target={target} board={board} />;
+  return <MeterLine windows={windows} now={now} onOpen={onOpenUsage} identity={identity} hidden={hidden} target={target} board={board} />;
 }
 
-function MeterLine({ windows, compact = false, now, onOpen, identity = "", hidden, target, board }: {
-  windows: RateLimitWindow[] | undefined; compact?: boolean; now?: number; onOpen: () => void; identity?: string; hidden?: boolean;
+function MeterLine({ windows, now, onOpen, identity = "", hidden, target, board }: {
+  windows: RateLimitWindow[] | undefined; now?: number; onOpen: () => void; identity?: string; hidden?: boolean;
   target?: MeterTarget | null; board?: ReturnType<typeof useUsageBoard>;
 }) {
   const { t } = useI18n();
@@ -126,7 +124,7 @@ function MeterLine({ windows, compact = false, now, onOpen, identity = "", hidde
   const [open, setOpen] = useQuickToggle(quick, identity);
   if (shown.length === 0 && !off) return null;
   return (
-    <div className={compact ? "min-w-0 flex-1" : "px-5 pb-1"}>
+    <div className="px-5 pb-1">
       <button ref={button} type="button" data-usage-meter="" onClick={quick ? () => { if (!open) trackScreen("usage-quick"); setOpen(!open); } : onOpen}
         aria-expanded={quick ? open : undefined} aria-haspopup={quick ? "dialog" : undefined}
         aria-label={quick && target ? t("usage.chat.openAria", { name: engineName(target.engine.engine) }) : t("usage.limits.openAria")} className="usage-chat-button w-full cursor-pointer text-left">

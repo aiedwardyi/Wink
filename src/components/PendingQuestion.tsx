@@ -48,12 +48,10 @@ const BADGE = "flex h-4 min-w-4 shrink-0 items-center justify-center rounded-ful
 const ARROW = "relative rounded p-0.5 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent pointer-coarse:after:absolute pointer-coarse:after:-inset-2";
 // the row and the card share these, so folding only tucks the body away
 const FRAME = "rounded-2xl border border-accent/40 bg-card";
-const DOCKED_FRAME = "rounded-t-[20px] rounded-b-none border border-b-0 border-hairline/70 bg-card";
-const FILL = "rounded-[15px] bg-card px-3.5 max-md:px-3";
-const DOCKED_FILL = "rounded-t-[19px] bg-card px-3.5 max-md:px-3";
+const FILL = "rounded-[15px] bg-control/40 px-4";
 // 44px tall touch targets that split the gap between them, so a tap never lands on both
 const CONTROL = "relative -mt-0.5 shrink-0 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink pointer-coarse:after:absolute pointer-coarse:after:-inset-y-[11px]";
-const CHIP = "rounded-xl border border-hairline/80 bg-inset/60 text-[13px] font-medium text-ink hover:bg-raised-hover";
+const CHIP = "rounded-full border border-ink-secondary bg-control text-[13px] text-ink hover:bg-raised-hover";
 const ROW_CHIP = cn(CHIP, "relative shrink-0 whitespace-nowrap px-2.5 py-0.5 pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-2.5");
 // a click's detail counts the presses; Enter and Space give 0
 const byKeyboard = (event: MouseEvent) => event.detail === 0;
@@ -63,7 +61,6 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   askerName,
   count,
   index = count - 1,
-  docked = false,
   onStep,
   onJump,
   typed = "",
@@ -79,8 +76,6 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   count: number;
   /** this question's place among them, oldest first */
   index?: number;
-  /** seated flush on top of the composer frame as one unified bottom unit */
-  docked?: boolean;
   /** shows the question `step` places away, folded as this one is */
   onStep?: (step: number, folded: boolean) => void;
   /** scrolls the chat to the message behind this question; absent when none is there */
@@ -183,17 +178,14 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
       </button>
     </>
   );
-  const frame = docked ? DOCKED_FRAME : FRAME;
-  const fill = docked ? DOCKED_FILL : FILL;
-  const foldGap = docked ? undefined : "mb-2";
   return (
     <>
-      <Fold open={folded} className={foldGap}>
+      <Fold open={folded} className="mb-2">
         <div
           data-pending-question={message.id}
           data-question-row=""
           data-no-swipe=""
-          className={cn("relative touch-pan-y", frame)}
+          className={cn("relative touch-pan-y", FRAME)}
           onTouchStart={(event) => {
             const point = event.touches[0];
             slide.current = event.touches.length === 1 && point ? { x: point.clientX, y: point.clientY, at: event.timeStamp, axis: null } : null;
@@ -220,7 +212,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
             event.currentTarget.style.transform = "";
           }}
         >
-          <div className={cn("flex min-w-0 items-center gap-2 py-1.5", fill)}>
+          <div className={cn("flex min-w-0 items-center gap-2 py-1.5", FILL)}>
             {lead}
             <button
               type="button"
@@ -228,17 +220,17 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
               onClick={(event) => fold(false, byKeyboard(event))}
               aria-expanded={false}
               aria-label={`${t("ask.expandQuestion")}: ${card.subtitle}`}
-              className={cn("min-w-0 flex-1 text-left", card.options.length && "min-w-[42%]")}
+              className={cn("min-w-0 flex-1 text-left", card.options.length && "min-w-[40%]")}
             >
-              <span className={cn(QUOTE_LABEL, "leading-[14px]")}>{label}</span>
-              <span className={cn(QUOTE_TEXT, "leading-[16px]")}>{card.subtitle.trim().split(/\r?\n/, 1)[0]}</span>
+              <span className={QUOTE_LABEL}>{label}</span>
+              <span className={QUOTE_TEXT}>{card.subtitle.trim().split(/\r?\n/, 1)[0]}</span>
             </button>
-            <RowChoices options={card.options} onPick={onPick} />
+            <RowChoices options={card.options} onPick={onPick} onMore={(event) => fold(false, byKeyboard(event))} />
             {controls(false)}
           </div>
         </div>
       </Fold>
-      <Fold open={!folded} className={foldGap}>
+      <Fold open={!folded} className="mb-2">
         <div
           ref={fitChoices}
           role="region"
@@ -263,23 +255,25 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
             if (start?.id === message.id && end && end.clientY - start.y > 48 && Math.abs(end.clientX - start.x) < 24) fold(true);
           }}
           onTouchCancel={() => { touch.current = null; }}
-          className={cn("relative flex max-h-[30dvh] flex-col", frame, glowing && "arrival-glow")}
+          className={cn("relative flex max-h-[30dvh] flex-col", FRAME, glowing && "arrival-glow")}
         >
-          {/* header keeps the badge inline so the question text and choices span the full card width */}
-          <div className={cn("flex min-h-0 flex-col py-2.5", fill)}>
-            <div className="flex shrink-0 items-center gap-2" aria-live="polite">
-              {lead}
-              <span className={cn(QUOTE_LABEL, "min-w-0 flex-1")}>{label}</span>
-              {controls(true)}
+          {/* the lead keeps its own column so the question starts where the row's line does */}
+          <div className={cn("flex min-h-0 gap-2 py-3", FILL)}>
+            <span className="flex h-5 shrink-0 items-center">{lead}</span>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div className="flex shrink-0 items-center gap-2" aria-live="polite">
+                <span className={cn(QUOTE_LABEL, "min-w-0 flex-1")}>{label}</span>
+                {controls(true)}
+              </div>
+              {/* only a long question's text scrolls, so the card stays a third of the chat with its choices in sight */}
+              <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} onClick={onJump && (() => { if (!window.getSelection()?.toString()) onJump(); })} onKeyDown={onJump && ((event) => {
+                // Space scrolls a question that overflows, so only Enter jumps from there
+                const body = event.currentTarget;
+                const key = event.key === "Enter" || (event.key === " " && body.scrollHeight <= body.clientHeight);
+                if (event.target === body && key && !window.getSelection()?.toString()) { event.preventDefault(); onJump(); }
+              })} className={cn(onJump && "cursor-pointer", "mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}>{card.subtitle}</div>
+              <AskChoices options={card.options} onPick={onPick} />
             </div>
-            {/* only a long question's text scrolls, so the card stays a third of the chat with its choices in sight */}
-            <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} onClick={onJump && (() => { if (!window.getSelection()?.toString()) onJump(); })} onKeyDown={onJump && ((event) => {
-              // Space scrolls a question that overflows, so only Enter jumps from there
-              const body = event.currentTarget;
-              const key = event.key === "Enter" || (event.key === " " && body.scrollHeight <= body.clientHeight);
-              if (event.target === body && key && !window.getSelection()?.toString()) { event.preventDefault(); onJump(); }
-            })} className={cn(onJump && "cursor-pointer", "mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-[1.45] text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}>{card.subtitle}</div>
-            <AskChoices options={card.options} onPick={onPick} />
           </div>
         </div>
       </Fold>
@@ -349,23 +343,35 @@ function fitChoices(card: HTMLDivElement | null) {
   };
 }
 
-/** The row's choices on one line, all or none: when any has no room, none show and the question takes the line. */
-function RowChoices({ options, onPick }: { options: string[]; onPick: (choice: string) => void }) {
+/** The row's choices on one line: the ones past its width give way to one +N pill that opens the card, so none drops out unseen. */
+function RowChoices({ options, onPick, onMore }: { options: string[]; onPick: (choice: string) => void; onMore: (event: MouseEvent) => void }) {
+  const { t } = useI18n();
   const list = useRef<HTMLSpanElement>(null);
+  const more = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
     const chips = list.current;
+    const rest = more.current;
     const row = chips?.parentElement;
-    if (!chips || !row) return;
+    if (!chips || !rest || !row) return;
     const fit = () => {
-      chips.hidden = false;
-      chips.hidden = chips.scrollWidth > chips.clientWidth;
+      const all = [...chips.querySelectorAll<HTMLElement>("[data-row-choice]")];
+      for (const chip of all) chip.hidden = false;
+      rest.hidden = true;
+      // the pill's own width counts, so each cut is measured with it in place
+      for (let cut = 1; cut <= all.length && chips.scrollWidth > chips.clientWidth; cut++) {
+        all[all.length - cut].hidden = true;
+        rest.hidden = false;
+        rest.textContent = `+${cut}`;
+        rest.title = t(cut === 1 ? "ask.moreChoicesOne" : "ask.moreChoices", { count: cut });
+        rest.setAttribute("aria-label", rest.title);
+      }
     };
     fit();
     if (typeof ResizeObserver === "undefined") return;
     const watch = new ResizeObserver(fit);
     watch.observe(row);
     return () => watch.disconnect();
-  }, [options]);
+  }, [options, t]);
   if (!options.length) return null;
   return (
     <span ref={list} data-row-choices="" className="flex min-w-0 items-center gap-1 overflow-hidden">
@@ -374,6 +380,8 @@ function RowChoices({ options, onPick }: { options: string[]; onPick: (choice: s
           {choice}
         </button>
       ))}
+      {/* its count and label are set by the fit above */}
+      <button ref={more} hidden type="button" onClick={onMore} className={ROW_CHIP} />
     </span>
   );
 }
@@ -397,42 +405,17 @@ export function HiddenQuestionDot({ id, count }: { id: string; count: number }) 
   );
 }
 
-const LONG_CHOICE_CHARS = 26;
-
 export function AskChoices({ options, onPick }: { options: string[]; onPick: (choice: string) => void }) {
   if (!options.length) return null;
-  const stacked = options.some((choice) => choice.length > LONG_CHOICE_CHARS);
-  if (stacked) {
-    return (
-      <div
-        data-term-choices
-        data-ask-choices
-        data-choice-layout="list"
-        className="mt-2 flex shrink-0 flex-col divide-y divide-hairline/40 overflow-hidden rounded-xl border border-hairline/70 bg-inset/45 md:flex-row md:flex-wrap md:gap-1.5 md:divide-y-0 md:overflow-visible md:rounded-none md:border-0 md:bg-transparent"
-      >
-        {options.map((choice) => (
-          <button
-            key={choice}
-            type="button"
-            onClick={() => onPick(choice)}
-            className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] font-medium leading-[1.35] text-ink hover:bg-raised-hover pointer-coarse:min-h-[38px] md:w-auto md:max-w-full md:rounded-xl md:border md:border-hairline/80 md:bg-inset/60 md:px-3 md:py-1.5 md:leading-[18px]"
-          >
-            <span className="min-w-0 break-words">{choice}</span>
-            <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-ink-secondary/70 md:hidden" />
-          </button>
-        ))}
-      </div>
-    );
-  }
-  // 32px chips on phone too, their 44px touch targets splitting the gap between rows
+  // 34px pills on phone too, their 44px touch targets splitting the gap between rows
   return (
-    <div data-term-choices data-ask-choices className="mt-2 flex shrink-0 flex-wrap gap-1.5 pointer-coarse:gap-y-3">
+    <div data-term-choices data-ask-choices className="mt-2.5 flex shrink-0 flex-wrap gap-2 pointer-coarse:gap-y-2.5">
       {options.map((choice) => (
         <button
           key={choice}
           type="button"
           onClick={() => onPick(choice)}
-          className={cn(CHIP, "relative min-w-12 max-w-full break-words px-3 py-1.5 text-center leading-[18px] pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-[6px]")}
+          className={cn(CHIP, "relative min-w-12 max-w-full break-words px-3.5 py-1.5 text-center leading-5 pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-[5px]")}
         >
           {choice}
         </button>

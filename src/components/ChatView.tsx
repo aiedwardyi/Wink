@@ -850,7 +850,7 @@ const MessagesList = memo(function MessagesList({
                 return <ApprovalCard bot={bot} message={m} />;
               }
               if (m.card && isAskUserCard(m)) {
-                const pinned = Boolean(pinnedQuestion(bot.messages, visibleMessages(bot)));
+                const pinned = pinnedQuestion(bot.messages, visibleMessages(bot))?.id === m.id;
                 return (
                   <AskUserRecord
                     message={m}
@@ -2034,6 +2034,11 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
         <SelectionMenu key={`${shownMenu.x},${shownMenu.y}`} x={shownMenu.x} y={shownMenu.y} opener={shownMenu.opener} text={shownMenu.text} closing={menuClosing} onClose={() => setMenu(null)} />
       ) : null}
 
+      {/* Reading scrollback — one tap back to the end, streaming or not */}
+      {latestShown && (
+        <JumpToLatest bottom={composerDock.height} onJump={jumpToLatest} />
+      )}
+
       {/* Keyed by task: each conversation keeps its own draft and a failed
           request can restore the old task without spilling into the newly
           selected one. ArrowUp-to-edit stays gated on busy because editing
@@ -2052,26 +2057,16 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           busy={modelSwitch.active || bot.busy}
           turns={activeTask?.usage?.turns ?? 0}
         />
-        {(!terminal || latestShown) && (
-          <div data-dock-rail="" className="flex min-h-[28px] min-w-0 items-center gap-2 bg-app px-5 py-1.5 empty:hidden max-md:border-t max-md:border-hairline/25 max-md:px-3">
-            {!terminal && (
-              <ChatPlanMeters
-                compact
-                identity={`${bot.id}:${bot.threadId}:${shownEngine?.accountOf ?? shownEngine?.instanceId}`}
-                hidden={hidden || preview}
-                instanceId={shownEngine?.instanceId}
-                windows={shownEngine?.rateLimits?.windows}
-                driverKind={shownEngine?.driverKind}
-                observedAt={shownEngine?.rateLimits?.observedAt}
-                onOpenUsage={() => dispatch({ type: "toggleAppSettings", open: true, section: "usage" })}
-              />
-            )}
-            {latestShown && (
-              <span className="ml-auto shrink-0">
-                <JumpToLatest inline onJump={jumpToLatest} />
-              </span>
-            )}
-          </div>
+        {!terminal && (
+          <ChatPlanMeters
+            identity={`${bot.id}:${bot.threadId}:${shownEngine?.accountOf ?? shownEngine?.instanceId}`}
+            hidden={hidden || preview}
+            instanceId={shownEngine?.instanceId}
+            windows={shownEngine?.rateLimits?.windows}
+            driverKind={shownEngine?.driverKind}
+            observedAt={shownEngine?.rateLimits?.observedAt}
+            onOpenUsage={() => dispatch({ type: "toggleAppSettings", open: true, section: "usage" })}
+          />
         )}
         <Composer
           key={bot.threadId}

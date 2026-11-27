@@ -11,8 +11,6 @@ export interface RoomTranscriptOptions {
   showActivities?: boolean;
   /** Worker run notes: the run's anchor shows its row, the rest fold into it. */
   workers?: ReadonlyMap<string, unknown>;
-  /** Rows shown elsewhere, like the waiting cards the composer's dock holds: no row, no label. */
-  hidden?: ReadonlySet<string>;
 }
 
 export interface RoomTranscriptRow {
@@ -64,7 +62,7 @@ export function roomTranscriptRows(
         ? activityRunVisible(item.messages, options.showActivities ?? options.showToolCalls)
         : options.workers?.has(first.id)
           ? Boolean(options.workers.get(first.id))
-          : !options.hidden?.has(first.id) && messageVisible(first, options.showToolCalls, options.showActivities);
+          : messageVisible(first, options.showToolCalls, options.showActivities);
     if (!visible) return { visible, newDay: false, cluster: false };
     const newDay = !prev || new Date(prev.at).toDateString() !== new Date(first.at).toDateString();
     const cluster = !prev || prev.role !== first.role || prev.from?.botId !== first.from?.botId || prev.author?.id !== first.author?.id || newDay;
