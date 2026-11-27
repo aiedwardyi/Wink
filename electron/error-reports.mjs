@@ -103,7 +103,7 @@ export function createErrorReports({ userData, dsn, build, platform, arch, now =
       trim();
       const report = makeErrorReport(input, { build, platform, arch, now: now(), uptime: uptime(), reportId: randomBytes(16).toString("hex") });
       if (!report) return;
-      const existing = records.find((item) => !item.attempts && item.report.code === report.code && item.report.site === report.site && item.report.build === report.build && item.report.platform === report.platform);
+      const existing = records.find((item) => !item.attempts && item.report.code === report.code && item.report.site === report.site && item.report.errorName === report.errorName && item.report.frame === report.frame && item.report.build === report.build && item.report.platform === report.platform);
       if (existing) existing.report.count = Math.min(10000, existing.report.count + 1);
       else records = [...records, { report, created: now(), attempts: 0, next: now() }].slice(-100);
       dirty = true;

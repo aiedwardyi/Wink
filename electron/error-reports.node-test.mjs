@@ -312,7 +312,7 @@ test("exact Sentry store bytes contain only permitted facts; all privacy fixture
   const request = f.received[0];
   assert.equal(request.url, "/api/1/store/?sentry_version=7&sentry_key=public");
   assert.deepEqual(request.headers, { "content-type": "application/json", "content-length": String(Buffer.byteLength(request.body)), host: `127.0.0.1:${f.config.dsn.match(/:(\d+)\//)[1]}`, connection: "close" });
-  assert.equal(request.body, JSON.stringify({ event_id: report.reportId, timestamp: Date.UTC(2026, 9, 28, 1) / 1000, message: "UNKNOWN_ERROR", release: "1.0.212", tags: { platform: "win32", arch: "x64", process: "renderer", site: "1" }, extra: { schema: 1, exitCode: 0, count: privateText.length, uptimeBucket: 1 } }));
+  assert.equal(request.body, JSON.stringify({ event_id: report.reportId, timestamp: Date.UTC(2026, 9, 28, 1) / 1000, message: "UNKNOWN_ERROR", release: "1.0.212", tags: { platform: "win32", arch: "x64", process: "renderer", site: "1" }, extra: { schema: 2, exitCode: 0, count: privateText.length, uptimeBucket: 1 } }));
   const bytes = JSON.stringify(request);
   for (const text of privateText) assert.equal(bytes.includes(text), false, text);
   assert.match(report.reportId, /^[a-f0-9]{32}$/);
@@ -742,10 +742,64 @@ test("spoofed IPC senders, subframes, origins and renderer sites are rejected", 
   handlers.get("error-reports:capture")(trusted, privateText[7]);
   assert.equal(captures.length, 0);
   handlers.get("error-reports:capture")(trusted, 2);
-  assert.deepEqual(captures, [{ process: "renderer", code: "UNKNOWN_ERROR", site: 2 }]);
+  assert.deepEqual(captures, [{ process: "renderer", code: "UNKNOWN_ERROR", site: 2, errorName: "", frame: "" }]);
   assert.equal(handlers.get("error-reports:set")(trusted, true), true);
   const app = new EventEmitter();
   installErrorReportCapture(app, reports, () => owner);
   app.emit("render-process-gone", {}, owner, { exitCode: 9, reason: privateText[6] });
   assert.deepEqual(captures.at(-1), { process: "renderer", code: "RENDERER_GONE", site: 3, exitCode: 9 });
+});
+
+const trustedOwner = () => {
+  const frame = { url: "http://127.0.0.1:9311/" };
+  return { frame, owner: { mainFrame: frame, isDestroyed: () => false, getURL: () => frame.url } };
+};
+
+test("renderer errors log one local line and report only the error name and app bundle frame", async (t) => {
+  const { registerErrorReportIpc } = await import("./error-report-capture.mjs");
+  const f = await fixture(t);
+  const { frame, owner } = trustedOwner();
+  const handlers = new Map();
+  const lines = [];
+  registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, f.reporter, () => owner, () => "http://127.0.0.1:9311", { log: (line) => lines.push(line), build: "1.0.212", uptime: () => 42.5 });
+  const capture = (site, detail) => handlers.get("error-reports:capture")({ sender: owner, senderFrame: frame }, site, detail);
+  const message = `${privateText[5]} ${privateText[2]}\n    at http://127.0.0.1:9311/assets/secret-plan.js:9:9`;
+  const stack = `TypeError: ${message}\n    at https://evil.test/assets/other.js:7:7\n    at render (http://127.0.0.1:9311/assets/index-AbC_12.js:1:2345)\n    at http://127.0.0.1:9311/assets/vendor-Xy.js:3:4`;
+  capture(1, { name: "TypeError", message, stack });
+  assert.equal(lines.length, 1);
+  for (const part of ["renderer error", "TypeError", privateText[5], privateText[2], "index-AbC_12.js:1:2345", "build=1.0.212", "uptime=42.5s"]) assert.ok(lines[0].includes(part), part);
+  assert.doesNotMatch(lines[0], /\n/);
+  await f.reporter.flush();
+  assert.equal(f.received.length, 0);
+  f.reporter.setConsent(true);
+  capture(1, { name: "TypeError", message, stack });
+  capture(2, { name: "", message: privateText[6], stack: "" });
+  assert.equal(lines.length, 3);
+  assert.match(lines[2], /^renderer rejection build=1\.0\.212 uptime=42\.5s/);
+  await f.reporter.flush();
+  await f.reporter.flush();
+  assert.equal(f.received.length, 2);
+  const [body, rejection] = f.received.map((request) => JSON.parse(request.body));
+  assert.deepEqual(body.tags, { platform: "win32", arch: "x64", process: "renderer", site: "1", errorName: "TypeError", frame: "index-AbC_12.js:1:2345" });
+  assert.deepEqual(body.fingerprint, ["UNKNOWN_ERROR", "1", "TypeError", "index-AbC_12.js:1:2345"]);
+  assert.equal(body.extra.schema, 2);
+  const bytes = JSON.stringify(f.received);
+  for (const text of [...privateText, "secret-plan", "evil.test", "vendor-Xy", "127.0.0.1:9311/"]) assert.equal(bytes.includes(text), false, text);
+  assert.deepEqual(rejection.tags, { platform: "win32", arch: "x64", process: "renderer", site: "2" });
+  assert.equal("fingerprint" in rejection, false);
+});
+
+test("renderer error log lines stop after a cap so an error loop cannot fill the disk", async () => {
+  const { registerErrorReportIpc } = await import("./error-report-capture.mjs");
+  const { frame, owner } = trustedOwner();
+  const handlers = new Map();
+  const lines = [];
+  registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, { capture() {} }, () => owner, () => "http://127.0.0.1:9311", { log: (line) => lines.push(line), build: "1.0.212" });
+  for (let i = 0; i < 150; i++) handlers.get("error-reports:capture")({ sender: owner, senderFrame: frame }, 1, { name: "Error", message: "loop", stack: "Error: loop" });
+  assert.equal(lines.length, 101);
+  assert.match(lines[100], /not logged/);
+});
+
+test("main wires renderer error lines into the local log", () => {
+  assert.match(source("./main.mjs"), /registerErrorReportIpc\(ipcMain, errorReports, [^\n]*\{ log: slog, build: [^\n]*\}\);/);
 });

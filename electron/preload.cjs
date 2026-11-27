@@ -198,7 +198,7 @@ contextBridge.exposeInMainWorld("ogb", {
   exportDiagnostics: () => invoke("desktop:export-diagnostics"),
   errorReportConsent: () => invoke("error-reports:get"),
   setErrorReportConsent: (enabled) => invoke("error-reports:set", enabled),
-  captureErrorReport: (site) => ipcRenderer.send("error-reports:capture", site),
+  captureErrorReport: (site, detail) => ipcRenderer.send("error-reports:capture", site, detail),
   /** Open a local file or folder from a chat link in its default app, or reveal it
    * when its type could run. The chat bubble shows the rejection text
    * verbatim, so strip the "Error invoking remote method" wrapper

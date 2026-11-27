@@ -163,7 +163,7 @@ function deliverNotificationTarget(win, target = pendingNotificationTarget) {
 let mainWindow = null;
 const ERROR_REPORT_DSN = verifyProbe ? null : errorReportDsn(() => require("./error-report-config.json"));
 const errorReports = createErrorReports({ userData: app.getPath("userData"), dsn: ERROR_REPORT_DSN, build: require("../package.json").version, platform: process.platform, arch: process.arch });
-registerErrorReportIpc(ipcMain, errorReports, () => mainWindow?.webContents, () => app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin);
+registerErrorReportIpc(ipcMain, errorReports, () => mainWindow?.webContents, () => app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin, { log: slog, build: require("../package.json").version });
 installErrorReportCapture(app, errorReports, () => mainWindow?.webContents);
 const STATS_URL = verifyProbe ? "" : statsUrl(() => require("./error-report-config.json"));
 const crashStats = installCrashStats(app, () => mainWindow?.webContents, async (events) => {
