@@ -18,6 +18,8 @@ interface WaitingSend {
 }
 
 const pending = new Map<string, Map<string, string>>();
+// Note approval's view of listed peer heads: a failed listing keeps them, only an import or a listing without them clears.
+const outstanding = new Map<string, Map<string, string>>();
 const applied = new Map<string, Map<string, string>>();
 const google = new Map<string, boolean>();
 const delivered = new Map<string, { folder: string; behind: boolean }>();
@@ -103,17 +105,26 @@ export const syncHold = {
     if (!files) return this.google(folder);
     google.set(key, true);
     const heads = pending.get(key) ?? new Map<string, string>();
+    const was = outstanding.get(key);
+    const listed = new Map<string, string>();
     let cleared = false;
     for (const [path, copies] of files) {
       const threadId = threadFor(path);
       if (!threadId || drivePathRule(path, ids) !== "peer") continue;
       const file = [...copies].sort((a, b) => Date.parse(b.modifiedTime) - Date.parse(a.modifiedTime) || Date.parse(b.createdTime) - Date.parse(a.createdTime) || a.id.localeCompare(b.id))[0];
-      if (!file?.md5Checksum) continue;
+      if (!file?.md5Checksum) {
+        if (was?.has(path)) listed.set(path, was.get(path)!);
+        continue;
+      }
       notePeer(threadId, `${key}/${path}`, "feed", file.md5Checksum);
       if (applied.get(key)?.get(path) === file.md5Checksum) cleared = heads.delete(path) || cleared;
-      else heads.set(path, file.md5Checksum);
+      else {
+        heads.set(path, file.md5Checksum);
+        listed.set(path, file.md5Checksum);
+      }
     }
     pending.set(key, heads);
+    outstanding.set(key, listed);
     if (cleared) wake();
   },
   pulled(folder: string, scope: SyncScope, heads: SyncApplyResult["heads"] = []): void {
@@ -135,6 +146,7 @@ export const syncHold = {
       // An older copy clears its listing but, as on base, is never applied.
       if (!head.older) hashes.set(head.path, head.hash);
       if (pending.get(key)?.get(head.path) === head.hash) pending.get(key)!.delete(head.path);
+      if (outstanding.get(key)?.get(head.path) === head.hash) outstanding.get(key)!.delete(head.path);
     }
     applied.set(key, hashes);
     delivered.set(scope.threadId, { folder: key, behind: ahead });
@@ -157,7 +169,7 @@ export const syncHold = {
   /** Whether Drive listed a peer update to this bot's chats, a chat new here included, that the store has not taken in. */
   incoming(botSyncId: string, threadIds: readonly string[]): boolean {
     if (!enabled()) return false;
-    for (const heads of pending.values()) {
+    for (const heads of [...pending.values(), ...outstanding.values()]) {
       if ([...heads.keys()].some((path) => botFor(path) === botSyncId)) return true;
     }
     return threadIds.some((threadId) => behind(threadId) === true);
@@ -166,6 +178,7 @@ export const syncHold = {
     clearTimeout(timer);
     waiting = [];
     pending.clear();
+    outstanding.clear();
     applied.clear();
     delivered.clear();
     google.clear();

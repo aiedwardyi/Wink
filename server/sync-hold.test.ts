@@ -136,8 +136,10 @@ async function googlePC(early?: Awaited<ReturnType<typeof boot>>) {
   const statePath = join(h.dataDir, "google-drive-table.json");
   const ids = { profileDeviceId: "local", writerId: h.own, memoryDeviceId: "a".repeat(12) };
   let failed = false;
+  let offline = false;
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
+    if (offline) return new Response(null, { status: 503 });
     return failed && url.pathname === "/drive/v3/changes" ? new Response(null, { status: 500 }) : drive.fetch(input, init);
   };
   await createDriveMirror({ owner, mirrorPath: h.folder, statePath, ownIds: ids, client: createDriveClient({ getAccessToken: async () => "test-access", fetch }) }).syncOnce();
@@ -160,7 +162,7 @@ async function googlePC(early?: Awaited<ReturnType<typeof boot>>) {
     await vi.waitFor(() => expect(downloading).toBe(true));
     return { pass, release: releaseDownload, file };
   };
-  return { ...h, google, account, drive, listed, fail: () => { failed = true; } };
+  return { ...h, google, account, drive, listed, fail: () => { failed = true; }, offline: (on: boolean) => { offline = on; } };
 }
 
 const expectHeld = (receipt: Awaited<ReturnType<Awaited<ReturnType<typeof boot>>["send"]>>) => {
@@ -211,6 +213,43 @@ describe("sends while a chat catches up", () => {
     h.deliverSegment();
     await h.sync.pull("thread");
     expect(syncHold.incoming("bot", ["thread"])).toBe(false);
+  });
+
+  it("keeps a listed peer update incoming across a failed download and a failed listing, while sends go as before", async () => {
+    const h = await googlePC();
+    const { syncHold } = await import("./sync-hold.ts");
+    const { drivePathHash, encodeDrivePath } = await import("./drive-mirror.ts");
+    h.drive.onDownload = async () => { throw new Error("download dropped"); };
+    h.drive.add(encodeDrivePath(h.headPath), { ph: drivePathHash(h.headPath) }, Buffer.from(h.head), [h.drive.root().id]);
+    await h.google.kick();
+    expect(syncHold.incoming("bot", [])).toBe(true);
+    h.offline(true);
+    await h.google.kick();
+    expect(syncHold.until("thread")).toBeUndefined();
+    expect(syncHold.incoming("bot", [])).toBe(true);
+    h.offline(false);
+    h.drive.onDownload = undefined;
+    await h.google.kick();
+    expect(syncHold.incoming("bot", [])).toBe(true);
+    h.deliverSegment();
+    await h.sync.pull("thread");
+    expect(syncHold.incoming("bot", ["thread"])).toBe(false);
+  });
+
+  it("drops a listed peer update from incoming once a listing shows it gone", async () => {
+    const h = await googlePC();
+    const { syncHold } = await import("./sync-hold.ts");
+    const { drivePathHash, encodeDrivePath } = await import("./drive-mirror.ts");
+    h.drive.onDownload = async () => { throw new Error("download dropped"); };
+    const file = h.drive.add(encodeDrivePath(h.headPath), { ph: drivePathHash(h.headPath) }, Buffer.from(h.head), [h.drive.root().id]);
+    await h.google.kick();
+    h.offline(true);
+    await h.google.kick();
+    expect(syncHold.incoming("bot", [])).toBe(true);
+    h.offline(false);
+    h.drive.trash(file.id);
+    await h.google.kick();
+    expect(syncHold.incoming("bot", [])).toBe(false);
   });
 
   it("releases a listed Google head on stop when the data folder uses a junction", async () => {
