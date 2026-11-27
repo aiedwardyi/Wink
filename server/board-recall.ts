@@ -3,6 +3,7 @@
 import type { Board, BoardPost } from "./board.ts";
 import { solvedMatches, type BoardCalls } from "./board-calls.ts";
 import type { MemoryLookup } from "./memory-lookup.ts";
+import { clean } from "./recall-row.ts";
 
 /** 120 tokens at the server's 3 bytes a token. */
 export const RECALL_BYTES = 360;
@@ -16,7 +17,6 @@ export interface BoardRecallDeps {
   calls: Pick<BoardCalls, "recalled">;
 }
 
-const flat = (text: string) => text.replace(/\s+/g, " ").trim();
 const fit = (text: string) => {
   if (Buffer.byteLength(text, "utf8") <= RECALL_BYTES) return text;
   const chars = [...text];
@@ -25,7 +25,7 @@ const fit = (text: string) => {
 };
 // a fix post restates the error its title names, so the line starts at its Fix label when it has one
 const remedy = (fix: string) => fix.replace(/^[\s\S]*?\bFix\b[^:\n]{0,20}:\s*/, "");
-export const recallLine = (post: BoardPost) => fit(`${HEADER} [${post.id}] ${flat(post.title)} Fix: ${flat(remedy(post.fix))}`);
+export const recallLine = (post: BoardPost) => fit(`${HEADER} [${post.id}] ${clean(post.title, true)} Fix: ${clean(remedy(post.fix), true)}`);
 
 export function createBoardRecall(deps: BoardRecallDeps) {
   const key = (botId: string, threadId: string) => `${botId}\n${threadId}`;
