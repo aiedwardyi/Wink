@@ -931,12 +931,13 @@ describe("dreaming, dry", () => {
       expect(history()).toBe("");
     });
 
-    // the withdrawal reached a chat first; April, sent before it after the turn or drained after it, landed last
+    // the withdrawal reached a chat first; April, sent before it after the turn or drained after it, landed last; across chats no order holds
     it.each([
       ["a held send in the same chat", "t1", 500, 2, false],
       ["holds drained in reverse across chats", "t2", 500, 2, false],
       ["a send count no newer than the withdrawal's", "t2", 1500, 3, false],
-      ["every order agreeing", "t2", 1500, 4, true],
+      ["every order agreeing across chats", "t2", 1500, 4, false],
+      ["every order agreeing in the same chat", "t1", 1500, 4, true],
     ] as const)("writes no value from %s that landed after a newer withdrawal", async (_, chat, acted, seq, listed) => {
       await quiet();
       const sent = Date.now();

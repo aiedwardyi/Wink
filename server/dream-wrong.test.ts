@@ -71,7 +71,7 @@ function judge(name: "claude" | "gemini"): NoteGenerator {
 const judges = { claude: judge("claude"), gemini: judge("gemini") };
 const named = ({ thread, id, at: when }: OwnerRow): Newest => ({ thread, id, at: when });
 const newest = (rows: readonly OwnerRow[]) => rows.length ? named(rows.reduce((last, each) => (each.at > last.at ? each : last))) : undefined;
-const check = (rows = ROWS, latest: Newest | null = newest(rows) ?? null, use: typeof judges = judges) => checkWrong({ raw: MEMORY, rows, newest: latest ?? undefined, ids: "ids", saved: SAVED, judges: use, today: TODAY, signal: new AbortController().signal, now: Date.now });
+const check = (rows = ROWS, latest: Newest | null = newest(rows) ?? null, use: typeof judges = judges) => checkWrong({ raw: MEMORY, rows, newest: latest ?? undefined, ids: "ids", owned: [], saved: SAVED, judges: use, today: TODAY, signal: new AbortController().signal, now: Date.now });
 const upTo = (id: string) => ROWS.slice(0, ROWS.findIndex((each) => each.id === id) + 1);
 
 describe("wrong-note check", () => {
@@ -122,7 +122,7 @@ describe("wrong-note check", () => {
     const verdict = async (rows: OwnerRow[], latest: Newest, when = written) => {
       const { refs } = wrongPrompt(await wrongPairs(MEMORY, fixTargets(MEMORY), rows), TODAY);
       const flags = (name: "claude" | "gemini") => [...refs].flatMap(([ref, pair]) => RULES.filter((rule) => (rule.judges ?? ["claude", "gemini"]).includes(name) && pair.note.text.includes(rule.note.replace(/^- /, "")) && pair.row.id === rule.row).map((rule) => ({ note: `L${pair.note.at + 1}`, message: ref, quote: rule.quote, fix: rule.fix })));
-      return planWrong(flags("claude"), flags("gemini"), refs, { all, today: TODAY, written: when, newest: latest, ids: "ids" });
+      return planWrong(flags("claude"), flags("gemini"), refs, { all, today: TODAY, written: when, newest: latest, ids: "ids", owned: [] });
     };
     // each row as the owner's newest message
     const rejected = (await Promise.all(ROWS.map((each) => verdict([each], named(each))))).flatMap((each) => each.rejected);
@@ -165,13 +165,13 @@ describe("wrong-note check", () => {
       calls += 1;
       return '{"wrong": []}';
     };
-    expect((await checkWrong({ raw: MEMORY, rows: [], newest: undefined, ids: "", saved: [], judges: { claude: counted, gemini: counted }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items).toEqual([]);
+    expect((await checkWrong({ raw: MEMORY, rows: [], newest: undefined, ids: "", owned: [], saved: [], judges: { claude: counted, gemini: counted }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items).toEqual([]);
     expect(calls).toBe(0);
   });
 
   it("lists nothing while a judge is missing or unreadable", async () => {
-    expect(await checkWrong({ raw: MEMORY, rows: ROWS, newest: newest(ROWS), ids: "ids", saved: SAVED, judges: { claude: judges.claude, gemini: null }, today: TODAY, signal: new AbortController().signal, now: Date.now })).toMatchObject({ state: "no-model", items: [] });
-    expect(await checkWrong({ raw: MEMORY, rows: ROWS, newest: newest(ROWS), ids: "ids", saved: SAVED, judges: { claude: judges.claude, gemini: async () => "no json" }, today: TODAY, signal: new AbortController().signal, now: Date.now })).toMatchObject({ state: "no-model", items: [] });
+    expect(await checkWrong({ raw: MEMORY, rows: ROWS, newest: newest(ROWS), ids: "ids", owned: [], saved: SAVED, judges: { claude: judges.claude, gemini: null }, today: TODAY, signal: new AbortController().signal, now: Date.now })).toMatchObject({ state: "no-model", items: [] });
+    expect(await checkWrong({ raw: MEMORY, rows: ROWS, newest: newest(ROWS), ids: "ids", owned: [], saved: SAVED, judges: { claude: judges.claude, gemini: async () => "no json" }, today: TODAY, signal: new AbortController().signal, now: Date.now })).toMatchObject({ state: "no-model", items: [] });
   });
 
   it("swaps only the note's own line and puts the exact old bytes back", () => {
@@ -197,7 +197,7 @@ describe("what a fix takes as the owner's word", () => {
       });
       return JSON.stringify({ wrong });
     };
-    return (await checkWrong({ raw, rows: [row("evidence", time(24, 12), owner)], newest: { thread: "t1", id: "evidence", at: time(24, 12) }, ids: "ids", saved: [], judges: { claude: generate, gemini: generate }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items;
+    return (await checkWrong({ raw, rows: [row("evidence", time(24, 12), owner)], newest: { thread: "t1", id: "evidence", at: time(24, 12) }, ids: "ids", owned: [], saved: [], judges: { claude: generate, gemini: generate }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items;
   };
   const listed = (items: Awaited<ReturnType<typeof run>>) => items.map((item) => item.listOnly);
 
@@ -321,7 +321,7 @@ describe("a line proposes only without the old value", () => {
   ])("misses a true fix when the newest line holds %s", async (_, saved, owner, quote, fix) => {
     const raw = SAFETY_MEMORY + saved + "\n";
     const generate: NoteGenerator = async (prompt) => JSON.stringify({ wrong: [...prompt.matchAll(/^PAIR\n(L\d+) \(written [^)]*\): ([^\n]+)\n(M\d+) /gm)].filter((match) => match[2] === saved).map((match) => ({ note: match[1], message: match[3], quote, fix })) });
-    expect((await checkWrong({ raw, rows: [row("evidence", time(24, 12), owner)], newest: { thread: "t1", id: "evidence", at: time(24, 12) }, ids: "ids", saved: [], judges: { claude: generate, gemini: generate }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items).toEqual([]);
+    expect((await checkWrong({ raw, rows: [row("evidence", time(24, 12), owner)], newest: { thread: "t1", id: "evidence", at: time(24, 12) }, ids: "ids", owned: [], saved: [], judges: { claude: generate, gemini: generate }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items).toEqual([]);
   });
 });
 
@@ -410,7 +410,7 @@ describe("what the judges read and agree on", () => {
   const april = note.replace("January", "April");
   const may = note.replace("January", "May");
   const withdrawn = "The main account plan ends in May now, after the April estimate was withdrawn.";
-  const ask = async (owner: string, fixes: [string | null, string | null], quote = "The main account plan ends in May now") => {
+  const ask = async (owner: string, fixes: [string | null, string | null], quote = "The main account plan ends in May now", owned: StoredRow[] = []) => {
     const prompts: string[] = [];
     const judge = (fix: string | null): NoteGenerator => async (prompt) => {
       if (prompt.includes("<pairs>")) prompts.push(prompt);
@@ -419,9 +419,36 @@ describe("what the judges read and agree on", () => {
     };
     // SAFETY: ownerRows reads only id, at, role, kind and text of a user row.
     const rows = ownerRows("t1", [{ id: "evidence", at: time(24, 12), role: "user", kind: "text", text: owner } as never], 0);
-    const checked = await checkWrong({ raw, rows, newest: { thread: "t1", id: "evidence", at: time(24, 12) }, ids: "ids", saved: [], judges: { claude: judge(fixes[0]), gemini: judge(fixes[1]) }, today: TODAY, signal: new AbortController().signal, now: Date.now });
+    const checked = await checkWrong({ raw, rows, newest: { thread: "t1", id: "evidence", at: time(24, 12) }, ids: "ids", owned, saved: [], judges: { claude: judge(fixes[0]), gemini: judge(fixes[1]) }, today: TODAY, signal: new AbortController().signal, now: Date.now });
     return { items: checked.items.map((item) => item.by), prompts };
   };
+
+  it("lists nothing once the owner wrote in another chat since the note, whatever its time or order", async () => {
+    const plain = "The main account plan ends in May now.";
+    const mark = (id: string, thread: string, when: number, extra: Partial<StoredRow> = {}): StoredRow => ({ thread, id, at: when, row: 1, role: "user", ...extra });
+    const evidence = mark("evidence", "t1", time(24, 12), { row: 9, actedAt: time(24, 12), sendSeq: 9 });
+    // a peer's withdrawal stamped on a clock behind, stored before, counted lower
+    for (const when of [time(24, 11, 59), time(20, 0), time(25, 9)]) expect([when, (await ask(plain, [may, may], undefined, [evidence, mark("withdraw", "t2", when, { actedAt: when, sendSeq: 1 })])).items]).toEqual([when, []]);
+    expect((await ask(plain, [may, may], undefined, [evidence, mark("before", "t2", time(19, 23))])).items).toEqual([may]);
+    expect((await ask(plain, [may, may], undefined, [evidence, mark("earlier", "t1", time(24, 11))])).items).toEqual([may]);
+    expect((await ask(plain, [may, may], undefined, [evidence, mark("peer", "t2", time(24, 11), { from: '{"botId":"peer"}' })])).items).toEqual([may]);
+  });
+
+  it("reads a message whole only when every line reaches the judges byte for byte", async () => {
+    const lines = (value: string) => `The main account plan ends in the month below now.\n\n${value}\n\nKeep it.`;
+    for (const indent of [" ", "  ", "    ", "\t"]) expect([indent, (await ask(lines(`${indent}May`), [may, may], "The main account plan ends in")).items]).toEqual([indent, []]);
+    expect((await ask(lines("May"), [may, may], "The main account plan ends in")).items).toEqual([may]);
+    expect((await ask(lines("May").replace("\n\nKeep", "\n \n\nKeep"), [may, may], "The main account plan ends in")).items).toEqual([may]);
+  });
+
+  it("lists a fix only when the value it puts in reads as the owner typed it, case aside", async () => {
+    const quote = "The main account plan ends in May";
+    const owner = "The main account plan ends in May with Team  Files now.";
+    const [two, one] = ["Team  Files", "Team Files"].map((each) => may.replace("May", `May with ${each}`));
+    expect((await ask(owner, [one, one], quote)).items).toEqual([]);
+    expect((await ask(owner, [two, two], quote)).items).toEqual([two]);
+    expect((await ask(owner.toLowerCase(), [two, two], quote.toLowerCase())).items).toEqual([two]);
+  });
 
   it("lists a fix only when both judges name the same new line", async () => {
     expect((await ask(withdrawn, [april, may])).items).toEqual([]);

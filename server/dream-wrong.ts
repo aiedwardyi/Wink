@@ -61,7 +61,8 @@ const plain = (line: string) => line.replace(/\r$/, "");
 const body = (text: string) => text.replace(/^\s*[-*+]\s+/, "").replace(/\s*\(noted \d{4}-\d{2}-\d{2}\)\s*$/, "").trim();
 const lowWords = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
 
-const squash = (text: string) => text.replace(/\s+/g, " ").trim();
+// only the blank lines between paragraphs may differ: every other byte the judges read is the owner's
+const breaks = (text: string) => text.replace(/\n\s*\n/g, "\n\n");
 
 /** The owner's own typing in these rows after `since`; a line that may hold a login or code is marked guarded. */
 export function ownerRows(thread: string, messages: readonly Message[], since: number): OwnerRow[] {
@@ -72,7 +73,7 @@ export function ownerRows(thread: string, messages: readonly Message[], since: n
     if (!text.trim()) return [];
     const row: OwnerRow = { thread, id: message.id, at: message.at, text };
     if (text !== safe || cleanerSkip(text)) row.guarded = true;
-    else if (text.length <= WHOLE_MAX && squash(text) === squash(message.text)) row.whole = true;
+    else if (text.length <= WHOLE_MAX && breaks(text) === breaks(message.text)) row.whole = true;
     return [row];
   });
 }
@@ -265,8 +266,17 @@ function typedSpan(text: string, quote: string): string | null {
 }
 
 export type Rejected = { note: number; message: string; why: string };
-/** newest: the owner's newest message when the judges read the pairs; ids: every message the owner had typed then. */
-export type WrongContext = { all: readonly string[]; today: string; written(note: NoteLine): number | undefined; newest: Newest; ids: string };
+/** newest: the owner's newest message when the judges read the pairs; ids: every message the owner had typed then; owned: those messages, in every chat of the bot. */
+export type WrongContext = { all: readonly string[]; today: string; written(note: NoteLine): number | undefined; newest: Newest; ids: string; owned: readonly StoredRow[] };
+
+// what the fix puts in place of the old line's middle
+function added(old: string, by: string): string {
+  let start = 0;
+  while (start < old.length && start < by.length && old[start] === by[start]) start++;
+  let end = 0;
+  while (end < old.length - start && end < by.length - start && old[old.length - 1 - end] === by[by.length - 1 - end]) end++;
+  return by.slice(start, by.length - end);
+}
 
 /** Flags both judges agree on that pass the code gates, as items; nothing is applied. */
 export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: ReadonlyMap<string, Pair>, context: WrongContext) {
@@ -302,6 +312,11 @@ export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: Readon
       no("row not after the note");
       continue;
     }
+    // no order the store keeps holds across chats or devices: a message in another chat since the note may take it back
+    if (context.owned.some((each) => ownerTyped(each) && each.thread !== row.thread && (!written || day(each.at) >= written))) {
+      no("owner wrote in another chat since the note");
+      continue;
+    }
     const quote = typedSpan(row.text, lowWords(one.quote).length <= lowWords(other.quote).length ? one.quote : other.quote);
     if (!quote) {
       no("quote is not the owner's own typing");
@@ -323,8 +338,14 @@ export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: Readon
       no("fix not grounded in the old line and the quote");
       continue;
     }
+    const listOnly = handOnly(note, context.all);
+    // a fix an OK can write keeps the spaces and marks the owner typed; case is the judges' to fix, as in march to March
+    if (!listOnly && !row.text.toLowerCase().includes(added(note.text, by).toLowerCase())) {
+      no("fix value not as the owner typed it");
+      continue;
+    }
     const item: FixItem = {
-      op: "fix", target, text: note.text, by, why: "wrong", listOnly: handOnly(note, context.all),
+      op: "fix", target, text: note.text, by, why: "wrong", listOnly,
       evidence: { thread: row.thread, message: row.id, at: row.at, quote },
       seen: { at: context.newest.at, sha: sha8(row.text), ids: context.ids },
     };
@@ -354,7 +375,7 @@ export function writtenAt(saved: readonly SavedNotes[]) {
 export type WrongCheck = { state: "checked" | "no-model"; items: FixItem[]; pairs: number; bytes: number; logs: Partial<Record<keyof DreamJudges, JudgeLog>>; reason?: string };
 
 /** One pass: pair the owner's newest message when it is read whole, ask both judges once, keep what both agree on and the gates pass. newest: that message, none when its order is unclear; ids: every message the owner had typed. */
-export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]; newest: Newest | undefined; ids: string; saved: readonly SavedNotes[]; judges: DreamJudges; today: string; signal: AbortSignal; now(): number }): Promise<WrongCheck> {
+export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]; newest: Newest | undefined; ids: string; owned: readonly StoredRow[]; saved: readonly SavedNotes[]; judges: DreamJudges; today: string; signal: AbortSignal; now(): number }): Promise<WrongCheck> {
   const logs: WrongCheck["logs"] = {};
   const notes = fixTargets(input.raw);
   const { newest } = input;
@@ -385,7 +406,7 @@ export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]
     return { state: "no-model", ...base, reason: `${failed === a ? "claude" : "gemini"} judge ${failed.status === "rejected" ? "failed" : "reply unreadable"}` };
   }
   const all = input.raw.split("\n").map(plain);
-  return { state: "checked", ...base, items: planWrong(a.value, b.value, refs, { all, today: input.today, written: writtenAt(input.saved), newest, ids: input.ids }).items };
+  return { state: "checked", ...base, items: planWrong(a.value, b.value, refs, { all, today: input.today, written: writtenAt(input.saved), newest, ids: input.ids, owned: input.owned }).items };
 }
 
 // the lines that read as the fix, and the heading above one

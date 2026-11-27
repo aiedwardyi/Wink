@@ -223,7 +223,7 @@ export function createDreamLive(deps: DreamLiveDeps) {
     const before = rows.length ? owned(botId) : undefined;
     try {
       const newest = before && !before.waiting ? newestOwned(before.rows, deps.under) : undefined;
-      const checked = await checkWrong({ raw, rows, newest, ids: before?.ids ?? "", saved, judges, today: pickStamp(at).slice(0, 10), signal, now });
+      const checked = await checkWrong({ raw, rows, newest, ids: before?.ids ?? "", owned: before?.rows ?? [], saved, judges, today: pickStamp(at).slice(0, 10), signal, now });
       const fields: Omit<DryFixes, keyof DreamFixes> = { pairs: checked.pairs, bytes: checked.bytes, judges: checked.logs };
       if (checked.reason) fields.reason = checked.reason;
       if (memoryFileRaw(botId) !== raw) return { state: "conflict", through, items: [], ...fields };
