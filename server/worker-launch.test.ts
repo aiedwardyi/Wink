@@ -829,7 +829,9 @@ describe("worker service boundary", () => {
     expect(String(request.mock.calls[0][0])).toContain("accountId=acct_third");
     request.mockRejectedValue(new Error("offline"));
     expect(await panes!.livePanesForAccount(access, "acct_third", request)).toEqual({ count: 0, unknown: 1, generations: {} });
-    expect(await panes!.livePanesForAccount(null, "acct_third", request)).toEqual({ count: 0, unknown: 1, generations: {} });
+    // No bridge, as in the browser-only launch: no bot pane can exist.
+    expect(await panes!.livePanesForAccount(null, "acct_third", request)).toEqual({ count: 0, unknown: 0, generations: {} });
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("enables host policy before accounts can be added and fails closed on an old host", async () => {

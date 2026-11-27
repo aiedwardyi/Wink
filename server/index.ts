@@ -3581,7 +3581,7 @@ const accountRuntime = createAccountRuntime({
   onMainChanged: (change) => { accountNotices.mainChanged(change); usageBoard.recordMain(change); },
 });
 const accountRoutes = createAccountRoutes(accountRuntime, registry, {
-  names: accountNames, onNamesChanged: () => { usageBoard.touch(); void accountUpdates(); },
+  names: accountNames, onNamesChanged: () => { usageBoard.touch(); void accountUpdates(); }, usageOrder: () => cfg.usageOrder?.orders,
 });
 const accountUpdates = createAccountUpdates({
   describe: async () => botAccounts.pickerInstances(botAccounts.accountInstances(withRateLimits(await registry.describeCached()))),

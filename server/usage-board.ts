@@ -9,7 +9,7 @@ import type { createUsageHistory } from "./usage-history.ts";
 
 type AccountRow = {
   id: string; of: string; driverKind: string; generation: number; existing: boolean; state: "pending" | "ready" | "stopped";
-  blocked?: boolean; checking?: boolean; identity?: string; credit?: true;
+  blocked?: boolean; checking?: boolean; identity?: string; credit?: true; userSignedOut?: true;
   status?: { state: "available" | "unavailable" | "checking"; cliMissing?: boolean; authenticated?: boolean; account?: string; accountIdentity?: string };
 };
 type Bot = { id: string; name: string; base: string };
@@ -70,6 +70,8 @@ export function createUsageBoard(deps: Deps) {
   // Accounts the last known runs had workers on: a read without runs keeps that answer instead of flipping rows.
   const working = new Set<string>();
   const identities = new Map<string, string | null>();
+  // Account id to how many times its sign-in changed this boot: the board's stand-in for an identity it never carries.
+  const logins = new Map<string, number>();
   // Account id to the generation and time the CLI refused it for a past-due payment. It belongs to the signed-in
   // identity: a sign-out or identity change drops it, and only a good send or a usage reading observed after it clears it.
   const unpaid = new Map<string, { generation: number; at: number }>();
@@ -107,6 +109,7 @@ export function createUsageBoard(deps: Deps) {
       // Stored before accountChanged runs: its callbacks read the board again.
       if (!(same && identity === SIGNED_IN)) identities.set(row.id, identity);
       if (changed) {
+        logins.set(row.id, (logins.get(row.id) ?? 0) + 1);
         deps.rateLimits.delete(row.id);
         unpaid.delete(row.id);
         deps.history.purge(row.id);
@@ -233,8 +236,9 @@ export function createUsageBoard(deps: Deps) {
       const [x, y] = [login(a), login(b)];
       return Boolean(x && y && (x.identity && y.identity ? x.identity === y.identity : x.email && x.email === y.email));
     };
+    // A base the user signed out, not signed in again, folds the same way while another account of its engine is listed.
     const duplicates = new Set(rows.filter((row) => row.id === row.of && rows.some((other) => other.of === row.of && other.id !== row.id
-      && !Object.hasOwn(deps.accounts.drains, other.id) && sameLogin(row, other))).map((row) => row.id));
+      && !Object.hasOwn(deps.accounts.drains, other.id) && (sameLogin(row, other) || (row.userSignedOut && !login(row) && !other.credit)))).map((row) => row.id));
     for (const row of rows) {
       const engine = engines.get(row.driverKind)!;
       let group = board.engines.find((group) => group.base === row.of);
@@ -285,7 +289,7 @@ export function createUsageBoard(deps: Deps) {
       group.accounts.push({ id: row.id, number, nickname, name: nickname ?? text(named?.name ?? fallback, fallback), main: row.id === group.mainId,
         signIn, coverage: "unknown", windows, observedAt: Number.isFinite(observedAt) ? observedAt : null,
         history: points?.generation === row.generation ? { fine: points.fine, coarse: points.coarse } : { fine: [], coarse: [] },
-        bots: accountBots, workers: null, ...(row.credit ? { credit: true as const } : {}), ...(row.codexPromo ? { codexPromo: true as const } : {}) });
+        bots: accountBots, workers: null, ...(logins.has(row.id) ? { login: logins.get(row.id)! } : {}), ...(row.credit ? { credit: true as const } : {}), ...(row.codexPromo ? { codexPromo: true as const } : {}) });
     }
     return { board, rows: rows.map((row) => ({ id: row.id, generation: row.generation })), bots, text, counter: history.counter, accounts: accountSet, epoch, duplicates };
   }
