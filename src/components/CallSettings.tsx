@@ -14,6 +14,7 @@ import { markCut } from "@/lib/scroll-cut";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { guardMenuTouch, useListMenuDismiss } from "@/lib/use-hold-menu";
 import { usePresence } from "@/lib/use-presence";
+import { useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
 import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallAnswer, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
 import { BotAvatar } from "./Avatar";
@@ -239,10 +240,13 @@ export function CallGear({ bot, className }: { bot: Bot; className?: string }) {
 export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: ReactNode; tap?: boolean }) {
   const { t } = useI18n();
   const anchor = useRef<HTMLSpanElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
   const press = useRef<{ x: number; y: number; held: boolean; timer: ReturnType<typeof setTimeout> } | null>(null);
   const [at, setAt] = useState<DOMRect | null>(null);
   const shown = usePresence(at);
   const close = useCallback(() => setAt(null), []);
+  const phone = useIsPhone();
+  useSheetSwipe(panel, Boolean(at) && phone, close);
   const open = () => anchor.current && setAt(anchor.current.getBoundingClientRect());
   const release = () => {
     if (press.current) clearTimeout(press.current.timer);
@@ -294,7 +298,7 @@ export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: R
       onTouchCancel={() => void release()}>
       {children}
       {shown.mounted && rect && createPortal(
-        <div data-call-settings-menu="" role="dialog" aria-label={t("callMenu.open")} data-closing={shown.closing || undefined} inert={shown.closing}
+        <div ref={panel} data-call-settings-menu="" role="dialog" aria-label={t("callMenu.open")} data-closing={shown.closing || undefined} inert={shown.closing}
           style={{ width, left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)), bottom: window.innerHeight - rect.top + 8, maxHeight: rect.top - 16 }}
           className={cn(MENU_CLASS, "origin-bottom-right overflow-y-auto p-3")}>
           <CallSettings bot={bot} />
