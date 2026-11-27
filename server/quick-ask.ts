@@ -63,20 +63,40 @@ export const routesQuick = (gate: QuickGate) => route(gate) === "quick";
 /** Steered to the bot as the person's own words; the helper answers only the question in it. */
 export const routesAside = (gate: QuickGate) => route(gate) === "aside";
 
-/** A nudge's question: the questions the person typed since the bot last said anything that no helper took, oldest first; "" when the send is no nudge, is the bot's alone, or nothing waits. */
-export function waitingQuestion(gate: QuickGate): string {
-  if (!isNudge(gate.text) || route(gate) === "main") return "";
+// The question rows a helper is answering now, so a second nudge or aside starts no second helper for them.
+const answering = new Set<string>();
+
+export interface Waiting {
+  question: string;
+  /** claimed for this nudge's helper; none when helpers already answer every one */
+  rows: string[];
+}
+
+/** A nudge's question: the questions the person typed since the bot last said anything that no helper took, oldest first, with those no helper answers yet claimed; none when the send is no nudge, is the bot's alone, or nothing waits. */
+export function claimWaitingQuestion(gate: QuickGate): Waiting | undefined {
+  if (!isNudge(gate.text) || route(gate) === "main") return undefined;
   const path = gate.messages;
   const asked: string[] = [];
+  const rows: string[] = [];
   for (let at = path.length - 1; at >= 0; at--) {
     const row = path[at]!;
     if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && row.text?.trim()) break;
     if (row.role !== "user" || row.kind !== "text" || row.quick) continue;
     const question = questionPart(row.text ?? "");
-    if (question) asked.unshift(question);
+    if (!question) continue;
+    asked.unshift(question);
+    rows.unshift(row.id);
   }
-  return asked.join(" ");
+  if (!rows.length) return undefined;
+  const free = rows.filter((id) => !answering.has(id));
+  if (!free.length) return { question: asked.join(" "), rows: [] };
+  for (const id of free) answering.add(id);
+  return { question: asked.filter((_, at) => free.includes(rows[at]!)).join(" "), rows: free };
 }
+
+export const releaseWaiting = (waiting: Waiting) => {
+  for (const id of waiting.rows) answering.delete(id);
+};
 
 // The answers a thread's starting turn carries in its block, until that turn's first model event.
 const carried = new Map<string, string[]>();
@@ -393,16 +413,27 @@ async function land(store: QuickDeps["store"], instance: ProviderInstance | null
 }
 
 /** The helper's answer to the question in a send the bot already took as the person's own words, or to the question a nudge waits on; none when the helper has none. */
-export async function answerAside(deps: HelperDeps, botId: string, threadId: string, sent: Message, question: string, waiting = false): Promise<void> {
-  const { store } = deps;
-  const bot = store.bot(botId);
-  const instance = bot ? deps.instance(bot, threadId) : null;
-  if (!instance) return;
-  const result = await askHelper(deps, instance, botId, threadId, sent, question);
-  const current = store.bot(botId);
-  if (!current || result.route === "handoff" || !result.text) return;
-  const path = store.activePath(threadId);
-  // an edit or rewind dropped the send, or the finished turn already replied to it
-  if (!path.some((row) => row.id === sent.id && row.text === sent.text) || (!current.busy && repliedUnder(path, sent))) return;
-  await land(store, instance, current, threadId, sent, result.text, waiting ? question : undefined);
+export async function answerAside(deps: HelperDeps, botId: string, threadId: string, sent: Message, question: string, waiting?: Waiting): Promise<void> {
+  const claim = waiting ?? { question, rows: [sent.id] };
+  if (!waiting) answering.add(sent.id);
+  try {
+    const { store } = deps;
+    const bot = store.bot(botId);
+    const instance = bot ? deps.instance(bot, threadId) : null;
+    if (!instance) return;
+    const result = await askHelper(deps, instance, botId, threadId, sent, question);
+    const current = store.bot(botId);
+    if (!current || result.route === "handoff" || !result.text) return;
+    const path = store.activePath(threadId);
+    // an edit or rewind dropped the send, or the finished turn already replied to it
+    if (!path.some((row) => row.id === sent.id && row.text === sent.text) || (!current.busy && repliedUnder(path, sent))) return;
+    // a waiting question is the bot's once any line of its own lands after it, mid-turn or not
+    if (waiting) {
+      const asked = path.findIndex((row) => row.id === waiting.rows[0]);
+      if (asked < 0 || path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && row.text?.trim())) return;
+    }
+    await land(store, instance, current, threadId, sent, result.text, waiting ? question : undefined);
+  } finally {
+    releaseWaiting(claim);
+  }
 }

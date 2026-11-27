@@ -20,8 +20,8 @@ import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
 import { switchHeld } from "./pending-model.ts";
-import { answerAside, answerQuick, askStopped, cancelQuickAsks, pending, queueAsk, quickAskRecovery, repliedUnder, requeueDroppedAsk, requeueDroppedCall, routesAside, routesQuick, trackQuickAsk, waitingQuestion, type QuickAsk, type QuickDeps, type QuickGate } from "./quick-ask.ts";
-import { isOrder, questionPart } from "./quick-route.ts";
+import { answerAside, answerQuick, askStopped, cancelQuickAsks, pending, queueAsk, quickAskRecovery, repliedUnder, requeueDroppedAsk, requeueDroppedCall, routesAside, routesQuick, trackQuickAsk, claimWaitingQuestion, releaseWaiting, type QuickAsk, type QuickDeps, type QuickGate, type Waiting } from "./quick-ask.ts";
+import { isNudge, isOrder, questionPart } from "./quick-route.ts";
 import { composeUserTurnPrompt, promptWithReply, replyExcerpt, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -304,7 +304,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       drain: drainQueuedSends,
     }, botId, threadId, ask).catch((error) => console.warn(`[quick] ask failed: ${error instanceof Error ? error.message : String(error)}`)).finally(settle);
   };
-  const startAside = (quick: QuickRouting, botId: string, threadId: string, sent: Message, question: string, waiting: boolean) => {
+  const startAside = (quick: QuickRouting, botId: string, threadId: string, sent: Message, question: string, waiting: Waiting | undefined) => {
     const owed = () => {
       const current = store.bot(botId);
       const path = store.activePath(threadId);
@@ -471,19 +471,29 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             } : undefined;
             // a call line is spoken back and a peer-watched turn owes the person its own tagged line, so only other typed sends get an answer beside them
             const beside = Boolean(quick && gate && !call && !hasPeerWatch(threadId));
-            // "sidekick answer me" while the person's own question waits: the helper answers that question beside the work
-            const waiting = beside && gate ? waitingQuestion(gate) : "";
-            if (quick && gate && !waiting && routesQuick(gate)) {
+            // "sidekick answer me" only asks for an answer: the helper answers the person's own question waiting above it beside the work, else the bot just reads it
+            const nudge = beside && isNudge(text);
+            const waiting = nudge && gate ? claimWaitingQuestion(gate) : undefined;
+            if (quick && gate && !nudge && routesQuick(gate)) {
               const message = store.appendMessage(threadId, { role: "user", kind: "text", text, sendId, quick: { state: "asked" }, call, answersCard, actedAt, sendSeq, sentAfterId });
               markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
               startQuick(quick, bot.id, threadId, message);
               return { ok: true as const, quick: true as const, threadId, message };
             }
-            const aside = Boolean(waiting) || Boolean(beside && gate && routesAside(gate));
-            const question = waiting || (aside ? questionPart(text) : "");
-            const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt, sendSeq, sentAfterId, waited: queuedSend?.waited, aside, question, waiting: Boolean(waiting) });
-            if (quick && question && "steered" in sent && sent.steered) startAside(quick, bot.id, threadId, sent.message, question, Boolean(waiting));
-            return sent;
+            const aside = nudge ? Boolean(waiting) : Boolean(beside && gate && routesAside(gate));
+            const question = waiting?.question ?? (aside ? questionPart(text) : "");
+            let started = false;
+            try {
+              const sent = await deliverBusy(currentAtStart, threadId, text, { adapter, replyTo, sendId, queueId, after, call, answersCard, actedAt, sendSeq, sentAfterId, waited: queuedSend?.waited, aside, question, waiting: Boolean(waiting) });
+              // a helper already answering the waiting question covers this nudge too
+              if (quick && question && (!waiting || waiting.rows.length) && "steered" in sent && sent.steered) {
+                startAside(quick, bot.id, threadId, sent.message, question, waiting);
+                started = true;
+              }
+              return sent;
+            } finally {
+              if (waiting && !started) releaseWaiting(waiting);
+            }
           }
           // Stop cleared `busy`, but the driver holds the thread for up to
           // the cancel grace and would refuse the dispatch. Queue it - that

@@ -1296,6 +1296,47 @@ describe("a nudge while the person's question waits", () => {
     expect(h.steer.mock.calls[0]![1]).not.toMatch(/earlier question/);
   });
 
+  it.each(["hello?", "answer me??", "you there?", "sidekick?", "anyone?", "사이드킥 대답해", "sidekick answer", "sidekick answer me?"])("posts nothing for a nudge when nothing waits: %s", async (nudge) => {
+    const h = waiting({ consumed: true }, "fix the build");
+    mainAcks(h);
+    const sent = await h.send({ text: nudge });
+    expect(sent.data).toMatchObject({ steered: true });
+    expect(sent.data.quick).toBeUndefined();
+    expect(h.ask).not.toHaveBeenCalled();
+    expect(h.steer.mock.calls[0]![1]).toContain(nudge);
+  });
+
+  it.each(["sidekick answer me", "hello?"])("starts no second helper for a nudge while one answers the waiting question: %s", async (second) => {
+    const h = waiting({ consumed: true, result: { route: "answer", text: "It's the second address.", ms: 1 } }, "whats the address again?");
+    mainAcks(h);
+    await h.send({ text: "sidekick answer me" });
+    expect((await h.send({ text: second })).data.quick).toBeUndefined();
+    await h.settled();
+    expect(h.ask).toHaveBeenCalledOnce();
+    expect(botLines(h)).toEqual(["It's the second address."]);
+  });
+
+  it("starts no second helper for a nudge while one answers the question in a mixed line", async () => {
+    const h = waiting({ consumed: true, result: { route: "answer", text: "It's the second address.", ms: 1 } }, "fix the build");
+    mainAcks(h);
+    await h.send({ text: "whats the address again? switch the tests to this one" });
+    await h.send({ text: "sidekick answer me" });
+    await h.settled();
+    expect(h.ask).toHaveBeenCalledOnce();
+    expect(botLines(h)).toEqual(["It's the second address."]);
+  });
+
+  it("drops the helper's answer once the bot answered mid-turn while still busy", async () => {
+    const h = waiting({ consumed: true, result: { route: "answer", text: "Yes. It's the second address.", ms: 1 } }, "whats the address again?");
+    await h.send({ text: "sidekick answer me" });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "It's spare@example.com." });
+    await h.settled();
+    expect(h.store.bot(h.bot.id)?.busy).toBe(true);
+    expect(botLines(h)).toEqual(["It's spare@example.com."]);
+    expect(h.rows().some((row) => row.quick?.state === "answer")).toBe(false);
+    expect(h.steer.mock.calls.at(-1)![1]).toMatch(/if your reply after it already answers it, write nothing for it/);
+  });
+
   it("asks nothing once the bot replied after the question", async () => {
     const h = waiting({ consumed: true });
     h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Looking it up." });
