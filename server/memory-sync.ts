@@ -92,8 +92,8 @@ const ledgerSchema = z.object({
       tidy: z.object({ from: z.string(), to: z.string() }).optional(),
       // the PC the last full pass picked to run the idle tidy
       tidier: z.string().regex(DEVICE).optional(),
-      // another PC that still names itself as the one to tidy: its last stamp, this PC's own when last looked, and when this PC's wait on it began
-      held: z.object({ at: time, talked: time, since: time.optional() }).optional(),
+      // set only while this PC is the pick and waits on another PC that still names itself: when that wait's HOLD_MS began; an older shape is dropped, not the ledger
+      held: z.object({ since: time }).optional().catch(undefined),
     }),
   ),
 });
@@ -321,13 +321,10 @@ const HOLD_MS = 6 * 60 * 60_000;
 
 type Held = NonNullable<MemorySyncLedger["bots"][string]["held"]>;
 
-// The PC the tidy moved to waits on it only while it shows it is on: the wait starts with a message here once this PC is the pick and that PC's stamp has not
-// changed since, and ends HOLD_MS later; a stamp first seen after a message here it predates counts that message. Each new stamp from it waits for the next
-// message here, so a PC in use that holds on is never tidied beside.
-function hold(held: Held | undefined, at: number, talkedAt: number, picked: boolean): Held {
-  const fresh = held === undefined ? at < talkedAt : held.talked !== talkedAt;
-  const since = !picked ? undefined : held?.at === at && held.since !== undefined ? held.since : fresh ? talkedAt : undefined;
-  return { at, talked: talkedAt, since };
+// The PC the tidy moved to waits on it HOLD_MS from the later of when this PC's copy first showed its latest message, as the wait began, and that PC's
+// newest stamp past this PC's latest message. Only such a stamp moves the wait on: a late copy of an older one changes nothing, so every wait ends.
+function hold(held: Held | undefined, at: number, talkedAt: number, shown: number): Held {
+  return { since: Math.max(held?.since ?? shown, at > talkedAt ? at : 0) };
 }
 
 /** Background jobs run on the PC the last full sync pass picked; a renamed PC keeps them. */
@@ -675,9 +672,10 @@ export function syncBotMemory(
     const mine = (device: string) => device === me || Boolean(ledger.renamed?.includes(device));
     const { pick: picked, holder } = pickTidier(talked, mine);
     pick = picked;
-    bot.held = holder ? hold(bot.held, talked.get(holder)!.at, talkedAt, Boolean(pick && mine(pick))) : undefined;
-    const waits = Boolean(holder && pick && mine(pick)) && (bot.held!.since === undefined || now < bot.held!.since + HOLD_MS);
-    bot.tidier = waits ? holder : pick;
+    // a message's own pass publishes its stamp; a PC that never published it (a copied data folder) shows it from now
+    const shown = snapshots.some((snapshot) => snapshot.device === me && snapshot.talkedAt === talkedAt) ? talkedAt : now;
+    bot.held = holder && pick && mine(pick) ? hold(bot.held, talked.get(holder)!.at, talkedAt, shown) : undefined;
+    bot.tidier = bot.held && now < bot.held.since + HOLD_MS ? holder : pick;
   }
   // a wiped or never-created workspace has nothing to publish; forgetting it pulls instead of deleting everywhere, from this PC's own snapshot too
   const restore = !existsSync(workspace);
@@ -890,8 +888,8 @@ export function syncBotMemory(
     writeFileAtomic(path, body, { mode: 0o600 });
   }
   const after = memoryFiles(workspace);
-  // a skipped file or snapshot is retried by the next poll, so the pass is not recorded as seen; so is a wait on another PC that ends on time
-  const complete = !partial && (bot.tidier === pick || bot.held?.since === undefined) && !Object.values(results).includes("skipped");
+  // a skipped file or snapshot is retried by the next poll, so the pass is not recorded as seen; so is a wait on another PC, which ends on time
+  const complete = !partial && bot.tidier === pick && !Object.values(results).includes("skipped");
   // a file written after the snapshots were read may not be what was read, so the racy window starts at the read
   bot.seen = complete && after ? passInputs(dirs, workspace, after, { files: bot.files, tidier: bot.tidier }, talkedAt, me, Math.min(now, read?.at ?? now)) : undefined;
   return results;

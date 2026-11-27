@@ -119,6 +119,117 @@ function settle(...all: PC[]) {
   }
 }
 
+const HOUR = 60 * 60_000;
+
+// seeded, so a failing order replays
+function random(seed: number) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(s ^ (s >>> 15), s | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 2 ** 32;
+  };
+}
+
+// Times are from the laptop's message that takes the tidy, a week after the desktop's last; the desktop is opened again at `back` and the laptop is
+// closed for good at `closed`. Each PC polls every six hours from `poll` on. copies(from, n): the delays after which Drive lands the n-th copy that PC
+// writes, counted from its copy before the laptop took over, once the other PC is on; a copy that names the laptop can land after a later one that does too.
+type Handover = { back: number; desk: number[]; laptop: number[]; closed: number; poll: number; copies: (from: "desk" | "laptop", n: number) => number[] };
+
+// Runs a week from `back` and returns each poll that broke the handover: at or past six hours after the later of the laptop's last message and the
+// desktop's latest message once it has read the laptop's claim, the desktop must tidy and the laptop must not.
+// both PCs in use and the desktop tidying, a week before the laptop takes the tidy at `took`; ahead of the files' own times, so a pass that reads
+// nothing new is skipped as in use
+function beforeHandover() {
+  const took = Date.now() + 9 * DAY;
+  const pcs = devices("aaaaaaaaaaaa", "bbbbbbbbbbbb");
+  const [a, b] = pcs;
+  seed(MEMORY_SEED, a, b);
+  talk(a, took - 8 * DAY);
+  talk(b, took - 8 * DAY);
+  for (const [from, to] of [[a, b], [b, a], [a, b]]) {
+    receive(from, to);
+    sync(to, took - 8 * DAY);
+  }
+  return { took, pcs };
+}
+
+function handover(plan: Handover, { took, pcs } = beforeHandover()) {
+  const [back, closed, end] = [took + plan.back, took + plan.closed, took + plan.back + 7 * DAY];
+  const [desk, laptop] = [plan.desk.map((at) => took + at), plan.laptop.map((at) => took + at)];
+  const [a, b] = devices("aaaaaaaaaaaa", "bbbbbbbbbbbb");
+  [a, b].forEach((pc, i) => {
+    for (const key of ["folder", "workspace"] as const) if (existsSync(pcs[i][key])) cpSync(pcs[i][key], pc[key], { recursive: true });
+    Object.assign(pc.ledger, structuredClone(pcs[i].ledger));
+  });
+  const last = Math.max(took, ...laptop);
+  const on = (pc: PC, at: number) => (pc === a ? at >= back : at <= closed);
+  const written = new Map([[a, [{ text: capture(a), claims: true }]], [b, [{ text: capture(b), claims: false }]]]);
+  const landed = new Map([[a, 0], [b, 0]]);
+  const queue: Array<{ at: number; run: () => void }> = [];
+  const later = (at: number, run: () => void) => {
+    if (at <= end) queue.splice(queue.findLastIndex((next) => next.at <= at) + 1, 0, { at, run });
+  };
+  const broke: string[] = [];
+  let due: number | undefined;
+  const land = (from: PC, to: PC, n: number, at: number) => {
+    const sent = written.get(from)!;
+    const now = landed.get(to)!;
+    if (!on(to, at) || (n < now && !(from === b && sent[n].claims && sent[now].claims))) return;
+    landed.set(to, n);
+    receive(from, to, sent[n].text);
+    pass(to, at);
+  };
+  const pass = (pc: PC, at: number, message = false) => {
+    if (!on(pc, at)) return;
+    if (message) talk(pc, at);
+    else sync(pc, at);
+    const [other, sent, text] = [pc === a ? b : a, written.get(pc)!, capture(pc)];
+    if (sent.at(-1)!.text !== text) {
+      const n = sent.push({ text, claims: JSON.parse(text).tidier === pc.ledger.device }) - 1;
+      for (const delay of plan.copies(pc === a ? "desk" : "laptop", n)) {
+        const lands = (other === a ? Math.max(at, back) : at) + delay;
+        later(lands, () => land(pc, other, n, lands));
+      }
+    }
+    const talked = a.ledger.talked!["bot-1"];
+    if (pc === a && due === undefined && talked >= back && written.get(b)![landed.get(a)!].claims) {
+      const at = (due = Math.max(last, talked) + 6 * HOUR);
+      later(at, () => pass(a, at));
+    }
+    if (due !== undefined && at >= due && tidiesHere(pc.ledger, "bot-1") !== (pc === a)) broke.push(`${pc === a ? "desktop waits" : "laptop tidies"} ${((at - due) / HOUR).toFixed(2)}h past due`);
+  };
+  pass(b, took, true);
+  later(back, () => pass(a, back));
+  for (const at of laptop) later(at, () => pass(b, at, true));
+  for (const at of desk) later(at, () => pass(a, at, true));
+  for (const pc of [a, b]) for (let at = (pc === a ? back : took) + plan.poll; at <= end; at += 6 * HOUR) later(at, () => pass(pc, at));
+  while (queue.length) queue.shift()!.run();
+  due ??= back;
+  pass(a, end);
+  pass(b, end);
+  return broke;
+}
+
+function shuffled(seed: number): Handover {
+  const rand = random(seed);
+  const between = (from: number, to: number) => Math.round(from + rand() * (to - from));
+  const back = between(HOUR, 4 * DAY);
+  const desk = Array.from({ length: 1 + Math.floor(rand() * 4) }, () => between(back, back + 2 * DAY)).sort((x, y) => x - y);
+  const laptop = Array.from({ length: Math.floor(rand() * 4) }, () => between(0, back + DAY));
+  // a last message on the laptop just after one on the desktop, closed before the desktop's copy lands
+  if (rand() < 0.3) laptop.push(desk[0] + between(0, 30 * 60_000));
+  laptop.sort((x, y) => x - y);
+  const last = Math.max(0, ...laptop);
+  const closed = rand() < 0.4 ? last : between(last, last + 12 * HOUR);
+  const copies = () => {
+    const first = rand() < 0.3 ? between(0, 2 * 60_000) : between(0, 3 * HOUR);
+    return rand() < 0.3 ? [first, first + between(0, 6 * HOUR)] : [first];
+  };
+  return { back, desk, laptop, closed, poll: between(1, 6 * HOUR), copies };
+}
+
 describe("memory sync", () => {
   it("tidies on one PC the user messages, hands that on after a week without a message there, and takes it back on the next one", () => {
     const [a, b, c] = devices("aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc");
@@ -365,27 +476,37 @@ describe("memory sync", () => {
     }
   });
 
-  it("keeps waiting on a PC that names itself while its copy changes after each message here", () => {
+  it("takes the tidy within six hours of the last message on a closed PC that has it, whatever order its copies land in", () => {
+    // two late copies from a laptop closed since a day after it took the tidy, landing a minute apart after a message here
+    expect(handover({ back: 4 * DAY, desk: [4 * DAY], laptop: [DAY], closed: DAY, poll: 30 * 60_000, copies: (_, n) => [n * 60_000] })).toEqual([]);
+    // the laptop's last message lands a minute after one here, from a laptop closed before it got this PC's copy
+    const back = 3 * DAY;
+    expect(handover({ back, desk: [back], laptop: [back + 60_000], closed: back + 60_000, poll: 30 * 60_000, copies: (from, n) => [from === "desk" ? 5 * 60_000 : n === 1 ? 0 : 60_000] })).toEqual([]);
+    const start = beforeHandover();
+    const broke = Array.from({ length: 500 }, (_, seed) => handover(shuffled(seed), start).map((what) => `seed ${seed}: ${what}`)).flat();
+    expect(broke.slice(0, 5)).toEqual([]);
+  }, 300_000);
+
+  // known case: a PC whose clock is more than a day behind leaves out this PC's stamps and keeps naming itself, while its own stamps look older than a
+  // message here, as a late copy's do. This PC takes the tidy six hours after that message anyway; both tidy, the later tidy wins and the other is set aside.
+  it("takes the tidy six hours after a message here beside a PC in use whose clock is more than a day behind", () => {
     const [a, b] = devices("aaaaaaaaaaaa", "bbbbbbbbbbbb");
     seed(MEMORY_SEED, a, b);
     const now = Date.now();
-    // b's clock is two days behind, so it leaves out a's stamps and keeps naming itself
     const ahead = now + 2 * DAY;
     talk(b, now);
     receive(b, a);
     talk(a, ahead);
+    expect(tidying(a, b)).toEqual([false, true]);
+    sync(a, ahead + 6 * 60 * 60_000 - 1);
     expect(tidying(a, b)).toEqual([false, true]);
     for (let day = 0; day < 3; day++) {
       talk(a, ahead + day * DAY + 60 * 60_000);
       talk(b, now + day * DAY + 3 * 60 * 60_000);
       receive(b, a);
       sync(a, ahead + day * DAY + 23 * 60 * 60_000);
-      expect(tidying(a, b)).toEqual([false, true]);
+      expect(tidying(a, b)).toEqual([true, true]);
     }
-    // b goes quiet after a message here: a takes the tidy six hours on
-    talk(a, ahead + 3 * DAY + 60 * 60_000);
-    sync(a, ahead + 3 * DAY + 7 * 60 * 60_000);
-    expect(tidying(a)).toEqual([true]);
   });
 
   // known case: Drive replays a PC's copy from before the user went back to it. The other PC takes the tidy again until the real copy

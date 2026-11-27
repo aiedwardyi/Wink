@@ -53,17 +53,18 @@ describe("memory reads", () => {
       mkdirSync(dir);
       writeFileSync(join(dir, "MEMORY.md"), "remember this");
     }
-    const [mine, theirs]: MemorySyncLedger[] = [{ bots: {} }, { bots: {} }];
+    // the other PC sorts first, so this one does not wait on it to let go of the tidy, which reads every copy until it ends
+    const [mine, theirs]: MemorySyncLedger[] = [{ device: "bbbbbbbbbbbb", host: "mine", bots: {} }, { device: "aaaaaaaaaaaa", host: "other", bots: {} }];
     const later = Date.now() + 5_000;
     syncBotMemory(folder, "bot", other, theirs, { host: "other", now: later });
-    syncBotMemory(folder, "bot", workspace, mine, { now: later });
+    syncBotMemory(folder, "bot", workspace, mine, { host: "mine", now: later });
     vi.mocked(readFileSync).mockClear();
-    syncBotMemory(folder, "bot", workspace, mine, { now: later });
+    syncBotMemory(folder, "bot", workspace, mine, { host: "mine", now: later });
     const copies = vi.mocked(readFileSync).mock.calls.filter(([file]) => String(file).startsWith(memorySyncDir(folder, "bot")));
     expect(copies).toEqual([]);
     writeFileSync(join(other, "MEMORY.md"), "remember this and that");
     syncBotMemory(folder, "bot", other, theirs, { host: "other", now: later });
-    expect(syncBotMemory(folder, "bot", workspace, mine, { now: later })["MEMORY.md"]).toBe("pulled");
+    expect(syncBotMemory(folder, "bot", workspace, mine, { host: "mine", now: later })["MEMORY.md"]).toBe("pulled");
   });
 
   it("rechecks a file edited within its timestamp's resolution", () => {
