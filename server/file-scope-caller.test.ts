@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CommsCallers } from "./comms-caller.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import { ownerChats } from "./one-mind.ts";
-import { ownerOwnTurn } from "./owner-turn.ts";
+import { ownerOwnTurn, ownerTypedTurn } from "./owner-turn.ts";
 import { seedTaskResumePacket } from "./task-state-fold.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { TurnRegistry, type LiveTurn } from "./turn-registry.ts";
@@ -42,6 +42,7 @@ let insidePicture: string;
 let packets: Map<string, TaskResumePacket>;
 let turns: TurnRegistry;
 let routes: ReturnType<typeof createInternalRoutes>;
+let ownerFileStart: (botId: string, threadId: string, depth: number, typed: boolean) => boolean;
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("pixels")]);
 
@@ -79,7 +80,9 @@ beforeEach(() => {
   const teammateAskTurn = (_roomId: string, threadId: string) => threadId === room.threadId;
   const readOnlyRoomTurn = load("readOnlyRoomTurn", { store, readOnlyTurnThreads, readOnlyAskTurn, teammateAskTurn });
   const guestRoomTurn = load("guestRoomTurn", { store, readOnlyRoomTurn, joinedGuestThreads, teammateAskTurn });
-  const ownerFileTurn = load("ownerFileTurn", { ownerOwnTurn, turnRegistry: turns, store, ownerChats, notOwnerChats: () => roomTaskThreads, joinedRoomThreads, guestRoomTurn });
+  const ownerFileFacts = load("ownerFileFacts", { turnRegistry: turns, store, ownerChats, notOwnerChats: () => roomTaskThreads, joinedRoomThreads, guestRoomTurn });
+  const ownerFileTurn = load("ownerFileTurn", { ownerOwnTurn, ownerFileFacts });
+  ownerFileStart = load("ownerFileStart", { ownerTypedTurn, ownerFileFacts });
   routes = createInternalRoutes({
     store,
     connectorThread: owns,
@@ -95,7 +98,10 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function post(route: "taskState" | "showImage", token: [string, string] | null, body: object) {
+// the token a turn's tools got at dispatch: the owner's typed turn gets its own, every other turn shares the chat's
+type Token = [botId: string, threadId: string, ownerFiles?: boolean];
+
+async function post(route: "taskState" | "showImage", token: Token | null, body: object) {
   const req = new EventEmitter() as IncomingMessage;
   req.headers = token ? { authorization: `Bearer ${callers.token(...token)}` } : {};
   let status = 0;
@@ -110,11 +116,13 @@ async function post(route: "taskState" | "showImage", token: [string, string] | 
 }
 
 const artifactsOf = (threadId: string) => packets.get(threadId)!.artifacts.map((artifact) => artifact.ref);
-const live = (botId: string, threadId: string, turn: Partial<LiveTurn> = {}) =>
-  turns.start(`turn-${threadId}`, { botId, threadId, owner: "user", depth: 0, typed: true, ...turn });
-const record = (botId: string, threadId: string, refs: string[]) =>
-  post("taskState", [botId, threadId], { fromBotId: botId, fromThreadId: threadId, artifacts: refs.map((ref) => ({ ref, label: "x" })) });
-const show = (botId: string, threadId: string, path: string) => post("showImage", [botId, threadId], { fromBotId: botId, fromThreadId: threadId, path });
+const live = (botId: string, threadId: string, turn: Partial<LiveTurn> = {}, turnId = `turn-${threadId}`) =>
+  turns.start(turnId, { botId, threadId, owner: "user", depth: 0, typed: true, ...turn });
+// an owner turn's token by default, so a folder-only result is the turn's doing, not the token's
+const record = (botId: string, threadId: string, refs: string[], ownerFiles = true) =>
+  post("taskState", [botId, threadId, ownerFiles], { fromBotId: botId, fromThreadId: threadId, artifacts: refs.map((ref) => ({ ref, label: "x" })) });
+const show = (botId: string, threadId: string, path: string, ownerFiles = true) =>
+  post("showImage", [botId, threadId, ownerFiles], { fromBotId: botId, fromThreadId: threadId, path });
 
 describe("file scope follows the turn the token belongs to", () => {
   it("a read-only turn's token can't record an outside file on another chat's task", async () => {
@@ -186,6 +194,21 @@ describe("only the owner's own 1:1 turn reads outside the bot's folders", () => 
     expect(artifactsOf("chat-b")).toEqual([]);
   });
 
+  it.each([
+    ["a peer's ask", { owner: "peer", depth: 1, typed: false }],
+    ["a routine, webhook, wake or card continuation", { typed: false }],
+  ] as const)("%s's token stays folder-only after the owner's next typed turn starts", async (_, earlier) => {
+    live("bot-b", "chat-b", earlier, "turn-1");
+    turns.settle("turn-1");
+    live("bot-b", "chat-b", {}, "turn-2");
+    expect((await show("bot-b", "chat-b", picture, false)).status).toBe(403);
+    expect((await record("bot-b", "chat-b", [outside], false)).status).toBe(200);
+    expect(artifactsOf("chat-b")).toEqual([]);
+    expect((await show("bot-b", "chat-b", picture)).status).toBe(201);
+    expect((await record("bot-b", "chat-b", [outside])).status).toBe(200);
+    expect(artifactsOf("chat-b")).toEqual([realpathSync(outside)]);
+  });
+
   it("a read-only joined-room turn is still refused task updates and kept to its folders for pictures", async () => {
     live("bot-a", "chat-a");
     expect((await record("bot-a", "chat-a", [inside])).status).toBe(403);
@@ -193,10 +216,21 @@ describe("only the owner's own 1:1 turn reads outside the bot's folders", () => 
     expect((await show("bot-a", "chat-a", insidePicture)).status).toBe(201);
   });
 
+  it("dispatch gives the owner token only to the owner's own typed 1:1 turn", () => {
+    expect(ownerFileStart("bot-b", "chat-b", 0, true)).toBe(true);
+    expect(ownerFileStart("bot-b", "chat-b", 1, true)).toBe(false);
+    expect(ownerFileStart("bot-b", "chat-b", 0, false)).toBe(false);
+    expect(ownerFileStart("bot-j", "chat-j", 0, true)).toBe(false);
+    expect(ownerFileStart("bot-h", room.threadId, 0, true)).toBe(false);
+    const source = index.getFullText();
+    expect(source).toContain("commsCallers.token(botId, threadId, ownerFiles)");
+    expect(source).toContain("agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory, ownerFileStart(bot.id, threadId, commsDepth, turnStartedByUser(opts)))");
+  });
+
   it("opens an unrestricted file scope only through owner-turn.ts", () => {
     const opened = readdirSync(import.meta.dirname, { recursive: true, encoding: "utf8" })
       .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts") && file !== "owner-turn.ts")
       .filter((file) => readFileSync(join(import.meta.dirname, file), "utf8").split("\n").some((line) => /kind:\s*"any"/.test(line) && !line.includes("type FileScope =")));
-    expect(opened, 'pick a file scope with fileScope(deps.ownerTurn(botId, threadId), roots) from owner-turn.ts, never a literal { kind: "any" }').toEqual([]);
+    expect(opened, 'pick a file scope with fileScope(deps.ownerTurn(caller, botId, threadId), roots) from owner-turn.ts, never a literal { kind: "any" }').toEqual([]);
   });
 });

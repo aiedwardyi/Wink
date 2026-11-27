@@ -14,6 +14,7 @@ import type { BoardCalls } from "./board-calls.ts";
 import type { BotCalls } from "./bot-call.ts";
 import { checkPicture } from "./bot-hooks.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
+import type { CommsCaller } from "./comms-caller.ts";
 import { postRefusalNotice, refusalText } from "./comms-notice.ts";
 import { callerSnapshot, release, reserve, type Reservation } from "./comms-root.ts";
 import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
@@ -53,7 +54,7 @@ type InternalRouteDeps = {
   computerControl: ComputerControl;
   askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation; reader?: boolean }) => Promise<AskReply>;
   runDelegatedTurn?: Parameters<typeof drainDelegations>[3];
-  resolveCommsCaller?: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined;
+  resolveCommsCaller?: (header: string | string[] | undefined) => CommsCaller | undefined;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
   checkedGroupResponder: (value: unknown, memberIds: string[]) => GroupDefaultResponder | null;
   createdBotSelection: (chief: ModelSelection, model: unknown, effort: unknown) => { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string };
@@ -64,8 +65,8 @@ type InternalRouteDeps = {
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   persistTaskPacket: (packet: TaskResumePacket, opts?: { staged?: boolean }, seen?: readonly TaskAsk[]) => TaskResumePacket | null;
   readOnlyTurn: (botId: string, threadId: string) => boolean;
-  /** The owner's own typed 1:1 turn, running now: the only one that reads files outside the bot's folders. */
-  ownerTurn: (botId: string, threadId: string) => boolean;
+  /** The owner's own typed 1:1 turn, running now and calling on its own token: the only one that reads files outside the bot's folders. */
+  ownerTurn: (caller: CommsCaller | undefined, botId: string, threadId: string) => boolean;
   /** The user line a running room turn was dispatched to answer. */
   answeredLine: (threadId: string) => string | undefined;
   /** The last text the bot's current turn in that thread wrote. */
@@ -192,7 +193,8 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!bot) return json(res, 403, { error: "unknown sender" });
       const conversation = store.conversationForBot(bot.id, body.fromThreadId);
       if (!conversation) return json(res, 403, { error: "source conversation does not belong to sender" });
-      if (tokenMismatch(deps.resolveCommsCaller?.(req.headers?.authorization), bot.id, body.fromThreadId)) {
+      const caller = deps.resolveCommsCaller?.(req.headers?.authorization);
+      if (tokenMismatch(caller, bot.id, body.fromThreadId)) {
         return json(res, 403, { error: "source conversation does not belong to sender" });
       }
       if (deps.readOnlyTurn(bot.id, body.fromThreadId)) {
@@ -209,7 +211,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         return json(res, 400, { error: "this task has no working folder for artifacts" });
       }
       const folder = taskCwd ?? "";
-      const scope = fileScope(deps.ownerTurn(bot.id, body.fromThreadId), taskCwd ? [taskCwd] : []);
+      const scope = fileScope(deps.ownerTurn(caller, bot.id, body.fromThreadId), taskCwd ? [taskCwd] : []);
       const { kept: artifacts, dropped } = groundTaskArtifacts(body.artifacts ?? [], folder, scope);
 
       const next = structuredClone(current);
@@ -545,7 +547,8 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!fromThreadId) return json(res, 400, { error: "no active thread" });
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
-      if (tokenMismatch(deps.resolveCommsCaller?.(req.headers?.authorization), from.id, fromThreadId)) return json(res, 403, { error: "source thread does not belong to sender" });
+      const caller = deps.resolveCommsCaller?.(req.headers?.authorization);
+      if (tokenMismatch(caller, from.id, fromThreadId)) return json(res, 403, { error: "source thread does not belong to sender" });
       const picture = deps.captureRoomPicture?.(from, fromThreadId);
       const roots = [
         store.taskByThread(from.id, fromThreadId)?.cwd,
@@ -553,7 +556,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         from.cwd,
         workspaceDir(from.id),
       ].filter((root): root is string => Boolean(root));
-      const scope = fileScope(deps.ownerTurn(from.id, fromThreadId), roots);
+      const scope = fileScope(deps.ownerTurn(caller, from.id, fromThreadId), roots);
       let saved: ReturnType<typeof importLocalImage>;
       try {
         saved = importLocalImage(String(body.path ?? ""), scope);
