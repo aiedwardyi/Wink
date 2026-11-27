@@ -3,6 +3,7 @@ import { Check, Copy, CornerDownLeft, RotateCcw, TerminalSquare, X } from "lucid
 import type { Bot } from "@/state/store";
 import { api, visibleMessages } from "@/state/store";
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { noteTerminalFetching, noteTerminalShown } from "@/lib/cold-open-timing";
 import { paintRun, runPaint, type RunPaint } from "@/lib/ansi-palette";
 import { composerEnterIntent } from "@/lib/composer-enter";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
@@ -44,6 +45,8 @@ const MAIN_CLOSED: RemoteTerminalSnapshot = { state: "no-terminal" };
 const REFRESH_MS = 1_000;
 const SPIN_MS = 500;
 const REFRESH_TIMEOUT_MS = 5_000;
+// Chromium holds a GET behind an identical one still waiting on headers (its cache lock), so a hung read would stall every later poll.
+const READ: RequestInit = { cache: "no-store" };
 const SEND_MAY_HAVE_RUN = "Send may have run. Check the screen before resending.";
 
 type TerminalKey = "up" | "down" | "enter" | "esc" | "clear";
@@ -110,7 +113,8 @@ export function RemoteTerminalView({
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [selectedPane, setSelectedPane] = useState<string | null>(() => lastViewedPanes.get(bot.id) ?? null);
+  // A tapped pane is the first read; waiting for a roster to list it costs a phone a whole extra read.
+  const [selectedPane, setSelectedPane] = useState<string | null>(() => paneFocus?.sessionId ?? lastViewedPanes.get(bot.id) ?? null);
   const [draft, setDraft] = useState("");
   // The pane a draft was typed for, MAIN_TAB for Main since a restart gives it a new id; a closed pane must not hand its line to whichever pane takes the screen.
   const [draftPane, setDraftPane] = useState<string | null>(null);
@@ -120,6 +124,8 @@ export function RemoteTerminalView({
   const [starting, setStarting] = useState(false);
   const requestRef = useRef(0);
   const appliedRequestRef = useRef(0);
+  // Reads in flight, oldest first, from the poll and the Refresh button alike. Closing or switching panes cancels them, since nothing can show them.
+  const readsRef = useRef<{ read: AbortController; answering: boolean }[]>([]);
   const outputRef = useRef<HTMLPreElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pinnedRef = useRef(true);
@@ -132,6 +138,13 @@ export function RemoteTerminalView({
 
   const panes = snapshot?.panes ?? [];
   const mainPane = panes.find((pane) => pane.main);
+  // A later tap picks its worker in the render that brings it, so the poll's first read is that worker, not the last pane.
+  const [tapped, setTapped] = useState(paneFocus);
+  if (tapped !== paneFocus) {
+    setTapped(paneFocus);
+    const id = paneFocus?.sessionId;
+    if (id && !panes.some((pane) => pane.sessionId === id && pane.main)) setSelectedPane(id);
+  }
   const order: RemoteTerminalPane[] = !panes.length
     ? panes
     : mainPane
@@ -145,19 +158,32 @@ export function RemoteTerminalView({
 
   const refresh = useCallback(async () => {
     const request = ++requestRef.current;
+    const reads = readsRef.current;
+    const entry = { read: new AbortController(), answering: false };
+    reads.push(entry);
+    // A link that answers nothing holds at most two of the phone's few sockets: a third read cancels the oldest still waiting.
+    // A read whose answer has begun is never dropped for this, however long its body takes.
+    const waiting = reads.filter((open) => !open.answering);
+    if (waiting.length > 2) reads.splice(reads.indexOf(waiting[0]), 1)[0].read.abort();
+    const { signal } = entry.read;
     const path = `/api/bots/${encodeURIComponent(bot.id)}/terminal`;
     const targetPane = onMainTab ? undefined : picked ?? fallbackPane;
     try {
       const qs = targetPane ? `?sessionId=${encodeURIComponent(targetPane)}` : "";
-      const next = await api(`${path}${qs}`);
+      noteTerminalFetching(targetPane, mainPane?.sessionId);
+      const next = await api(`${path}${qs}`, { ...READ, signal }, () => { entry.answering = true; });
       if (request < appliedRequestRef.current) return;
+      // A body cut off mid-read decodes to {}: it holds no frame, so the last one stays.
+      if (!Object.keys(next ?? {}).length) return;
       appliedRequestRef.current = request;
       restoringRef.current = null;
       setSnapshot(next);
+      noteTerminalShown(targetPane, mainPane?.sessionId);
       setError(null);
       setActionError(null);
     } catch (cause) {
-      if (request < appliedRequestRef.current) return;
+      // A read cancelled on close or pane switch has nothing left to show.
+      if (signal?.aborted || request < appliedRequestRef.current) return;
       appliedRequestRef.current = request;
       const message = cause instanceof Error ? cause.message : String(cause);
       if (targetPane && /unknown terminal/i.test(message)) {
@@ -170,17 +196,21 @@ export function RemoteTerminalView({
         }
         // The roster still lists the closed pane, so re-read it or the fallback keeps targeting it.
         try {
-          const roster = await api(path);
+          const roster = await api(path, { ...READ, signal });
           if (request < appliedRequestRef.current) return;
           setSnapshot(roster);
           setError(null);
         } catch (retry) {
-          if (request < appliedRequestRef.current) return;
+          if (signal?.aborted || request < appliedRequestRef.current) return;
           setError(retry instanceof Error ? retry.message : String(retry));
         }
         return;
       }
       setError(message);
+    } finally {
+      // Older reads can only be discarded after this answer, so they free their sockets now.
+      const index = reads.indexOf(entry);
+      if (index >= 0) for (const older of reads.splice(0, index + 1)) if (older !== entry) older.read.abort();
     }
   }, [bot.id, picked, onMainTab, fallbackPane]);
 
@@ -197,7 +227,7 @@ export function RemoteTerminalView({
     setRefreshing(false);
   }, [refresh]);
 
-  // A stale roster must not consume the tap. Apply it once that pane is listed.
+  // A roster can predate a worker the chat lists, so an unlisted tap is a worker; a gone one falls back on its read.
   const focusedRef = useRef<typeof paneFocus>(null);
   useEffect(() => {
     if (!paneFocus || focusedRef.current === paneFocus) return;
@@ -208,11 +238,11 @@ export function RemoteTerminalView({
       setDraftPane(mainPane ? MAIN_TAB : null);
       return;
     }
-    const match = panes.find((pane) => pane.sessionId === paneFocus.sessionId);
-    if (!match) return;
+    if (!panes.length) return;
+    const main = panes.some((pane) => pane.main && pane.sessionId === paneFocus.sessionId);
     focusedRef.current = paneFocus;
-    setSelectedPane(match.main ? null : match.sessionId);
-    setDraftPane(match.main ? MAIN_TAB : match.sessionId);
+    setSelectedPane(main ? null : paneFocus.sessionId);
+    setDraftPane(main ? MAIN_TAB : paneFocus.sessionId);
   }, [paneFocus, panes]);
 
   useEffect(() => {
@@ -224,6 +254,7 @@ export function RemoteTerminalView({
     let timer = 0;
     let live = true;
     // The next tick waits for this read, so a slow link never stacks them; a dropped one holds the poll only until the timeout.
+    // A read still arriving then runs on and paints: cancelling it would drop a frame that is on its way.
     const tick = async () => {
       await Promise.race([refresh(), new Promise<void>((done) => window.setTimeout(done, REFRESH_TIMEOUT_MS))]);
       if (live) timer = window.setTimeout(tick, REFRESH_MS);
@@ -233,6 +264,7 @@ export function RemoteTerminalView({
       live = false;
       window.clearTimeout(timer);
       appliedRequestRef.current = ++requestRef.current;
+      for (const { read } of readsRef.current.splice(0)) read.abort();
     };
   }, [visible, refresh]);
 

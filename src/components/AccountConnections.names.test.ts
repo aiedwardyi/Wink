@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { makeIdentityCanary, scanForCanary, type IdentityCanary } from "@/lib/identity-canary";
 import { usageBoardFixture } from "@/lib/usage-board.fixture";
 import type { UsageBoard } from "@/lib/usage-board";
+import { usageOrderHost } from "@/lib/usage-order.test-host";
 import type { AppSettingsSection, InstanceInfo } from "@/state/store";
 
 let m: {
@@ -24,6 +25,7 @@ let reply: (() => Promise<Response>) | null;
 let boardReply: (() => Promise<Response>) | null;
 let mutationReply: (() => Promise<Response>) | null;
 let calls: { path: string; init?: RequestInit }[];
+let wink: ReturnType<typeof usageOrderHost>;
 const matchMedia = window.matchMedia;
 const row = () => host.querySelector<HTMLElement>('[data-connection-account="claude"]');
 const button = (label: string, scope: ParentNode | null = host) => [...(scope?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((node) => node.textContent === label);
@@ -78,6 +80,7 @@ beforeEach(async () => {
     install: { login: { args: ["login"], deviceArgs: ["login", "--device"] } },
   }));
   calls = [];
+  wink = usageOrderHost();
   reply = null;
   boardReply = null;
   mutationReply = null;
@@ -85,6 +88,8 @@ beforeEach(async () => {
     const path = String(url);
     calls.push({ path, init });
     if (path.startsWith("/api/usage/board")) return boardReply ? boardReply() : Response.json(structuredClone(board));
+    const order = wink.answer(path, init);
+    if (order) return Response.json(await order);
     if (path.endsWith("/name")) return reply ? reply() : Response.json({ id: "claude", number: 1, nickname: "Studio", name: "Studio" });
     if (path === "/api/accounts" && init?.method === "POST" && mutationReply) return mutationReply();
     return new Promise<Response>(() => {});
@@ -377,7 +382,8 @@ it("persists Connections order in Usage and brings Usage changes back", async ()
   await move(row(), "ArrowDown");
   const changed = [ids[1], ids[0], ids[2]];
   expect(connectionOrder()).toEqual(changed);
-  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).claude).toEqual(changed);
+  await settle();
+  expect(wink.orders?.claude).toEqual(changed);
   await act(async () => store.dispatch({ type: "toggleAppSettings", section: "usage", open: true }));
   await settle();
   expect(usageOrder()).toEqual(changed);
@@ -394,7 +400,7 @@ it("persists Connections order in Usage and brings Usage changes back", async ()
 
 it.each([
   ["signed-out", "Sign In", {}],
-  ["still signing in", "Cancel", { loginState: "pending", loginCapture: { url: "https://example.com/device" } }],
+  ["still signing in", "Cancel", { loginState: "pending" }],
 ] as const)("keeps one menu, on the name row, for a %s named account on a phone", async (_state, action, signIn) => {
   Object.assign(accounts[0]!, { snapshot: { state: "available", authenticated: false }, ...signIn });
   await mount({ phone: true });
@@ -405,7 +411,101 @@ it.each([
   while (line && line !== row() && !line.textContent?.includes("Claude 1")) line = line.parentElement;
   expect(line, "it sits on the name row, not on the account as a whole").not.toBe(row());
   expect(button(action, row()), `${action} shows`).toBeTruthy();
-  expect(line!.contains(button(action, row())!), `${action} sits on its own row, clear of the menu`).toBe(false);
+  // ${action} takes its own slot beside the menu, in the head's one control box, as Sign Out does on a signed-in row.
+  expect(button(action, row())!.closest(".usage-control"), `${action} sits in the menu's slot`).toBe(menus[0]!.parentElement);
+});
+
+it.each([[false, "en"], [true, "ko"]] as const)("gives a signed-out row a signed-in row's head, with Remove beside Sign In on desktop and in the phone menu, and drops it once the board folds it (phone=%s, %s)", async (phone, locale) => {
+  const [remove, signIn, signOut] = locale === "en" ? ["Remove", "Sign In", "Sign Out"] : ["제거", "로그인", "로그아웃"];
+  Object.assign(accounts[0]!, { accountMain: false, snapshot: { state: "available", authenticated: false } });
+  accounts[1]!.accountMain = true;
+  const fetchMock = vi.mocked(fetch);
+  const answer = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url, init) => String(url).endsWith("/sign-out") ? (calls.push({ path: String(url), init }), Response.json({})) : answer(url, init));
+  await mount({ phone, locale });
+  const other = host.querySelector<HTMLElement>('[data-connection-account]:not([data-connection-account="claude"])')!;
+  // Same head as the signed-in row: name line, the status where the address goes, the controls in its one slot.
+  expect(row()!.querySelectorAll("[data-account-head]")).toHaveLength(1);
+  expect(row()!.querySelector("[data-account-email]")?.textContent).toBe(locale === "en" ? "Signed out." : "로그아웃됨.");
+  const slot = (node: HTMLElement) => [...node.querySelectorAll<HTMLButtonElement>(".usage-control > button")].map((button) => button.dataset.connectionMenu === undefined ? button.textContent : "…");
+  if (phone) {
+    expect(slot(row()!)).toEqual([signIn, "…"]);
+    expect(slot(other)).toEqual(["…"]);
+    await click(other.querySelector<HTMLElement>("[data-connection-menu]"));
+    expect([...other.querySelectorAll("[data-fold] button")].map((button) => button.textContent)).not.toContain(remove);
+    await click(row()!.querySelector<HTMLElement>("[data-connection-menu]"));
+    const items = [...row()!.querySelectorAll<HTMLButtonElement>("[data-fold] button")];
+    expect(items.map((button) => button.textContent).at(-1)).toBe(remove);
+    // The menu row holds the same kind of buttons in the same container as a signed-in row's menu.
+    expect(items.at(-1)!.parentElement!.className).toBe(other.querySelector("[data-fold] button")!.parentElement!.className);
+    await click(items.at(-1));
+  } else {
+    expect(row()!.querySelector("[data-connection-menu]")).toBeNull();
+    expect(slot(row()!)).toEqual([remove, signIn]);
+    expect(slot(other)).toEqual([signOut]);
+    expect(button(remove, row())!.className).toBe(button(signOut, other)!.className);
+    await click(button(remove, row()));
+  }
+  expect(calls.filter((call) => call.path.endsWith("/sign-out")).map((call) => [call.path, call.init?.body])).toEqual([["/api/accounts/claude/sign-out", '{"login":null}']]);
+  await unmount();
+  const claude = board.engines[0]!;
+  Object.assign(claude, { accounts: claude.accounts.filter((account) => account.id !== "claude"), duplicates: ["claude"] });
+  Object.assign(board, { revision: board.revision + 1, cursor: "fixture-43" });
+  await mount({ phone, locale });
+  expect(row()).toBeNull();
+});
+
+it.each([false, true])("offers no Remove on a lone signed-out base, which nothing would clear (phone=%s)", async (phone) => {
+  accounts = [Object.assign(accounts[0]!, { accountMain: true, snapshot: { state: "available", authenticated: false } })];
+  board.engines[0]!.accounts = board.engines[0]!.accounts.filter((account) => account.id === "claude");
+  await mount({ phone });
+  expect(button("Sign In", row())).toBeTruthy();
+  if (phone) await click(row()!.querySelector<HTMLElement>("[data-connection-menu]"));
+  expect(row()!.querySelector("[data-remove-account]")).toBeNull();
+});
+
+it("names the login each row shows on Remove and Sign Out, and redraws without an error when another client changed it", async () => {
+  Object.assign(accounts[0]!, { accountMain: false, snapshot: { state: "available", authenticated: false } });
+  accounts[1]!.accountMain = true;
+  const fetchMock = vi.mocked(fetch);
+  const answer = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url, init) => {
+    if (String(url).endsWith("/sign-out")) return calls.push({ path: String(url), init }), Response.json({ error: "changed", code: "login-changed" }, { status: 409 });
+    if (String(url) === "/api/instances") return calls.push({ path: String(url), init }), Response.json({ instances: accounts });
+    return answer(url, init);
+  });
+  await mount();
+  const other = host.querySelector<HTMLElement>(`[data-connection-account="${accounts[2]!.instanceId}"]`);
+  await click(button("Remove", row()));
+  await click(button("Sign Out", other));
+  expect(calls.filter((call) => call.path.endsWith("/sign-out")).map((call) => JSON.parse(String(call.init?.body)))).toEqual([{ login: null }, { login: canary.address }]);
+  expect(calls.filter((call) => call.path === "/api/instances")).toHaveLength(2);
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("reloads the engine rows once when the board shows a sign-in another client changed", async () => {
+  await mount();
+  const reloads = () => calls.filter((call) => call.path === "/api/instances").length;
+  const before = reloads();
+  await act(async () => m.client.usageBoardFrame(board.revision));
+  await settle();
+  expect(reloads(), "an unchanged board reloads nothing").toBe(before);
+  board.engines[0]!.accounts[0]!.signIn = "signed-out";
+  board.revision += 1;
+  await act(async () => m.client.usageBoardFrame(board.revision));
+  await settle();
+  expect(reloads()).toBe(before + 1);
+});
+
+it("reloads the engine rows once when the board shows one login replaced by another", async () => {
+  await mount();
+  const reloads = () => calls.filter((call) => call.path === "/api/instances").length;
+  const before = reloads();
+  board.engines[0]!.accounts[0]!.login = 1;
+  board.revision += 1;
+  await act(async () => m.client.usageBoardFrame(board.revision));
+  await settle();
+  expect(reloads()).toBe(before + 1);
 });
 
 it("shows a base signed in as an added account once, as Usage does", async () => {

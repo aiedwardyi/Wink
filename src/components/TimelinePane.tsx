@@ -236,7 +236,8 @@ function drawInk(sheet: HTMLElement, ink: SVGSVGElement) {
       const ox = out.x + out.w / 2;
       add("branch", penCurve(r, lx, ly + 2, ox, out.y - 4), LINE, 1.4);
       add("branch", penCurve(r, lx + 0.8, ly + 2, ox + 0.6, out.y - 4, 0.7), LINE, 0.7);
-      add("tick", penLine(r, ox - 8, out.y - 9, ox + 8, out.y - 6, 1), OUT, 1.6);
+      // no mark above a struck option, the X already says it; the draw stays so the strokes after it keep their wobble
+      penLine(r, ox - 8, out.y - 9, ox + 8, out.y - 6, 1);
       add("strike", penLine(r, out.x + 4, out.y + 6, out.x + out.w - 4, out.y + out.h - 6), OUT, 2.2, ' opacity=".9"');
       add("strike", penLine(r, out.x + out.w - 6, out.y + 8, out.x + 6, out.y + out.h - 10), OUT, 2.2, ' opacity=".9"');
     }
@@ -270,7 +271,7 @@ function drawInk(sheet: HTMLElement, ink: SVGSVGElement) {
   ink.innerHTML = paths.join("");
 }
 
-type PaneProps = { botId: string; threadId: string; maximized: boolean; closing: boolean; profileName?: string };
+type PaneProps = { botId: string; threadId: string; maximized: boolean; closing: boolean; profileName?: string; kept?: boolean };
 
 export function TimelinePane(props: PaneProps) {
   const [viewing, setViewing] = useState<PreviewImage | null>(null);
@@ -295,7 +296,7 @@ export function TimelinePane(props: PaneProps) {
   );
 }
 
-function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) {
+function Picks({ botId, threadId, maximized, closing, profileName, kept }: PaneProps) {
   const { t } = useI18n();
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -337,7 +338,7 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
   const you = profileName || t("chrome.you");
 
   return (
-    <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} aria-busy={(!entries && !failed) || undefined} data-sample={sample || undefined}>
+    <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} data-kept={kept} aria-busy={(!entries && !failed) || undefined} data-sample={sample || undefined}>
       {failed && !entries
         ? <p role="status" className="show-media-empty">{t("errors.request")}</p>
         : sample
@@ -598,6 +599,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     <div
       ref={frame}
       className="timeline-canvas"
+      data-no-swipe
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

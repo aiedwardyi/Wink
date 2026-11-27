@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider, useStore, type Bot } from "@/state/store";
 import { turnCompleted } from "@/lib/call";
 import { I18nProvider } from "@/lib/i18n";
+import { answerCall } from "@/lib/live-call/active";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
 import { CallHostSlot } from "./CallSlots";
@@ -47,6 +48,7 @@ vi.mock("@/lib/live-call/audio", () => ({
     flush() {}
     close() {}
     boop() {}
+    handOver() {}
     heardShare() { return 1; }
     level() { return 0; }
   },
@@ -116,6 +118,24 @@ async function call() {
   return fakes.engines[0]!;
 }
 const tokens = () => posts.filter(({ path }) => path.endsWith("/call/token"));
+const box = () => host.querySelector("[data-call-box]")?.getAttribute("data-call-box");
+let picks = 0;
+const pickAnswer = (answer: "bot" | "gemini") => act(async () => {
+  current = config(answer);
+  fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: `pick:${++picks}`, ...current }), lastEventId: `pick:${picks}` });
+});
+async function gemini(index: number) {
+  await vi.waitFor(() => expect(fakes.engines).toHaveLength(index + 1));
+  const engine = fakes.engines[index]!;
+  await act(async () => engine.events.ready());
+  await vi.waitFor(() => expect(engine.texts).toHaveLength(1));
+  await act(async () => {
+    engine.events.answering();
+    engine.events.said("Hey, I'm here.");
+    engine.events.turnDone();
+  });
+  return engine;
+}
 
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -158,6 +178,97 @@ describe("who answers a call", () => {
     expect(host.textContent).toContain("what is the build status");
     expect(engine.texts).toEqual([]);
   });
+  it("a pick of who answers made during the call switches the live call, and back", async () => {
+    await mount("bot");
+    const same = await call();
+    await pickAnswer("gemini");
+    const voice = await gemini(1);
+    expect(same.closed).toBe(true);
+    expect(tokens()).toHaveLength(2);
+    expect(tokens()[1]!.body).not.toHaveProperty("mode");
+    expect(box()).toBe("listening");
+    await act(async () => {
+      voice.events.heard("how are you");
+      voice.events.answering();
+      voice.events.audio(new Int16Array(4));
+      voice.events.said("Doing well. What can I help with?");
+      voice.events.turnDone();
+    });
+    expect(posts.filter(({ path }) => path === "/api/bots/atlas/messages")).toHaveLength(0);
+
+    await pickAnswer("bot");
+    await vi.waitFor(() => expect(fakes.engines).toHaveLength(3));
+    expect(voice.closed).toBe(true);
+    expect(tokens()[2]!.body).toMatchObject({ mode: "bot" });
+    const back = fakes.engines[2]!;
+    await act(async () => back.events.ready());
+    await act(async () => {
+      back.events.heard("and the tests");
+      back.events.answering();
+      back.events.turnDone();
+    });
+    await vi.waitFor(() => expect(posts.find(({ path }) => path === "/api/bots/atlas/messages")?.body).toMatchObject({ text: "and the tests" }));
+    expect(back.texts).toEqual([]);
+    expect(box()).toBe("working");
+  });
+
+  it("a call the bot rang stays on Gemini voice when the setting says Same bot", async () => {
+    await mount("bot");
+    const built = fakes.built;
+    await act(async () => void answerCall(atlas, "Can I delete the old logs?", true));
+    await vi.waitFor(() => expect(fakes.engines).toHaveLength(1));
+    const voice = fakes.engines[0]!;
+    await act(async () => voice.events.ready());
+    await act(async () => {
+      voice.events.answering();
+      voice.events.said("Atlas asks: can it delete the old logs?");
+      voice.events.turnDone();
+    });
+    await vi.waitFor(() => expect(box()).toBe("listening"));
+    await act(async () => voice.events.heard("yes go ahead"));
+    expect(voice.closed).toBe(false);
+    expect(fakes.engines).toHaveLength(1);
+    expect(tokens()).toHaveLength(1);
+    expect(tokens()[0]!.body).not.toHaveProperty("mode");
+    expect(fakes.built).toBe(built);
+  });
+
+  it("a switch made while the bot works waits for its reply to be read, once, then moves", async () => {
+    await mount("bot");
+    const same = await call();
+    await act(async () => {
+      same.events.heard("what is the build status");
+      same.events.answering();
+      same.events.turnDone();
+    });
+    await vi.waitFor(() => expect(posts.some(({ path }) => path === "/api/bots/atlas/messages")).toBe(true));
+    const { sendId } = posts.find(({ path }) => path === "/api/bots/atlas/messages")!.body;
+    await act(async () => dispatch({ type: "switchTask", botId: atlas.id, threadId: "thread-previous" }));
+    await vi.waitFor(() => expect(host.textContent).toContain("Crocus 918 old only."));
+    await pickAnswer("gemini");
+    expect(fakes.engines).toHaveLength(1);
+    expect(box()).toBe("working");
+    thread = [
+      { id: "u1", at: 10, role: "user", kind: "text", text: "what is the build status", sendId },
+      { id: "r1", at: 11, role: "bot", kind: "text", text: "The build is green.", parentId: "u1" },
+    ];
+    await act(async () => {
+      fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "bot", cursor: "qa:3", bot: { id: atlas.id, busy: false } }), lastEventId: "qa:3" });
+      turnCompleted(atlas.threadId);
+    });
+    await vi.waitFor(() => expect(same.texts).toEqual(["[READ]\nThe build is green."]));
+    expect(fakes.engines).toHaveLength(1);
+    await act(async () => {
+      same.events.answering();
+      same.events.said("The build is green.");
+      same.events.turnDone();
+    });
+    await gemini(1);
+    expect(same.closed).toBe(true);
+    expect(same.texts).toHaveLength(1);
+    expect(box()).toBe("listening");
+  });
+
   it("Same bot reads nothing when he switches to a task that already has a reply", async () => {
     await mount("bot");
     const engine = await call();

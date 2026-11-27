@@ -47,6 +47,7 @@ import { noteJoinedFrame } from "@/lib/joined-rooms";
 import { BOARD_CHANGED_EVENT, isForumSelection } from "@/lib/board";
 import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
+import { noteDispatch, reportChatSwitch } from "@/lib/chat-switch-diag";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
 import { relaySignInSite } from "@/lib/devices-setup";
 import { leaveSignedOut, sessionLive, sessionState } from "@/lib/signed-out";
@@ -1134,9 +1135,9 @@ export const initialState: AppState = {
  * smaller page can leave a first screen with only a handful of bubbles. */
 export const MESSAGE_PAGE = 200;
 
-export function api(path: string, init?: RequestInit): Promise<any> {
-  const call = request(path, init);
-  const method = init?.method?.toUpperCase() ?? "GET";
+export function api(...args: Parameters<typeof request>): Promise<any> {
+  const call = request(...args);
+  const method = args[1]?.method?.toUpperCase() ?? "GET";
   return method === "GET" || method === "HEAD" ? call : holdReload(call);
 }
 
@@ -1212,8 +1213,19 @@ const StoreContext = createContext<{
 
 const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 
+// Every path that moves the open chat goes through here (CHAT-JUMP diag).
+function tracedReducer(state: AppState, action: Action): AppState {
+  const next = reducer(state, action);
+  if (state.selectedId && next.selectedId !== state.selectedId) reportChatSwitch(action, state.selectedId, next.selectedId);
+  return next;
+}
+
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [state, rawDispatch] = useReducer(reducer, initialState, withCachedSnapshot);
+  const [state, reactDispatch] = useReducer(tracedReducer, initialState, withCachedSnapshot);
+  const rawDispatch = useCallback((action: Action) => {
+    noteDispatch(action);
+    reactDispatch(action);
+  }, []);
   const stateRef = useRef(state);
   const reconnectLiveRef = useRef<(() => void) | null>(null);
   const reconnectLive = useCallback(() => {

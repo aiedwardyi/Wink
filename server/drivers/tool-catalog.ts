@@ -2,7 +2,7 @@ export type CatalogTool = { name: string; description: string; inputSchema: obje
 type Integration = { command: string; args: string[]; env: Record<string, string> };
 
 // Only tools a user or the worker playbook asks for by name: a lookup is one more model call, and reactions, images and routines (reminders) must stay one call away.
-const OPTIONAL = new Set(["create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "link_room_fix", "board_search", "board_post", "wake_me", "web_read"]);
+const OPTIONAL = new Set(["create_bot", "create_channel", "generate_image", "call_api", "request_credential", "usage_status", "link_room_fix", "post_to_group", "board_search", "board_post", "wake_me", "web_read"]);
 
 export const CATALOG_TOOLS = [
   {
@@ -60,8 +60,8 @@ export function createToolCatalog(eligible: readonly CatalogTool[]) {
 }
 
 export function originalCatalogCall(name: string, input: unknown, server?: string): { name: string; input: unknown } {
-  if (((name === "call_wink_tool" && server === "agents") || name === "mcp__agents__call_wink_tool") && record(input) && typeof input.name === "string" && OPTIONAL.has(input.name) && record(input.arguments)) {
-    return { name: name.replace("call_wink_tool", input.name), input: input.arguments };
+  if (((name.endsWith("call_wink_tool") && server === "agents") || name === "mcp__agents__call_wink_tool") && record(input) && typeof input.name === "string" && OPTIONAL.has(input.name) && record(input.arguments)) {
+    return { name: name.slice(0, -"call_wink_tool".length) + input.name, input: input.arguments };
   }
   return { name, input };
 }

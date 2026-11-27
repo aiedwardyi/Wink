@@ -179,6 +179,8 @@ export interface Message {
     usageWait?: UsageWaitView;
     /** an auto-approval chip; the model replay skips it */
     approval?: boolean;
+    /** Sleep's morning line: the run it archived and how many lines */
+    tidy?: { runId: string; count?: number; undoneAt?: number };
   };
   /** user messages sent INTO a running turn (capabilities.queueing): the
    * model saw it mid-turn, so the transcript marks it — a reader should
@@ -232,6 +234,8 @@ export interface Message {
   origin?: string;
   /** Team room rows: who said it, and the room log entry it mirrors. */
   author?: import("./rooms/db.ts").RoomAuthor;
+  /** A joined room's row that anyone but this PC's person typed: no replay lets its @ name a file. */
+  guest?: boolean;
   roomEntryId?: string;
   roomFiles?: import("./rooms/db.ts").RoomFile[];
   quiet?: true;
@@ -1721,6 +1725,14 @@ export class Store {
 
   botByThread(threadId: string) {
     return this.bots.find((b) => b.threadId === threadId || b.tasks?.some((t) => t.threadId === threadId)) ?? null;
+  }
+
+  /** The bots that run turns on a thread: its room's members or its chat's bot; none once the room or chat is deleted. */
+  threadBots(threadId: string): BotRecord[] {
+    const group = this.groupByThread(threadId);
+    if (group) return group.memberIds.flatMap((id) => this.bot(id) ?? []);
+    const bot = this.botByThread(threadId);
+    return bot ? [bot] : [];
   }
 
   conversationForBot(botId: string, threadId: string) {

@@ -2,6 +2,101 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.307] - 2026-11-27
+
+### Changed
+- Replies look as they did before: no live draft line and no Steps row; each in-between message is its own bubble again.
+
+### Fixed
+- The bot answers right after you end a call again, with no wait.
+- Sign Out now also removes the account from Usage and Connections.
+- Closing a card you already answered no longer shows an error.
+- The call icon on your own messages is easier to see.
+
+### Security
+- A group guest can no longer get your bot to read files on your PC through an earlier message.
+
+## [1.0.306] - 2026-11-27
+
+### Changed
+- Forum: calls to you no longer show up as Forum posts, and bots close their own posts once fixed.
+
+### Fixed
+- The phone chat bottom is back as it was: full-size usage bar and typing box.
+
+### Security
+- People in your group can no longer get your bot to read files on your PC.
+
+## [1.0.305] - 2026-11-27
+
+### Added
+- Promises a bot made and questions a reply skipped carry to the next reply, even on another model, and it checks before redoing anything.
+
+### Fixed
+- Groups: a guest can't make your Claude or Gemini bot read your project files.
+- Groups: the "finished a task" note in a chat no longer shows a long ID.
+
+## [1.0.304] - 2026-11-26
+
+### Added
+- New Gemini chats start warm, so the first reply comes faster.
+- Dreaming: an old note is archived only when two judges agree; archived notes stay searchable, and one Undo puts a night back.
+- A turn's step lines fold under Steps above its answer.
+- Phone: swipe right closes the side pane.
+- Bots can post to a group they belong to.
+
+### Fixed
+- Calls: changing Answered by mid-call switches the live call, and the bot stops reading when you talk over it.
+- Signing in: the newest sign-in wins, every engine signs in the same way, and a cancelled sign-in no longer leaves an engine stuck.
+- Moving the bot list to the other side glides once instead of jumping.
+- Usage: your account order stays the same on every device and link.
+- Quick picker arrow keys keep working after clicking an engine tab.
+- What's New clips play sharp on 2x screens.
+- Question cards stay open when you step between them.
+- Phone: the usage sheet X closes on the first tap, and a swipe up dismisses it.
+- Phone: a calmer chat bottom with one question card and a one-row typing box.
+- An archived bot is never picked to read a web page for another bot.
+
+## [1.0.303] - 2026-11-26
+
+### Added
+- Quick model picker: a fourth picker style; Max glows in the model's color.
+
+### Changed
+- Gemini 4 Argon is removed from model pickers; a bot already on it keeps running.
+
+### Fixed
+- A PC that wakes up shows Online to your other devices sooner: its status now syncs before the rest of its catch-up.
+- The quick side reply only answers your questions; no more "Got it" lines.
+- Links and "sent mid-turn" in your own message bubble are readable in every theme.
+- Glasses: Speak and Listen work, and question cards show on the lens.
+- Phone: hold a side pane tab to drag it to a new spot.
+- Timeline: no red tick above crossed-out options.
+- The usage bar says "Payment due" when a Claude subscription is past due.
+- Phone and browser terminals show the worker you tapped right away.
+
+## [1.0.302] - 2026-11-25
+
+### Added
+- Side pane tabs: open only the tabs you need, drag to reorder, drag the edge to resize.
+
+### Fixed
+- Sending to an idle chat starts at once instead of waiting on an old sync copy.
+- Live Verify replays point only at what was checked, and a run that checked nothing leaves no card.
+- Space plays and pauses a video after full screen.
+- Old helper files get cleaned up even on a busy PC.
+
+## [1.0.301] - 2026-11-25
+
+### Fixed
+- Messenger is back in the featured themes.
+- Notes resume after a usage-limit hit instead of staying paused.
+
+### Changed
+- Gemini chats answer faster: the next turn is already warm.
+- Codex and Gemini chats use fewer tokens per message.
+- Changing model or effort in a Claude chat takes effect without restarting it.
+
 ## [1.0.300] - 2026-11-25
 
 ### Fixed

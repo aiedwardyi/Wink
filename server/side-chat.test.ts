@@ -11,7 +11,7 @@ import { ClaudeDriver } from "./drivers/claude.ts";
 import { forkClaude } from "./drivers/claude-fork.ts";
 import { EventBus } from "./harness/bus.ts";
 import { createMemoryPass } from "./memory-pass.ts";
-import { quickAsk, sideIdle, sweepSide } from "./side-chat.ts";
+import { dropOpener, quickAsk, sideIdle, sweepSide } from "./side-chat.ts";
 import { observeLive } from "./side-live-state.ts";
 import { Store, type Message } from "./store.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
@@ -95,17 +95,6 @@ describe("quickAsk on a fork", () => {
     expect(preamble).toContain("A file being written now: don't state what it says, answer the rest.");
     expect(notes).toBe("[Quick answers given beside your work.]\nQ: a\nA: b");
     expect(text).toBe("where's the plan?");
-  });
-
-  it("asks a send the bot already took for one short line, never a handoff", async () => {
-    const stub = stubFork();
-    const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t1", { text: "help me answer ur questions", ack: true });
-    stub.emit({ type: "done", ok: true, text: "On it, I'll lay out each question with my pick." });
-    expect(await pending).toMatchObject({ route: "answer", text: "On it, I'll lay out each question with my pick." });
-    const [preamble, text] = stub.inputs[0]!.text.split("\n\n");
-    expect(preamble).toMatch(/^\[Quick helper\. .*already reached your main task as their own words.*never reply HANDOFF\.\]$/);
-    expect(preamble).not.toContain("reply with exactly HANDOFF");
-    expect(text).toBe("help me answer ur questions");
   });
 
   it("hands the main's live state to the fork", async () => {
@@ -277,6 +266,30 @@ describe("quickAsk on a fork", () => {
     await sideIdle();
     expect(ledger()).toEqual([]);
     expect(existsSync(stub.tempDir)).toBe(false);
+  });
+});
+
+describe("dropOpener", () => {
+  it.each([
+    ["Got it, that goes in next.", "That goes in next."],
+    ["Okay. Sure, the settings page first.", "The settings page first."],
+    ["On it - the CI link is about caching.", "The CI link is about caching."],
+    ["알겠어요, 설정 페이지 먼저 할게요.", "설정 페이지 먼저 할게요."],
+    ["네. 둘 다 머지 대상이에요.", "둘 다 머지 대상이에요."],
+    ["Got it.", "Got it."],
+    ["네!", "네!"],
+    ["On item 3 the test is flaky.", "On item 3 the test is flaky."],
+    ["네가 말한 파일은 server에 있어요.", "네가 말한 파일은 server에 있어요."],
+    ["Port 8080.", "Port 8080."],
+  ])("%s", (line, expected) => {
+    expect(dropOpener(line)).toBe(expected);
+  });
+
+  it.each([["Sure, port 8080.", "Port 8080."], ["네, 8080이에요.", "8080이에요."], ["notes.md says Tue Nov 24.", "notes.md says Tue Nov 24."]])("drops a filler opener from any answer: %s", async (said, line) => {
+    const stub = stubFork();
+    const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t1", { text: "what port?" });
+    stub.emit({ type: "done", ok: true, text: said });
+    expect(await pending).toMatchObject({ route: "answer", text: line });
   });
 });
 

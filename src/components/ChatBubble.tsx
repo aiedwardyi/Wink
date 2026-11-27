@@ -319,7 +319,7 @@ const Bubble = memo(function Bubble({
   const collapsible = user && !webhookView && !expanded && userTextFolds(visibleText);
   // floated beside markdown: shorter than a line, so only the first line makes room
   const callMark = message.call && (
-    <Phone size={12} className={cn("mr-1.5 text-ink-secondary/70", user ? "inline align-[-1px]" : "float-left mt-[calc((1lh-12px)/2)]")} />
+    <Phone size={12} className={cn("mr-1.5", user ? "inline align-[-1px] text-current opacity-70" : "float-left mt-[calc((1lh-12px)/2)] text-ink-secondary/70")} />
   );
 
   if (user && editing && !webhookView) {
@@ -466,7 +466,7 @@ const Bubble = memo(function Bubble({
               </div>
               {attachedImages && <FileAttachmentRows files={attachedImages.files} threadId={threadId} className={cn(visibleText && "mt-2")} />}
               {message.steered && (
-                <div className="mt-1 text-[11px] text-ink-secondary/70" title={t("chat.sentMidTurnHint")}>
+                <div className="mt-1 text-[11px]" title={t("chat.sentMidTurnHint")}>
                   {t("chat.sentMidTurn")}
                 </div>
               )}

@@ -14,6 +14,7 @@ import {
   DRAWER_HEADER_RIGHT,
 } from "@/lib/drawer-button";
 import { PHONE_HEADER_MENU_GAP, PHONE_MENU_BUTTON_PX } from "@/lib/phone-header";
+import { closeShow } from "@/lib/show-pane";
 import { LIGHT_SKIN_IDS, SKINS, SKIN_IDS, nextSkin, type SkinId } from "@/lib/skins";
 import { lastViewedPanes } from "@/lib/terminal-panes";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
@@ -198,7 +199,7 @@ describe("worker list shortcut", () => {
         return event;
       },
       unmount: async () => {
-        await act(async () => root.unmount());
+        await act(async () => { root.unmount(); closeShow(); });
         host.remove();
         vi.restoreAllMocks();
         vi.unstubAllGlobals();

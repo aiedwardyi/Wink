@@ -924,7 +924,8 @@ function summaryPrompt(input: {
   const history = input.history.length
     ? input.history.map((item) => `${item.label ?? (item.role === "user" ? "User: " : "Assistant: ")}${item.text}`).join("\n")
     : "none";
-  return [
+  // the Claude CLI reads a bare @word as a file mention and answers its notice instead of summarizing
+  return inertMentions([
     "Create a provider-neutral durable summary of the conversation data below.",
     `Start with the line ${SUMMARY_SENTINEL}, then plain text only, and keep it under ${Math.floor(input.summaryTokens * 3 * SUMMARY_ASK_SHARE / SUMMARY_BYTES_PER_WORD)} words.`,
     `The summary covers the conversation up to ${boundaryLabel(input.coveredAt)}; everything after that is replayed verbatim.`,
@@ -946,7 +947,7 @@ function summaryPrompt(input: {
     "<new_history>",
     history,
     "</new_history>",
-  ].join("\n");
+  ].join("\n"));
 }
 
 function callResult(text: string, signal?: AbortSignal): SummaryCallResult {

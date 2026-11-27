@@ -149,6 +149,24 @@ describe("sendStaticFile", () => {
     expect(head.headers["content-encoding"]).toBeUndefined();
   });
 
+  it("answers byte ranges on media so Safari plays a video", async () => {
+    const dir = temps.make(join(tmpdir(), "orbit-compress-"));
+    const mp4 = join(dir, "clip.mp4");
+    const bytes = Buffer.from(Array.from({ length: 1000 }, (_, i) => i % 256));
+    writeFileSync(mp4, bytes);
+    const port = await serve((res) => sendStaticFile(res, mp4, "/assets/clip-AAAA1111.mp4", "video/mp4"));
+    const whole = await get(port);
+    expect([whole.status, whole.headers["accept-ranges"], whole.body.equals(bytes)]).toEqual([200, "bytes", true]);
+    const probe = await get(port, { range: "bytes=0-1" });
+    expect([probe.status, probe.headers["content-range"], probe.headers["content-type"], probe.headers["cache-control"]]).toEqual([206, "bytes 0-1/1000", "video/mp4", IMMUTABLE_CACHE]);
+    expect(probe.body.equals(bytes.subarray(0, 2))).toBe(true);
+    expect((await get(port, { range: "bytes=990-" })).body.equals(bytes.subarray(990))).toBe(true);
+    expect((await get(port, { range: "bytes=-10" })).headers["content-range"]).toBe("bytes 990-999/1000");
+    expect((await get(port, { range: "bytes=500-5000" })).headers["content-range"]).toBe("bytes 500-999/1000");
+    expect((await get(port, { range: "bytes=1000-" })).status).toBe(416);
+    expect((await get(port, { range: "bytes=0-1,5-6" })).status).toBe(200);
+  });
+
   it("caches mascot avatars like hashed assets", async () => {
     const dir = temps.make(join(tmpdir(), "orbit-compress-"));
     const png = join(dir, "icon-31-wink.png");

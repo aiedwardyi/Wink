@@ -39,7 +39,7 @@ describe("account settings recovery", () => {
     const { Readable } = await import("node:stream");
     let output = "";
     const route = createAccountRoutes({ accounts } as Parameters<typeof createAccountRoutes>[0], { describeCached: async () => [] } as unknown as Parameters<typeof createAccountRoutes>[1]);
-    await route(Readable.from([]) as unknown as Parameters<typeof route>[0], { writeHead() {}, end: (body: string) => { output = body; } } as unknown as Parameters<typeof route>[1], "GET", "/api/accounts");
+    await route(Readable.from([]) as unknown as Parameters<typeof route>[0], { writeHead() {}, end: (body: string) => { output = body; } } as unknown as Parameters<typeof route>[1], "GET", "/api/accounts", "pc:");
     const rows = JSON.parse(output).accounts;
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ state: "stopped", snapshot: { state: "unavailable", reason: expect.stringContaining("accounts.json") } });

@@ -1,0 +1,18 @@
+{
+ "tuning": {
+  "hash": "7c5c1cd0f8fb0162e3355c341f2e53ff4351f9f47f385a92d553167cc882c251",
+  "cases": 1500,
+  "positives": 800,
+  "misses": 500,
+  "guards": 200,
+  "anchor": "2026-11-27"
+ },
+ "held-out": {
+  "hash": "930b278e94e20b698cb34d36c4888dbff8076ea2f6ed2cea36e7f409dc7dc77c",
+  "cases": 850,
+  "positives": 450,
+  "misses": 300,
+  "guards": 100,
+  "anchor": "2026-11-27"
+ }
+}

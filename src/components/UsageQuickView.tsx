@@ -10,7 +10,7 @@ import { isTerminalSkin, useSkin } from "@/lib/skins";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine } from "@/lib/usage-board";
 import { checkedMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { useBackLayer } from "@/lib/use-back-layer";
-import { useIsPhone } from "@/lib/use-phone-swipe";
+import { useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
 import { useSpinUntilTurnEnds } from "@/lib/use-spin-until-turn-ends";
 import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
 import { useVisibleClock } from "@/lib/use-visible-clock";
@@ -120,6 +120,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
   const closeRef = useRef(close);
   useLayoutEffect(() => { closeRef.current = close; });
   useBackLayer(!closing, close);
+  useSheetSwipe(box, phone && !closing && Boolean(spot), close, true);
 
   useLayoutEffect(() => {
     const update = () => {
@@ -150,8 +151,10 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
 
   useEffect(() => {
     if (closing) return;
+    let pressedClose = false;
     const away = (event: PointerEvent) => {
       const target = event.target as Node;
+      pressedClose = event.pointerType === "touch" && Boolean(box.current?.querySelector("[data-quick-close]")?.contains(target));
       if (box.current?.contains(target) || anchor.current?.contains(target)) return;
       // An open account menu inside the view is the top layer; its own listener closes it.
       if (box.current?.querySelector('[role="menu"]')) return;
@@ -162,10 +165,24 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
       event.preventDefault();
       closeRef.current();
     };
+    // The view grows up from its line, so a refresh landing mid-tap moves Close from under the finger and its click lands beside it.
+    const tapped = (event: MouseEvent) => {
+      if (!pressedClose) return;
+      pressedClose = false;
+      if (event.target instanceof Node && box.current?.querySelector("[data-quick-close]")?.contains(event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeRef.current();
+    };
+    const cancelled = () => { pressedClose = false; };
     document.addEventListener("pointerdown", away, true);
+    document.addEventListener("pointercancel", cancelled, true);
+    document.addEventListener("click", tapped, true);
     document.addEventListener("keydown", key);
     return () => {
       document.removeEventListener("pointerdown", away, true);
+      document.removeEventListener("pointercancel", cancelled, true);
+      document.removeEventListener("click", tapped, true);
       document.removeEventListener("keydown", key);
     };
   }, [anchor, closing]);

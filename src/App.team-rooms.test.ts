@@ -442,7 +442,7 @@ describe("Team rooms for the host", () => {
     expect(main.textContent).not.toMatch(/Nova|Find in conversation|approve|hold|level/i);
   });
 
-  it("opens the room's Media from its header and shuts it again", async () => {
+  it("opens the room's Media from the header's tool list and shuts it again", async () => {
     const id = "F".repeat(24);
     // the sidebar folds for the pane, and happy-dom reports a canceled fold as unhandled
     const matchMedia = window.matchMedia.bind(window);
@@ -453,6 +453,7 @@ describe("Team rooms for the host", () => {
     await boot({ groups: [teamRoom()], route: (call) => call.path === "/api/rooms/r1/files" ? Response.json({ files: [{ id, name: "map.png", type: "image/png", bytes: 2048, at: 1, sender: "Edward" }], used: 0, capacity: 1, error: null }) : undefined });
     await act(async () => store.dispatch!({ type: "select", id: "g1" }));
     await click(button("Show and media"));
+    await click(document.querySelector("[data-pane-tool=media]"));
     await vi.waitFor(() => expect($("[data-media-grid] img")?.getAttribute("src")).toBe(`/api/rooms/r1/files/${id}/preview`));
     await click(button("Show and media"));
     await vi.waitFor(() => expect($("[data-show-media]")).toBeNull());

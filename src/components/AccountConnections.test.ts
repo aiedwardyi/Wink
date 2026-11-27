@@ -120,7 +120,7 @@ it.each(["en", "ko"] as const)("signs out a non-main account in one tap in %s", 
   const name = locale === "en" ? "Sign Out" : "로그아웃";
   expect(buttons(name)).toHaveLength(3);
   await act(async () => buttons(name)[1]!.click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/account-1/sign-out", { method: "POST", body: "{}" });
+  expect(request).toHaveBeenCalledWith("/api/accounts/account-1/sign-out", { method: "POST", body: JSON.stringify({ login: "account-1@example.com" }) });
   expect(request.mock.calls.filter(([path]) => String(path).endsWith("/sign-out"))).toHaveLength(1);
   expect(host.querySelector('input, [role="radiogroup"]')).toBeNull();
   expect(host.textContent).not.toMatch(/Move|bots? use|옮|봇/);
@@ -200,7 +200,7 @@ it("skips stopped and loading accounts when choosing Main's destination", async 
   state.instances[2]!.snapshot = { state: "available" };
   await update();
   await act(async () => buttons("Sign Out")[0]!.click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-3" }) });
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-3", login: "claude@example.com" }) });
 });
 
 it("uses the server's compatible destination for Main sign-out", async () => {
@@ -208,7 +208,7 @@ it("uses the server's compatible destination for Main sign-out", async () => {
   request.mockImplementation(async (path: string) => path.endsWith("/destination") ? { destinationId: "account-2" } : {});
   await act(async () => buttons("Sign Out")[0]!.click());
   expect(request).toHaveBeenCalledWith("/api/accounts/claude/destination");
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-2" }) });
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-2", login: "claude@example.com" }) });
 });
 
 it("keeps Main signed in when compatible destination selection fails", async () => {
@@ -258,9 +258,10 @@ it.each([false, true])("opens the existing add/sign-in flow with desktop bridge 
   await render();
   request.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/api/accounts" && init?.method === "POST") {
-      state.instances = [...state.instances, { ...engine("new", false), loginState: "pending", loginCapture: { code: "ABCD", url: "https://example.com/login" } }];
+      state.instances = [...state.instances, { ...engine("new", false), loginState: "pending" }];
       return { id: "new", state: "pending" };
     }
+    if (path === "/api/accounts/new/sign-in") return { state: "pending", code: "ABCD", url: "https://example.com/login" };
     return {};
   });
   await act(async () => buttons("Add Account")[0]!.click());
@@ -358,7 +359,7 @@ it("signs out the main account with zero bots through the destination path", asy
   try {
     await render();
     await act(async () => buttons("Sign Out")[0]!.click());
-    expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-1" }) });
+    expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-1", login: "claude@example.com" }) });
     expect(host.textContent).not.toContain("Move");
     expect(host.querySelector('input, [role="radiogroup"]')).toBeNull();
   } finally { state.bots.push(...bots); }
@@ -370,7 +371,7 @@ it.each(["en", "ko"] as const)("signs out Main through another ready account in 
   const name = locale === "en" ? "Sign Out" : "로그아웃";
   expect(buttons(name)[0]!.disabled).toBe(false);
   await act(async () => buttons(name)[0]!.click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-1" }) });
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-1", login: "claude@example.com" }) });
   state.instances[0]!.accountMain = false;
   state.instances[1]!.accountMain = true;
   state.instances = [...state.instances];
@@ -378,14 +379,14 @@ it.each(["en", "ko"] as const)("signs out Main through another ready account in 
   expect(buttons(name)[0]!.disabled).toBe(false);
   expect(buttons(name)[1]!.disabled).toBe(false);
   await act(async () => buttons(name)[0]!.click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ login: "claude@example.com" }) });
 });
 
 it("keeps single-account sign-out unchanged", async () => {
   await render(1);
   expect(buttons("Sign Out")[0]!.disabled).toBe(false);
   await act(async () => buttons("Sign Out")[0]!.click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ login: "claude@example.com" }) });
 });
 
 it.each([false, true])("retries a failed drain with its recorded destination when Main is %s", async (main) => {
@@ -441,8 +442,10 @@ it("drops Sign Out from an open phone menu when the account starts draining", as
 it.each(["en", "ko"] as const)("submits a managed Claude browser code without exposing it in %s", async (locale) => {
   persistPreference(locale);
   await render();
-  state.instances[1] = { ...engine("account-1", false), loginState: "pending",
-    loginCapture: { url: "https://claude.com/cai/oauth/authorize?code=true", inputGeneration: 7 } };
+  state.instances[1] = { ...engine("account-1", false), loginState: "pending" };
+  request.mockImplementation(async (path: string) => path === "/api/accounts/account-1/sign-in"
+    ? { state: "pending", url: "https://claude.com/cai/oauth/authorize?code=true", inputGeneration: 7 } : {});
+  await update();
   await update();
   const input = host.querySelector<HTMLInputElement>('input[type="password"]')!;
   expect(input).not.toBeNull();
@@ -509,11 +512,11 @@ it("keeps the failure line after an added account rejects its code and its row i
   request.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/api/accounts" && init?.method === "POST") {
       failed = false;
-      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending" });
       return { id: "new" };
     }
     if (path === "/api/accounts/new/sign-in/code") { failed = true; state.instances = state.instances.filter((row) => row.instanceId !== "new"); return {}; }
-    if (path === "/api/accounts/new/sign-in") return { state: failed ? "failed" : "pending" };
+    if (path === "/api/accounts/new/sign-in") return failed ? { state: "failed" } : { state: "pending", url: "https://example.test/login", inputGeneration: 4 };
     return {};
   });
   vi.useFakeTimers();
@@ -543,11 +546,11 @@ it("keeps the failure line when Connections remounts before the added account re
   request.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/api/accounts" && init?.method === "POST") {
       failed = false;
-      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending" });
       return { id: "new" };
     }
     if (path === "/api/accounts/new/sign-in/code") { failed = true; state.instances = state.instances.filter((row) => row.instanceId !== "new"); return {}; }
-    if (path === "/api/accounts/new/sign-in") return { state: failed ? "failed" : "pending" };
+    if (path === "/api/accounts/new/sign-in") return failed ? { state: "failed" } : { state: "pending", url: "https://example.test/login", inputGeneration: 4 };
     return {};
   });
   vi.useFakeTimers();
@@ -578,11 +581,11 @@ it("shows the failure line once when the user returns after the failed added acc
   request.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/api/accounts" && init?.method === "POST") {
       failed = false;
-      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending" });
       return { id: "new" };
     }
     if (path === "/api/accounts/new/sign-in/code") return {};
-    if (path === "/api/accounts/new/sign-in") return { state: failed ? "failed" : "pending" };
+    if (path === "/api/accounts/new/sign-in") return failed ? { state: "failed" } : { state: "pending", url: "https://example.test/login", inputGeneration: 4 };
     return {};
   });
   vi.useFakeTimers();
@@ -618,12 +621,12 @@ it("stops waiting on an addition the server no longer knows", async () => {
   let known = true;
   request.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/api/accounts" && init?.method === "POST") {
-      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending", loginCapture: { url: "https://example.test/login", inputGeneration: 4 } });
+      state.instances.push({ ...engine("new", false), accountState: "pending", install: state.instances[0]!.install, loginState: "pending" });
       return { id: "new" };
     }
     if (path === "/api/accounts/new/sign-in") {
       if (!known) throw Object.assign(new Error("Unknown account"), { status: 404 });
-      return { state: "pending" };
+      return { state: "pending", url: "https://example.test/login", inputGeneration: 4 };
     }
     return {};
   });
@@ -737,4 +740,20 @@ it("keeps the Claude section, Add Account and the added accounts after the base 
   expect(buttons("Add Account")).toHaveLength(1);
   expect(section.querySelector('[data-connection-account="claude"]')!.textContent).toContain("Sign In");
   expect(host.textContent).not.toMatch(/Not Installed|More Engines/);
+});
+
+it.each(["claudeAgent", "codex", "grokAgent"])("adds a %s account and signs a signed-out one in with the code flow from another PC's window", async (kind) => {
+  // SAFETY: the phone check reads only `matches`.
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: false } as MediaQueryList);
+  vi.stubGlobal("location", new URL("https://home.tail1234.ts.net/"));
+  await render(2);
+  const { install } = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === kind)!;
+  for (const account of state.instances) account.install = install;
+  state.instances[1] = { ...engine("account-1", false), install };
+  await update();
+  expect(host.querySelector("[data-computer-only]")).toBeNull();
+  await act(async () => buttons("Add Account")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts", { method: "POST", body: JSON.stringify({ of: "claude", device: true }) });
+  await act(async () => buttons("Sign In")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/instances/account-1/sign-in", { method: "POST", body: JSON.stringify({ device: true }) });
 });

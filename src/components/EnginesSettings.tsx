@@ -10,6 +10,7 @@ import { revealOnOpen } from "@/lib/reveal-on-open";
 import { engineChecking, installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { isFriendsCliEngine, orderFriendsEngines } from "@/lib/engine-rail";
 import { useI18n } from "@/lib/i18n";
+import { shownLogin } from "../../shared/usage-identity";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { Fold } from "./Fold";
 import { ACCOUNT_ROW, AccountGroup } from "./UsageDesk";
@@ -32,13 +33,23 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
     setBusy(true);
     setError(false);
     try {
-      const failed = await api(`/api/instances/${encodeURIComponent(instance.instanceId)}/sign-out`, { method: "POST", body: "{}" }).then(() => false, () => true);
-      // A done sign-out already re-probed this engine; only a failure waits on a fresh probe, so the row shows what it left behind.
-      const { instances } = await api(failed ? "/api/instances?refresh=1" : "/api/instances");
+      let changed = false;
+      const failed = await api(`/api/instances/${encodeURIComponent(instance.instanceId)}/sign-out`, { method: "POST", body: JSON.stringify({ login: shownLogin(current.snapshot) }) })
+        .then(() => false, (error) => { changed = (error as { code?: string }).code === "login-changed"; return true; });
+      if (!failed) {
+        // A done sign-out was checked signed out on the server, which pushes the full row to every device.
+        const next = { ...current, snapshot: { ...current.snapshot, authenticated: false, account: undefined, accountIdentity: undefined } };
+        setCurrent(next);
+        onUpdated?.(next);
+        return;
+      }
+      // After a failure, so the row shows what the sign-out left behind.
+      const { instances } = await api("/api/instances?refresh=1");
       dispatch?.({ type: "instances", instances, preserveRateLimits: true });
       const next = (instances as InstanceInfo[]).find((row) => row.instanceId === instance.instanceId);
       if (next) { setCurrent(next); onUpdated?.(next); }
-      if (failed) setError(true);
+      // Another client changed this sign-in since the row was drawn: the row redraws, nothing was signed out.
+      if (!changed) setError(true);
     } catch { setError(true); }
     finally { setBusy(false); }
   };

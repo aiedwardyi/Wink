@@ -29,12 +29,13 @@ import type { ProviderInstance } from "./contracts.ts";
 import { AntigravityDriver } from "./drivers/antigravity.ts";
 import { createCliText } from "./drivers/cli-text.ts";
 import { CodexDriver } from "./drivers/codex.ts";
+import { antigravityRateLimitWindows } from "./drivers/rate-limits.ts";
 import { memoryNotice } from "./memory-health.ts";
 import { createMemoryLookup } from "./memory-lookup.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { replyTurns } from "./pick-sources.ts";
 import { loadProfileSyncSettings, saveProfileSyncSettings } from "./profile-sync.ts";
-import type { RateLimitsMap } from "./rate-limits-store.ts";
+import type { RateLimitsMap, RateLimitsReport } from "./rate-limits-store.ts";
 import type { Message, StoreChange } from "./store.ts";
 import { summaryInstance } from "./summary-instance.ts";
 import { MEMORY_MAX_BYTES, MEMORY_SEED, memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
@@ -2640,6 +2641,71 @@ describe("note generator", () => {
     await noteGenerator([claude])!("prompt", signal, onUsage);
     expect(claude.generateText).toHaveBeenCalledWith("prompt", { signal, timeoutMs: 120_000, ephemeral: true, lean: true, onUsage });
   });
+
+  describe("account limits", () => {
+    const HOUR = 3_600_000;
+    const now = Date.parse("2026-11-22T00:00:00Z");
+    const own = (error?: Error) => ({ instanceId: "grok", driverKind: "grokAgent", enabled: true, generateText: vi.fn(async () => {
+      if (error) throw error;
+      return "[]";
+    }) });
+    const usage = (report?: RateLimitsReport) => ({ limits: new Map<string, RateLimitsReport>(report ? [["grok", report]] : []), save: vi.fn() });
+    beforeEach(() => vi.spyOn(Date, "now").mockReturnValue(now));
+    afterEach(() => vi.restoreAllMocks());
+
+    it("holds notes after a limit with no reset time only for the shortest window", async () => {
+      const limits = usage();
+      await expect(noteGenerator([], undefined, own(new Error("xAI HTTP 429: Too Many Requests")), limits)?.("notes", new AbortController().signal)).rejects.toThrow();
+      expect(limits.limits.get("grok")?.noteLimit).toEqual({ resetsAt: now + 5 * HOUR });
+      expect(noteGenerator([], undefined, own(), limits)).toBeNull();
+      vi.spyOn(Date, "now").mockReturnValue(now + 5 * HOUR);
+      expect(noteGenerator([], undefined, own(), limits)).not.toBeNull();
+    });
+
+    it("keeps a limit's own reset time, and stops reading a stored limit with none", async () => {
+      const limits = usage();
+      const error = Object.assign(new Error("429"), { data: { error: { type: "rate_limit_exceeded" }, resetsAt: (now + 30 * HOUR) / 1000 } });
+      await expect(noteGenerator([], undefined, own(error), limits)?.("notes", new AbortController().signal)).rejects.toThrow();
+      expect(limits.limits.get("grok")?.noteLimit).toEqual({ resetsAt: now + 30 * HOUR });
+      vi.spyOn(Date, "now").mockReturnValue(now + 29 * HOUR);
+      expect(noteGenerator([], undefined, own(), limits)).toBeNull();
+      vi.spyOn(Date, "now").mockReturnValue(now + 30 * HOUR + 1);
+      expect(noteGenerator([], undefined, own(), limits)).not.toBeNull();
+      expect(noteGenerator([], undefined, own(), usage({ windows: [], observedAt: new Date(now).toISOString(), noteLimit: { resetsAt: null } }))).not.toBeNull();
+    });
+
+    it("pauses on a spent window unless another pool of it still has room", () => {
+      const spent = { id: "seven_day", usedPercent: 100, resetsAt: now + 48 * HOUR };
+      const report = (otherPoolLeft?: boolean) => usage({ windows: [{ ...spent, ...(otherPoolLeft && { otherPoolLeft }) }], observedAt: new Date(now).toISOString() });
+      expect(noteGenerator([], undefined, own(), report())).toBeNull();
+      expect(noteGenerator([], undefined, own(), report(true))).not.toBeNull();
+    });
+
+    it("helper's own Gemini Models pool spent, another pool free: helper stays off, 0 calls until reset", async () => {
+      const live = JSON.parse(readFileSync(new URL("./testing/fixtures/agy-usage-live.jsonl", import.meta.url), "utf8").split("\n")[0]!).command.data;
+      const reset = now + 72 * HOUR;
+      // a fresh usage report every hour replaces the whole entry, as the client's refresh does
+      const report = (at: number): RateLimitsReport => {
+        const data = structuredClone(live);
+        for (const group of data.groups) for (const bucket of group.buckets) {
+          bucket.reset_time = new Date(reset).toISOString();
+          if (at < reset && bucket.id === "gemini-weekly") bucket.remaining_fraction = 0;
+        }
+        return { windows: antigravityRateLimitWindows(data, at), observedAt: new Date(at).toISOString() };
+      };
+      const helper = { ...own(new Error("RESOURCE_EXHAUSTED (code 429): Quota exceeded")), driverKind: "antigravityAgent" };
+      const limits = usage();
+      for (let at = now; at < reset; at += HOUR) {
+        vi.spyOn(Date, "now").mockReturnValue(at);
+        limits.limits.set("grok", report(at));
+        await noteGenerator([], undefined, helper, limits)?.("notes", new AbortController().signal).catch(() => {});
+      }
+      expect(helper.generateText.mock.calls.length).toBe(0);
+      vi.spyOn(Date, "now").mockReturnValue(reset + 1);
+      limits.limits.set("grok", report(reset + 1));
+      expect(noteGenerator([], undefined, helper, limits)).not.toBeNull();
+    });
+  });
 });
 
 describe("notes on the bot's own engine", () => {
@@ -2664,7 +2730,49 @@ describe("notes on the bot's own engine", () => {
     await expect(noteGenerator([], undefined, own, usage)?.("notes", new AbortController().signal)).rejects.toThrow("Account text rate limit");
     expect(noteGenerator([], undefined, own, usage)).toBeNull();
     expect(usage.save).toHaveBeenCalledTimes(1);
-    expect(limits.get("codex")?.noteLimit).toEqual({ resetsAt: null });
+    expect(limits.get("codex")?.noteLimit?.resetsAt).toBeGreaterThan(Date.now());
+  });
+
+  it("agy denies the text model, fallback model's pool spent, Gemini Models free: helper stays off, 0 calls until reset", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const FAKE_AGY = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-agy-cli.ts");
+    chmodSync(FAKE_AGY, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-agy-denied-"));
+    const errorFile = join(home, "result-error.txt");
+    const agy = await AntigravityDriver.create({ instanceId: "Gemini", displayName: undefined, enabled: true,
+      environment: { HOME: home, USERPROFILE: home, FAKE_AGY_DENIED_MODEL: "gemini-3.8-flash-low", FAKE_AGY_RESULT_ERROR_FILE: errorFile }, config: { cli: FAKE_AGY, fullAuto: false } });
+    const live = JSON.parse(readFileSync(new URL("./testing/fixtures/agy-usage-live.jsonl", import.meta.url), "utf8").split("\n")[0]!).command.data;
+    const reset = Date.now() + 72 * 3_600_000;
+    const report = (argonSpent: boolean, at = Date.now()): RateLimitsReport => {
+      const data = structuredClone(live);
+      for (const group of data.groups) for (const bucket of group.buckets) {
+        bucket.reset_time = new Date(reset).toISOString();
+        if (argonSpent && at < reset && bucket.id === "gemini-argon-wtu-weekly") bucket.remaining_fraction = 0;
+      }
+      return { windows: antigravityRateLimitWindows(data, at), observedAt: new Date(at).toISOString() };
+    };
+    const own = summaryInstance(agy, "gemini-4-argon-low");
+    const generateText = vi.fn(own.generateText!);
+    const limits: RateLimitsMap = new Map();
+    const usage = { limits, save: vi.fn(), signedOut: new Set<string>() };
+    const notes = () => noteGenerator([], undefined, { ...own, generateText }, usage);
+    try {
+      // denied the text model, the account writes its notes on the bot's Argon model
+      usage.limits.set("Gemini", report(false));
+      await expect(notes()!("notes", new AbortController().signal)).resolves.toBe("done from fake agy");
+      // then Argon runs out while Gemini Models has room; agy's weekly wording stores no limit
+      writeFileSync(errorFile, "RESOURCE_EXHAUSTED: You have reached your weekly limit. Upgrade your plan or try again later.");
+      usage.limits.set("Gemini", report(true));
+      generateText.mockClear();
+      for (let i = 0; i < 5; i++) await notes()?.("notes", new AbortController().signal).catch(() => {});
+      expect(generateText).not.toHaveBeenCalled();
+      vi.spyOn(Date, "now").mockReturnValue(reset + 1);
+      usage.limits.set("Gemini", report(true, reset + 1));
+      expect(notes()).not.toBeNull();
+    } finally {
+      await agy.dispose();
+    }
   });
 
   it.each([
@@ -2775,7 +2883,7 @@ describe("memory pass wiring", () => {
   it("keeps the legacy Claude selector and uses the resolved own account for other bots", () => {
     expect(index).toContain("botAccounts.notes(bot, { limits: rateLimitsByInstance,");
     expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: noteHelper,[\s\S]*?botHasActiveTurn/);
-    expect(index).toMatch(/createMemorySleep\(\{[\s\S]*?generate: noteHelper,/);
+    expect(index).toMatch(/createMemorySleep\(\{[\s\S]*?judges: \(\) => botAccounts\.dreamJudges\(\{ limits: rateLimitsByInstance,/);
     expect(index).toMatch(/memoryPass\.onSettled\(bot\.id, event\.threadId, flushNotes\);\s*if \(!store\.groupByThread\(event\.threadId\)\)/);
     expect(index).toContain("memoryPass.dispose();");
   });

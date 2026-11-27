@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { CATALOG_ONLY } from "../testing/agents-tools.ts";
 import { spawnTestNode as spawn } from "../testing/harness-auth.ts";
 import { handle } from "./agents-proxy.ts";
 
@@ -19,6 +20,35 @@ const { reply } = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/
 
 const PROXY = join(dirname(fileURLToPath(import.meta.url)), "agents-proxy.ts");
 const TOKEN = "test-comms-token";
+const DEFAULT_TOOL_NAMES = [
+  "web_read",
+  "board_search",
+  "board_post",
+  "list_bots",
+  "update_task_state",
+  "ask_bot",
+  "delegate_bot",
+  "check_delegation",
+  "wait_delegation",
+  "create_bot",
+  "create_channel",
+  "react",
+  "ask_user",
+  "show_image",
+  "generate_image",
+  "call_api",
+  "request_credential",
+  "usage_status",
+  "list_routines",
+  "propose_routine",
+  "propose_routine_action",
+  "wake_me",
+  "set_keep_going",
+  "pin_goal",
+  "no_reply_needed",
+  "link_room_fix",
+  "post_to_group",
+];
 
 // scripted harness stub
 let stub: Server;
@@ -203,7 +233,7 @@ beforeAll(async () => {
         }
         if (lastAskUserBody.close) {
           res.writeHead(200, { "content-type": "application/json" });
-          return res.end(JSON.stringify({ closed: true }));
+          return res.end(JSON.stringify(["answered", "dismissed"].includes(lastAskUserBody.question) ? { closed: false, settled: lastAskUserBody.question } : lastAskUserBody.question === "unknown" ? { closed: false } : { closed: true }));
         }
         res.writeHead(201, { "content-type": "application/json" });
         res.end(JSON.stringify({ messageId: "msg-ask" }));
@@ -340,6 +370,11 @@ beforeAll(async () => {
       });
       return;
     }
+    if (req.method === "POST" && ["/api/internal/board-search", "/api/internal/board-post", "/api/internal/room-fix", "/api/internal/post-to-group"].includes(req.url ?? "")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ text: `${req.url} ok` }));
+      return;
+    }
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "unknown" }));
   });
@@ -395,34 +430,7 @@ describe("agents-proxy MCP surface", () => {
     const init = await rpc("initialize", { protocolVersion: "2024-11-05" });
     expect(init.result.serverInfo.name).toContain("agents");
     const list = await rpc("tools/list");
-    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual([
-      "web_read",
-      "board_search",
-      "board_post",
-      "list_bots",
-      "update_task_state",
-      "ask_bot",
-      "delegate_bot",
-      "check_delegation",
-      "wait_delegation",
-      "create_bot",
-      "create_channel",
-      "react",
-      "ask_user",
-      "show_image",
-      "generate_image",
-      "call_api",
-      "request_credential",
-      "usage_status",
-      "list_routines",
-      "propose_routine",
-      "propose_routine_action",
-      "wake_me",
-      "set_keep_going",
-      "pin_goal",
-      "no_reply_needed",
-      "link_room_fix",
-    ]);
+    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(DEFAULT_TOOL_NAMES);
   });
 
   it("ends a quiet turn with no_reply_needed without calling Wink", async () => {
@@ -511,6 +519,15 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.isError).toBe(false);
     expect(res.result.content[0].text).toBe("Closed as answered in chat.");
     expect(lastAskUserBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", question: "Ship it?", close: true });
+  });
+
+  it("tells a close on an already answered card apart from one never asked", async () => {
+    const settled = await callTool("ask_user", { question: "answered", close: true });
+    expect(settled.result).toMatchObject({ isError: false, content: [{ text: "Already closed; the user answered it." }] });
+    const dismissed = await callTool("ask_user", { question: "dismissed", close: true });
+    expect(dismissed.result.content[0].text).toBe("Already closed; the user dismissed it.");
+    const unknown = await callTool("ask_user", { question: "unknown", close: true });
+    expect(unknown.result.content[0].text).toBe("No matching open question.");
   });
 
   it("forwards a fact mark so the Forum may answer first", async () => {
@@ -1384,9 +1401,7 @@ describe("agents-proxy identity gate", () => {
 
   it("lists every tool with a complete identity at depth 0", async () => {
     const { list } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0" });
-    expect(list.result.tools).toHaveLength(26);
-    expect(list.result.tools.map((t: { name: string }) => t.name)).toContain("set_keep_going");
-    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(["ask_bot", "delegate_bot", "ask_user", "update_task_state", "check_delegation"]));
+    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(DEFAULT_TOOL_NAMES);
   });
 
   it.each([1, 2])("lists only safe peer tools at depth %s", async (depth) => {
@@ -1396,7 +1411,7 @@ describe("agents-proxy identity gate", () => {
     ]);
   });
 
-  it.each(["ask_bot", "delegate_bot", "create_bot", "create_channel", "ask_user", "react", "show_image", "generate_image", "call_api", "request_credential", "propose_routine", "propose_routine_action", "wake_me", "set_keep_going", "report_issue"])("refuses %s from a peer turn before calling the harness", async (name) => {
+  it.each(["ask_bot", "delegate_bot", "create_bot", "create_channel", "ask_user", "react", "show_image", "generate_image", "call_api", "request_credential", "propose_routine", "propose_routine_action", "wake_me", "set_keep_going", "report_issue", "post_to_group"])("refuses %s from a peer turn before calling the harness", async (name) => {
     const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_TEAM_REPORTS: "1" }, name);
     expect(call.result.isError).toBe(true);
     expect(call.result.content[0].text).toContain("unavailable in peer turns");
@@ -1420,7 +1435,7 @@ describe("agents-proxy read-only room turn", () => {
     ]);
   });
 
-  it.each(["ask_bot", "delegate_bot", "call_api", "request_credential", "create_bot", "create_channel", "set_keep_going", "generate_image", "propose_routine", "board_post", "update_task_state"])("refuses %s before calling the harness", async (name) => {
+  it.each(["ask_bot", "delegate_bot", "call_api", "request_credential", "create_bot", "create_channel", "set_keep_going", "generate_image", "propose_routine", "board_post", "post_to_group", "update_task_state"])("refuses %s before calling the harness", async (name) => {
     const { call } = await probeWithIdentity(identity, name);
     expect(call.result.isError).toBe(true);
     expect(call.result.content[0].text).toBe(`${name} is unavailable: the host has to turn on "Can make bots work" for whoever asked.`);
@@ -1464,6 +1479,36 @@ describe("agents-proxy catalog", () => {
     expect(direct.list.result.tools.map((tool: { name: string }) => tool.name)).toContain(name);
     const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: args });
     expect(gateway.call.result.isError).toBe(true);
+  });
+
+  // Offline stand-in for a model turn: the words a model would search with,
+  // then the call it would make. Real-model accuracy is the nightly eval's arm.
+  it.each([
+    ["create_bot", "create a new bot", { name: "Pixel", role: "Designer", instructions: "Draw things." }],
+    ["create_channel", "make a group channel", { name: "Design", member_ids: ["bot-helper"] }],
+    ["generate_image", "generate an image", { prompt: "A test image", show: true }],
+    ["call_api", "call an api with a saved key", { credential_id: "ttsKey", method: "POST", url: "https://api.example.com/audio" }],
+    ["request_credential", "ask the user for an api key credential", { credential_id: "geminiApiKey", reason: "Task needs it" }],
+    ["usage_status", "usage limits left", {}],
+    ["link_room_fix", "link_room_fix", { sessionId: "pane-1", title: "Login bug" }],
+    ["post_to_group", "post the research in a group", { group: "Launch Planning", text: "Research links" }],
+    ["board_search", "search the board for fixes", { query: "EADDRINUSE" }],
+    ["board_post", "post a tip to the board", { kind: "tip", title: "Port", body: "Kill the old dev server." }],
+    ["wake_me", "wake me later", { at: "2099-01-01T09:00:00+00:00", note: "Check the deploy." }],
+    ["web_read", "read a web page url", { url: "https://example.com/" }],
+  ])("finds %s by a model's words and reaches its original handler", async (name, query, args) => {
+    webReadResponse = { status: "ok", url: "https://example.com/", route: "fetch", text: "Example Domain", tried: [] };
+    const found = await probeWithIdentity(identity(), "find_wink_tool", { query });
+    expect(JSON.parse(found.call.result.content[0].text).tools.map((tool: { name: string }) => tool.name)).toContain(name);
+    const direct = await probeWithIdentity({ ...identity(), OMB_WINK_TOOL_CATALOG: "0" }, name, args);
+    const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: args });
+    expect(gateway.call.result).toMatchObject({ ...direct.call.result, _meta: { winkTool: name } });
+    expect(gateway.call.result.isError).toBeFalsy();
+  });
+
+  it.each(["hello", "thanks!", "good morning"])("finds no tool for a chat turn that needs none: %s", async (query) => {
+    const found = await probeWithIdentity(identity(), "find_wink_tool", { query });
+    expect(JSON.parse(found.call.result.content[0].text).tools).toEqual([]);
   });
 
   it.each(["create_bot", "create_channel", "generate_image", "request_credential"])("preserves %s argument refusals", async (name) => {
@@ -1537,19 +1582,23 @@ describe("agents-proxy verify_site", () => {
     expect(source.includes("verifyToolEnv")).toBe(false);
   });
 
-  it.each<[Record<string, string>, number, boolean]>([
-    [{ OMB_TEAM_REPORTS: "0" }, 26, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 27, true],
-    [{ OMB_TEAM_REPORTS: "1" }, 27, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 28, true],
-    [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 17, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 18, true],
-    [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 18, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 19, true],
-  ])("lists the tool only with its env (%o)", async (flags, total, listed) => {
+  it.each<Record<string, string>>([
+    { OMB_TEAM_REPORTS: "0" },
+    { OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" },
+    { OMB_TEAM_REPORTS: "1" },
+    { OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" },
+    { OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" },
+    { OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" },
+    { OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" },
+    { OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" },
+  ])("lists the tool only with its env (%o)", async (flags) => {
     const { list } = await probe(identity(0, flags));
-    expect(names(list)).toHaveLength(total);
-    expect(names(list).includes("verify_site")).toBe(listed);
+    const expected = flags.OMB_WINK_TOOL_CATALOG === "1"
+      ? [...DEFAULT_TOOL_NAMES.filter((name) => !CATALOG_ONLY.includes(name)), "find_wink_tool", "call_wink_tool"]
+      : [...DEFAULT_TOOL_NAMES];
+    if (flags.OMB_TEAM_REPORTS === "1") expected.push("report_issue");
+    if (flags.OMB_LIVE_VERIFY === "1") expected.push("verify_site");
+    expect(names(list).sort()).toEqual(expected.sort());
   });
 
   it.each<Record<string, string>>([{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, { OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, { OMB_TEAM_REPORTS: "1" }])("keeps the five peer tools and never lists verify_site at depth > 0 (%o)", async (flags) => {

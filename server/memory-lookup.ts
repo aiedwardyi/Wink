@@ -11,9 +11,11 @@ import { z } from "zod";
 
 import { latestTaskAsks } from "../shared/task-ask-list.ts";
 import { aboutYouFile, aboutYouPastTheCut, botImportFile, botImportPastTheCut } from "./about-you.ts";
+import { DREAMED_FILE } from "./dream-archive.ts";
 import { secretLike, userTyping, withoutBlocks } from "./memory-pass.ts";
 import { isSyncedFile } from "./memory-sync.ts";
 import { currentOnly, PICKS_FILE } from "./picks.ts";
+import { clean, hiddenFromRecall, words } from "./recall-row.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { appendRotatingLog } from "./rotating-log.ts";
 import { parseJson } from "./schema.ts";
@@ -58,11 +60,8 @@ const STOP = new Set("a an and are as at be but by can could did do does for fro
 const CHAT = new Set("u ur ya im ive id ill youre dont doesnt didnt cant wont isnt arent wasnt werent thats whats hows theres heres lol haha btw pls plz thx ty idk imo tldr cool nice great good sweet sure right really actually maybe probably also still already again now today tomorrow yesterday later soon first next last back way thing things stuff something anything everything nothing one two three more most much many very all any each every both other another same new old big little think thought know knew see saw seen look looks looking looked want wanted need needed needs wait waiting waited mean means meant say said says tell told ask asked asking give gave given get got getting make made making take took taken put use used using try tried trying come came going gone went like lot lots bit kind sort done sent send ready happen happened help".split(" "));
 const skipped = (word: string) => STOP.has(word) || CHAT.has(word);
 
-const SEPARATOR = /^\|[\s:|-]+\|?$/;
-const STRUCK = /^[-*\s|]*(?:\d+\s*\|\s*)?~~/;
 const DATED = /\b(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b|\b(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/g;
 
-const words = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
 const localDay = (at: number) => new Date(at).toLocaleDateString("sv-SE");
 const yieldLoop = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -79,18 +78,6 @@ export interface RecallIndex {
   hits(terms: Terms): RecallHit[];
   gate(terms: Terms, hits: RecallHit[]): RecallHit[];
   close(): void;
-}
-
-// Rows come from files a bot can be talked into writing, so nothing here may read as markup or as Wink's own framing.
-function clean(line: string): string {
-  const text = line
-    .replace(/<\/?[a-zA-Z!][^<>]*>/g, " ")
-    .replace(/<(?=[a-zA-Z/!])/g, " ")
-    .replace(/\[\/?\s*Wink recall[^\]]*\]?/gi, " ")
-    .replace(/current message:/gi, "current message -")
-    .replace(/\s+/g, " ")
-    .replace(/^[\s|]+|[\s|]+$/g, "");
-  return redactSecretsInText(text);
 }
 
 function rowDate(text: string, mtime: number): string {
@@ -134,20 +121,16 @@ function piecesOfFile(file: NoteFile): Piece[][] {
   let heading: string[] = [];
   file.text.split(/\r?\n/).forEach((raw, at) => {
     const line = raw.trim();
-    if (!line || SEPARATOR.test(line)) return;
     if (line.startsWith("#")) {
       heading = words(clean(line));
       return;
     }
-    if (STRUCK.test(line)) return;
-    // a split could part a label from its value, so the whole row is withheld, as Auto Notes does
-    if (secretLike(line)) return;
+    if (hiddenFromRecall(line)) return;
     const text = clean(line);
-    if (!words(text).length) return;
     const table = line.startsWith("|");
     const cell = words(firstCell(text).slice(0, TITLE_CHARS));
-    // a timeline field like "Picked:" or a goal belongs to its own entry, never one topic across entries
-    const label = table ? cell : file.source === PICKS_SOURCE || /^(?:[-*]\s+)?Goal:\s/i.test(text) ? [] : words(/^(?:[-*]\s+)?([^:]{2,60}):\s/.exec(text)?.[1] ?? "");
+    // a timeline field like "Picked:", a goal or an archived note belongs to its own entry, never one topic across entries
+    const label = file.source === DREAMED_FILE ? [] : table ? cell : file.source === PICKS_SOURCE || /^(?:[-*]\s+)?Goal:\s/i.test(text) ? [] : words(/^(?:[-*]\s+)?([^:]{2,60}):\s/.exec(text)?.[1] ?? "");
     const key = `${file.source}\0${text.slice(0, 80)}`;
     const shared = {
       key,
@@ -385,7 +368,10 @@ export interface MemoryLookupDeps {
 
 /* oxlint-disable anti-slop/no-unknown-parameters -- provider resume cursors are opaque. */
 export interface MemoryLookup {
-  refresh(botId: string): Promise<void>;
+  /** held: the next turns' recall waits for this build, so a line just moved out of MEMORY.md, or synced before a restart, is found. */
+  refresh(botId: string, held?: boolean): Promise<void>;
+  /** The build a held refresh still owes, or nothing to wait for. */
+  ready(botId: string): Promise<void> | undefined;
   /** The recall note for a typed turn, or nothing. No I/O and no build. */
   take(botId: string, threadId: string, cursor: unknown, text: string): string[];
   /** The provider took the last take's turn, so its rows now count as shown. */
@@ -395,7 +381,7 @@ export interface MemoryLookup {
   settled(botId: string, threadId: string, cursor: unknown): Promise<void>;
 }
 
-const cursorKey = (cursor: unknown) => (cursor === undefined || cursor === null ? "" : JSON.stringify(cursor));
+export const cursorKey = (cursor: unknown) => (cursor === undefined || cursor === null ? "" : JSON.stringify(cursor));
 /* oxlint-enable anti-slop/no-unknown-parameters */
 
 type LookupLog = {
@@ -500,7 +486,8 @@ async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile
   for (const { source, tier, path, mtime, size } of sources) {
     // an import file only counts for the lines past the cut: a big one fills what is left, it is not skipped whole
     const shared = source === ABOUT_YOU_SOURCE || source === IMPORT_SOURCE;
-    if (!shared) {
+    // the archive holds lines that left MEMORY.md, so it is read whole and takes no room from the other files
+    if (!shared && source !== DREAMED_FILE) {
       if (bytes + size > MAX_CORPUS_BYTES) continue;
       bytes += size;
     }
@@ -532,6 +519,8 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   const on = (botId: string) => !listed || listed.has(botId);
   const indexes = new Map<string, { index: RecallIndex; signature: string }>();
   const runs = new Map<string, number>();
+  const building = new Map<string, Promise<void>>();
+  const owed = new Set<string>();
   const shown = new Map<string, { cursor: string; rows: Set<string> }>();
   const pending = new Map<string, { session: string; rows: string[] }>();
   const markKey = (botId: string, threadId: string) => `${botId}\0${threadId}`;
@@ -564,14 +553,11 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     return found.filter((source) => source !== null);
   };
 
-  const refresh = async (botId: string) => {
+  const build = async (botId: string, run: number) => {
     try {
       await loadFlags();
       const overflow = Boolean(aboutYouPastTheCut());
       const ownOverflow = Boolean(botImportPastTheCut(botId));
-      // a build still running for an earlier state must find itself replaced, whether this refresh builds or drops
-      const run = (runs.get(botId) ?? 0) + 1;
-      runs.set(botId, run);
       if (!on(botId) && !overflow && !ownOverflow) {
         drop(botId);
         return;
@@ -590,6 +576,20 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     } catch (error) {
       console.warn(`[memory-lookup] index failed for ${botId}: ${error instanceof Error ? error.name : "unknown"}`);
     }
+  };
+
+  const refresh = (botId: string, held = false) => {
+    if (held) owed.add(botId);
+    // a build still running for an earlier state must find itself replaced, whether this refresh builds or drops
+    const run = (runs.get(botId) ?? 0) + 1;
+    runs.set(botId, run);
+    const done: Promise<void> = build(botId, run).finally(() => {
+      if (building.get(botId) !== done) return;
+      building.delete(botId);
+      owed.delete(botId);
+    });
+    building.set(botId, done);
+    return done;
   };
 
   const writeLog = (entry: LookupLog) => {
@@ -672,6 +672,13 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
 
   return {
     refresh,
+    ready(botId) {
+      if (!owed.has(botId)) return undefined;
+      // a later refresh replaces the one awaited, so wait out each until the newest lands
+      return (async () => {
+        while (owed.has(botId)) await building.get(botId);
+      })();
+    },
     take(botId, threadId, cursor, text) {
       if (!on(botId) && !indexes.has(botId)) return [];
       pending.delete(markKey(botId, threadId));

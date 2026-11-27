@@ -19,6 +19,7 @@ const windowSchema = z.object({
   usedPercent: z.number().finite(),
   resetsAt: z.number().finite().nullable(),
   windowMinutes: z.number().finite().optional(),
+  otherPoolLeft: z.boolean().optional(),
 });
 const reportSchema = z.object({
   windows: z.array(windowSchema),

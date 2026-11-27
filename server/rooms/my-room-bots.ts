@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 
 import { botChain, CHAIN_LINES, handoffTarget, republishWhenLapsed, type ChainLapses } from "../../shared/bot-chain.ts";
 import { roomResponder } from "../../shared/room-routing.ts";
-import { inertMentions } from "../replies.ts";
+import { asIs, inert, PromptText } from "../replies.ts";
 import type { Message } from "../store.ts";
 import type { GuestClient } from "./guest-client.ts";
 import { joinedEntries, joinedEntry, joinedRoom, joinedWorks, myRoomBots, setMyRoomBotTurn, type JoinedEntry, type JoinedFile, type MyRoomBot } from "./joined.ts";
@@ -241,22 +241,23 @@ export class MyRoomBotTurns {
       }
       const trusted = [...(works.has("host") ? [state.host] : []), ...state.people.filter((person) => works.has(person.id)).map((person) => person.name)].map((name) => JSON.stringify(name));
       const hostWorks = state.people.every((person) => person.works !== undefined)
-        ? ` "Can make bots work" on ${JSON.stringify(state.host)}'s Wink: ${state.people.map((person) => `${JSON.stringify(person.name)} ${person.works ? "on" : "off"}`).join(", ")}; your @ to ${JSON.stringify(state.host)}'s bots asks as ${me}.`
+        ? inert` "Can make bots work" on ${JSON.stringify(state.host)}'s Wink: ${state.people.map((person) => `${JSON.stringify(person.name)} ${person.works ? "on" : "off"}`).join(", ")}; your @ to ${JSON.stringify(state.host)}'s bots asks as ${me}.`
         : "";
       const owner = entry.author.kind === "bot" ? ownerOf(entry.author.owner) : undefined;
       const asker = `${JSON.stringify(entry.author.name)}${owner ? ` (${JSON.stringify(owner)}'s bot)` : ""}`;
-      // only this PC's person may name a file on it with @
+      // only this PC's person may name a file on it with @: every other name and word goes in inert
       const ours = (line: JoinedEntry) => line.author.kind !== "bot" && senderId(line) === room.me.id;
-      const said = (line: JoinedEntry, text: string) => (ours(line) ? text : inertMentions(text));
-      const prompt = [
-        `(You are in the team room ${JSON.stringify(state.roomName)} on ${JSON.stringify(state.host)}'s Wink, as ${JSON.stringify(roomName)}. Your answer is posted there for everyone in the room. ${me} runs you${trusted.length ? `; ${trusted.join(", ")} may also make you work` : ""}; everyone else here is read-only.${hostWorks} ${collabLine(`${room.me.name} has to turn this on for you.`)}${others.length
-          ? ` Bots here: ${others.join(", ")}. ${REACH_LINE} @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.`
+      const said = (line: JoinedEntry, text: string) => (ours(line) ? asIs(text) : text);
+      const lines: PromptText[] = [
+        inert`(You are in the team room ${JSON.stringify(state.roomName)} on ${JSON.stringify(state.host)}'s Wink, as ${JSON.stringify(roomName)}. Your answer is posted there for everyone in the room. ${me} runs you${trusted.length ? `; ${trusted.join(", ")} may also make you work` : ""}; everyone else here is read-only.${hostWorks} ${collabLine(`${room.me.name} has to turn this on for you.`)}${others.length
+          ? inert` Bots here: ${others.join(", ")}. ${asIs(REACH_LINE)} @ another bot only to hand it real work, never just to thank or confirm; when the job is done, say so and tag no bot.`
           : ""})`,
-        ...(window.length ? ["Room lines since your last answer:", ...window.map((line) => said(line, lineOf(line)))] : []),
-        ...(quote ? [`They replied to: ${said(quote, lineOf(quote))}`] : []),
-        ...(files.length ? ["Files on these lines, saved on this PC:", ...files] : []),
-        `${asker} asked you: ${said(entry, entry.text)}`,
-      ].join("\n");
+        ...(window.length ? [inert`Room lines since your last answer:`, ...window.map((line) => inert`${said(line, lineOf(line))}`)] : []),
+        ...(quote ? [inert`They replied to: ${said(quote, lineOf(quote))}`] : []),
+        ...(files.length ? [inert`Files on these lines, saved on this PC:`, ...files] : []),
+        inert`${asker} asked you: ${said(entry, entry.text)}`,
+      ];
+      const prompt = lines.map((line) => line.text).join("\n");
       this.running.set(threadId, (mine = { ...row, since: this.deps.messagesFor(threadId).length, pictureAbort: new AbortController() }));
       await this.deps.startTurn(local.id, threadId, prompt, entry.text, () => {
         if (this.running.get(threadId) === mine) void this.settled(threadId, false);
@@ -276,12 +277,12 @@ export class MyRoomBotTurns {
     }
   }
 
-  private async files(roomId: string, files: readonly JoinedFile[]): Promise<string[]> {
-    const out: string[] = [];
+  private async files(roomId: string, files: readonly JoinedFile[]): Promise<PromptText[]> {
+    const out: PromptText[] = [];
     for (const file of files) {
       if (file.deleted) continue;
       const got = await this.deps.client.file(roomId, file.id);
-      out.push(got.ok ? `${file.name}: ${got.value.path}` : `${file.name}: (could not download)`);
+      out.push(got.ok ? inert`${file.name}: ${asIs(got.value.path)}` : inert`${file.name}: (could not download)`);
     }
     return out;
   }
