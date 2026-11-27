@@ -87,6 +87,8 @@ if (engine === "claude") {
   else {
     const session = randomUUID();
     let initialized = false;
+    // the real CLI answers a line written mid-reply after that reply, so a steer never cuts a [hold] turn short
+    let pendingUntil = 0;
     lines((message) => {
       if (message.type === "control_request") {
         out({ type: "control_response", response: { subtype: "success", request_id: message.request_id } });
@@ -97,7 +99,9 @@ if (engine === "claude") {
         initialized = true;
         out({ type: "system", subtype: "init", session_id: session, model });
       }
-      out({ type: "system", subtype: "status", status: "requesting" });
+      const queued = Math.max(0, pendingUntil - Date.now());
+      if (queued) setTimeout(() => out({ type: "system", subtype: "status", status: "requesting" }), queued);
+      else out({ type: "system", subtype: "status", status: "requesting" });
       const { text, delay } = reply(model, message.message?.content);
       // An expired login fails the first send only, as if Sign in fixed it before Retry.
       const expiredOnce = process.env.WINK_STUB_LOG && `${process.env.WINK_STUB_LOG}.expired`;
@@ -124,12 +128,13 @@ if (engine === "claude") {
         return;
       }
       const half = Math.ceil(text.length / 2);
-      setTimeout(() => out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: text.slice(0, half) } } }), delay / 2);
+      pendingUntil = Date.now() + queued + delay + 1;
+      setTimeout(() => out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: text.slice(0, half) } } }), queued + delay / 2);
       setTimeout(() => {
         out({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: text.slice(half) } } });
         out({ type: "assistant", message: { id: randomUUID(), content: [{ type: "text", text }] } });
         out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 } });
-      }, delay);
+      }, queued + delay);
     });
   }
 }
