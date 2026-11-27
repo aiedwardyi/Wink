@@ -2190,32 +2190,6 @@ describe("summary repair", () => {
     expect(isFallbackSummary(fallbackRow.summary)).toBe(true);
   });
 
-  it("keeps a model rewrite of the fallback on its own boundary a repair target", () => {
-    const rewrite = compactionMessage("cr", "m23", row({ summary: "model rewrite of the fallback", coveredThroughId: "m14", firstKeptId: "m15", sourceMessageCount: 15, previousCompactionId: "cf" }));
-    const found = repairTarget([...fallbackPath(), rewrite]);
-    expect(found?.target.messageId).toBe("cr");
-    expect(found?.fallback.messageId).toBe("cf");
-    expect(found?.good?.messageId).toBe("cg");
-    const repaired = compactionMessage("cp", "m23", row({ summary: "repaired summary", coveredThroughId: "m14", firstKeptId: "m15", sourceMessageCount: 15, previousCompactionId: "cg" }));
-    expect(repairTarget([...fallbackPath(), rewrite, repaired])).toBeNull();
-  });
-
-  it("keeps a rewrite of a later fallback a repair target when it shares a boundary with a replaced row", () => {
-    const later = (id: string, parentId: string, summary: string, previousCompactionId: string) =>
-      compactionMessage(id, parentId, row({ summary, coveredThroughId: "m19", firstKeptId: "m20", sourceMessageCount: 20, previousCompactionId }));
-    const path = [
-      ...fallbackPath(),
-      later("cb", "m23", "build chained from the fallback", "cf"),
-      compactionMessage("cp", "cb", row({ summary: "repaired summary", coveredThroughId: "m14", firstKeptId: "m15", sourceMessageCount: 15, previousCompactionId: "cg" })),
-      later("cf2", "cp", `${NOTICE}\nsecond fallback digest`, "cp"),
-      later("cr", "cf2", "model rewrite of the second fallback", "cf2"),
-    ];
-    const found = repairTarget(path);
-    expect(found?.target.messageId).toBe("cr");
-    expect(found?.fallback.messageId).toBe("cf2");
-    expect(found?.good?.messageId).toBe("cp");
-  });
-
   it("returns clean for a model-only chain without calling the summarizer", async () => {
     const path = [
       ...longHistory(10),

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { applicableCompaction, buildCompaction, isFallbackSummary, planCompaction, prepareModelContext, repairTarget } from "./context-compaction.ts";
+import { buildCompaction, isFallbackSummary, planCompaction, prepareModelContext } from "./context-compaction.ts";
 import type { Message } from "./store.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer } from "./summary-build.ts";
 import { createSummaryRepair } from "./summary-repair.ts";
@@ -237,239 +237,69 @@ describe("summary build after settle", () => {
     expect(appended).toEqual([]);
   });
 
-  it("uses a ready build at the next send with no inline call", async () => {
+  it("leaves a fallback chain to the repair", async () => {
     const generateText = vi.fn(async () => "SUMMARY\nbuilt");
     const { threads, appended, build, sendPrepares } = setup(generateText);
     threads.set("t", overBudgetThread("a"));
-
-    build.onSettled("bot", "t");
-    await build.idle();
-    threads.get("t")!.push(message("send", "next question"));
-    const waited = await build.settle("t", claudeSend, 90_000, () => true, { grace: graceInputs(threads.get("t")!) });
-    const { prepared, summarize } = await sendPrepares("t", "send");
-
-    expect(waited).toBe(0);
-    expect(generateText).toHaveBeenCalledOnce();
-    expect(summarize).not.toHaveBeenCalled();
-    expect(prepared).toMatchObject({ status: "ready", compactionId: appended[0]!.id });
-  });
-
-  async function fallbackChain(setupResult: ReturnType<typeof setup>) {
-    const { threads, sendPrepares } = setupResult;
-    threads.set("t", overBudgetThread("a"));
     threads.get("t")!.push(message("send", "next question"));
     const { prepared } = await sendPrepares("t", "send", { summarize: undefined });
-    if (prepared.status !== "ready" || !isFallbackSummary(prepared.compaction!.summary)) throw new Error("the fixture did not land a fallback");
+    expect(prepared.status === "ready" && isFallbackSummary(prepared.compaction!.summary)).toBe(true);
+    if (prepared.status !== "ready") return;
     threads.get("t")!.push(
       { id: "fallback", at: 2_000, role: "bot", kind: "compaction", compaction: prepared.compaction! },
       ...overBudgetThread("b"),
     );
-    return prepared.compaction!;
-  }
-
-  it("builds a fallback chain's next summary after settle, so the send makes no call", async () => {
-    const generateText = vi.fn(async () => "SUMMARY\nbuilt");
-    const harness = setup(generateText);
-    const { threads, appended, build, sendPrepares } = harness;
-    await fallbackChain(harness);
 
     build.onSettled("bot", "t");
     await build.idle();
 
-    expect(generateText).toHaveBeenCalledOnce();
-    expect(appended).toHaveLength(1);
-    expect(appended[0]!.compaction.previousCompactionId).toBe("fallback");
-    threads.get("t")!.push(message("next", "next question"));
-    const { prepared, summarize } = await sendPrepares("t", "next");
-    expect(summarize).not.toHaveBeenCalled();
-    expect(prepared).toMatchObject({ status: "ready", compactionId: appended[0]!.id });
-  });
-
-  it("drops a build chained from a fallback when a repair lands on that boundary first", async () => {
-    const { calls, generateText } = deferred();
-    const harness = setup(generateText);
-    const { threads, appended, build } = harness;
-    const fallback = await fallbackChain(harness);
-
-    build.onSettled("bot", "t");
-    await tick();
-    expect(calls).toHaveLength(1);
-    threads.get("t")!.push(message("repair", "", { role: "bot", kind: "compaction", compaction: { ...fallback, summary: "repaired summary" } }));
-    calls[0]!.resolve("SUMMARY\nchained from the fallback");
-    await build.idle();
-
+    expect(generateText).not.toHaveBeenCalled();
     expect(appended).toEqual([]);
-    const dropped = vi.mocked(console.info).mock.calls.map(([line]) => String(line)).filter((line) => line.startsWith("[summary-build] dropped "));
-    expect(dropped).toHaveLength(1);
   });
 
-  const NOTICE = "Model summary unavailable; full transcript retained by Wink.";
-  const RELEASE = "release 4.2 shipped from the harbor branch";
-  const logLine = "the tide log kept every buoy reading in order. ".repeat(27);
-  const turns = (prefix: string, count: number, text = logLine) => Array.from({ length: count }, (_, index) =>
-    message(`${prefix}${index}`, `${prefix === "h" && index === 0 ? `${RELEASE}. ` : ""}${text}`, { role: index % 2 ? "bot" : "user" }));
-  const standIn = (summary: string, contextWindow: number): Message => ({
-    id: "fallback",
-    at: 2_000,
-    role: "bot",
-    kind: "compaction",
-    compaction: { v: 1, summary: `${NOTICE}\n${summary}`, coveredThroughId: "h11", firstKeptId: "k0", contextWindow, estimatedTokensBefore: 9_000, sourceMessageCount: 12 },
-  });
-
-  function besideRepair(harness: ReturnType<typeof setup>) {
-    const { calls, generateText } = deferred();
+  it("repairs a fallback over @ words in one pass, then builds, so the send makes no call", async () => {
+    const words = ["@tsv", "@Marketing", "@($t", "@notes/plan.md"];
+    // the Claude CLI answers its file-mention notice instead of summarizing when a bare @ reaches it
+    const generateText = vi.fn(async (prompt: string) =>
+      /@(?!\u200B)/.test(prompt) ? "I could not find a file named tsv." : `SUMMARY\nkept ${[...new Set(prompt.match(/@\u200B\S+/g))].join(" ")}`);
+    const { threads, appended, build, store, sendPrepares } = setup(generateText);
     const repair = createSummaryRepair({
-      store: harness.store,
+      store,
       instanceFor: async () => ({ driverKind: "claude", generateText, textModel: "claude-haiku-5-5", textTimeoutMs: 90_000 }),
-      busy: () => harness.state.busy,
+      busy: () => false,
       taskRecordText: () => "Goal: build",
       userName: () => "User",
     });
-    return { repair, calls };
-  }
-
-  const answer = async (calls: ReturnType<typeof deferred>["calls"], text: string) => {
-    for (let index = 0; index < calls.length; index++) {
-      calls[index]!.resolve(text);
-      await tick();
-    }
-  };
-
-  // Both workers start from the same fallback chain and the build lands first.
-  async function buildThenRepair(harness: ReturnType<typeof setup>, builder: ReturnType<typeof deferred>) {
-    const { repair, calls } = besideRepair(harness);
-    repair.onSettled("bot", "t");
-    harness.build.onSettled("bot", "t");
-    await tick();
-    expect(calls).toHaveLength(1);
-    await answer(builder.calls, "SUMMARY\nbuilt from the fallback");
-    await harness.build.idle();
-    await answer(calls, "SUMMARY\nrepaired with the 4.2 release");
-    await repair.idle();
-    return calls;
-  }
-
-  it("lands the repair when a build chained past it leaves a span over the repair's batch cap", async () => {
-    const builder = deferred();
-    const harness = setup(builder.generateText);
-    const { threads, state } = harness;
-    state.window = 8_192;
-    const tail = turns("k", 20);
-    threads.set("t", [...turns("h", 12), ...tail.slice(0, 2), standIn("fallback digest", 8_192), ...tail.slice(2)]);
-    const raw = threads.get("t")!.map((row) => row.id);
-
-    const calls = await buildThenRepair(harness, builder);
-
-    const path = threads.get("t")!;
-    expect(calls).toHaveLength(4);
-    expect(calls[0]!.prompt).toContain(RELEASE);
-    expect(applicableCompaction(path)).toMatchObject({ value: { coveredThroughId: "h11", summary: expect.stringContaining("repaired with the 4.2 release") } });
-    expect(repairTarget(path)).toBeNull();
-    expect(path.filter((row) => row.kind !== "compaction" || row.id === "fallback").map((row) => row.id)).toEqual(raw);
-  });
-
-  it("lands the repair when a build only rewrote the stand-in on its boundary", async () => {
-    const builder = deferred();
-    const harness = setup(builder.generateText);
-    const { threads, state } = harness;
-    state.window = 8_192;
-    const digestText = "stand-in digest line about buoy readings and tide tables.\n".repeat(347);
-    const tail = turns("k", 3, "short follow-up");
-    threads.set("t", [...turns("h", 12), ...tail.slice(0, 2), standIn(digestText, WINDOW), ...tail.slice(2)]);
-    const raw = threads.get("t")!.map((row) => row.id);
-
-    await buildThenRepair(harness, builder);
-
-    const path = threads.get("t")!;
-    expect(builder.calls.map((call) => call.prompt).join("\n")).not.toContain(RELEASE);
-    expect(applicableCompaction(path)).toMatchObject({ value: { coveredThroughId: "h11", summary: expect.stringContaining("repaired with the 4.2 release") } });
-    expect(repairTarget(path)).toBeNull();
-    expect(path.filter((row) => row.kind !== "compaction" || row.id === "fallback").map((row) => row.id)).toEqual(raw);
-  });
-
-  const echo = (prompt: string) => `SUMMARY\n${prompt.includes(RELEASE) ? RELEASE : "no release"}`;
-  const helper = (repairs: { ok: boolean }) => vi.fn(async (prompt: string) => (repairs.ok ? echo(prompt) : "no sentinel"));
-  const repairWith = (harness: ReturnType<typeof setup>, generateText: (prompt: string) => Promise<string>) => createSummaryRepair({
-    store: harness.store,
-    instanceFor: async () => ({ driverKind: "claude", generateText, textModel: "claude-haiku-5-5", textTimeoutMs: 90_000 }),
-    busy: () => harness.state.busy,
-    taskRecordText: () => "Goal: build",
-    userName: () => "User",
-  });
-  const nextContext = async (harness: ReturnType<typeof setup>) => {
-    harness.threads.get("t")!.push(message("next", "next question"));
-    const { prepared } = await harness.sendPrepares("t", "next");
-    return prepared.status === "ready" ? prepared.transcript.map((item) => item.text).join("\n") : "";
-  };
-
-  it("repairs the fallback's own span after backoff when a build widened the span past the cap", async () => {
-    const harness = setup(vi.fn(async () => "SUMMARY\nbuilt from the fallback"));
-    const { threads, state, appended, build } = harness;
-    state.window = 8_192;
-    const tail = turns("k", 20);
-    threads.set("t", [...turns("h", 12), ...tail.slice(0, 2), standIn("fallback digest", 8_192), ...tail.slice(2)]);
-    const repairs = { ok: false };
-    const generateText = helper(repairs);
-    const repair = repairWith(harness, generateText);
-
-    repair.onSettled("bot", "t");
-    await repair.idle();
-    expect(generateText).toHaveBeenCalled();
-    build.onSettled("bot", "t");
-    await build.idle();
-    expect(appended.map((row) => row.compaction.previousCompactionId)).toEqual(["fallback"]);
-    generateText.mockClear();
-    repair.onSettled("bot", "t");
-    await repair.idle();
-    expect(generateText).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(10 * MINUTE);
-    repairs.ok = true;
-    repair.onSettled("bot", "t");
-    await repair.idle();
-
-    const path = threads.get("t")!;
-    expect(generateText).toHaveBeenCalledTimes(4);
-    expect(applicableCompaction(path)).toMatchObject({ value: { coveredThroughId: "h11", summary: expect.stringContaining(RELEASE) } });
-    expect(repairTarget(path)).toBeNull();
-    expect(await nextContext(harness)).toContain(RELEASE);
-  });
-
-  it("repairs a second fallback from the summary before the first, not from a build chained onto it", async () => {
-    const harness = setup(vi.fn(async () => "SUMMARY\nbuilt from the stand-in"));
-    const { threads, appended, build, sendPrepares } = harness;
-    const first = overBudgetThread("a");
-    first[1] = message("ab0", `${RELEASE}.`, { role: "bot" });
     threads.set("t", [
-      ...first,
-      message("fallback", "", { role: "bot", kind: "compaction", compaction: { v: 1, summary: `${NOTICE}\nfallback digest`, coveredThroughId: "ab67", firstKeptId: "au68", contextWindow: WINDOW, estimatedTokensBefore: 9_000, sourceMessageCount: 136 } }),
-      ...overBudgetThread("b"),
+      message("m1", "post it to @Marketing and read @notes/plan.md"),
+      message("m2", "ran gh pr list --jq '[.number] | @tsv' and $long = @($t -split ',')", { role: "bot" }),
+      ...overBudgetThread("a"),
+      message("send", "next question"),
     ]);
-    const repairs = { ok: false };
-    const generateText = helper(repairs);
-    const repair = repairWith(harness, generateText);
+    const { prepared } = await sendPrepares("t", "send", { summarize: undefined });
+    if (prepared.status !== "ready" || !isFallbackSummary(prepared.compaction!.summary)) throw new Error("the fixture did not land a fallback");
+    threads.get("t")!.push({ id: "fallback", at: 2_000, role: "bot", kind: "compaction", compaction: prepared.compaction! }, ...overBudgetThread("b"));
+    const onSettled = async () => {
+      build.onSettled("bot", "t");
+      repair.onSettled("bot", "t");
+      await Promise.all([build.idle(), repair.idle()]);
+    };
 
-    repair.onSettled("bot", "t");
-    await repair.idle();
-    build.onSettled("bot", "t");
-    await build.idle();
-    expect(appended.map((row) => row.compaction.previousCompactionId)).toEqual(["fallback"]);
-    threads.get("t")!.push(...overBudgetThread("c"), message("send", "next question"));
-    const { prepared } = await sendPrepares("t", "send", { summarize: vi.fn(async () => "no sentinel") });
-    if (prepared.status !== "ready" || !isFallbackSummary(prepared.compaction!.summary)) throw new Error("the fixture did not land a second fallback");
-    expect(prepared.compaction!.previousCompactionId).toBe(appended[0]!.id);
-    threads.get("t")!.push(message("fallback-2", "", { role: "bot", kind: "compaction", compaction: prepared.compaction! }));
+    await onSettled();
+    expect(generateText).toHaveBeenCalledOnce();
+    expect(appended).toHaveLength(1);
+    expect(appended[0]!.compaction.coveredThroughId).toBe(prepared.compaction!.coveredThroughId);
+    for (const word of words) expect(appended[0]!.compaction.summary).toContain(word.replace("@", "@\u200B"));
 
-    generateText.mockClear();
-    repairs.ok = true;
-    repair.onSettled("bot", "t");
-    await repair.idle();
-
-    const path = threads.get("t")!;
-    expect(generateText.mock.calls[0]![0]).toContain(RELEASE);
-    expect(applicableCompaction(path)).toMatchObject({ value: { summary: expect.stringContaining(RELEASE) } });
-    expect(repairTarget(path)).toBeNull();
-    expect(await nextContext(harness)).toContain(RELEASE);
+    await onSettled();
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(appended).toHaveLength(2);
+    expect(appended[1]!.compaction.previousCompactionId).toBe(appended[0]!.id);
+    threads.get("t")!.push(message("next", "next question"));
+    const { prepared: next, summarize } = await sendPrepares("t", "next");
+    expect(summarize).not.toHaveBeenCalled();
+    expect(next).toMatchObject({ status: "ready", compactionId: appended[1]!.id });
+    repair.dispose();
   });
 
   it("lands nothing when the leaf moved", async () => {

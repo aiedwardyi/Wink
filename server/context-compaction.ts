@@ -782,42 +782,18 @@ export function repairTarget(messages: Message[]): RepairTarget | null {
   const target = found.at(-1);
   if (!target || "unsupported" in target) return null;
   const rows = validCompactions(found);
-  const byId = new Map(rows.map((row) => [row.messageId, row]));
-  const derives = (later: ApplicableCompaction, row: ApplicableCompaction) => {
-    let from = later;
-    while (from.messageId !== row.messageId) {
-      const next = byId.get(from.value.previousCompactionId ?? "");
-      if (!next || next.pathIndex >= from.pathIndex || next.value.coveredThroughId !== row.value.coveredThroughId) return false;
-      from = next;
-    }
-    return true;
-  };
-  // A later row on the same boundary is a repair and replaces the earlier one, unless it was rewritten from that row's text.
-  const repairs = (later: ApplicableCompaction, row: ApplicableCompaction) =>
-    later.pathIndex > row.pathIndex && later.value.coveredThroughId === row.value.coveredThroughId && !derives(later, row);
-  const chain = rows.filter((row) => !rows.some((later) => repairs(later, row)));
-  const descends = (row: ApplicableCompaction, from: ApplicableCompaction) => {
-    for (let at: ApplicableCompaction | undefined = row; at; ) {
-      if (at === from) return true;
-      const next = byId.get(at.value.previousCompactionId ?? "");
-      at = next && next.pathIndex < at.pathIndex ? next : undefined;
-    }
-    return false;
-  };
+  // A later row on the same boundary is a repair and replaces the earlier one.
+  const chain = rows.filter((row, index) =>
+    !rows.slice(index + 1).some((later) => later.value.coveredThroughId === row.value.coveredThroughId));
   let fallbackAt = -1;
-  let firstAt = -1;
   chain.forEach((row, index) => {
-    if (isFallbackSummary(row.value.summary)) {
-      fallbackAt = index;
-      if (firstAt < 0) firstAt = index;
-    } else if (!(fallbackAt >= 0 && descends(row, chain[fallbackAt]!)) && rows.some((earlier) => repairs(row, earlier))) {
-      // a row chained from the live fallback is a build on it, whatever older row it shares a boundary with
-      fallbackAt = firstAt = -1;
+    if (isFallbackSummary(row.value.summary)) fallbackAt = index;
+    else if (rows.some((earlier) => earlier.pathIndex < row.pathIndex && earlier.value.coveredThroughId === row.value.coveredThroughId)) {
+      fallbackAt = -1;
     }
   });
   if (fallbackAt < 0) return null;
-  // A row chained onto a fallback since the run's first one is provisional, so the repair starts before it.
-  const good = chain.slice(0, firstAt).findLast((row) => !isFallbackSummary(row.value.summary)) ?? null;
+  const good = chain.slice(0, fallbackAt).findLast((row) => !isFallbackSummary(row.value.summary)) ?? null;
   return { target, fallback: chain[fallbackAt]!, good };
 }
 
@@ -980,31 +956,6 @@ function callResult(text: string, signal?: AbortSignal): SummaryCallResult {
   return /abort/i.test(text) ? "aborted" : "error";
 }
 
-function segmentBatches(input: {
-  previous: ApplicableCompaction | null;
-  previousSummary: string;
-  history: ReplayUnit[];
-  contextWindow: number;
-  summaryBudget: number;
-}): { resummarize: boolean; batches: ReplayUnit[][] } {
-  const { previousSummary, contextWindow } = input;
-  const resummarize = Boolean(previousSummary) && messageTokens(summaryMessage(previousSummary, 0)) > input.summaryBudget;
-  return {
-    resummarize,
-    batches: [
-      ...(resummarize
-        ? summaryBatches([{
-          id: input.previous!.value.coveredThroughId,
-          pathIndex: input.previous!.coveredIndex,
-          role: "assistant",
-          text: previousSummary,
-        }], contextWindow)
-        : []),
-      ...summaryBatches(input.history, contextWindow),
-    ],
-  };
-}
-
 /** Chains each batch into the summary; an oversized previous summary is re-summarized first. */
 async function summarizeSegment(input: {
   messages: Message[];
@@ -1021,7 +972,18 @@ async function summarizeSegment(input: {
 }): Promise<SegmentResult> {
   const { contextWindow, summaryBudget } = input;
   let summary = input.previousSummary;
-  const { resummarize, batches } = segmentBatches(input);
+  const resummarize = Boolean(summary) && messageTokens(summaryMessage(summary, 0)) > summaryBudget;
+  const batches = [
+    ...(resummarize
+      ? summaryBatches([{
+        id: input.previous!.value.coveredThroughId,
+        pathIndex: input.previous!.coveredIndex,
+        role: "assistant",
+        text: summary,
+      }], contextWindow)
+      : []),
+    ...summaryBatches(input.history, contextWindow),
+  ];
   if (input.maxBatches !== undefined && batches.length > input.maxBatches) {
     return { status: "too-large", batches: batches.length };
   }
@@ -1558,16 +1520,20 @@ export async function buildCompaction(input: {
   return validated.status === "valid" ? { status: "ready", compaction: validated.value } : { status: "failed", result: "error" };
 }
 
-interface RepairSpanInput {
+/** Rebuilds the target from the last model summary and the original messages, never the fallback text. */
+export async function repairModelContext(input: {
   messages: Message[];
   target: RepairTarget;
+  taskRecordText: string;
+  summarize: (prompt: string) => Promise<string>;
   excludeIds?: ReadonlySet<string>;
   userName?: string;
   referenceMessages?: Message[];
   includeSpeakers?: boolean;
-}
-
-function repairSpan(input: RepairSpanInput) {
+  maxBatches?: number;
+  signal?: AbortSignal;
+  onSummaryCall?: (record: SummaryCallRecord) => void;
+}): Promise<RepairedModelContext> {
   const { target, good } = input.target;
   const contextWindow = target.value.contextWindow;
   const budgetTokens = contextBudget(contextWindow);
@@ -1576,29 +1542,10 @@ function repairSpan(input: RepairSpanInput) {
     Math.min(MAX_SUMMARY_TOKENS, budgetTokens, Math.floor(budgetTokens * SUMMARY_BUDGET_SHARE)),
   );
   const history = spanUnits(input, good?.coveredIndex ?? -1, target.coveredIndex, good?.value.deferredMail, target.value.deferredMail);
-  const previousSummary = good ? withoutTypedValues(redactSecretsInText(good.value.summary)) : "";
-  return { previous: good, previousSummary, history, contextWindow, budgetTokens, summaryBudget };
-}
-
-/** The batches a repair of this target sends, counted with no call. */
-export function repairBatches(input: RepairSpanInput): number {
-  return segmentBatches(repairSpan(input)).batches.length;
-}
-
-/** Rebuilds the target from the last model summary and the original messages, never the fallback text. */
-export async function repairModelContext(input: RepairSpanInput & {
-  taskRecordText: string;
-  summarize: (prompt: string) => Promise<string>;
-  maxBatches?: number;
-  signal?: AbortSignal;
-  onSummaryCall?: (record: SummaryCallRecord) => void;
-}): Promise<RepairedModelContext> {
-  const { target } = input.target;
-  const { previous, previousSummary, history, contextWindow, budgetTokens, summaryBudget } = repairSpan(input);
   const segment = await summarizeSegment({
     messages: input.messages,
-    previous,
-    previousSummary,
+    previous: good,
+    previousSummary: good ? withoutTypedValues(redactSecretsInText(good.value.summary)) : "",
     history,
     taskRecordText: input.taskRecordText,
     contextWindow,
@@ -1621,7 +1568,7 @@ export async function repairModelContext(input: RepairSpanInput & {
     sourceMessageCount: target.value.sourceMessageCount,
     ...(target.value.deferredMail?.length ? { deferredMail: target.value.deferredMail } : {}),
   };
-  if (previous) compaction.previousCompactionId = previous.messageId;
+  if (good) compaction.previousCompactionId = good.messageId;
   const validated = readContextCompaction({ value: compaction });
   return validated.status === "valid" ? { status: "ready", compaction: validated.value } : { status: "failed", result: "error" };
 }
