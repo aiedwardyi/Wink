@@ -351,8 +351,8 @@ describe("isNudge", () => {
     expect(isNudge(text)).toBe(false);
   });
 
-  it("answers in linear time on a long run of casual words", () => {
-    const text = "you are ".repeat(40) + "X";
+  it.each(["you are", "youre", "ur", "u r", "ya", "you", "hello", "sidekick", "answer me", "ok", "ha"])("answers in linear time on a long run of %s", (word) => {
+    const text = `${word} `.repeat(40) + "working X";
     const started = process.hrtime.bigint();
     expect(isNudge(text)).toBe(false);
     expect(nominate(`hello. ${text}`)).not.toBeUndefined();
