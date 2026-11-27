@@ -1,19 +1,20 @@
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect } from "node:net";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { installOrbitMsg, terminalPaneEnv } from "../electron/terminal-mailbox.mjs";
 import {
-  BUILT_REMINDER, loadMailboxSecret, mailboxGrant, mailboxNoteText, mailboxPostSchema, mailboxScope, mailboxSecretFor, MAILBOX_NOTE_MAX_CHARS, MAILBOX_SECRET_FILE, MAILBOX_STALE_GRANT, readMailboxBody,
+  BUILT_REMINDER, loadMailboxSecret, mailboxGrant, mailboxNoteText, mailboxPostSchema, mailboxScope, mailboxSecretFor, MAILBOX_NOTE_MAX_CHARS, MAILBOX_SECRET_FILE, MAILBOX_STALE_GRANT, readMailboxBody, splitReportPath,
 } from "./mailbox.ts";
 import { PANE_WAKE_DEBOUNCE_MS, PANE_WAKE_PROMPT } from "./pane-wake.ts";
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
+import { spawnTestNode } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FAKE_CLAUDE = join(ROOT, "server", "testing", "fake-claude-cli.ts");
@@ -77,9 +78,7 @@ async function transcript(threadId: string) {
 }
 
 beforeAll(async () => {
-  const scratch = process.env.OMB_DATA_DIR ?? tmpdir();
-  mkdirSync(scratch, { recursive: true });
-  home = mkdtempSync(join(scratch, "mailbox-"));
+  home = createFixtureHome("mailbox-");
   const data = join(home, "data");
   const userData = join(home, "server-user-data");
   mkdirSync(userData);
@@ -114,7 +113,7 @@ beforeAll(async () => {
   const port = address.port;
   await new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()));
   base = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, [join(ROOT, "server", "index.ts")], {
+  child = spawnTestNode(process.execPath, [join(ROOT, "server", "index.ts")], {
     cwd: ROOT,
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
@@ -161,7 +160,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await waitForExit(child, { signal: "SIGTERM" });
   await new Promise<void>((resolve) => terminalStub.close(() => resolve()));
-  await removeTempDir(home);
+  removeTestData(home);
 });
 
 describe("mailbox note text", () => {
@@ -199,6 +198,21 @@ describe("mailbox note text", () => {
     for (const text of ["FAIL SITE branch=HEAD sha=abc1234 dirty=no\nbroke", "DONE: lead work", "done"]) {
       expect(mailboxNoteText(PANE, "worker", "w1", text), text).not.toContain(BUILT_REMINDER);
     }
+  });
+
+  it("keeps a report link last, after the cut marker and the built.md reminder", () => {
+    const head = "DONE SITE branch=HEAD sha=abc1234 dirty=no";
+    const link = "Full report: C:\\orbit\\report.txt";
+    expect(mailboxNoteText(PANE, "worker", "w1", `${head}\npartial\n[truncated]\n${link}`)).toBe(`[pane 0f3c9a1e] from worker (w1): ${head}\npartial\n${BUILT_REMINDER}\n[truncated]\n${link}`);
+    const long = mailboxNoteText(PANE, "worker", "w1", `${head}\n${"x".repeat(MAILBOX_NOTE_MAX_CHARS + 50)}\n[truncated]\n${link}`)!;
+    expect(long.endsWith(`x\n${BUILT_REMINDER}\n[truncated]\n${link}`)).toBe(true);
+    expect(long.match(/\[truncated\]/g)).toHaveLength(1);
+  });
+
+  it("extracts only a Windows report path", () => {
+    expect(splitReportPath("text\n[truncated]\nFull report: C:\\orbit\\r.txt")).toEqual({ text: "text", path: "C:\\orbit\\r.txt" });
+    const posix = "text\n[truncated]\nFull report: /home/user/r.txt";
+    expect(splitReportPath(posix)).toEqual({ text: posix, path: "" });
   });
 });
 

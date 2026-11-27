@@ -91,5 +91,8 @@ describe("tool catalog", () => {
     expect(originalCatalogCall("call_wink_tool", input, "agents")).toEqual({ name: "generate_image", input: input.arguments });
     expect(originalCatalogCall("call_wink_tool", input, "other")).toEqual({ name: "call_wink_tool", input });
     expect(originalCatalogCall("other__call_wink_tool", input)).toEqual({ name: "other__call_wink_tool", input });
+    // Gemini may prefix an MCP tool with its server; the row keeps the prefix a direct call shows
+    expect(originalCatalogCall("openmausbot-agents/call_wink_tool", input, "agents")).toEqual({ name: "openmausbot-agents/generate_image", input: input.arguments });
+    expect(originalCatalogCall("call_wink_tool", { name: "react", arguments: {} }, "agents")).toEqual({ name: "call_wink_tool", input: { name: "react", arguments: {} } });
   });
 });

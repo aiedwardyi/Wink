@@ -12,7 +12,7 @@ import type { Message } from "@/state/store";
 import { ARRIVAL_GLOW_ANIMATION } from "@/lib/arrival-glow";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
-import { lockAxis, reducedMotion, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
+import { isPhone, lockAxis, reducedMotion, swipeStep, type SwipeAxis } from "@/lib/phone-swipe";
 import { markCut } from "@/lib/scroll-cut";
 import { Fold } from "./Fold";
 import { QUOTE_LABEL, QUOTE_TEXT } from "./ReplyQuote";
@@ -33,11 +33,12 @@ function mark(questions: Set<string>, id: string, value: boolean) {
   for (const notify of watchers) notify();
 }
 const useMarked = (questions: Set<string>, id: string) => useSyncExternalStore(subscribe, () => questions.has(id), () => false);
+export const useQuestionHidden = (id: string) => useMarked(hiddenQuestions, id);
 
-/** Shows a question as its row from now on; it never shrinks by itself after that. */
-export function foldQuestion(id: string) {
+/** Shows a question as its row (or, with `folded` false, as the card) from now on; it never shrinks by itself after that. */
+export function foldQuestion(id: string, folded = true) {
   shrunkQuestions.add(id);
-  mark(rowQuestions, id, true);
+  mark(rowQuestions, id, folded);
 }
 
 // the arrow pressed unmounts with its question, so the next question's row takes the focus
@@ -61,6 +62,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   count,
   index = count - 1,
   onStep,
+  onJump,
   typed = "",
   attached = 0,
   replying = false,
@@ -74,8 +76,10 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   count: number;
   /** this question's place among them, oldest first */
   index?: number;
-  /** shows the question `step` places away */
-  onStep?: (step: number) => void;
+  /** shows the question `step` places away, folded as this one is */
+  onStep?: (step: number, folded: boolean) => void;
+  /** scrolls the chat to the message behind this question; absent when none is there */
+  onJump?: () => void;
   /** the message box's text and attachment count: a change after arrival shrinks the card */
   typed?: string;
   attached?: number;
@@ -134,7 +138,7 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
   };
   const step = (by: number) => {
     stepFocus = by;
-    onStep?.(by);
+    onStep?.(by, folded);
   };
   const card = message.card;
   if (!card || hidden) return null;
@@ -262,7 +266,12 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
                 {controls(true)}
               </div>
               {/* only a long question's text scrolls, so the card stays a third of the chat with its choices in sight */}
-              <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} className="mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]">{card.subtitle}</div>
+              <div tabIndex={0} data-question-body="" onScroll={(event) => markCut(event.currentTarget)} onClick={onJump && (() => { if (!window.getSelection()?.toString()) onJump(); })} onKeyDown={onJump && ((event) => {
+                // Space scrolls a question that overflows, so only Enter jumps from there
+                const body = event.currentTarget;
+                const key = event.key === "Enter" || (event.key === " " && body.scrollHeight <= body.clientHeight);
+                if (event.target === body && key && !window.getSelection()?.toString()) { event.preventDefault(); onJump(); }
+              })} className={cn(onJump && "cursor-pointer", "mt-1.5 min-h-[1lh] overflow-y-auto whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink data-[cut]:[mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}>{card.subtitle}</div>
               <AskChoices options={card.options} onPick={onPick} />
             </div>
           </div>
@@ -286,8 +295,13 @@ function fitChoices(card: HTMLDivElement | null) {
   let pane = card.parentElement;
   while (pane && !/auto|scroll/.test(getComputedStyle(pane).overflowY)) pane = pane.parentElement;
   const fit = () => {
+    const line = parseFloat(getComputedStyle(body).lineHeight) || LINE;
+    const phone = isPhone();
+    // the tray's own cap (30dvh on a phone) is below what three lines and the choices need, and would read as no room
+    if (choices && pane) pane.style.maxHeight = phone ? "none" : "";
+    // the last fit's snap would be read back as the window's own height
+    body.style.maxHeight = "";
     if (choices) {
-      const line = parseFloat(getComputedStyle(body).lineHeight) || LINE;
       // the last fit's min-height would be read back as the text's own height
       body.style.minHeight = "";
       const kept = Math.min(body.scrollHeight, KEPT_LINES * line);
@@ -308,6 +322,10 @@ function fitChoices(card: HTMLDivElement | null) {
         }
       }
     }
+    // a cut question on a phone ends on a whole line, never half of one; a desktop card keeps its 30dvh window
+    const shown = body.getBoundingClientRect().height;
+    const whole = Math.floor(shown / line + 0.02) * line;
+    if (phone && body.scrollHeight > shown + 1 && whole >= line && whole < shown) body.style.maxHeight = `${whole}px`;
     markCut(body);
   };
   fit();
@@ -321,6 +339,7 @@ function fitChoices(card: HTMLDivElement | null) {
     watch.disconnect();
     window.removeEventListener("resize", fit);
     fold?.removeEventListener("animationend", fit);
+    if (choices && pane) pane.style.maxHeight = "";
   };
 }
 

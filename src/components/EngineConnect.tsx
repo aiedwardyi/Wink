@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import type { InstanceInfo } from "@/state/store";
 import { firstLaunchConnectInstances } from "@/lib/engine-rail";
@@ -8,6 +8,7 @@ import { useI18n, type MessageKey } from "@/lib/i18n";
 import { useEngineInstall } from "@/lib/use-engine-install";
 import { EngineSetup, EngineSignIn, engineChecking, installCommandFor, needsSignIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { ProviderBrandMark } from "./ProviderIcons";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { Fold } from "./Fold";
 import { trackOnboard } from "@/lib/usage-stats";
 
@@ -23,6 +24,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   const { t } = useI18n();
   const canInstall = Boolean(window.ogb?.openEngineInstall);
   const commandsId = useId();
+  const commandList = useRef<HTMLDivElement>(null);
   const [commands, setCommands] = useState(!canInstall);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [opened, setOpened] = useState<Record<string, boolean>>({});
@@ -37,7 +39,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   const signInAs = (instance: InstanceInfo) => {
     const main = needsSignIn(instance) ? usageAccount(instances, instance.instanceId) : undefined;
     return main && main.instanceId !== instance.instanceId
-      ? { ...instance, instanceId: main.instanceId, loginState: main.loginState, loginCapture: main.loginCapture } : instance;
+      ? { ...instance, instanceId: main.instanceId, loginState: main.loginState, loginOpensBrowser: main.loginOpensBrowser, loginError: main.loginError } : instance;
   };
 
   const install = async (instance: InstanceInfo) => {
@@ -104,12 +106,12 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   };
 
   return <div data-engine-connect-panel className="flex min-h-0 flex-col">
-    <div className="-mx-1 flex min-h-0 flex-col overflow-y-auto px-1 [scrollbar-width:thin]">
+    <div className="-m-1 flex min-h-0 flex-col overflow-y-auto p-1 [scrollbar-width:thin]">
       <div className="flex flex-col gap-2">{primary.map((instance) => row(instance, instance.driverKind === "claudeAgent"))}</div>
       <h2 className="my-5 flex items-center gap-3 text-[12px] text-ink-secondary before:h-px before:flex-1 before:bg-hairline/50 after:h-px after:flex-1 after:bg-hairline/50">{t("engineConnect.others")}</h2>
       <div className="flex flex-col gap-2">{others.map((instance) => row(instance))}</div>
-      <Fold open={commands}>
-        <div id={commandsId} data-engine-connect-commands className="mt-4 flex flex-col gap-2.5">
+      <Fold open={commands} onOpened={() => revealOnOpen(commandList.current?.querySelector<HTMLElement>(":scope > *") ?? null)}>
+        <div ref={commandList} id={commandsId} data-engine-connect-commands className="mt-4 flex flex-col gap-2.5">
           {engines.filter((instance) => !engineChecking(instance)).map((instance) => <EngineSetup key={instance.instanceId} instance={signInAs(instance)} intent="cloud" />)}
         </div>
       </Fold>

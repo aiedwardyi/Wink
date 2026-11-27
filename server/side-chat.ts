@@ -12,11 +12,10 @@ import { liveBlock, quotesUnread } from "./side-live-state.ts";
 import type { Message } from "./store.ts";
 
 const PREAMBLE =
-  "[Quick helper. The person sent the message below while you are busy on the main task. You are a read-only copy of yourself answering beside that work: the main task keeps running, and it only learns this exchange later as a short note. If the message is a question you can fully answer from this conversation, or with at most 3 Read, Glob or Grep lookups in this project folder, answer it in 1 to 4 short lines under 400 characters (a longer answer is dropped), stating only what this conversation or your lookups show, naming only the files the question needs, never what a file you have not seen does or does not contain, with no extra tips, guesses, or commands and code you composed yourself. Otherwise reply with exactly HANDOFF and nothing else. HANDOFF whenever answering needs editing or creating files, running commands, the web, other computers, workers or other bots, or whenever the message asks for, approves, corrects, pauses or changes work, even when it is phrased as a question. Your latest step may show here as interrupted or without a result; the main task is still running it, so call it in progress. A file being written now: don't state what it says, answer the rest. For anything a file says now, read it; the chat may be behind.]";
-// The message already reached the main task as the person's own words; the helper only shows it landed.
-const ACK_PREAMBLE =
-  "[Quick helper. The person sent the message below while you are busy on the main task. It already reached your main task as their own words, and that task will handle it. You are a read-only copy of yourself replying beside that work so they know it landed. Reply in one short line under 200 characters, in your own voice: acknowledge what they said and name what you take from it, or answer a question in it that this conversation already settles. Never say anything is done, fixed or decided, never promise a time, never ask them anything, and never mention a helper, a copy or a main task. Do not look anything up and never reply HANDOFF.]";
+  "[Quick helper. The person sent the message below while you are busy on the main task. You are a read-only copy of yourself answering beside that work: the main task keeps running, and it only learns this exchange later as a short note. If the message is a question you can fully answer from this conversation, or with at most 3 Read, Glob or Grep lookups in this project folder, answer it in 1 to 4 short lines under 400 characters (a longer answer is dropped), stating only what this conversation or your lookups show, naming only the files the question needs, never what a file you have not seen does or does not contain, with no extra tips, guesses, or commands and code you composed yourself. Start with the answer itself: no opener like \"Got it\" or \"Sure\", no restating the question, and never say what you or the main task will do. Otherwise reply with exactly HANDOFF and nothing else. HANDOFF whenever answering needs editing or creating files, running commands, the web, other computers, workers or other bots, or whenever the message asks for, approves, corrects, pauses or changes work, even when it is phrased as a question. Your latest step may show here as interrupted or without a result; the main task is still running it, so call it in progress. A file being written now: don't state what it says, answer the rest. For anything a file says now, read it; the chat may be behind.]";
 const READ_TOOLS = new Set(["Read", "Glob", "Grep"]);
+// "On item 3" or "네가" stays: an opener only counts with punctuation after it
+const OPENER = /^(?:(?:got it|sure|okay|ok|on it|alright|all right|understood|noted|will do|sounds good|알겠어요|알겠습니다|알았어요|네|넵|좋아요)\s*[,.!:;\u2014\u2013-]+\s*)+/i;
 const CAP_MS = 12_000;
 // a fork still reading or writing gets a fresh CAP_MS, up to this
 const MAX_MS = 25_000;
@@ -123,6 +122,12 @@ export async function sideIdle(): Promise<void> {
   while (closing.size) await Promise.all([...closing]);
 }
 
+/** A filler opener the model added anyway comes off; a line that is only filler stays. */
+export function dropOpener(line: string): string {
+  const rest = line.replace(OPENER, "");
+  return rest && rest !== line ? rest[0]!.toUpperCase() + rest.slice(1) : line;
+}
+
 const handoff = (started: number, usage?: Usage): QuickResult => ({ route: "handoff", ...(usage ? { usage } : {}), ms: Date.now() - started });
 const usable = (threadId: string, answer: string, reads: string[]) =>
   Boolean(answer) && !answer.startsWith("HANDOFF") && answer.length <= MAX_CHARS && !quotesUnread(threadId, answer, reads);
@@ -205,9 +210,9 @@ async function viaText(bot: QuickBot, threadId: string, ask: string, started: nu
 }
 
 /** One ask: the engine's fork when it has one, else a chat-only one-shot. */
-export function quickAsk(bot: QuickBot, threadId: string, ask: { text: string; notes?: string; ack?: boolean }): Promise<QuickResult> {
+export function quickAsk(bot: QuickBot, threadId: string, ask: { text: string; notes?: string }): Promise<QuickResult> {
   const started = Date.now();
-  const text = [ask.ack ? ACK_PREAMBLE : PREAMBLE, ask.notes?.trim(), ask.text].filter(Boolean).join("\n\n");
+  const text = [PREAMBLE, ask.notes?.trim(), ask.text].filter(Boolean).join("\n\n");
   const live = liveBlock(threadId);
   let handle: SideHandle | null = null;
   try {
@@ -215,8 +220,9 @@ export function quickAsk(bot: QuickBot, threadId: string, ask: { text: string; n
   } catch {
     return Promise.resolve(handoff(started));
   }
-  if (handle) return viaFork(handle, threadId, started, live.attached);
+  const plain = (result: QuickResult) => (result.text ? { ...result, text: dropOpener(result.text) } : result);
+  if (handle) return viaFork(handle, threadId, started, live.attached).then(plain);
   // the chat-only path cannot do the lookups the prompt promises, so an engine with a fork never falls back to it
   if (bot.instance.fork) return Promise.resolve(handoff(started));
-  return viaText(bot, threadId, [live.text, text].filter(Boolean).join("\n\n"), started, live.attached);
+  return viaText(bot, threadId, [live.text, text].filter(Boolean).join("\n\n"), started, live.attached).then(plain);
 }

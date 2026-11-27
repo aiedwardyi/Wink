@@ -7,18 +7,20 @@ import { DATA_DIR } from "./config.ts";
 import * as context from "./context-compaction.ts";
 import { joinRunningTurn } from "./continuation-turn.ts";
 import { _resetPending, drainDelegations, finishDelegatedTurn, queueDelegation, type DelegatedTurn } from "./delegations.ts";
+import { guestTurnInput } from "./drivers/turn-access.ts";
 import * as mail from "./mail.ts";
 import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { roomEchoesSinceLastUserTurn } from "./one-mind.ts";
+import { GuestSessions } from "./rooms/guest-sessions.ts";
 import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { _resetSteerQueue, foldQueuedSends, queueMark } from "./steer-queue.ts";
 import { Store } from "./store.ts";
 import { asksNudge } from "./task-asks.ts";
-import { removeTempDir } from "./testing/cleanup.ts";
 import * as turns from "./turn-context.ts";
 import { currentTurnTrace, tracePart } from "./turn-timing.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 function section(from: string, to: string): string {
@@ -45,7 +47,7 @@ const runDispatch = new Function(`${javascript}\nreturn run;`)();
 
 beforeEach(async () => {
   closeMessageDb();
-  await removeTempDir(DATA_DIR);
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   _resetPending();
   vi.spyOn(console, "info").mockImplementation(() => {});
@@ -98,9 +100,9 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       currentTurnEpoch: () => 1, epoch: 1, claimMark: queueMark(), isSendCancelled: () => false,
       clearUnattended: () => {}, resumePaneWakes: () => {},
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,
-      opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, modelContextWindow: 200_000,
+      opts: {}, cfg: {}, reactions: {}, guestSessions: new GuestSessions(), threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, modelContextWindow: 200_000, closes: { notes: () => [] },
       taskRecord: undefined, durableTaskRecordText: "",
-      providerReload: { started: () => instance }, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), privateWorkspace: false, opensHostFiles: () => false,
+      providerReload: { started: () => instance }, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), notOwnerChats: () => new Set(), privateWorkspace: false, opensHostFiles: () => false,
       accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
       paneNoteTurnThreads: new Set(), routineTurnThreads: new Set(),
       persona: "Verify the delegated work.", cwd: ".", projectFolderPrompt: () => "", projectNotesPrompt: () => "",
@@ -109,10 +111,10 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       taskStatePrompt: "", reactPrompt: "", showImagePrompt: "", detailedRepliesEnabled: () => false,
       ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", accessRules: () => "", keepGoing: { rules: () => "" },
       skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", tagged: [],
-      graceInputs: {}, summaryGrace: {}, summarySkipped: false, logSummaryWait: () => {},
+      graceInputs: {}, summaryGrace: {}, summarySkipped: false, codexHistory: false, logSummaryWait: () => {},
       seed: {}, systemSeed: undefined, systemSeeds: { set: () => ({}) },
       pendingInterruptThreads: { started: () => {} }, effort: undefined, leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(),
-      joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false,
+      joinRunningTurn, guestTurnInput, runningTurnIdByThread: new Map(), readOnly: false,
     });
     store.markTaskDispatched(sender.id, threadId, instanceId, model);
     const cursor = sendTurn.mock.calls.at(-1)![0].resumeCursor ?? "new-provider-session";

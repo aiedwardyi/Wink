@@ -49,6 +49,12 @@
 //                   | echo-gated (a happy turn that replies `echo: <input>`
 //                     and, when FAKE_MSP_GATE_FILE is set, holds the turn
 //                     open until that file exists)
+//                   | read (a read_file of notes.txt in the session's
+//                     workspace root runs unasked, like Muse with
+//                     --disable-write --disable-shell; a resumed session keeps
+//                     the root it started in unless session/resume names a
+//                     workspaceRoot, which moves it there. What it read goes to
+//                     FAKE_MSP_READ_OUT, roots to `<that path>.roots.json`)
 //   FAKE_MSP_STATE  path to a JSON file holding per-session models across
 //                   the one-process-per-turn spawns, so a switch sticks.
 //   FAKE_MSP_DUMP   path to write {argv, env, cwd} as JSON, so a test can assert
@@ -119,6 +125,8 @@ const recordConfig = (entry: unknown) => {
 };
 
 const SESSION_ID = "fake-msp-session";
+const READ_OUT = process.env.FAKE_MSP_READ_OUT;
+const sessionRoots = (): Record<string, string | null> => (READ_OUT && existsSync(`${READ_OUT}.roots.json`) ? JSON.parse(readFileSync(`${READ_OUT}.roots.json`, "utf8")) : {});
 const CONTRIBUTOR_BUILDS = ["muse-spark-1.3", "muse-spark-1.2"];
 const contributorOff = argv.some((arg, i) => arg === "--contributor-mode" && argv[i + 1] === "off");
 const TURN_ID = "fake-msp-turn-1";
@@ -343,6 +351,7 @@ function handle(msg: any) {
       const models = readModels();
       models[SESSION_ID] = modelId;
       writeModels(models);
+      if (READ_OUT) writeFileSync(`${READ_OUT}.roots.json`, JSON.stringify({ ...sessionRoots(), [SESSION_ID]: msg.params?.workspaceRoot ?? null }));
       // The real host emits the notification before the result.
       out({ jsonrpc: "2.0", method: "session/started", params: { session: { sessionId: SESSION_ID, modelId }, viewCursor: "v:1" } });
       result(msg.id, { session: { sessionId: SESSION_ID, modelId }, viewCursor: "v:1" });
@@ -356,6 +365,7 @@ function handle(msg: any) {
         break;
       }
       const resumedId = msg.params?.sessionId ?? SESSION_ID;
+      if (READ_OUT && typeof msg.params?.workspaceRoot === "string") writeFileSync(`${READ_OUT}.roots.json`, JSON.stringify({ ...sessionRoots(), [resumedId]: msg.params.workspaceRoot }));
       result(msg.id, {
         session: { sessionId: resumedId, modelId: readModels()[resumedId] ?? "fake-msp-resumed" },
         history: { mode: "none" },
@@ -426,6 +436,8 @@ function handle(msg: any) {
         }
       }
       if (mode === "hang") return;
+      const root = mode === "read" ? sessionRoots()[msg.params?.sessionId] : undefined;
+      if (READ_OUT && typeof root === "string" && existsSync(`${root}/notes.txt`)) writeFileSync(READ_OUT, readFileSync(`${root}/notes.txt`));
       const served = readModels()[msg.params?.sessionId];
       if (process.env.FAKE_MSP_CONTRIBUTOR === "1" && !contributorOff && served && !CONTRIBUTOR_BUILDS.includes(served.replace(/-contributor$/, ""))) {
         const message = `model \`${served}\` does not exist or you lack access [request_id=fake]`;

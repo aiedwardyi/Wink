@@ -6,7 +6,6 @@ import { knownCatalogContextWindow, planCompaction, prepareModelContext, superse
 import { STATIC_CLAUDE_MODELS } from "./drivers/claude.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { Store } from "./store.ts";
-import { removeTempDir } from "./testing/cleanup.ts";
 import {
   buildTurnContext,
   countLastTurnToolRounds,
@@ -19,6 +18,7 @@ import {
   sessionPromptFor,
   shouldRecycleProviderSession,
 } from "./turn-context.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 // The recycle check a user send runs, built from the store the way index.ts does.
 function recycleOnSend(store: Store, botId: string, threadId: string, sendId: string, instanceId = "claude", model = "claude-opus-5-5") {
@@ -49,7 +49,7 @@ describe("provider session recycle after Wink compaction", () => {
   // messages.db, and a naked afterEach rmSync races the global close hook.
   beforeEach(async () => {
     closeMessageDb();
-    await removeTempDir(DATA_DIR);
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
   });
 
@@ -369,7 +369,7 @@ describe("provider session recycle after Wink compaction", () => {
 describe("provider session recycle by native prompt size", () => {
   beforeEach(async () => {
     closeMessageDb();
-    await removeTempDir(DATA_DIR);
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
   });
 
@@ -498,7 +498,7 @@ describe("summary repair across native recycles", () => {
 
   beforeEach(async () => {
     closeMessageDb();
-    await removeTempDir(DATA_DIR);
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
   });
 
@@ -623,7 +623,7 @@ describe("summary repair across native recycles", () => {
 describe("background summary before the next send", () => {
   beforeEach(async () => {
     closeMessageDb();
-    await removeTempDir(DATA_DIR);
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
   });
 

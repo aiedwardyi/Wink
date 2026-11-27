@@ -1,11 +1,11 @@
-import { spawnSync, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import type { ChildProcess } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
-import { spawnHarness as spawn, harnessFetch as fetch } from "../testing/harness-auth.ts";
+import { spawnHarness as spawn, harnessFetch as fetch, runTestNode } from "../testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "../testing/test-home.ts";
 
 const ROOMS_DIR = dirname(fileURLToPath(import.meta.url));
 const SERVER_DIR = join(ROOMS_DIR, "..");
@@ -34,20 +34,18 @@ const newBot = async (instanceId: string, name: string) => {
   await api("PATCH", `/api/bots/${bot.id}`, { name, modelSelection: { instanceId, model: "claude-fake" } });
   return bot.id as string;
 };
-const roomEntries = (roomId: string) => {
+const roomEntries = async (roomId: string) => {
   const db = JSON.stringify(pathToFileURL(join(ROOMS_DIR, "db.ts")).href);
-  const read = spawnSync(process.execPath, ["--input-type=module", "-e", `import { recentRoomEntries } from ${db}; console.log(JSON.stringify(recentRoomEntries(process.env.ROOM_ID, 50)));`], {
+  const read = await runTestNode(["--input-type=module", "-e", `import { recentRoomEntries } from ${db}; console.log(JSON.stringify(recentRoomEntries(process.env.ROOM_ID, 50)));`], {
     cwd: ROOT,
-    env: { ...process.env, OMB_DATA_DIR: join(home, ".orbit"), ROOM_ID: roomId },
-    encoding: "utf8",
-    windowsHide: true,
+    env: { ...process.env, HOME: home, USERPROFILE: home, OMB_DATA_DIR: join(home, ".orbit"), ROOM_ID: roomId },
   });
   expect(read.status, read.stderr).toBe(0);
   return JSON.parse(read.stdout) as Array<{ author: { kind: string; name: string }; text: string; replyToId?: string; askId?: string }>;
 };
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "omb-bot-chain-"));
+  home = createFixtureHome("omb-bot-chain-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   const fixture = join(home, "handoff.json");
   writeFileSync(fixture, JSON.stringify([
@@ -85,7 +83,7 @@ afterAll(async () => {
     child.on("close", () => resolve());
     setTimeout(resolve, 5_000).unref?.();
   });
-  rmSync(home, { recursive: true, force: true });
+  removeTestData(home);
 });
 
 it("publishes one entry with no reply link for a teammate bot an answer @-mentions", async () => {
@@ -95,10 +93,10 @@ it("publishes one entry with no reply link for a teammate bot an answer @-mentio
   expect(created.status, JSON.stringify(created.body)).toBe(201);
   const { id, hosted } = created.body.group;
   expect((await api("POST", `/api/groups/${id}/messages`, { text: "@Alpha start" })).status).toBe(202);
-  const fromBot = (name: string) => roomEntries(hosted.roomId).filter((entry) => entry.author.kind === "bot" && entry.author.name === name);
-  await waitFor(async () => fromBot("Beta").length > 0 && !(await api("GET", "/api/bots")).body.groups.find((g: any) => g.id === id)?.working, "Beta's answer");
-  expect(fromBot("Alpha").map((entry) => entry.text)).toEqual(["@Beta over to you"]);
-  const answers = fromBot("Beta");
+  const fromBot = async (name: string) => (await roomEntries(hosted.roomId)).filter((entry) => entry.author.kind === "bot" && entry.author.name === name);
+  await waitFor(async () => (await fromBot("Beta")).length > 0 && !(await api("GET", "/api/bots")).body.groups.find((g: any) => g.id === id)?.working, "Beta's answer");
+  expect((await fromBot("Alpha")).map((entry) => entry.text)).toEqual(["@Beta over to you"]);
+  const answers = await fromBot("Beta");
   expect(answers).toHaveLength(1);
   expect(answers[0]!.replyToId).toBeUndefined();
   expect(answers[0]!.askId).toBeUndefined();

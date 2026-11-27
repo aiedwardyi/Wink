@@ -1,7 +1,7 @@
 // A worker note that reaches a bot while it answers another bot. The real
 // delegation, steer, takeover, wake, ask and context modules run; index.ts's
 // wiring is copied below and pinned to its source.
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ASK_BOT_TIMEOUT_MS, waitForPeerReply, type AskReply } from "./ask-bot.ts";
@@ -29,6 +29,7 @@ import { _resetSteerQueue } from "./steer-queue.ts";
 import { Store, type BotRecord, type GroupRecord, type Message } from "./store.ts";
 import { buildResumeFallback } from "./turn-context.ts";
 import { ownTurnReply } from "./turn-reply.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 // server/testing/setup.ts moves HOME to a throwaway dir; never touch the real ~/.orbit
 if (!DATA_DIR.includes("omb-test-home-")) throw new Error(`refusing to run against ${DATA_DIR}`);
@@ -62,7 +63,7 @@ describe("worker notes while a bot answers a bot", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     _resetPending();
     _resetSteerQueue();
     _resetPeerUserReplies();
@@ -267,8 +268,8 @@ describe("worker notes while a bot answers a bot", () => {
       "  holds: hasPeerWatch,",
       "    return steerUntilTaken(adapter, threadId, text, () => peerInputJoined(threadId));",
       "  const holdNotes = hasPeerWatch(threadId) ? (messages: Message[]) => holdWorkerNotes(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined) : undefined;",
-      "  const messagesBeforeSummary = store.activePath(threadId);\n  holdNotes?.(messagesBeforeSummary);\n",
-      "  const activeMessages = summarySkipped ? messagesBeforeSummary : store.activePath(threadId);\n  holdNotes?.(activeMessages);\n",
+      "  const messagesBeforeSummary = taskRows(store.activePath(threadId));\n  holdNotes?.(messagesBeforeSummary);\n",
+      "  const activeMessages = usePlannedContext ? messagesBeforeSummary : store.activePath(threadId);\n  holdNotes?.(activeMessages);\n",
       "skipTranscript.add(message.id);\n            holdNotes?.(messages);\n            const refreshedNotes = paneNotesForTurn(messages, skipTranscript,",
       "      if (holdNotes) newestPaneNoteId = undefined;\n      // a deferred recycle's live session",
       "      store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);",

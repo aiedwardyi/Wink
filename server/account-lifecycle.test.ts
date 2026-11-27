@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -16,6 +16,11 @@ import { createUsageRefresh } from "./usage-refresh.ts";
 import { createInstanceChecks } from "./instance-checks.ts";
 import { resetPathCacheForTests } from "./env-path.ts";
 import { ClaudeDriver } from "./drivers/claude.ts";
+import { accountLaunch } from "./account-policy.ts";
+import { shareUserSetup } from "./account-shared-setup.ts";
+import { markCodexPromo } from "../electron/codex-promo.mjs";
+import { createUsageBoard } from "./usage-board.ts";
+import { createUsageHistory } from "./usage-history.ts";
 
 const core = await import("./accounts.ts").catch(() => null);
 const lifecycle = await import("./account-lifecycle.ts").catch(() => null);
@@ -34,15 +39,15 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-async function fixture(onMainChanged?: (change: MainChange) => void) {
+async function fixture(onMainChanged?: (change: MainChange) => void, grok = false) {
   expect(core, "account service exists").not.toBeNull();
   expect(lifecycle, "account lifecycle exists").not.toBeNull();
   const dir = join(DATA_DIR, `lifecycle-${++next}`);
   mkdirSync(dir, { recursive: true });
-  const bases = { claude: { driver: "claudeAgent" }, codex: { driver: "codex" } };
+  const bases = { claude: { driver: "claudeAgent" }, codex: { driver: "codex" }, ...grok ? { grok: { driver: "grokAgent" } } : {} };
   const accounts = new core!.AccountService(dir, () => bases);
   const statuses = new Map<string, ProviderSnapshot>();
-  const drivers = ["claudeAgent", "codex"].map((kind) => {
+  const drivers = ["claudeAgent", "codex", "grokAgent"].map((kind) => {
     const fake = makeFakeDriver({ kind }).driver;
     const create = fake.create;
     return { ...fake, defaultConfig: () => ({ cli: "fake" }), install: { login: { args: ["login"], deviceArgs: ["device"], env: { OPENAI_API_KEY: "fake-install-key" } }, logout: ["logout"] },
@@ -84,14 +89,121 @@ async function fixture(onMainChanged?: (change: MainChange) => void) {
     referenced: async (id) => references.has(id), invalidate, changed, configBusy: () => configBusy,
   });
   controllers.push(controller);
-  return { dir, accounts, registry, drivers, controller, holdStarting: routed ? routed.holdStarting : undefined, references, invalidate, changed, start, statuses, providers, configs,
+  return { dir, bases, accounts, registry, drivers, controller, holdStarting: routed ? routed.holdStarting : undefined, references, invalidate, changed, start, statuses, providers, configs,
     busy: (value: boolean) => { configBusy = value; }, failLogout: () => { logoutFails = true; },
     state: (value: typeof state) => { state = value; }, wait: (value: Promise<void>) => { waiting = value; },
-    add: async (of = "claude") => { const result = await controller.add(of); await controller.settled(result.id); return accounts.get(result.id)!; },
+    add: async (of = "claude") => { const result = await controller.add(of, false, "pc:"); await controller.settled(result.id); return accounts.get(result.id)!; },
   };
 }
 
 describe("account lifecycle", () => {
+  it.each(["claude", "codex", "grok"])("a saved %s account whose home is gone reads signed out and Sign In creates it", async (of) => {
+    const f = await fixture(undefined, true);
+    const account = await f.add(of);
+    rmSync(account.home, { recursive: true });
+    const snapshot = vi.spyOn(f.registry.get(account.id)!, "snapshot");
+    await f.registry.describe({ refresh: true });
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(f.accounts.get(account.id)?.state).toBe("stopped");
+    expect(f.registry.accountBlocked(account.id)).toBe(true);
+    expect(existsSync(account.home)).toBe(false);
+    await f.controller.signIn(account.id, false, "pc:");
+    await f.controller.settled(account.id);
+    expect(readdirSync(account.home)).toEqual(of === "codex" ? ["state"] : []);
+    expect(f.start.mock.calls.at(-1)?.[2]).toEqual(["login"]);
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+  });
+
+  it("a saved account whose home went missing before a restart reads signed out without launching", async () => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    rmSync(account.home, { recursive: true });
+    const accounts = new core!.AccountService(f.dir, () => f.bases);
+    const registry = new ProviderRegistry(f.drivers);
+    registries.push(registry);
+    await registry.load(instanceConfigs({ instances: f.bases }, accounts.snapshot), { deferAccountAuth: true });
+    const snapshot = vi.spyOn(registry.get(account.id)!, "snapshot");
+    const controller = new lifecycle!.AccountLifecycle(accounts, registry, {
+      reload: async () => {}, referenced: async () => false, invalidate: vi.fn(), changed: vi.fn(), configBusy: () => false,
+    });
+    controllers.push(controller);
+    await controller.restore();
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(accounts.get(account.id)?.state).toBe("stopped");
+    expect(registry.accountStopped(account.id)).toBe(true);
+    expect(existsSync(account.home)).toBe(false);
+  });
+
+  it("keeps a signed-in Codex account ready when only its state folder is missing", async () => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    rmSync(join(account.home, "state"), { recursive: true });
+    const snapshot = vi.spyOn(f.registry.get(account.id)!, "snapshot");
+    await f.registry.describe({ refresh: true });
+    expect(snapshot).toHaveBeenCalled();
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+    expect(f.registry.accountAvailable(account.id)).toBe(true);
+    const accounts = new core!.AccountService(f.dir, () => f.bases);
+    expect(accounts.error).toBeUndefined();
+    const registry = new ProviderRegistry(f.drivers);
+    registries.push(registry);
+    await registry.load(instanceConfigs({ instances: f.bases }, accounts.snapshot), { deferAccountAuth: true });
+    const controller = new lifecycle!.AccountLifecycle(accounts, registry, {
+      reload: async () => {}, referenced: async () => false, invalidate: vi.fn(), changed: vi.fn(), configBusy: () => false,
+    });
+    controllers.push(controller);
+    await controller.restore();
+    expect(accounts.get(account.id)?.state).toBe("ready");
+    expect(registry.accountAvailable(account.id)).toBe(true);
+    expect(existsSync(join(account.home, "state"))).toBe(false);
+  });
+
+  it("never brings back the missing home of a removed account", async () => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    rmSync(account.home, { recursive: true });
+    await expect(f.controller.remove(account.id)).resolves.toEqual({});
+    await expect(f.controller.signIn(account.id, false, "pc:")).rejects.toMatchObject({ status: 404 });
+    await f.registry.describe({ refresh: true });
+    expect(() => markCodexPromo(account.home, account.generation)).toThrow();
+    const base = join(f.dir, "base");
+    mkdirSync(join(base, "skills", "fixture"), { recursive: true });
+    writeFileSync(join(base, "AGENTS.md"), "fixture");
+    shareUserSetup("codex", account, base);
+    expect(new core!.AccountService(f.dir, () => f.bases).error).toBeUndefined();
+    expect(existsSync(account.home)).toBe(false);
+  });
+
+  it("removes a saved Codex account whose home is a junction as it always did", async () => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    const target = join(f.dir, "target");
+    mkdirSync(target);
+    writeFileSync(join(target, "keep"), "keep");
+    rmSync(account.home, { recursive: true });
+    symlinkSync(target, account.home, "junction");
+    // As the Codex driver does: its login env resolves through accountLaunch.
+    f.registry.get(account.id)!.loginConfig = () => ({ cli: "fake", env: accountLaunch(account, "codex", [], {}).env });
+    await expect(f.controller.remove(account.id)).resolves.toEqual({});
+    expect(f.accounts.get(account.id)).toBeUndefined();
+    expect(readdirSync(target)).toEqual(["keep"]);
+  });
+
+  it("refuses Sign In through a saved home that became a junction and creates nothing", async () => {
+    const f = await fixture();
+    const account = await f.add("codex");
+    await f.accounts.stop(account.id);
+    const target = join(f.dir, "target");
+    mkdirSync(target);
+    rmSync(account.home, { recursive: true });
+    symlinkSync(target, account.home, "junction");
+    const logins = f.start.mock.calls.length;
+    await expect(f.controller.signIn(account.id, false, "pc:")).rejects.toThrow("link or alias");
+    expect(readdirSync(target)).toEqual([]);
+    expect(f.start.mock.calls.length).toBe(logins);
+    expect(f.accounts.get(account.id)?.state).toBe("stopped");
+  });
+
   it("clears a base account's promo mark after sign-in completes", async () => {
     const f = await fixture();
     const home = join(f.dir, "base-codex");
@@ -100,11 +212,11 @@ describe("account lifecycle", () => {
     const file = join(home, ".wink-codex-promo.json");
     writeFileSync(file, '{"generation":0}');
     f.state("cancelled");
-    await f.controller.signIn("codex");
+    await f.controller.signIn("codex", false, "pc:");
     await f.controller.settled("codex");
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ generation: 0 });
     f.state("complete");
-    await f.controller.signIn("codex");
+    await f.controller.signIn("codex", false, "pc:");
     await f.controller.settled("codex");
     expect(JSON.parse(readFileSync(file, "utf8"))).toBeNull();
   });
@@ -115,11 +227,11 @@ describe("account lifecycle", () => {
     const file = join(account.home, ".wink-codex-promo.json");
     writeFileSync(file, JSON.stringify({ generation: account.generation }));
     f.state("failed");
-    await f.controller.signIn(account.id);
+    await f.controller.signIn(account.id, false, "pc:");
     await f.controller.settled(account.id);
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ generation: account.generation });
     f.state("complete");
-    await f.controller.signIn(account.id);
+    await f.controller.signIn(account.id, false, "pc:");
     await f.controller.settled(account.id);
     expect(JSON.parse(readFileSync(file, "utf8"))).toBeNull();
   });
@@ -131,13 +243,13 @@ describe("account lifecycle", () => {
     if (match === "stored identity") vi.spyOn(f.registry.get(existing.id)!, "snapshot").mockRejectedValue(new Error("probe unavailable"));
     let release!: () => void;
     f.wait(new Promise<void>((done) => { release = done; }));
-    const added = await f.controller.add("claude");
+    const added = await f.controller.add("claude", false, "pc:");
     f.statuses.set(added.id, { state: "available", authenticated: true,
       accountIdentity: match === "email" ? "another-identity" : existing.identity, account: " SAME@EXAMPLE.TEST " });
     release();
     await f.controller.settled(added.id);
     expect(f.accounts.snapshot.map((row) => row.id)).toEqual([existing.id]);
-    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: existing.id });
+    expect(f.controller.signInResult(added.id, "pc:")).toEqual({ state: "duplicate", existingId: existing.id });
     expect(f.accounts.get(existing.id)).toEqual(existing);
     expect(f.start.mock.calls.some(([, , args]) => args.includes("logout"))).toBe(false);
   });
@@ -147,12 +259,12 @@ describe("account lifecycle", () => {
     f.statuses.set("claude", { state: "available", authenticated: true, account: "base@example.test" });
     let release!: () => void;
     f.wait(new Promise<void>((done) => { release = done; }));
-    const added = await f.controller.add("claude");
+    const added = await f.controller.add("claude", false, "pc:");
     f.statuses.set(added.id, { state: "available", authenticated: true, accountIdentity: "base-identity", account: "base@example.test" });
     release();
     await f.controller.settled(added.id);
     expect(f.accounts.snapshot).toHaveLength(0);
-    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: "claude" });
+    expect(f.controller.signInResult(added.id, "pc:")).toEqual({ state: "duplicate", existingId: "claude" });
   });
 
   it("rechecks account changes without blocking them on duplicate probes", async () => {
@@ -166,7 +278,7 @@ describe("account lifecycle", () => {
     vi.spyOn(f.registry.get(existing.id)!, "snapshot").mockImplementationOnce(() => { entered(); return probe; });
     let release!: () => void;
     f.wait(new Promise<void>((done) => { release = done; }));
-    const added = await f.controller.add("claude");
+    const added = await f.controller.add("claude", false, "pc:");
     f.statuses.set(added.id, { state: "available", authenticated: true, accountIdentity: "incoming", account: "same@example.test" });
     release();
     await started;
@@ -180,7 +292,7 @@ describe("account lifecycle", () => {
       await observation;
       await f.controller.settled(added.id);
     }
-    expect(f.controller.signInResult(added.id)).toEqual({ state: "duplicate", existingId: existing.id });
+    expect(f.controller.signInResult(added.id, "pc:")).toEqual({ state: "duplicate", existingId: existing.id });
     expect(f.accounts.snapshot.map((row) => row.id)).toEqual([existing.id]);
   });
 
@@ -191,7 +303,7 @@ describe("account lifecycle", () => {
     const snapshot: ProviderSnapshot = { state: "available", authenticated: true, accountIdentity: first.identity, account: "same@example.test" };
     f.statuses.set(first.id, snapshot);
     f.statuses.set(second.id, snapshot);
-    await f.controller.signIn(second.id);
+    await f.controller.signIn(second.id, false, "pc:");
     await f.controller.settled(second.id);
     expect(f.accounts.snapshot.map((row) => row.id)).toEqual([first.id, second.id]);
     expect(f.accounts.get(second.id)?.identity).toBe(first.identity);
@@ -205,7 +317,7 @@ describe("account lifecycle", () => {
     f.statuses.set(existing.id, snapshot);
     let release!: () => void;
     f.wait(new Promise<void>((done) => { release = done; }));
-    const added = await f.controller.add("codex");
+    const added = await f.controller.add("codex", false, "pc:");
     f.statuses.set(added.id, snapshot);
     expect((await request(f, "GET", `/api/accounts/${added.id}/sign-in`)).body.state).toBe("pending");
     release();
@@ -222,7 +334,7 @@ describe("account lifecycle", () => {
     let release!: () => void;
     f.wait(new Promise<void>((done) => { release = done; }));
     const snapshot = vi.spyOn(f.registry.get("claude")!, "snapshot").mockRejectedValue(new Error("fixture probe failure"));
-    await f.controller.signIn("claude");
+    await f.controller.signIn("claude", false, "pc:");
     const finished = f.controller.settled("claude");
     release();
     await expect(finished).resolves.toBeUndefined();
@@ -241,7 +353,7 @@ describe("account lifecycle", () => {
       pending.set("claude", newer);
       return { state: "available", authenticated: true };
     });
-    await f.controller.signIn("claude");
+    await f.controller.signIn("claude", false, "pc:");
     const finished = f.controller.settled("claude");
     release();
     await finished;
@@ -254,7 +366,7 @@ describe("account lifecycle", () => {
     if (kind === "turn") f.references.add("claude");
     else (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async () => true;
     f.start.mockClear();
-    await expect(f.controller.signIn("claude")).rejects.toThrow(/active work/);
+    await expect(f.controller.signIn("claude", false, "pc:")).rejects.toThrow(/active work/);
     expect(f.start).not.toHaveBeenCalled();
     expect(f.registry.accountBlocked("claude")).toBe(false);
   });
@@ -263,7 +375,7 @@ describe("account lifecycle", () => {
     const f = await fixture();
     await f.add();
     vi.spyOn(f.registry, "startSignIn").mockRejectedValue(new Error("Another sign-in is running"));
-    await expect(f.controller.signIn("claude")).rejects.toThrow("Another sign-in");
+    await expect(f.controller.signIn("claude", false, "pc:")).rejects.toThrow("Another sign-in");
     expect(f.registry.accountBlocked("claude")).toBe(false);
   });
 
@@ -275,15 +387,15 @@ describe("account lifecycle", () => {
     await f.controller.signedOut?.(account.id);
     await f.controller.signedOut?.("claude");
     f.start.mockClear();
-    await expect(f.controller.signIn(account.id)).resolves.toBeDefined();
+    await expect(f.controller.signIn(account.id, false, "pc:")).resolves.toBeDefined();
     await f.controller.settled(account.id);
-    await expect(f.controller.signIn("claude")).resolves.toBeDefined();
+    await expect(f.controller.signIn("claude", false, "pc:")).resolves.toBeDefined();
     expect(f.start.mock.calls.map(([id]) => id)).toEqual([account.id, "claude"]);
     expect(panesBusy).toHaveBeenCalledWith(account.id, true);
     expect(panesBusy).toHaveBeenCalledWith("claude", true);
     f.references.add(account.id);
     await f.controller.signedOut?.(account.id);
-    await expect(f.controller.signIn(account.id)).rejects.toThrow(/active work/);
+    await expect(f.controller.signIn(account.id, false, "pc:")).rejects.toThrow(/active work/);
   });
 
   it.runIf(process.platform === "win32")("signs in a stopped Claude account before a status check selects the working CLI", async () => {
@@ -328,7 +440,9 @@ describe("account lifecycle", () => {
       const response = await request({ controller, registry }, "POST", `/api/instances/${account.id}/sign-in`);
       await controller.settled(account.id);
       expect(existsSync(failed), "the broken shim received auth login").toBe(false);
-      expect(response).toMatchObject({ status: 200, body: { url: "https://claude.com/cai/oauth/authorize?code=true" } });
+      expect(response).toMatchObject({ status: 200 });
+      // The fake CLI exits at once, so its link ended with the attempt.
+      expect(response.body).toEqual({});
       expect(readFileSync(opened, "utf8")).toBe(account.home);
     } finally {
       vi.unstubAllEnvs();
@@ -342,13 +456,13 @@ describe("account lifecycle", () => {
     (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async () => true;
     f.start.mockClear();
     for (const id of [account.id, "claude"]) {
-      await expect(f.controller.signIn(id)).rejects.toMatchObject({ message: "Finish this account's active work before signing in", code: "account-busy" });
+      await expect(f.controller.signIn(id, false, "pc:")).rejects.toMatchObject({ message: "Finish this account's active work before signing in", code: "account-busy" });
       expect(await request(f, "POST", `/api/accounts/${id}/sign-in`)).toMatchObject({ status: 409, body: { error: "Finish this account's active work before signing in", code: "account-busy" } });
     }
     expect(f.start).not.toHaveBeenCalled();
     expect(f.registry.accountBlocked("claude")).toBe(false);
     expect(f.accounts.get(account.id)?.state).toBe("ready");
-    await expect(runtime!.accountPanesBusy(null, account.id)).rejects.toMatchObject({ code: "host-unknown" });
+    await expect(runtime!.accountPanesBusy({ url: "http://127.0.0.1:1", token: "fixture" }, account.id)).rejects.toMatchObject({ code: "host-unknown" });
     const { LoginBusyError } = await import("./engine-login.ts");
     (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async () => false;
     vi.spyOn(f.registry, "startSignIn").mockRejectedValue(new LoginBusyError());
@@ -372,10 +486,10 @@ describe("account lifecycle", () => {
     expect((await request(f, "POST", path)).status).toBe(404);
     expect((await request(f, "POST", path)).status).toBe(500);
     expect(log.mock.calls).toEqual([
-      ["sign-in refused code=http-400 status=400 stderr=-"],
-      ["sign-in refused code=provider-config-busy status=409 stderr=-"],
-      ["sign-in refused code=unknown-engine-sign-in status=404 stderr=-"],
-      ["sign-in refused code=http-500 status=500 stderr=-"],
+      ["sign-in refused code=http-400 status=400 reason=-"],
+      ["sign-in refused code=provider-config-busy status=409 reason=-"],
+      ["sign-in refused code=unknown-engine-sign-in status=404 reason=-"],
+      ["sign-in refused code=http-500 status=500 reason=-"],
     ]);
   });
 
@@ -406,7 +520,7 @@ describe("account lifecycle", () => {
     await f.controller.signedOut("claude");
     expect(f.changed).toHaveBeenCalledTimes(1);
     expect(f.registry.accountAvailable("claude")).toBe(false);
-    await f.controller.signIn("claude");
+    await f.controller.signIn("claude", false, "pc:");
     await f.controller.settled("claude");
     expect(f.registry.accountAvailable("claude")).toBe(true);
   });
@@ -436,7 +550,7 @@ describe("account lifecycle", () => {
     const account = await f.add();
     let release!: () => void;
     f.wait(new Promise<void>((done) => { release = done; }));
-    const signingIn = f.controller.signIn(account.id);
+    const signingIn = f.controller.signIn(account.id, false, "pc:");
     const marked = f.controller.signedOut(account.id);
     await signingIn;
     await marked;
@@ -457,14 +571,14 @@ describe("account lifecycle", () => {
       fetch.mockImplementation(async (url) => String(url).includes("account-runs")
         ? state === "unknown" ? Response.json({}, { status: 404 }) : Response.json({ runs: [{ botId: "fixture", paneId: "fixture", label: null, engine: "claude", accountId: id, accountGeneration: kind === "base" ? 0 : account.generation, state }] })
         : Response.json({ count: 1, unknown: 0, generations: { "0": 1 } }));
-      await expect(f.controller.signIn(id)).rejects.toMatchObject({ code: state === "unknown" ? "host-unknown" : "account-busy" });
+      await expect(f.controller.signIn(id, false, "pc:")).rejects.toMatchObject({ code: state === "unknown" ? "host-unknown" : "account-busy" });
       expect(start).not.toHaveBeenCalled();
       expect(f.registry.accountBlocked(id)).toBe(true);
     }
     fetch.mockImplementation(async (url) => String(url).includes("account-runs")
       ? Response.json({ runs: [{ botId: "fixture", paneId: "fixture", label: null, engine: "claude", accountId: id, accountGeneration: kind === "base" ? 0 : account.generation, state: "idle" }] })
       : Response.json({ count: 1, unknown: 0, generations: { "0": 1 } }));
-    await expect(f.controller.signIn(id)).resolves.toBeDefined();
+    await expect(f.controller.signIn(id, false, "pc:")).resolves.toBeDefined();
     await f.controller.settled(id);
     expect(f.registry.accountAvailable(id)).toBe(true);
   });
@@ -558,7 +672,7 @@ describe("account lifecycle", () => {
     const account = await f.add();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await f.controller.observe(account.id, { state: "unavailable" });
-    await f.controller.signIn(account.id);
+    await f.controller.signIn(account.id, false, "pc:");
     await f.controller.settled(account.id);
     expect(vi.getTimerCount()).toBe(0);
     expect(f.registry.accountAvailable(account.id)).toBe(true);
@@ -683,7 +797,7 @@ describe("account lifecycle", () => {
     expect(f.accounts.get(account.id)).toEqual(account);
 
     f.start.mockRejectedValueOnce(new Error("fixture login failed to start"));
-    await expect(f.controller.signIn(account.id)).rejects.toThrow("fixture login failed to start");
+    await expect(f.controller.signIn(account.id, false, "pc:")).rejects.toThrow("fixture login failed to start");
     expect(f.registry.accountAvailable(account.id)).toBe(false);
 
     f.changed.mockClear();
@@ -805,7 +919,7 @@ describe("account lifecycle", () => {
     f.invalidate.mockClear();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     f.statuses.set(account.id, { state: "available" });
-    await f.controller.signIn(account.id);
+    await f.controller.signIn(account.id, false, "pc:");
     await f.controller.settled(account.id);
     expect(f.accounts.get(account.id)).toEqual(account);
     expect(f.invalidate).not.toHaveBeenCalled();
@@ -829,7 +943,7 @@ describe("account lifecycle", () => {
   it.each(["failed", "cancelled"] as const)("drops a new account after %s without logging out another account", async (state) => {
     const f = await fixture();
     f.state(state);
-    const added = await f.controller.add("codex");
+    const added = await f.controller.add("codex", false, "pc:");
     await f.controller.settled(added.id);
     expect(f.accounts.get(added.id)).toBeUndefined();
     expect(f.start.mock.calls.map((call) => call[2])).toEqual([["login"]]);
@@ -903,7 +1017,7 @@ describe("account lifecycle", () => {
     const f = await fixture();
     let finish!: () => void;
     f.wait(new Promise((resolve) => { finish = resolve; }));
-    const added = await f.controller.add("claude");
+    const added = await f.controller.add("claude", false, "pc:");
     await f.registry.describeCached();
     await f.registry.describeCached();
     expect(f.providers.started("thread", added.id)).toBeNull();
@@ -917,7 +1031,7 @@ describe("account lifecycle", () => {
   it("refuses account mutations while provider settings are changing", async () => {
     const f = await fixture();
     f.busy(true);
-    await expect(f.controller.add("claude")).rejects.toThrow("Provider settings");
+    await expect(f.controller.add("claude", false, "pc:")).rejects.toThrow("Provider settings");
     expect(f.accounts.snapshot).toHaveLength(0);
   });
 
@@ -943,7 +1057,7 @@ describe("account lifecycle", () => {
     const f = await fixture();
     const account = await f.add();
     f.invalidate.mockClear();
-    await f.controller.signIn(account.id);
+    await f.controller.signIn(account.id, false, "pc:");
     await f.controller.settled(account.id);
     expect(f.accounts.get(account.id)?.generation).toBe(account.generation + 1);
     expect(f.invalidate).toHaveBeenCalledExactlyOnceWith(account.id);
@@ -953,7 +1067,7 @@ describe("account lifecycle", () => {
     const f = await fixture();
     f.state("failed");
     vi.spyOn(f.registry.logins, "capture").mockReturnValue({ error: "device_cap" });
-    const added = await f.controller.add("codex");
+    const added = await f.controller.add("codex", false, "pc:");
     await f.controller.settled(added.id);
     expect(f.accounts.get(added.id)).toBeUndefined();
     expect((await request(f, "GET", `/api/accounts/${added.id}/sign-in`)).body).toEqual({ state: "failed", error: "device_cap" });
@@ -968,13 +1082,14 @@ describe("account lifecycle", () => {
   });
 });
 
-async function request(f: Pick<Awaited<ReturnType<typeof fixture>>, "controller" | "registry">, method: string, path: string, value: unknown = {}, contentType = "application/json") {
+async function request(f: Pick<Awaited<ReturnType<typeof fixture>>, "controller" | "registry">, method: string, path: string, value: unknown = {}, contentType = "application/json",
+  deps?: Parameters<NonNullable<typeof routes>["createAccountRoutes"]>[2]) {
   expect(routes, "account routes exist").not.toBeNull();
   const req = Object.assign(Readable.from([JSON.stringify(value)]), { headers: { "content-type": contentType } }) as unknown as IncomingMessage;
   let status = 0;
   let output = "";
   const res = { writeHead: (code: number) => { status = code; }, end: (body: string) => { output = body; } } as unknown as ServerResponse;
-  const handled = await routes!.createAccountRoutes(f.controller, f.registry)(req, res, method, path);
+  const handled = await routes!.createAccountRoutes(f.controller, f.registry, deps)(req, res, method, path, "pc:");
   return { handled, status, body: output ? JSON.parse(output) : undefined };
 }
 
@@ -1105,10 +1220,304 @@ describe("account HTTP routes", () => {
     expect(f.start).not.toHaveBeenCalled();
   });
 
+  it("hands Main to the first ready account in the saved Usage order, not the order accounts were added", async () => {
+    const f = await fixture(vi.fn());
+    const first = await f.add();
+    const second = await f.add();
+    const usageOrder = () => ({ claude: ["claude", second.id, first.id] });
+    expect(await request(f, "GET", "/api/accounts/claude/destination", {}, "application/json", { usageOrder })).toMatchObject({ status: 200, body: { destinationId: second.id } });
+  });
+
+  it.each([false, true])("refuses a base Sign Out while a worker is busy on it and keeps the login (another engine's account=%s)", async (other) => {
+    const f = await fixture();
+    if (other) await f.add("codex");
+    (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async (id) => id === "claude";
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/accounts/claude/sign-out")).toMatchObject({ status: 409 });
+    expect(f.start).not.toHaveBeenCalled();
+    expect(f.registry.accountBlocked("claude")).toBe(false);
+  });
+
+  it.each([
+    ["no terminal host, as the browser-only launch runs", null, 200],
+    ["an unreachable terminal host", { url: "http://127.0.0.1:1", token: "fixture" }, 409],
+  ])("signs out a lone base with %s only when its workers are known", async (_name, access, status) => {
+    const f = await fixture();
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("unreachable"); }));
+    (f.controller as unknown as { hooks: { panesBusy(id: string, activeOnly?: boolean): Promise<boolean> } }).hooks.panesBusy = (id, activeOnly) => runtime!.accountPanesBusy(access, id, activeOnly);
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/accounts/claude/sign-out")).toMatchObject({ status });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(status === 200);
+  });
+
+  it("refuses a stale Remove of a signed-out base whose home now holds another login, and keeps that login", async () => {
+    const f = await fixture(vi.fn());
+    const added = await f.add("codex");
+    await f.controller.useForBots(added.id);
+    await f.controller.remove("codex");
+    // Another login lands on the base; a client that drew the row signed out still offers Remove.
+    f.statuses.set("codex", { state: "available", authenticated: true, account: "replacement@example.test" });
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/accounts/codex/sign-out", { login: null })).toMatchObject({ status: 409, body: { code: "login-changed" } });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(false);
+    expect(f.registry.accountAvailable("codex", true)).toBe(true);
+    expect(f.accounts.list().find((row) => row.id === "codex")?.userSignedOut).toBeUndefined();
+  });
+
+  it("refuses a stale Sign Out of a login another one replaced, then signs out the one it names", async () => {
+    const f = await fixture(vi.fn());
+    const added = await f.add("codex");
+    f.statuses.set("codex", { state: "available", authenticated: true, account: "first@example.test" });
+    await f.registry.describe({ refresh: true });
+    f.statuses.set("codex", { state: "available", authenticated: true, account: "replacement@example.test" });
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/accounts/codex/sign-out", { destinationId: added.id, login: "first@example.test" })).toMatchObject({ status: 409, body: { code: "login-changed" } });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(false);
+    expect(await request(f, "POST", "/api/accounts/codex/sign-out", { destinationId: added.id, login: "replacement@example.test" })).toMatchObject({ status: 200 });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(true);
+  });
+
+  it("refuses a stale single-account Sign Out on the instance route before the provider runs", async () => {
+    const f = await fixture(vi.fn());
+    f.statuses.set("codex", { state: "available", authenticated: true, account: "replacement@example.test" });
+    await f.registry.describe({ refresh: true });
+    f.start.mockClear();
+    expect(await request(f, "POST", "/api/instances/codex/sign-out", { login: "first@example.test" })).toMatchObject({ status: 409, body: { code: "login-changed" } });
+    expect(f.start.mock.calls.some((call) => call[2].includes("logout"))).toBe(false);
+    expect(f.registry.accountAvailable("codex", true)).toBe(true);
+  });
+
   it("uses the same removal guard for legacy managed-instance sign-out", async () => {
     const f = await fixture();
     const added = await f.add();
     f.references.add(added.id);
     expect((await request(f, "POST", `/api/instances/${added.id}/sign-out`)).status).toBe(409);
+  });
+});
+
+describe("base sign-out beside added accounts", () => {
+  it("reads the signed-out base as signed out, never as not installed", async () => {
+    const f = await fixture();
+    await f.add();
+    f.invalidate.mockImplementation((id: string) => f.registry.invalidateAccount(id));
+    await f.controller.remove("claude");
+    expect(f.invalidate).toHaveBeenCalledWith("claude");
+    expect(f.registry.accountStopped("claude")).toBe(true);
+    for (const rows of [await f.registry.describeKnown(), await f.registry.describeCached()]) {
+      expect(rows.find((row) => row.instanceId === "claude")!.snapshot).toMatchObject({ state: "available", authenticated: false });
+    }
+  });
+
+  it("reads a signed-out Main base as signed out after a hand-over and keeps the saved account", async () => {
+    const f = await fixture(vi.fn());
+    const account = await f.add();
+    expect(f.accounts.defaultFor("claude") ?? "claude").toBe("claude");
+    await expect(f.controller.remove("claude", account.id)).resolves.toEqual({ state: "removed", destinationId: account.id });
+    expect(f.registry.accountStopped("claude")).toBe(true);
+    for (const rows of [await f.registry.describeKnown(), await f.registry.describeCached()]) {
+      expect(rows.find((row) => row.instanceId === "claude")!.snapshot).toMatchObject({ state: "available", authenticated: false });
+    }
+    expect(f.accounts.list().filter((row) => row.of === "claude").map((row) => row.id)).toEqual(["claude", account.id]);
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+  });
+});
+
+describe("a user Sign Out removes the account from Usage and Connections", () => {
+  type Fixture = Awaited<ReturnType<typeof fixture>>;
+  // What Usage lists for this engine and what Connections hides, built the way the server builds them.
+  async function listed(f: Fixture, base: string, accounts = f.accounts) {
+    const status = new Map((await f.registry.describeCached()).map((row) => [row.instanceId, row.snapshot]));
+    const board = createUsageBoard({
+      accounts: { list: () => accounts.list().map((row) => {
+        const snapshot = status.get(row.id);
+        return { ...row, blocked: f.registry.accountStopped(row.id), checking: f.registry.accountChecking(row.id),
+          status: snapshot && { state: snapshot.state === "available" ? "available" as const : "unavailable" as const, authenticated: snapshot.authenticated, account: snapshot.account, accountIdentity: snapshot.accountIdentity } };
+      }), defaultFor: (of) => accounts.defaultFor(of), get drains() { return accounts.drains; } },
+      names: { get: () => null }, rateLimits: new Map(), history: createUsageHistory(join(f.dir, "usage")),
+      runs: async () => ({ known: true, runs: [] }), bots: () => [],
+    });
+    const engine = (await board.read()).engines.find((group) => group.base === base)!;
+    const hidden = engine.duplicates ?? [];
+    return { usage: engine.accounts.map((row) => row.id), connections: accounts.list().filter((row) => row.of === base && !hidden.includes(row.id)).map((row) => row.id),
+      signIn: Object.fromEntries(engine.accounts.map((row) => [row.id, row.signIn])), mainId: engine.mainId };
+  }
+
+  it.each(["codex", "claude"])("takes a signed-out %s base off both lists, after a restart too, while another account is left", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await f.controller.useForBots(added.id);
+    await f.controller.remove(base);
+    expect(await listed(f, base)).toMatchObject({ usage: [added.id], connections: [added.id], mainId: added.id });
+    const restarted = new core!.AccountService(f.dir, () => f.bases);
+    expect((await listed(f, base, restarted)).connections).toEqual([added.id]);
+  });
+
+  it.each(["codex", "claude"])("hands Main on and takes the %s base off both lists when Main signs out", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await expect(f.controller.remove(base, added.id)).resolves.toEqual({ state: "removed", destinationId: added.id });
+    expect(await listed(f, base)).toMatchObject({ usage: [added.id], connections: [added.id], mainId: added.id });
+  });
+
+  it.each(["codex", "claude"])("removes a signed-out added %s account as it always did", async (base) => {
+    const f = await fixture(vi.fn());
+    const first = await f.add(base);
+    const second = await f.add(base);
+    await f.controller.remove(second.id);
+    expect(await listed(f, base)).toMatchObject({ usage: [base, first.id], connections: [base, first.id] });
+  });
+
+  it.each(["codex", "claude"])("keeps an expired %s base's row with Sign In", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await f.controller.useForBots(added.id);
+    f.statuses.set(base, { state: "available", authenticated: false });
+    await f.controller.signedOut(base);
+    expect(await listed(f, base)).toMatchObject({ usage: [base, added.id], connections: [base, added.id], signIn: { [base]: "signed-out" } });
+  });
+
+  it.each(["codex", "claude"])("Remove takes an expired %s base's leftover row off both lists", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await f.controller.useForBots(added.id);
+    f.statuses.set(base, { state: "available", authenticated: false });
+    await f.controller.signedOut(base);
+    await f.controller.remove(base);
+    expect(await listed(f, base)).toMatchObject({ usage: [added.id], connections: [added.id], mainId: added.id });
+  });
+
+  it("hands Main on when a leftover signed-out Main is removed", async () => {
+    const f = await fixture(vi.fn());
+    const added = await f.add("codex");
+    f.statuses.set("codex", { state: "available", authenticated: false });
+    await f.controller.signedOut("codex");
+    await expect(f.controller.remove("codex", added.id)).resolves.toEqual({ state: "removed", destinationId: added.id });
+    expect(await listed(f, "codex")).toMatchObject({ usage: [added.id], connections: [added.id], mainId: added.id });
+  });
+
+  it("keeps a lone base's signed-out row, the engine's own signed-out state", async () => {
+    const f = await fixture(vi.fn());
+    await f.controller.remove("codex");
+    expect(await listed(f, "codex")).toMatchObject({ usage: ["codex"], connections: ["codex"], signIn: { codex: "signed-out" } });
+  });
+
+  it.each(["signed out", "expired"])("refuses Remove on a lone %s base, which it could not clear", async (how) => {
+    const f = await fixture(vi.fn());
+    if (how === "signed out") await f.controller.remove("codex");
+    else {
+      f.statuses.set("codex", { state: "available", authenticated: false });
+      await f.controller.signedOut("codex");
+    }
+    f.start.mockClear();
+    await expect(f.controller.remove("codex")).rejects.toMatchObject({ status: 409 });
+    expect(f.start).not.toHaveBeenCalled();
+    expect(await listed(f, "codex")).toMatchObject({ usage: ["codex"], connections: ["codex"], signIn: { codex: "signed-out" } });
+  });
+
+  it.each(["codex", "claude"])("keeps the Sign In row of a later %s login that expires after an earlier Sign Out", async (base) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    await f.controller.useForBots(added.id);
+    await f.controller.remove(base);
+    // Another login lands on the base outside Wink; the next start confirms it.
+    f.statuses.delete(base);
+    const accounts = new core!.AccountService(f.dir, () => f.bases);
+    const registry = new ProviderRegistry(f.drivers);
+    registries.push(registry);
+    await registry.load(instanceConfigs({ instances: f.bases }, accounts.snapshot));
+    const controller = new lifecycle!.AccountLifecycle(accounts, registry, {
+      reload: async () => {}, referenced: async () => false, invalidate: vi.fn(), changed: vi.fn(), configBusy: () => false,
+    });
+    controllers.push(controller);
+    await registry.describe({ refresh: true });
+    await vi.waitFor(() => expect(accounts.list().find((row) => row.id === base)?.userSignedOut).toBeUndefined());
+    f.statuses.set(base, { state: "available", authenticated: false });
+    await controller.signedOut(base);
+    expect(await listed({ ...f, accounts, registry, controller }, base, accounts)).toMatchObject({ usage: [base, added.id], signIn: { [base]: "signed-out" } });
+  });
+
+  it.each([
+    ["codex", "signs out", "refresh"], ["claude", "signs out", "rescan"], ["codex", "hands Main on", "rescan"],
+  ] as const)("lists a later %s login without a restart after the base %s, on a %s, and keeps its Sign In row when it expires", async (base, how, probe) => {
+    const f = await fixture(vi.fn());
+    const added = await f.add(base);
+    if (how === "hands Main on") await f.controller.remove(base, added.id);
+    else {
+      await f.controller.useForBots(added.id);
+      await f.controller.remove(base);
+    }
+    expect((await listed(f, base)).usage).toEqual([added.id]);
+    // Another login lands on the base outside Wink while Wink stays open.
+    f.statuses.delete(base);
+    await f.registry.describe({ [probe]: true });
+    expect(await listed(f, base)).toMatchObject({ usage: [base, added.id], connections: [base, added.id] });
+    expect(f.accounts.list().find((row) => row.id === base)?.userSignedOut).toBeUndefined();
+    f.statuses.set(base, { state: "available", authenticated: false });
+    await f.controller.signedOut(base);
+    expect(await listed(f, base)).toMatchObject({ usage: [base, added.id], signIn: { [base]: "signed-out" } });
+  });
+
+  it("lists the base again once it signs back in", async () => {
+    const f = await fixture(vi.fn());
+    const added = await f.add("codex");
+    await f.controller.useForBots(added.id);
+    await f.controller.remove("codex");
+    f.statuses.delete("codex");
+    await f.controller.signIn("codex", false, "pc:");
+    await f.controller.settled("codex");
+    expect(f.registry.accountAvailable("codex")).toBe(true);
+    f.statuses.set("codex", { state: "available", authenticated: false });
+    await f.controller.signedOut("codex");
+    expect(await listed(f, "codex")).toMatchObject({ usage: ["codex", added.id], signIn: { codex: "signed-out" } });
+  });
+});
+
+describe("code-flow sign-in over a browser-mode one", () => {
+  it("restarts an added account's browser-mode sign-in in code mode and keeps the account", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    f.state("pending");
+    await f.controller.signIn(account.id, false, "pc:");
+    expect(f.start.mock.calls.at(-1)?.[2]).toEqual(["login"]);
+    vi.spyOn(f.registry.logins, "opensBrowser").mockReturnValue(true);
+    await f.controller.signIn(account.id, true, "pc:");
+    expect(f.start.mock.calls.at(-1)?.[2]).toEqual(["device"]);
+    f.state("complete");
+    release();
+    await f.controller.settled(account.id);
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+  });
+
+  it("joins an added account's code-flow sign-in", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    f.wait(new Promise<void>(() => {}));
+    f.state("pending");
+    await f.controller.signIn(account.id, true, "pc:");
+    const starts = f.start.mock.calls.length;
+    vi.spyOn(f.registry.logins, "joins").mockReturnValue(true);
+    await f.controller.signIn(account.id, true, "pc:");
+    expect(f.start.mock.calls).toHaveLength(starts);
+  });
+});
+
+describe("a base sign-in that ends without signing in", () => {
+  it.each(["cancelled", "failed"] as const)("unblocks the engine again once it is %s while an added account exists", async (end) => {
+    const f = await fixture();
+    await f.add();
+    f.statuses.set("claude", { state: "available", authenticated: false });
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    f.state("pending");
+    vi.spyOn(f.registry.logins, "generation").mockReturnValue(7);
+    expect(f.registry.accountBlocked("claude")).toBe(false);
+    await f.controller.signIn("claude", false, "pc:");
+    expect(f.registry.accountBlocked("claude")).toBe(true);
+    f.state(end);
+    release();
+    await f.controller.settled("claude");
+    expect(f.registry.accountBlocked("claude")).toBe(false);
   });
 });

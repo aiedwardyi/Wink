@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { linuxDesktopEnv } from "./smoke-env.mjs";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wayland = process.env.OMB_SMOKE_WAYLAND === "1";
 const hardDeath = process.env.OMB_SMOKE_HARD_DEATH === "1";
@@ -185,19 +187,12 @@ if (!brokerAddress || typeof brokerAddress === "string") {
   throw new Error("could not start the deterministic slow Composio broker");
 }
 
-const desktopEnv = {
-  ...process.env,
-  HOME: home,
-  XDG_CONFIG_HOME: xdgConfig,
-  XDG_RUNTIME_DIR: xdgRuntime,
-  XDG_SESSION_TYPE: wayland ? "wayland" : "x11",
-  XDG_CURRENT_DESKTOP: "GNOME",
-  CUA_DRIVER_PATH: sentinel,
-  OMB_COMPOSIO_BROKER_URL: `http://127.0.0.1:${brokerAddress.port}`,
-  OMB_SMOKE_TEST: "1",
-  OMB_SMOKE_CUA: hardDeath || bundled || sessionBlocked ? "0" : "1",
-  OMB_SMOKE_BUNDLED_CUA: bundled ? "1" : "0",
-};
+const desktopEnv = linuxDesktopEnv(process.env, {
+  home, xdgConfig, xdgRuntime, wayland, sentinel,
+  brokerPort: brokerAddress.port,
+  cua: !(hardDeath || bundled || sessionBlocked),
+});
+desktopEnv.OMB_SMOKE_BUNDLED_CUA = bundled ? "1" : "0";
 if (hardDeath || signalShutdown) desktopEnv.OMB_SMOKE_KEEP_OPEN = "1";
 if (bundled) delete desktopEnv.CUA_DRIVER_PATH;
 if (wayland) desktopEnv.WAYLAND_DISPLAY = "wayland-smoke";

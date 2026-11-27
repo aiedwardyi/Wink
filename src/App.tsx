@@ -39,10 +39,10 @@ import { LazyView } from "@/components/LazyView";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
-import { closePane, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
+import { canWatch, closePane, followChat, openPaneTool, useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
 import { useReplaysHere } from "@/lib/verify-replays";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
-import { useAutoShow, useCheckThread, useMapThread, useMediaThread, useShowItem, useTimelineThread, useWorkersThread } from "@/lib/show-pane";
+import { hopTab, PANE_KEY, PANE_TOOLS, useAutoShow, useCheckThread, useMapThread, useMediaThread, useShowItem, useTimelineThread, useToolsThread, useWorkersThread } from "@/lib/show-pane";
 import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
@@ -63,9 +63,10 @@ import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
 import { Presence, usePresence } from "@/lib/use-presence";
 import { lazyView, useStaleBuildReload } from "@/lib/stale-build";
 import { warmViews } from "@/lib/warm-views";
-import { markColdOpen, noteCacheShown, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
+import { markColdOpen, noteCacheShown, noteChatShown, noteTerminalOpened, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
+import { useUsageOrderSync } from "@/lib/usage-order";
 import { trackFeature, trackScreen } from "@/lib/usage-stats";
 import "@/components/VerifyWatch.css";
 
@@ -142,6 +143,7 @@ function PhoneChatPages({ id, enabled, menuVisible, hidden, rider, order, onSele
 function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
+  useUsageOrderSync();
   const latestState = useRef(state);
   const handledTerminalAttention = useRef(new Set<string>());
   const pendingTerminalAcknowledgements = useRef(new Map<string, Set<string>>());
@@ -234,6 +236,15 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     if (botId) setPaneFocus({ sessionId: null, botId });
   }, [botId, openTerminal]);
   const botPaneFocus = paneFocus?.botId && paneFocus.botId !== botId ? null : paneFocus;
+  // The tap, before the remote view's chunk loads; a focus an earlier open already used names no pane.
+  // A layout effect: a reopened view is still mounted, and its passive effect starts the read.
+  const seenFocus = useRef(botPaneFocus);
+  useLayoutEffect(() => {
+    if (terminalOpen && !window.ogb?.terminal && !webTerminal) noteTerminalOpened(botPaneFocus === seenFocus.current ? undefined : botPaneFocus?.sessionId);
+  }, [terminalOpen, botId]);
+  useEffect(() => {
+    seenFocus.current = botPaneFocus;
+  }, [botPaneFocus]);
   useEffect(() => {
     setPaneFocus((focus) => focus?.botId && focus.botId !== botId ? null : focus);
   }, [botId]);
@@ -325,6 +336,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const mapping = useMapThread();
   const crewThread = useWorkersThread();
   const timelineThread = useTimelineThread();
+  const toolsThread = useToolsThread();
   const watchChat = group ?? bot;
   const room = group && isTeamRoom(group) ? group : undefined;
   const chatMessages = useMemo(() => group ? group.messages : bot ? visibleMessages(bot) : [], [group, bot]);
@@ -332,24 +344,28 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     ? verifyCardIn(chatMessages, watch.owner, watch.messageId)
     : undefined, watchChat?.threadId);
   const paneCard = useReplaysHere(LIVE_VERIFY_V0 ? verifyCardIn(chatMessages) : undefined, watchChat?.threadId);
-  const showing = show && watchChat && show.threadId === watchChat.threadId ? show : undefined;
-  const mediaOn = Boolean(watchChat && media === watchChat.threadId);
+  const withWatch = Boolean(bot || group && (isTeamRoom(group) || LIVE_VERIFY_V0));
+  const paneThreads = [watch?.threadId, show?.threadId, media, mapping, crewThread, timelineThread, toolsThread];
+  const hop = !phoneMenuVisible && !forum && withWatch && watchChat && !terminalOpen ? hopTab(watchChat.threadId, paneThreads, checking, Boolean(bot), canWatch(paneCard)) : undefined;
+  const showing = show && watchChat && show.threadId === watchChat.threadId ? show : typeof hop === "object" ? hop : undefined;
+  const mediaOn = Boolean(watchChat && media === watchChat.threadId) || hop === "media";
   const source = watchChat && { threadId: watchChat.threadId, messages: chatMessages, hasMore: watchChat.hasMore, roomId: room?.hosted.roomId };
   const paneWatch = watch && watchChat && watchCard ? { card: watchCard, threadId: watchChat.threadId, live: watch.live } : undefined;
-  const mapOn = Boolean(watchChat && mapping === watchChat.threadId);
-  const workersOn = Boolean(watchChat && crewThread === watchChat.threadId);
-  const timelineOn = Boolean(watchChat && timelineThread === watchChat.threadId);
-  const watchShown = usePresence(paneWatch || showing || mediaOn || mapOn || workersOn || timelineOn ? { item: showing, watch: paneWatch, media: mediaOn, check: Boolean(watchChat && checking === watchChat.threadId), map: mapOn, workers: workersOn, timeline: timelineOn, profileName: shownProfile(state)?.profile?.name?.trim(), botId: bot?.id, card: paneCard, source } : null);
-  const withWatch = Boolean(bot || group && (isTeamRoom(group) || LIVE_VERIFY_V0));
+  const mapOn = Boolean(watchChat && mapping === watchChat.threadId) || hop === "map";
+  const workersOn = Boolean(watchChat && crewThread === watchChat.threadId) || hop === "workers";
+  const timelineOn = Boolean(watchChat && timelineThread === watchChat.threadId) || hop === "timeline";
+  const toolsOn = Boolean(watchChat && toolsThread === watchChat.threadId) || hop === "tools";
+  const checkOn = Boolean(watchChat && checking === watchChat.threadId) || hop === "check";
+  const watchShown = usePresence(paneWatch || showing || mediaOn || mapOn || workersOn || timelineOn || toolsOn || hop === "check" ? { item: showing, watch: paneWatch, media: mediaOn, check: checkOn, map: mapOn, workers: workersOn, timeline: timelineOn, tools: toolsOn, profileName: shownProfile(state)?.profile?.name?.trim(), botId: bot?.id, card: paneCard, source } : null);
   const watchDock = withWatch && watchShown.mounted ? "verify-watch-dock" : "";
-  const paneThreads = [watch?.threadId, show?.threadId, media, mapping, crewThread, timelineThread];
-  const slotPanels: SlotPanel[] = [...(watch || show || media || mapping || crewThread || timelineThread ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : []), ...(terminalOpen && !terminalCovers ? ["terminal" as const] : [])].filter((panel) => panel !== "show" || Boolean(watchChat && paneThreads.includes(watchChat.threadId)));
+  const slotPanels: SlotPanel[] = [...(paneThreads.some(Boolean) ? ["show" as const] : []), ...(state.settingsOpen ? ["details" as const] : []), ...(state.inspectorOpen ? ["inspector" as const] : []), ...(terminalOpen && !terminalCovers ? ["terminal" as const] : [])].filter((panel) => panel !== "show" || Boolean(watchChat && (paneThreads.includes(watchChat.threadId) || hop)));
   const closeSlot = (panel: SlotPanel) => panel === "show" ? closePane() : panel === "terminal" ? closeTerminal() : dispatch({ type: panel === "details" ? "toggleSettings" : "toggleInspector", open: false });
   useRightSlot(slotPanels, closeSlot);
   // on desktop the Forum only hides the pane; the chat it was opened from finds it as it was
   useEffect(() => {
     if (!phoneMenuVisible && (forum || watchChat && [...paneThreads, checking].includes(watchChat.threadId))) return;
-    closePane();
+    if (hop && watchChat) followChat(watchChat.threadId, Boolean(bot), paneCard);
+    else closePane();
   }, [state.selectedId]);
   useAutoShow(room ? undefined : watchChat?.threadId, chatMessages, !phoneMenuVisible && !watch && slotPanels.every((panel) => panel === "show"));
   const slotShown = !phoneMenuVisible && Boolean(watchShown.value && !watchShown.closing || state.settingsOpen && Boolean(bot || group || joinedId) || bot && state.inspectorOpen || terminalOpen);
@@ -359,7 +375,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     </LazyView>
   );
 
-  // App-wide shortcuts: Alt+T Themes · Alt+Shift+T Cycle theme · Alt+U Usage · Alt+I Model index · Alt+W Workers · Ctrl+1..9 Nth bot · Alt+1..9 Nth worker pane. Esc still closes panels.
+  // App-wide shortcuts: Alt+T Themes · Alt+Shift+T Cycle theme · Alt+U Usage · Alt+I Model index · Alt+W Workers · Alt+P Media · Alt+C Check · Alt+G Map · Alt+L Timeline · Ctrl+1..9 Nth bot · Alt+1..9 Nth worker pane. Esc still closes panels.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (document.querySelector("[data-media-viewer]")) return;
@@ -385,7 +401,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         return;
       }
       if (e.altKey && !mod && !e.shiftKey) {
-        if (e.code === "KeyW") {
+        if (e.code === `Key${PANE_KEY.workers}`) {
           if (nativeViewOverlayOpen || onboardingOpen || e.repeat || e.isComposing) return;
           e.preventDefault();
           e.stopPropagation();
@@ -409,6 +425,14 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           // A chat's usage line takes the first press for its quick view; the next reaches all Usage.
           if (!state.appSettingsOpen && !window.dispatchEvent(new CustomEvent("orbit:usage-key", { cancelable: true }))) return;
           dispatch({ type: "toggleAppSettings", open: !usageOpen, section: "usage" });
+          return;
+        }
+        const tool = PANE_TOOLS.find((tool) => tool !== "workers" && e.code === `Key${PANE_KEY[tool]}`);
+        if (tool) {
+          // A terminal or a text field keeps its own Alt keys; xterm types through a textarea.
+          if (!watchChat || nativeViewOverlayOpen || onboardingOpen || e.repeat || e.isComposing || (tool === "map" || tool === "timeline") && !bot || e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable]")) return;
+          e.preventDefault();
+          openPaneTool(tool, watchChat.threadId, paneCard);
           return;
         }
       }
@@ -459,7 +483,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [state.appSettingsOpen, state.appSettingsSection, state.settingsOpen, bot, group, openTerminalPane, nativeViewOverlayOpen, onboardingOpen, dispatch]);
+  }, [state.appSettingsOpen, state.appSettingsSection, state.settingsOpen, bot, group, paneCard, openTerminalPane, nativeViewOverlayOpen, onboardingOpen, dispatch]);
 
   useEffect(() => {
     if (!themeToast) return;

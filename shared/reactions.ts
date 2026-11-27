@@ -107,9 +107,25 @@ export function reactionToolGuidance(): string {
 
 // bot reactions on user messages are the bot's own output, not feedback;
 // launch rows are display-only and never reach the model
-function feedbackMarks(message: ReactionMessage): ReactionMark[] {
-  if (message.kind === "launch") return [];
-  return (message.reactions ?? []).filter((reaction) => message.role !== "user" || reaction.by === "user");
+// most rows carry no reactions, so a long chat's scan allocates nothing for them
+const NO_MARKS: readonly ReactionMark[] = Object.freeze([]);
+
+function feedbackMarks(message: ReactionMessage): readonly ReactionMark[] {
+  if (message.kind === "launch" || !message.reactions?.length) return NO_MARKS;
+  return message.reactions.filter((reaction) => message.role !== "user" || reaction.by === "user");
+}
+
+// a long chat's path is a frozen array that a turn reads several times; few of its rows carry a reaction
+const reactedByPath = new WeakMap<readonly ReactionMessage[], readonly ReactionMessage[]>();
+
+/** The rows of `messages` with any reaction, in order. */
+export function reactedRows<T extends ReactionMessage>(messages: readonly T[]): readonly T[] {
+  const known = reactedByPath.get(messages);
+  if (known) return known as readonly T[];
+  const rows: T[] = [];
+  for (const message of messages) if (message.reactions?.length) rows.push(message);
+  if (Object.isFrozen(messages)) reactedByPath.set(messages, rows);
+  return rows;
 }
 
 const markKey = (message: ReactionMessage, reaction: ReactionMark) =>
@@ -117,7 +133,9 @@ const markKey = (message: ReactionMessage, reaction: ReactionMark) =>
 
 /** Every feedback mark on the thread now, as passed back in `delivered`. */
 export function reactionMarkKeys(messages: readonly ReactionMessage[]): string[] {
-  return messages.flatMap((message) => feedbackMarks(message).map((reaction) => markKey(message, reaction)));
+  const keys: string[] = [];
+  for (const message of reactedRows(messages)) for (const reaction of feedbackMarks(message)) keys.push(markKey(message, reaction));
+  return keys;
 }
 
 type ReactionPromptOpts = { omitMessageIds?: ReadonlySet<string>; delivered?: ReadonlySet<string> };
@@ -125,7 +143,7 @@ type ReactionPromptOpts = { omitMessageIds?: ReadonlySet<string>; delivered?: Re
 function pendingReactions(messages: readonly ReactionMessage[], opts?: ReactionPromptOpts) {
   const feedback = (message: ReactionMessage) =>
     feedbackMarks(message).filter((reaction) => !opts?.delivered?.has(markKey(message, reaction)));
-  const marked = messages.filter((message) =>
+  const marked = reactedRows(messages).filter((message) =>
     feedback(message).length > 0 && !opts?.omitMessageIds?.has(message.id),
   );
   return {

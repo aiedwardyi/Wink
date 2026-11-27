@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer, type Server } from "node:https";
 import { join } from "node:path";
+import { createSecureContext, type SecureContext } from "node:tls";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { botChain } from "../../shared/bot-chain.ts";
@@ -9,13 +10,15 @@ import { DATA_DIR } from "../config.ts";
 import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
 import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
-import { GuestClient, roomCodeHost, uploadDeadline, type GuestClientDeps } from "./guest-client.ts";
+import { GuestClient, movedHosts, roomCodeHost, uploadDeadline, type GuestClientDeps } from "./guest-client.ts";
 import * as joinedFiles from "./joined-files.ts";
 import { addJoinedEntries, closeJoinedDb, endJoined, joinedEntries, joinedKey, joinedRoom, removeJoined, saveJoined, seatTaken, setJoinedSentName, setJoinedState, type JoinedEntry } from "./joined.ts";
 import { joinedRoute } from "./joined-routes.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const BASE = "wink.test";
 const HOST = `abcdefghijklmnop.${BASE}`;
+const MOVED = "abcdefghijklmnop.app.test";
 const SECRET = `wki_${"s".repeat(43)}`;
 const KEY = `wkg_${"k".repeat(43)}`;
 const CODE = `wkr1:${HOST}:inv1.${SECRET}`;
@@ -24,6 +27,7 @@ const STATE = { version: 1, roomName: "Team", instructions: "", host: "Edward", 
 
 let server: Server;
 let tls: { key: string; cert: string; ca: string };
+let moved: SecureContext;
 let https: GuestClientDeps["https"];
 let seen: Array<{ method: string; url: string; headers: IncomingMessage["headers"]; body: string }> = [];
 let route: (req: IncomingMessage, res: ServerResponse, body: string) => void;
@@ -33,13 +37,14 @@ beforeAll(async () => {
   const ca = await TestCa.create();
   const { keyPem, certPem } = await ca.issue(HOST);
   tls = { key: keyPem, cert: certPem, ca: ca.certPem };
+  moved = createSecureContext(await ca.issue(MOVED).then(({ keyPem, certPem }) => ({ key: keyPem, cert: certPem })));
 });
 
 // A server per test: a stopped client's request still in flight meets a closed port, not the next test's `seen`.
 beforeEach(async () => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
-  server = createServer({ key: tls.key, cert: tls.cert }, (req, res) => {
+  server = createServer({ key: tls.key, cert: tls.cert, SNICallback: (name, cb) => cb(null, name === MOVED ? moved : undefined) }, (req, res) => {
     let body = "";
     req.on("data", (chunk: Buffer) => (body += chunk.toString("utf8")));
     req.on("end", () => {
@@ -190,6 +195,12 @@ describe("room codes", () => {
     for (const code of refused) expect([code, roomCodeHost(code, [BASE])]).toEqual([code, null]);
     expect(roomCodeHost(CODE, [])).toBeNull();
     expect(roomCodeHost(CODE, ["evil.example"])).toBeNull();
+  });
+
+  it("follows a moved host only to its own label under the current bases", () => {
+    expect(movedHosts("abcdefghijklmnop.old.test", [null, BASE, BASE.toUpperCase(), "old.test"])).toEqual([HOST]);
+    expect(movedHosts(HOST, [null, BASE])).toEqual([]);
+    expect(movedHosts(`x.${HOST}`, ["app.test"])).toEqual([]);
   });
 
   it("refuses a bad code without any request", async () => {
@@ -406,6 +417,16 @@ describe("sync", () => {
     expect(joinedKey("r1")).toBeNull();
     expect(await client!.send("r1", "hi")).toEqual({ ok: false, status: 409, error: "this room is read-only" });
     expect(JSON.stringify(changed.mock.calls)).not.toContain(KEY);
+  });
+
+  it("streams from the moved host that answered the snapshot", async () => {
+    route = (req, res) => (req.headers.host === HOST ? reply(res, 503, { error: "unavailable" }) : quietDoor(req, res));
+    saveJoined("r1", HOST, STATE.me, KEY);
+    const c = guest({ bases: () => [BASE, "app.test"], timing: { retryMs: 20 } });
+    c.start();
+    await until(() => c.rooms()[0]?.link === "live");
+    expect(joinedKey("r1")?.relayHost).toBe(MOVED);
+    expect(seen.filter((row) => row.url.includes("/stream")).map((row) => row.headers.host)).toEqual([MOVED]);
   });
 
   it("goes offline and backs off while the host is unreachable", async () => {
@@ -646,7 +667,7 @@ describe("deleted files", () => {
     guest({ timing: { retryMs: 10 } }).start();
     await until(() => asked.length >= 2);
     expect(asked.slice(0, 2)).toEqual(["0", "0"]);
-    rmSync(copy, { recursive: true });
+    removeTestData(copy);
     await until(() => asked.includes("3"));
     expect(existsSync(copy)).toBe(false);
   });

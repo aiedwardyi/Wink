@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +7,7 @@ import { createGroupRoutes } from "../group-routes.ts";
 import { Store, type BotRecord, type GroupRecord } from "../store.ts";
 import { addPerson, closeRoomsDb, roomById } from "./db.ts";
 import { writeRoomEntry } from "./mirror.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 let store: Store;
 const engines = new Map<string, string>();
@@ -41,7 +41,7 @@ const bot = (name: string, driverKind: string) => {
 
 beforeEach(() => {
   closeRoomsDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
 });
 afterEach(closeRoomsDb);

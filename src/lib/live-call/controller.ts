@@ -15,7 +15,7 @@ export const MIC_BLOCKED = "Microphone blocked";
 export const MIC_MISSING = "Microphone missing";
 export const MIC_BUSY = "Microphone busy";
 export const VOICE_OUT = "Voice limit reached";
-const MIC_ERRORS: Record<string, string> = { NotAllowedError: MIC_BLOCKED, NotFoundError: MIC_MISSING, OverconstrainedError: MIC_MISSING, NotReadableError: MIC_BUSY };
+export const MIC_ERRORS: Record<string, string> = { NotAllowedError: MIC_BLOCKED, NotFoundError: MIC_MISSING, OverconstrainedError: MIC_MISSING, NotReadableError: MIC_BUSY };
 
 export type CallStatus = "starting" | "needsKey" | "listening" | "speaking" | "working" | "paused" | "ended" | "failed";
 export type CallState = {
@@ -92,7 +92,7 @@ type Held = { text: string; valid?: () => boolean; kept?: string; played?: () =>
 
 const HANGUL = /[가-힣]/g;
 const LETTER = /\p{L}/gu;
-const MAX_RECONNECTS = 3;
+export const MAX_RECONNECTS = 3;
 const QUOTA = /quota|resource.?exhausted/i;
 const VOICE_OUT_LINE = { en: "I'm out of voice for today. Keep typing, I'm still on it.", ko: "오늘 음성은 여기까지야. 채팅으로 계속해 줘, 작업은 계속할게." };
 const MAX_NUDGES = 3;
@@ -104,7 +104,7 @@ const MIC_SILENT_RMS = 1e-5;
 // A gate input with no engine event for this long is stale: a stray fragment, not a turn.
 const QUIET_MS = 4_000;
 // A socket that never sets up would hold the call open and silent.
-const READY_MS = 15_000;
+export const READY_MS = 15_000;
 const REPORT_CHARS = 1_500;
 const READ_CHARS = 8_000;
 const RETRY_MS = 1_500;
@@ -1677,6 +1677,11 @@ export class LiveCall {
   mute(muted: boolean) {
     this.set({ muted });
     if (muted) this.engine?.audioPaused();
+  }
+
+  /** Nothing said, heard, offered or waited on: another session can take over and lose nothing. */
+  idle(): boolean {
+    return this.snapshot.status === "listening" && !this.pending && !this.held.length && !this.playing && !this.generating && !spokenText(this.heardBuf) && !this.sends.size && !this.open.text();
   }
 
   hidden(isHidden: boolean) {

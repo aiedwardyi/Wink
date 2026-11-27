@@ -1,25 +1,18 @@
 import { useState } from "react";
 import { X } from "lucide-react";
-import { useStore, visibleMessages, type Message } from "@/state/store";
-import { useI18n, type MessageKey } from "@/lib/i18n";
+import { useStore, type Message } from "@/state/store";
+import { useI18n } from "@/lib/i18n";
 import { QuestionChoiceCard } from "./QuestionChoiceCard";
 
-const ONBOARDING_OPTIONS: MessageKey[] = ["onboarding.card.work", "onboarding.card.writing", "onboarding.card.life", "onboarding.card.everything"];
-
-/** First-run quiz, not a live provider ask (those carry requestId) and not
- * a bot's ask_user question (marked askUser). */
+/** The first-run quiz older builds seeded, not a live provider ask (those
+ * carry requestId) and not a bot's ask_user question (marked askUser). */
 export function isOnboardingCard(message: Message): boolean {
   return message.kind === "options" && !!message.card && !message.card.requestId && !message.card.askUser;
 }
 
-/** Hide the quiz once they have talked past it — picked an option, typed in
- * the composer, or dismissed it. Live asks are never this card. */
-export function shouldHideOnboardingCard(message: Message, transcript: Message[]): boolean {
-  if (!isOnboardingCard(message) || !message.card) return false;
-  if (message.card.dismissed || message.card.answered) return true;
-  const index = transcript.findIndex((entry) => entry.id === message.id);
-  if (index < 0) return false;
-  return transcript.slice(index + 1).some((later) => later.role === "user" && later.kind === "text");
+/** A new chat opens on the composer alone, so a seeded quiz never shows. Live asks are never this card. */
+export function shouldHideOnboardingCard(message: Message): boolean {
+  return isOnboardingCard(message);
 }
 
 export function OptionCard({
@@ -29,21 +22,13 @@ export function OptionCard({
   botId: string;
   message: Message;
 }) {
-  const { state, dispatch } = useStore();
+  const { dispatch } = useStore();
   const { t } = useI18n();
   const [custom, setCustom] = useState("");
   const [pending, setPending] = useState(false);
   const card = message.card;
-  const bot = state.bots.find((candidate) => candidate.id === botId);
-  const transcript = bot ? visibleMessages(bot) : [];
-  // Full thread, not the mounted window: a search-focus slice can omit the
-  // later user message that means they already talked past this quiz.
-  if (!card || shouldHideOnboardingCard(message, transcript)) return null;
-  // The server stores the quiz in English; it follows the UI language here.
-  const onboarding = isOnboardingCard(message);
-  const title = onboarding ? t("onboarding.card.title") : card.title;
-  const subtitle = onboarding ? t("onboarding.card.subtitle") : card.subtitle;
-  const options = onboarding ? ONBOARDING_OPTIONS.map((key) => t(key)) : card.options;
+  if (!card || shouldHideOnboardingCard(message)) return null;
+  const { title, subtitle, options } = card;
   const answered = card.answered ?? null;
   const selectedOption = answered && options.includes(answered) ? answered : null;
   const customAnswered = Boolean(answered) && !selectedOption;
@@ -59,7 +44,7 @@ export function OptionCard({
     <div className="flex w-full flex-col gap-2">
       <QuestionChoiceCard
         question={title}
-        subtitle={onboarding || subtitle ? subtitle : null}
+        subtitle={subtitle || null}
         options={options}
         pending={pending}
         selectedOption={selectedOption}

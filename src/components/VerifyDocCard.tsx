@@ -3,6 +3,7 @@ import { FileCheck, Play } from "lucide-react";
 import { LIVE_VERIFY_V0, verifyCardStale, type VerifyCardData } from "../../shared/live-verify";
 import { VERIFY_DOC_KINDS, type VerifyDocFinding, type VerifyDocKind } from "../../shared/verify-doc";
 import { useI18n } from "@/lib/i18n";
+import { revealInChat } from "@/lib/reveal-on-open";
 import { lazyView } from "@/lib/stale-build";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { openVerifyWatch } from "@/lib/verify-watch";
@@ -89,7 +90,7 @@ export function VerifyDocCard({ card, threadId, messageId }: { card: VerifyCardD
         {doc.uncompared ? <div className="verify-card-unchecked">{c.unchecked}: {c.words.names}</div> : null}
         {!complete && <div className="verify-card-unchecked">{c.unchecked}: {reason}</div>}
       </Fold>
-      {phone && inline !== null && <LazyView><VerifyDocWatchFrame card={card} threadId={threadId} live={inline} hidden={false} inline onClose={() => setInline(null)} /></LazyView>}
+      {phone && inline !== null && <div ref={revealInChat}><LazyView><VerifyDocWatchFrame card={card} threadId={threadId} live={inline} hidden={false} inline onClose={() => setInline(null)} /></LazyView></div>}
     </section>
   );
 }

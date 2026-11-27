@@ -1,5 +1,13 @@
-import { spawn, type SpawnOptions } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessByStdio, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process";
+import { once } from "node:events";
+import { tmpdir } from "node:os";
+import type { Readable, Writable } from "node:stream";
 import { z } from "zod";
+
+import { harnessTestHome, requireTestHome } from "../../companion/src/test-profile.ts";
+import { scrubProfileEnv } from "./profile-env.ts";
+
+const profilePreload = new URL("./harness-profile.ts", import.meta.url).href;
 
 const tokens = new Map<string, Promise<string>>();
 const stderrTails = new Map<string, string[]>();
@@ -9,10 +17,39 @@ export async function harnessToken(origin: string): Promise<string> {
   return await tokens.get(origin) ?? "";
 }
 
-export function spawnHarness(command: string, args: string[], options: SpawnOptions) {
+export function spawnTestNode(command: string, args: string[], options: SpawnOptions & { stdio: ["pipe", "pipe", "pipe"] }): ChildProcessWithoutNullStreams;
+export function spawnTestNode(command: string, args: string[], options: SpawnOptions & { stdio: ["pipe", "pipe", "inherit"] }): ChildProcessByStdio<Writable, Readable, null>;
+export function spawnTestNode(command: string, args: string[], options: SpawnOptions): ChildProcess;
+export function spawnTestNode(command: string, args: string[], options: SpawnOptions): ChildProcess {
+  let env = options.env ?? process.env;
+  let profile;
+  if (process.env.VITEST !== undefined) {
+    profile = harnessTestHome(env.HOME);
+    if (!profile || env.USERPROFILE !== profile.home) {
+      throw new Error("Use createFixtureHome from server/testing/test-home.ts for a Vitest child HOME and USERPROFILE");
+    }
+    const temp = tmpdir();
+    env = { ...env, TEMP: temp, TMP: temp, TMPDIR: temp };
+    scrubProfileEnv(env, profile.home, profile);
+    if (env.OMB_COMPANION_DIR && env.OMB_COMPANION_DIR === process.env.OMB_COMPANION_DIR && profile.home !== requireTestHome()) {
+      delete env.OMB_COMPANION_DIR;
+    }
+    args = ["--import", profilePreload, ...args];
+  }
   // stdio and windowsHide sit after the spread deliberately: the ipc channel
   // is load-bearing for the token handshake below, and no harness wants a console.
-  const child = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true });
+  const stdio = Array.isArray(options.stdio) ? options.stdio : [];
+  const child = spawn(command, args, { ...options, env, ...(profile ? { serialization: "advanced" } : {}),
+    stdio: [stdio[0] ?? "ignore", stdio[1] ?? "pipe", stdio[2] ?? "pipe", "ipc"], windowsHide: true });
+  const childProfile = profile;
+  if (childProfile) child.once("message", (message) => {
+    if (message === "wink:test-profile") child.send(childProfile, () => {});
+  });
+  return child;
+}
+
+export function spawnHarness(command: string, args: string[], options: SpawnOptions) {
+  const child = spawnTestNode(command, args, options);
   const origin = `http://127.0.0.1:${options.env?.OMB_PORT ?? options.env?.OGB_PORT ?? 8799}`;
   const token = new Promise<string>((resolve) => {
     child.on("message", (message) => {
@@ -35,6 +72,16 @@ export function spawnHarness(command: string, args: string[], options: SpawnOpti
     if (tokens.get(origin) === token) tokens.delete(origin);
   });
   return child;
+}
+
+export async function runTestNode(args: string[], options: SpawnOptions = {}) {
+  const child = spawnTestNode(process.execPath, args, options);
+  let stdout = "";
+  let stderr = "";
+  child.stdout!.on("data", (chunk: Buffer) => { stdout += chunk; });
+  child.stderr!.on("data", (chunk: Buffer) => { stderr += chunk; });
+  const [status] = await once(child, "close");
+  return { status, stdout, stderr };
 }
 
 const resetError = z.object({ cause: z.object({ code: z.literal("ECONNRESET") }) });

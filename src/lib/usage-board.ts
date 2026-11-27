@@ -33,7 +33,7 @@ export type UsageBoardAccount = {
   nickname: string | null;
   name: string;
   main: boolean;
-  signIn: "ready" | "signing-in" | "signed-out" | "cli-missing" | "draining" | "unknown";
+  signIn: "ready" | "signing-in" | "signed-out" | "payment-due" | "cli-missing" | "draining" | "unknown";
   // "complete": the report lists every window the plan enforces, so a missing session window means the plan has none.
   coverage: "complete" | "unknown";
   windows: UsageBoardWindow[];
@@ -42,6 +42,8 @@ export type UsageBoardAccount = {
   bots: UsageBoardBot[];
   // null means unknown (host miss or old host), never "no workers".
   workers: UsageBoardRun[] | null;
+  // Counts this boot's sign-in changes, so a client sees one login replace another without being told either.
+  login?: number;
   // Runs on the saved OpenAI key: no plan windows, never Main.
   credit?: true;
   codexPromo?: true;
@@ -54,6 +56,8 @@ export type UsageBoardEngine = {
   // Absent until automatic picks ship; true keeps new work on Main.
   stayOn?: boolean;
   accounts: UsageBoardAccount[];
+  // Account ids left out because another row of this engine is the same sign-in, or a base the user signed out; Connections hides them too.
+  duplicates?: string[];
   events: UsageBoardEvent[];
 };
 

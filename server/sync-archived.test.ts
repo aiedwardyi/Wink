@@ -9,6 +9,7 @@ import { GOOGLE_BINDING_FILE } from "./google-sync.ts";
 import { readSyncOperations } from "./profile-sync.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { harnessFetch, spawnHarness } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 
@@ -21,12 +22,17 @@ interface PC {
 let root: string;
 let folder: string;
 let pcs: PC[];
+const homes = new Map<string, string>();
 // the server also listens beside its own port
 const firstPort = 30_000 + Math.floor(Math.random() * 200) * 100;
 let boots = 0;
 
 async function boot(name: string): Promise<PC> {
-  const home = join(root, name);
+  let home = homes.get(name);
+  if (!home) {
+    home = createFixtureHome(`orbit-sync-${name}-`);
+    homes.set(name, home);
+  }
   const dataDir = join(home, ".orbit");
   mkdirSync(dataDir, { recursive: true });
   // one unknown driver: no CLI probes, no network
@@ -102,6 +108,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   while (pcs.length) await close(pcs[0]!);
+  for (const home of homes.values()) removeTestData(home);
+  homes.clear();
   await removeTempDir(root);
 });
 

@@ -260,7 +260,7 @@ describe("ModelPicker friends chip", () => {
     expect(html).toContain("#aa7bfa");
   });
 
-  it("lists the Argon cell first with its three tiers and no off-list note", () => {
+  it("keeps a bot saved on Argon as one off-list cell with its three tiers, after the offered Gemini cells", () => {
     const argonTiered: InstanceInfo = {
       ...antigravityTiered,
       models: {
@@ -300,15 +300,15 @@ describe("ModelPicker friends chip", () => {
     );
     expect(chipText(html)).toContain("Gemini 4 Argon Low");
     const list = html.slice(html.indexOf("data-model-picker-content"));
-    expect(list).toContain('model-cross-name">Gemini 4 Argon<');
+    expect(list).not.toContain('model-cross-name">Gemini 4 Argon<');
     expect(list).toContain('model-cross-name">Gemini 4 Hydrogen<');
     expect(list).toContain('model-cross-name">Gemini 4 Carbon<');
     expect(list).toContain('model-cross-name">Gemini 4 Neon<');
     expect(list.indexOf("Gemini 4 Carbon")).toBeLessThan(list.indexOf("Gemini 4 Neon"));
     expect(list.indexOf("Gemini 4 Neon")).toBeLessThan(list.indexOf("Gemini 4 Hydrogen"));
-    expect(list.indexOf("Gemini 4 Hydrogen")).toBeLessThan(list.indexOf("Gemini 4 Argon"));
-    expect(list.indexOf("Gemini 4 Argon")).toBeLessThan(list.indexOf("Gemini 3.8 Flash"));
-    expect(list).not.toContain("model-cross-note");
+    expect(list.indexOf("Gemini 4 Hydrogen")).toBeLessThan(list.indexOf("Gemini 3.8 Flash"));
+    expect(list.indexOf("Gemini 3.8 Flash")).toBeLessThan(list.indexOf("Gemini 4 Argon"));
+    expect(list.match(/model-cross-note/g)).toHaveLength(1);
     for (const tier of ["low", "medium", "high"]) {
       expect(list).toContain(`data-model-tier="gemini-4-argon-${tier}"`);
     }
@@ -683,7 +683,7 @@ describe("ModelPicker friends chip", () => {
 describe("ModelPicker usage stats", () => {
   it("names the view that is drawn, not the one saved", () => {
     const picker = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "ModelPicker.tsx"), "utf8");
-    expect(picker).toContain('trackScreen(dial && dialFits && next !== "list" ? (next === "chart" ? "model-chart" : "model-dial") : "model-picker");');
+    expect(picker).toContain('trackScreen(dial && dialFits && next !== "list" ? (next === "chart" ? "model-chart" : next === "quick" ? "model-quick" : "model-dial") : "model-picker");');
     expect(picker).toContain('if (dialView) switchVia("dial");');
   });
 });

@@ -7,14 +7,16 @@ import { steersSend } from "./send-deliver.ts";
 import { sendPostReceipt, startedTurn } from "./send-receipt.ts";
 import { parseCallTag } from "./live-call.ts";
 import { applyPendingModel, switchHeld } from "./pending-model.ts";
-import { quickAskRecovery, routesAck, routesQuick } from "./quick-ask.ts";
-import { isOrder } from "./quick-route.ts";
-import { coldLoading, sentRow } from "./cold-thread.ts";
+import { claimWaitingQuestion, quickAskRecovery, releaseWaiting, routesAside, routesQuick } from "./quick-ask.ts";
+import { isNudge, isOrder, questionPart } from "./quick-route.ts";
+import { coldLoad, coldLoading, coldNewestStamp, sentRow } from "./cold-thread.ts";
 import { hasPeerWatch, watchPeerTurn } from "./peer-takeover.ts";
 import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import * as queue from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
+import { sendClock } from "../shared/send-clock.ts";
+import { serverClockCap, serverSendClock } from "./send-clock.ts";
 
 const source = readFileSync(new URL("./bot-chat-routes.ts", import.meta.url), "utf8");
 const start = source.indexOf('      const body = await readBody(req);', source.indexOf('    send: async ('));
@@ -45,15 +47,15 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
   const interruptTurn = vi.fn(async () => {});
   const busyResumeThreads = new Set<string>();
   const scope = {
-    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, switchHeld, sendPostReceipt, parseCallTag,
+    ...queue, acceptedSendMatch, parseSendId, sendFingerprint, steersSend, switchHeld, sendPostReceipt, parseCallTag, serverClockCap, serverSendClock,
     store, startTurn, sendSequencer: new SendSequencer(), m: ["", bot.id], req: {}, res: {},
     readBody: async () => ({}), json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
-    noteTalked: noop, noteSendLocale: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop, quickAskRecovery, coldLoading, sentRow,
+    noteTalked: noop, noteSendLocale: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop, quickAskRecovery, coldLoad, coldLoading, coldNewestStamp, sentRow,
     ensureChatLatency: noop, markChatLatency: noop, resolveReplyTarget: (_thread: string, id?: string) => messages.find((m) => m.id === id),
     botHasActiveTurn: () => false, registry: new Map([["fake", { adapter: { capabilities: { queueing }, steer, interruptTurn } }]]),
     instanceForBot: () => ({ adapter: { capabilities: { queueing }, steer, interruptTurn } }),
     beginPeerUserReply, cfg: {},
-    composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text, closedAskNotes: () => [], ACK_COVERED: "[covered]",
+    composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text, closedAskNotes: () => [], ANSWERED_ASIDE: "[answered]",
     userTurnReactionKeys: () => [], hasPeerWatch, clearUnattended: noop,
     resumePaneWakes: noop, cancelUsageWait: noop, paneNoteTurnThreads: new Set(), busyResumeThreads, drainQueuedSends: drain, quick: undefined,
     ...extra,
@@ -68,6 +70,19 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
 }
 
 describe("queued send through the message POST", () => {
+  it("persists a plain send's insertion point through its queue and drain", async () => {
+    const h = harness(vi.fn(async () => false));
+    const sendId = "send-now-anchor-00000";
+    h.messages.push({ id: "peer", role: "bot", kind: "text", at: Date.now() + 300 });
+    const receipt = await h.post({ text: "one", sendId, sendSeq: 1, sentAfterId: "peer", actedAt: sendClock(h.messages) });
+    expect(receipt.body).toMatchObject({ queued: true, sentAfterId: "peer" });
+    queue._resetSteerQueue();
+    queue.initializeSteerQueue({ ...h.store, onChange: () => () => {} });
+    expect(queue.waitingSends()[h.bot.threadId]?.[0]).toMatchObject({ sentAfterId: "peer" });
+    h.bot.busy = false;
+    h.drain();
+    expect(h.messages.at(-1)).toMatchObject({ sendId, sentAfterId: "peer" });
+  });
   it.each([true, false])("splits the user's live reply or follows its original row (marked: %s)", async (marked) => {
     const h = harness();
     const end = watchPeerTurn(h.bot.threadId);
@@ -201,7 +216,7 @@ describe("a line typed while the bot works", () => {
   const working = (activeThreadId: string, steer = vi.fn(async () => activeThreadId === "thread"), extra: Record<string, unknown> = {}) => {
     const startQuick = vi.fn();
     const h = harness(steer, true, {
-      routesQuick, routesAck, isOrder, startQuick, startAck: vi.fn(), quick: { accountReady: () => true },
+      routesQuick, routesAside, claimWaitingQuestion, releaseWaiting, isNudge, isOrder, questionPart, startQuick, startAside: vi.fn(), quick: { accountReady: () => true },
       instanceForBot: () => ({ driverKind: "claudeAgent", fork: vi.fn(), adapter: { capabilities: { queueing: true }, steer, interruptTurn: vi.fn() } }),
       ...extra,
     });
@@ -220,7 +235,7 @@ describe("a line typed while the bot works", () => {
   it("steers into a turn a pane note started in this chat", async () => {
     const h = working("thread");
     expect((await h.post({ text: "tldr pls ?" })).body).toMatchObject({ steered: true });
-    expect(h.steer).toHaveBeenCalledWith("thread", "[covered]\n\ntldr pls ?", expect.any(Function), { fromUser: true, peerTurn: false });
+    expect(h.steer).toHaveBeenCalledWith("thread", "tldr pls ?", expect.any(Function), { fromUser: true, peerTurn: false });
     expect(h.startQuick).not.toHaveBeenCalled();
   });
 
@@ -284,7 +299,7 @@ describe("a model switch during a busy turn", () => {
     const startQuick = vi.fn();
     const fork = vi.fn();
     const h = harness(undefined, true, {
-      routesQuick, startQuick, quick: { accountReady: () => true },
+      routesQuick, claimWaitingQuestion, releaseWaiting, isNudge, startQuick, quick: { accountReady: () => true },
       instanceForBot: () => ({ driverKind: "claudeAgent", fork, adapter: { capabilities: { queueing: true }, steer: vi.fn(async () => true), interruptTurn: vi.fn() } }),
     });
     Object.assign(h.store, { groupByThread: () => undefined });
@@ -294,4 +309,86 @@ describe("a model switch during a busy turn", () => {
     expect((await h.post({ text: "what model r u now?" })).body).toMatchObject({ queued: true });
     expect(startQuick).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("a send the server holds", () => {
+  it.each([
+    ["a plain line the steering engine could not take", true, undefined, undefined],
+    ["a line sent after this turn", true, "after", true],
+    ["a line for an engine that cannot steer", false, undefined, true],
+  ])("marks whether %s waits for the turn", async (_name, queueing, deliver, waited) => {
+    const h = harness(vi.fn(async () => false), queueing);
+    const sendId = `send-now-${"held".padEnd(16, "0")}`;
+    expect((await h.post({ text: "held", sendId, threadId: h.bot.threadId, deliver, actedAt: 1_000 })).body).toMatchObject({ queued: true });
+    expect(queue.queuedSteeredMessage(h.bot.id, h.bot.threadId, sendId)).toMatchObject({ actedAt: 1_000 });
+    expect(queue.queuedSteeredMessage(h.bot.id, h.bot.threadId, sendId)?.waited).toBe(waited);
+  });
+
+  it("answers with the sent time it keeps, not the sender's clock", async () => {
+    const h = harness(vi.fn(async () => false));
+    const sendId = `send-now-${"fast".padEnd(16, "0")}`;
+    // this sender's clock runs a minute ahead
+    const receipt = await h.post({ text: "held", sendId, threadId: h.bot.threadId, actedAt: Date.now() + 60_000 });
+    const kept = queue.waitingSends()[h.bot.threadId]?.[0]?.at;
+    expect(kept).toBeLessThanOrEqual(Date.now());
+    expect(receipt.body).toMatchObject({ queued: true, actedAt: kept });
+  });
+
+  it("keeps a promoted after-turn send marked as waited", async () => {
+    const h = harness();
+    const sendId = "send-now-waited000000000";
+    const held = queue.queueSteeredMessage(h.bot.id, h.bot.threadId, "later", { sendId, after: true, waited: true, actedAt: 1_000 });
+    const receipt = await h.post({ text: "later", sendId, queueId: held.id, threadId: h.bot.threadId, actedAt: 3_000 });
+    expect(receipt.body).toMatchObject({ steered: true, message: { sendId, actedAt: 1_000, waited: true } });
+  });
+});
+
+describe("a send while a row stamped ahead of this clock is newest", () => {
+  it.each([["held", false], ["steered", true]])("keeps the sent time the window drew it at (%s)", async (_name, steers) => {
+    const h = harness(vi.fn(async () => steers));
+    // a synced row from a PC whose clock runs a minute ahead
+    const peer = { id: "peer", role: "user", kind: "text", text: "peer", at: Date.now() + 60_000 } as Message;
+    h.messages.push(peer);
+    const actedAt = sendClock(h.messages);
+    const sendId = `send-now-${"skew".padEnd(16, "0")}`;
+    const receipt = await h.post({ text: "answer", sendId, replyToId: peer.id, threadId: h.bot.threadId, actedAt });
+    const sent = steers ? receipt.body.message?.actedAt : queue.waitingSends()[h.bot.threadId]?.[0]?.at;
+    expect(sent).toBe(actedAt);
+    expect(sent).toBeGreaterThan(peer.at);
+  });
+
+  it.each([["held", false], ["steered", true]])("keeps two lines it stamps alike in the order sent when the second POST lands first (%s)", async (_name, steers) => {
+    const h = harness(vi.fn(async () => steers));
+    h.messages.push({ id: "peer", role: "bot", kind: "text", text: "peer", at: Date.now() + 60_000 } as Message);
+    const actedAt = sendClock(h.messages);
+    for (const [text, sendSeq] of [["second", 2], ["first", 1]] as const) {
+      await h.post({ text, sendId: `send-now-${text.padEnd(16, "0")}`, threadId: h.bot.threadId, actedAt, sendSeq });
+    }
+    const kept = steers ? h.messages.slice(1).map((message) => ({ text: message.text, at: message.actedAt, sendSeq: message.sendSeq })) : queue.waitingSends()[h.bot.threadId];
+    expect(kept).toMatchObject([{ text: "second", at: actedAt, sendSeq: 2 }, { text: "first", at: actedAt, sendSeq: 1 }]);
+  });
+});
+
+it("keeps overlapping sends in order when the server clock steps back between their POSTs", async () => {
+  const before = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(before);
+  let finish!: (taken: boolean) => void;
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const steer = vi.fn(async () => true).mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+    finish = resolve;
+    enter();
+  }));
+  const h = harness(steer);
+  const first = h.post({ text: "first", sendId: "send-now-clock-first", actedAt: before, sendSeq: 1 });
+  await entered;
+  clock.mockReturnValue(before - 2_000);
+  const second = h.post({ text: "second", sendId: "send-now-clock-second", actedAt: before, sendSeq: 2 });
+  try {
+    expect((await second).body.message).toMatchObject({ actedAt: before, sendSeq: 2 });
+  } finally {
+    finish(true);
+    await first;
+  }
+  expect((await first).body.message).toMatchObject({ actedAt: before, sendSeq: 1 });
 });
