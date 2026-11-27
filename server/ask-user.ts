@@ -136,9 +136,10 @@ export function postAskUser<B extends Sender>(deps: AskUserDeps<B>, request: Ask
 
 /** The person's newest message since `card` that no other card claims by its id, its quote or the transcript: what a close:true answered. */
 function chatAnswer(path: readonly Message[], states: Map<Message, AskState>, card: Message): Message | undefined {
-  const claimed = new Set([...states].flatMap(([other, state]) => other !== card && state.state === "answered" && state.by ? [state.by] : []));
+  // an answered patch drops the transcript's `by`, so a card closed earlier claims its reply by id
+  const claimed = new Set([...states].flatMap(([other, state]) => other === card ? [] : [state.state === "answered" ? state.by?.id : undefined, other.card?.answeredBy]));
   const own = answerPrefix(card);
-  return path.slice(path.indexOf(card) + 1).findLast((row) => answersQuestion(row) && !claimed.has(row)
+  return path.slice(path.indexOf(card) + 1).findLast((row) => answersQuestion(row) && !claimed.has(row.id)
     && (!row.answersCard || row.answersCard === card.id) && (!row.text?.startsWith("Re: “") || row.text.startsWith(own)));
 }
 

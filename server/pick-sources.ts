@@ -144,13 +144,14 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
     for (let at = i; at >= 0; at = parent(at)) path.push(messages[at]!);
     return path.reverse();
   };
-  // a reply with no card id answers the newest card on its branch it quotes, answered before or not, else a card the bot closed for it, else a card its branch closes with it: one with no buttons by any words, else by an option's whole text, as a tap sends it
-  const chatCard = (answer: Message, path: readonly Message[]) => {
+  // a reply with no card id answers the newest card on its branch it quotes, answered before or not, else a card the bot closed for it or for a row it edits, else a card its branch closes with it: one with no buttons by any words, else by an option's whole text, as a tap sends it
+  const chatCard = (answer: Message, path: readonly Message[], replaced: readonly Message[]) => {
     if (answer.answersCard) return undefined;
     const text = answer.text ?? "";
     const quoted = text.startsWith("Re: “") ? path.findLast((row) => row !== answer && isQuestionCard(row) && text.startsWith(answerPrefix(row))) : undefined;
     if (quoted) return quoted.id;
-    const closed = path.findLast((row) => row !== answer && isQuestionCard(row) && row.card?.answeredBy === answer.id);
+    const closedFor = (ids: readonly string[]) => path.findLast((row) => row !== answer && isQuestionCard(row) && ids.includes(row.card?.answeredBy ?? ""));
+    const closed = closedFor([answer.id]) ?? closedFor(replaced.map(({ id }) => id));
     if (closed) return closed.id;
     for (const [card, state] of askStates(path)) if (state.state === "answered" && state.by === answer && (!card.card?.options?.length || card.card.options.includes(text.trim()))) return card.id;
     return undefined;
@@ -160,7 +161,9 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
     if (!wanted.delete(answer.id)) continue;
     let path: Message[] | undefined;
     const branch = () => (path ??= pathTo(i));
-    const cardId = answer.answersCard ?? chatCard(answer, branch());
+    // an edit sits on the parent of the user's rows it replaces
+    const replaced = messages.slice(0, i).filter((row, j) => sentByPerson(row) && parent(j) === parent(i));
+    const cardId = answer.answersCard ?? chatCard(answer, branch(), replaced);
     const card = cardId ? byId.get(cardId) : undefined;
     const answered = card !== undefined && card < i && isQuestionCard(messages[card]!) ? messages[card] : undefined;
     const { turn, previous } = botTurn(messages, answered ? card! : parent(i), parent);
@@ -178,8 +181,6 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
       if (choice !== undefined) reply.choice = choice;
       reply.answer = choice === said ? said : ownWords(said, () => branch().slice(0, -1));
     }
-    // an edit sits on the parent of the user's rows it replaces
-    const replaced = messages.slice(0, i).filter((row, j) => sentByPerson(row) && parent(j) === parent(i));
     // each earlier edit took effect after the rows it replaced, so a later edit is newer still
     if (replaced.length) reply.edits = replaced.reduce((after, row) => Math.max(row.actedAt ?? row.at, after + 1), -Infinity);
     found.set(answer.id, reply);

@@ -276,6 +276,34 @@ describe("every way to answer a card files it under that card", () => {
     expect(`${prompt}\n`).toMatch(new RegExp(`\\(\\d\\d-\\d\\d\\): ${picked}\\n`));
   });
 
+  it("keeps each reply on its own card when the bot closes two cards answered in chat, newer first", async () => {
+    const { ask, send, settle, restarted, close, card: cardOf } = setup();
+    const db = ask("Which database should billing use?", ["SQLite", "Postgres"]);
+    const env = ask("Which environment should the preview use?", ["Prod", "Staging"]);
+    const first = send("Postgres for billing", { actedAt: Date.now() - 2 * MINUTE });
+    const second = send("Use Staging for the preview", { actedAt: Date.now() - MINUTE });
+    expect(close(env.card!.subtitle)).toMatchObject({ body: { closed: true } });
+    expect(close(db.card!.subtitle)).toMatchObject({ body: { closed: true } });
+    expect([cardOf(db.id)?.answeredBy, cardOf(env.id)?.answeredBy]).toEqual([first.id, second.id]);
+    await settle();
+    const { picks } = await restarted();
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres for billing", db.id], ["Use Staging for the preview", env.id]]);
+  });
+
+  it("files an edit of a reply the bot closed as answered in chat as the card's answer now", async () => {
+    const { ask, send, settle, restarted, close, branch } = setup();
+    const question = "Which environment should the preview use?";
+    const card = ask(question, ["Prod", "Staging"]);
+    const reply = send("Use Staging for the preview", { actedAt: Date.now() - 2 * MINUTE });
+    close(question);
+    await settle();
+    branch(reply.id, "Use Prod for the preview");
+    await settle();
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Use Prod for the preview", card.id]]);
+    expect(prompt).not.toContain("Use Staging for the preview");
+  });
+
   it.each(["postgres", "Postgres please", "B", "the first one"])("leaves a typed %s that is not an option's whole text to the notes", async (sent) => {
     const { send, settle, answeredBy, restarted, post } = setup();
     const card = post({ role: "bot", kind: "options", card: { title: "Ask", subtitle: "Which database should the reporting service use?", options: ["Postgres", "MySQL"], askUser: true } });
