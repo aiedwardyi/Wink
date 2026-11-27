@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, extname, join, relative, resolve } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
@@ -42,6 +42,7 @@ const portableBotChanges = z.object({
   projectNotes: z.string().trim().max(1_024).nullable().optional(),
   pinnedMessageId: ID.nullable().optional(),
   trashed: z.boolean().optional(),
+  hidden: z.boolean().optional(),
 }).strict();
 const sectionChanges = z.object({
   name: z.string().trim().min(1).max(100).optional(),
@@ -138,6 +139,7 @@ interface FieldVersion {
 
 export interface ProfileSyncState {
   bots: Record<string, SyncedBot>;
+  botOrigins: Record<string, string>;
   sections: Record<string, SyncedSection>;
   rooms: Record<string, SyncedRoom>;
   order: SyncOrder;
@@ -260,6 +262,7 @@ export function createSyncOperation(input: Omit<ProfileSyncOperation, "format" |
 export function emptyProfileSyncState(): ProfileSyncState {
   return {
     bots: {},
+    botOrigins: {},
     sections: {},
     rooms: {},
     order: { sectionOrder: [], itemOrder: {} },
@@ -273,7 +276,7 @@ export function emptyProfileSyncState(): ProfileSyncState {
 
 function operationSawPrior(
   operation: ProfileSyncOperation,
-  previous: FieldVersion,
+  previous: Pick<FieldVersion, "operationId">,
   appliedOrder: Map<string, number>,
 ): boolean {
   const base = operation.baseCheckpoint;
@@ -349,6 +352,7 @@ export function applySyncOperations(
     appliedOperationIds.add(operationId);
     if (!appliedOrder.has(operationId)) appliedOrder.set(operationId, appliedOrder.size);
   };
+  const fullWrites = new Map<string, ProfileSyncOperation[]>();
   for (const operation of sorted) {
     if (appliedOperationIds.has(operation.operationId)) continue;
     const tombstone = state.tombstones[entityKey(operation)];
@@ -367,12 +371,22 @@ export function applySyncOperations(
       continue;
     }
     const changes = validateChanges(operation) ?? {};
+    if (operation.entity === "bot" && !Object.hasOwn(state.botOrigins, operation.entityId) &&
+        ["name", "title", "description", "color"].every((key) => Object.hasOwn(changes, key))) {
+      fullWrites.set(operation.entityId, [...(fullWrites.get(operation.entityId) ?? []), operation]);
+    }
     for (const [field, value] of Object.entries(changes)) {
       // a bot with no picked style publishes null; it must not erase an icon another device picked
       if (field === "mascotStyle" && value === null) continue;
       setField(state, operation, field, value, appliedOrder);
     }
     markApplied(operation.operationId);
+  }
+  // A bot's publisher is its first full write that saw no other; a skewed clock or a peer's edit can sort first.
+  for (const [botId, writes] of fullWrites) {
+    const origin = writes.find((write) => (!write.baseCheckpoint || appliedOrder.has(write.baseCheckpoint)) &&
+      !writes.some((other) => other !== write && operationSawPrior(write, other, appliedOrder)));
+    if (origin) state.botOrigins[botId] = origin.deviceId;
   }
   state.appliedOperationIds = [...appliedOperationIds].slice(-10_000);
   state.checkpoint = state.appliedOperationIds.at(-1) ?? state.checkpoint;
@@ -394,7 +408,7 @@ export function parseSyncOperationText(text: string): ProfileSyncOperation {
 }
 
 // Bot fields older builds reject travel in their own op, under an extension those builds never read.
-const OWN_OP_EXTENSIONS = { memoryNotes: "notes", projectNotes: "paths", pinnedMessageId: "pin", mascotStyle: "style", trashed: "trash" } as const;
+const OWN_OP_EXTENSIONS = { memoryNotes: "notes", projectNotes: "paths", pinnedMessageId: "pin", mascotStyle: "style", trashed: "trash", hidden: "archive" } as const;
 
 function ownOpFields(changes: Record<string, unknown>) {
   return Object.entries(OWN_OP_EXTENSIONS).filter(([field]) => field in changes &&
@@ -409,7 +423,7 @@ export function syncOperationFileName(operation: ProfileSyncOperation): string {
   return `${String(operation.sequence).padStart(12, "0")}-${safe(operation.deviceId)}-${safe(operation.operationId)}.${ext}`;
 }
 
-const isSyncOperationFile = (name: string) => /\.(?:json|notes|paths|pin|style|trash|room)$/.test(name);
+const isSyncOperationFile = (name: string) => /\.(?:json|notes|paths|pin|style|trash|archive|room)$/.test(name);
 
 export function writeSyncOperation(folder: string, operation: ProfileSyncOperation): string {
   const parsed = parseSyncOperation(operation);
@@ -621,6 +635,34 @@ export function syncAvatarMatches(folder: string, avatarAsset: unknown, bytes: B
   return digest(asset.bytes) === digest(bytes);
 }
 
+/** The asset this PC last synced for a bot's picture, found by the hash it kept; null when the folder no longer holds it. */
+export function lastSyncedAvatarAsset(folder: string, synced: Record<string, string>, entityId: string): string | null {
+  const base = synced[syncedKey("bot", entityId, "avatarAsset")];
+  if (!base) return null;
+  let names: string[];
+  try {
+    names = readdirSync(join(folder, PROFILE_SYNC_ASSETS_DIR));
+  } catch {
+    return null;
+  }
+  const asset = names.map((name) => `${PROFILE_SYNC_ASSETS_DIR}/${name}`).find((candidate) => syncValueHash(candidate) === base);
+  return asset && resolveSyncAvatarPath(folder, asset) ? asset : null;
+}
+
+/** A bot picture lost here (a wiped attachments folder) comes back under its own name from that asset; an existing file is never replaced. */
+export function restoreSyncedAvatar(folder: string, synced: Record<string, string>, entityId: string, attachmentsDir: string, name: string): boolean {
+  if (!/^[A-Za-z0-9-]+\.(png|jpg|gif|webp)$/.test(name)) return false;
+  const asset = readSyncAvatarAsset(folder, lastSyncedAvatarAsset(folder, synced, entityId));
+  if (!asset || extname(name) !== `.${asset.ext}`) return false;
+  try {
+    mkdirSync(attachmentsDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(attachmentsDir, name), asset.bytes, { mode: 0o600, flag: "wx" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const namesSignature = (names: string[]) => createHash("sha256").update(names.filter(isSyncOperationFile).sort().join("\n")).digest("hex");
 
 // Change files are never rewritten in place, so their names alone say whether the log moved.
@@ -674,8 +716,8 @@ export function unsyncedChanges(synced: Record<string, string>, local: readonly 
   });
 }
 
-// 1.0.60 rejects a bot op carrying any of these keys, 1.0.184 one carrying memoryNotes, 1.0.185 projectNotes, 1.0.200 pinnedMessageId
-const LATER_BOT_DEFAULTS: Record<string, unknown> = { effort: null, modelMode: null, approvePeerComms: false, memoryNotes: null, projectNotes: null, pinnedMessageId: null };
+// 1.0.60 rejects a bot op carrying any of these keys, 1.0.184 one carrying memoryNotes, 1.0.185 projectNotes, 1.0.200 pinnedMessageId, 1.0.288 hidden
+const LATER_BOT_DEFAULTS: Record<string, unknown> = { effort: null, modelMode: null, approvePeerComms: false, memoryNotes: null, projectNotes: null, pinnedMessageId: null, hidden: false };
 
 /** Leaves never-synced defaults of LATER_BOT_DEFAULTS out of the op, marking them synced so a later change still publishes. */
 export function compatibleSyncChanges(synced: Record<string, string>, item: SyncEntityValues): SyncEntityValues {
@@ -768,8 +810,8 @@ export function remoteFieldsToApply(
     const base = synced[key];
     if (syncValueHash(value) === base) continue;
     if (local && base !== undefined && syncValueHash(local[field]) !== base) continue;
-    // no base on a mapped bot (a pre-auto-sync mapping): its own value wins and publishes
-    if (local && base === undefined && entity === "bot" && local[field] != null) continue;
+    // no base on a mapped bot (a pre-auto-sync mapping): its own value wins and publishes, unless it is a later default that never publishes
+    if (local && base === undefined && entity === "bot" && local[field] != null && !(field in LATER_BOT_DEFAULTS && valueEqual(local[field], LATER_BOT_DEFAULTS[field]))) continue;
     apply[field] = value;
   }
   return apply;

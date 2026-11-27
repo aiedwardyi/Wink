@@ -119,6 +119,7 @@ describe("self-wake", () => {
     const h = harness();
     const callers = new CommsCallers();
     const routes = createInternalRoutes({
+      readOnlyTurn: () => false,
       store: { bot: (id: string) => ({ id }) },
       connectorThread: () => ({}),
       routines: h.manager,

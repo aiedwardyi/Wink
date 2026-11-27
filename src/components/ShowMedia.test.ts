@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import { forgetMedia, type MediaWire } from "@/lib/media-index";
 import { useThumb } from "@/lib/media-thumbs";
-import { closeShow, showFolder, showItem, showMedia, useMediaThread, useShowItem, type FolderListing, type ShowItem } from "@/lib/show-pane";
+import { closeShow, showFolder, showItem, showMap, showMedia, useMediaThread, useShowItem, type FolderListing, type ShowItem } from "@/lib/show-pane";
 import type { MediaSource } from "@/lib/show-media";
 import { usePresence } from "@/lib/use-presence";
 import type { Message } from "@/state/store";
@@ -59,8 +59,7 @@ beforeEach(() => {
   media = {};
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     calls.push(url);
-    if (url.includes("&size=")) return Response.json({ size: 300 });
-    const asked = url.match(/^\/api\/threads\/([^/?]+)\/media\?paged=1(?:&v=(.+))?$/);
+    const asked = url.match(/^\/api\/threads\/([^/?]+)\/media(?:\?v=(.+))?$/);
     if (asked) {
       const answer = media[asked[1]!] ?? wire([]);
       return Response.json(asked[2] === answer.v ? { v: answer.v } : answer);
@@ -108,12 +107,12 @@ const render = (source: MediaSource) => act(async () => root.render(createElemen
 const settle = () => act(async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0)); });
 const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((each) => each.textContent === name)!;
 const click = (el: Element | null) => act(async () => (el as HTMLElement).click());
+const openTool = async (name: string) => { await click(host.querySelector("[data-pane-add]")); await click(document.querySelector(`[data-pane-tools-menu] [data-pane-tool="${name}"]`)); };
 const thumbs = () => [...host.querySelectorAll("[data-media-grid] img")].map((img) => img.getAttribute("src")!);
 const months = () => [...host.querySelectorAll("[data-media-month]")].map((head) => head.textContent);
 const names = () => [...host.querySelectorAll("[data-media-file]")].map((row) => row.querySelector("span span")!.textContent);
 const row = (name: string) => [...host.querySelectorAll("[data-media-file]")].find((each) => each.querySelector("span span")!.textContent === name)!;
 const tiles = () => [...host.querySelectorAll("[data-media-grid] [data-media-key]")].map((tile) => tile.getAttribute("title"));
-const retry = () => [...host.querySelectorAll("button")].find((each) => each.textContent === "Retry");
 const scroller = () => host.querySelector<HTMLElement>(".show-media-scroll")!;
 const pointer = (el: Element, type: string, clientY: number) => act(async () => { el.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, clientY })); });
 const chat: MediaSource = { threadId: "t1", messages: [upload, reply] };
@@ -146,13 +145,13 @@ const deck: ShowItem = { threadId: "t1", path: "C:\\w\\deck.pdf", kind: "pdf" };
 it("switches between Show and Media", async () => {
   await act(async () => showItem(deck));
   await render(chat);
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
-  await click(tab("Media"));
+  expect(tab("deck.pdf").getAttribute("aria-selected")).toBe("true");
+  await openTool("media");
   await settle();
   expect(tab("Media").getAttribute("aria-selected")).toBe("true");
   expect(host.querySelector("[data-show-media]")).not.toBeNull();
-  await click(tab("Show"));
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  await click(tab("deck.pdf"));
+  expect(tab("deck.pdf").getAttribute("aria-selected")).toBe("true");
   expect(host.querySelector(".show-frame-name")?.textContent).toBe("deck.pdf");
 });
 
@@ -160,7 +159,7 @@ it("lists a chat's images and files newest first, the ones since it loaded on to
   media.t1 = wire([["u1", 1, "a", "abc-1.png", ""], ["u1", 1, "f", "notes.docx", "C:\\att\\notes.docx"]]);
   await act(async () => showItem(deck));
   await render(chat);
-  await click(tab("Media"));
+  await openTool("media");
   await settle();
   expect(thumbs()).toEqual([
     "/api/threads/t1/linked-file?path=" + encodeURIComponent("C:\\w\\chart.png"),
@@ -170,12 +169,26 @@ it("lists a chat's images and files newest first, the ones since it loaded on to
   expect(names()).toEqual(["deck.pdf", "data.zip", "notes.docx"]);
 });
 
+it("keeps an audio row playing when a photo arrives", async () => {
+  media.t1 = wire([["b1", 1000, "l", "audio.mp3", "C:\\w\\audio.mp3"]]);
+  await act(async () => showMedia("t1"));
+  await render({ threadId: "t1", messages: [] });
+  await settle();
+  await click(row("audio.mp3"));
+  const playing = host.querySelector("audio");
+  expect(playing).not.toBeNull();
+  await render({ threadId: "t1", messages: [{ id: "b2", role: "bot", kind: "text", at: 2000, text: "[photo.png](C:\\w\\photo.png)" }] });
+  await settle();
+  expect(tab("Files").getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelector("audio")).toBe(playing);
+});
+
 it("an image opens full size, a showable file shows, the rest open as before", async () => {
   const openFile = vi.fn(async () => {});
   window.ogb = { openFile } as unknown as typeof window.ogb;
   await act(async () => showItem(deck));
   await render(chat);
-  await click(tab("Media"));
+  await openTool("media");
   await settle();
   await click(host.querySelector("[data-media-grid] button"));
   expect(document.querySelector("[data-media-viewer]")).not.toBeNull();
@@ -184,282 +197,35 @@ it("an image opens full size, a showable file shows, the rest open as before", a
   await click(row("data.zip"));
   expect(openFile).toHaveBeenCalledWith("C:\\w\\data.zip");
   await click(row("deck.pdf"));
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(tab("deck.pdf").getAttribute("aria-selected")).toBe("true");
   expect(shown).toEqual(deck);
 });
 
-it("loads the timeline on open and a linked size when its row appears", async () => {
+it("asks for the whole timeline only once Media opens, then for its version alone", async () => {
   media.t1 = wire([["b0", 0, "l", "first.pdf", "C:\\w\\first.pdf"]]);
   await act(async () => showItem(deck));
   await render({ ...chat, hasMore: true });
   await settle();
   expect(calls).toEqual([]);
-  await click(tab("Media"));
+  await openTool("media");
   await settle();
-  expect(calls).toEqual(["/api/threads/t1/media?paged=1"]);
+  expect(calls).toEqual(["/api/threads/t1/media"]);
   await click(tab("Files"));
-  await settle();
   expect(names().at(-1)).toBe("first.pdf");
-  expect(row("first.pdf").textContent).toContain("300 B");
-  await click(tab("Show"));
-  await click(tab("Media"));
+  await act(async () => closeShow());
+  await act(async () => showMedia("t1"));
   await settle();
-  expect(calls.filter((url) => !url.includes("&size="))).toEqual(["/api/threads/t1/media?paged=1", "/api/threads/t1/media?paged=1&v=1"]);
-  expect(calls.filter((url) => url.includes("&size="))).toEqual(Array(2).fill("/api/threads/t1/media?v=1&size=0"));
+  expect(calls).toEqual(["/api/threads/t1/media", "/api/threads/t1/media?v=1"]);
   expect(names().at(-1)).toBe("first.pdf");
 });
 
-it("renders the first page while older media is loading", async () => {
-  let finish!: (response: Response) => void;
-  const older = new Promise<Response>((resolve) => { finish = resolve; });
-  const initial = wire([["b2", 2000, "l", "new.png", "C:\\w\\new.png"]]);
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    if (url === "/api/threads/t1/media?paged=1") return Response.json({ ...initial, head: "b2", next: 1 });
-    if (url === "/api/threads/t1/media?v=1&page=1") return older;
-    return new Response(null, { status: 206 });
-  }));
-
-  await act(async () => showMedia("t1"));
-  await render({ ...chat, messages: [
-    { id: "b2", role: "bot", kind: "text", at: 2000, text: "Working" },
-  ] });
-  await settle();
-  expect(tiles()).toEqual(["new.png"]);
-
-  finish(Response.json(wire([["b1", 1000, "l", "old.png", "C:\\w\\old.png"]])));
-  await settle();
-  expect(tiles()).toEqual(["new.png", "old.png"]);
-});
-
-it("keeps the complete list through a reopen while a new version is paging", async () => {
-  const old: Entry = ["b1", 1000, "l", "old.pdf", "C:\\w\\old.pdf"];
-  const photo: Entry = ["b2", 2000, "l", "old.png", "C:\\w\\old.png"];
-  let finish!: (page: MediaWire) => void;
-  const older = new Promise<MediaWire>((resolve) => { finish = resolve; });
-  let pageStarted: Promise<void> | undefined;
-  let startPage: (() => void) | undefined;
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    calls.push(url);
-    if (url.endsWith("page=1")) {
-      startPage?.();
-      return Response.json(await older);
-    }
-    if (url.includes("&size=")) {
-      if (!pageStarted) return Response.json({ size: 300 });
-      await pageStarted;
-      return Response.json({ error: "media version expired" }, { status: 409 });
-    }
-    if (url.endsWith("v=2")) return Response.json({ v: "2" });
-    if (url.includes("v=")) return Response.json({ ...wire([], "2"), head: "b3", next: 1 });
-    return Response.json(wire([photo, old]));
-  }));
-  await act(async () => showItem(deck));
-  await render({ ...chat, messages: [] });
-  await click(tab("Media"));
-  await settle();
-  await click(tab("Files"));
-  expect(names()).toEqual(["old.pdf"]);
-
-  for (let n = 0; n < 2; n++) {
-    pageStarted = new Promise<void>((resolve) => { startPage = resolve; });
-    await click(tab("Show"));
-    await click(tab("Media"));
-    await settle();
-    expect(calls.filter((url) => url.endsWith("page=1"))).toHaveLength(n + 1);
-    expect(calls.filter((url) => url.includes("?paged=1"))).toHaveLength(n + 2);
-    expect(names()).toEqual(["old.pdf"]);
-    expect(tab("Files").getAttribute("aria-selected")).toBe("true");
-    expect(host.querySelector("[data-show-media]")?.hasAttribute("aria-busy")).toBe(false);
-  }
-
-  finish(wire([photo, ["b1", 1000, "f", "updated.pdf", "C:\\w\\updated.pdf"]], "2"));
-  await settle();
-  expect(names()).toEqual(["updated.pdf"]);
-});
-
-it("refreshes once when visible sizes expire and uses the refreshed slots", async () => {
-  const first: Entry = ["b1", 1000, "l", "first.pdf", "C:\\w\\first.pdf"];
-  const second: Entry = ["b2", 2000, "l", "second.pdf", "C:\\w\\second.pdf"];
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    calls.push(url);
-    if (url.includes("v=1&size=")) return Response.json({ error: "media version expired" }, { status: 409 });
-    if (url.includes("v=2&size=")) return Response.json({ size: url.endsWith("size=1") ? 300 : 600 });
-    if (url.includes("paged=1&v=1")) return Response.json(wire([second, first], "2"));
-    return Response.json(wire([first, second]));
-  }));
-  await act(async () => showMedia("t1"));
-  await render({ ...chat, messages: [] });
-  await settle();
-  expect(calls.filter((url) => url === "/api/threads/t1/media?paged=1&v=1")).toHaveLength(1);
-  expect(row("first.pdf").textContent).toContain("300 B");
-  expect(row("second.pdf").textContent).toContain("600 B");
-});
-
-it("cancels size requests once their rows scroll out of the grid", async () => {
-  const entries = Array.from({ length: 1_000 }, (_, n): Entry => [
-    "b" + n, NOVEMBER, "l", "file-" + n + ".pdf", "C:\\w\\file-" + n + ".pdf",
-  ]);
-  const pending: Array<AbortSignal | undefined> = [];
-  vi.stubGlobal("fetch", vi.fn(async (url: string, options?: RequestInit) => {
-    if (!url.includes("&size=")) return Response.json(wire(entries));
-    const signal = options?.signal ?? undefined;
-    pending.push(signal);
-    return new Promise<Response>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
-  }));
-  await act(async () => showMedia("t1"));
-  await render({ ...chat, messages: [] });
-  await settle();
-  const previous = pending.slice();
-  expect(previous.length).toBeGreaterThan(0);
-  await act(async () => { scroller().scrollTop = 40_000; scroller().dispatchEvent(new Event("scroll")); });
-  expect(pending.length).toBeGreaterThan(previous.length);
-  expect(previous.map((signal) => signal?.aborted)).toEqual(previous.map(() => true));
-});
-
-it.each([409, 503])("recovers the complete index when a continuation returns %s", async (status) => {
-  const old = wire([["b1", 1000, "l", "old.png", "C:\\w\\old.png"]], "2");
-  let snapshot = false;
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    const params = new URL(url, "http://x").searchParams;
-    if (params.has("snapshot")) { snapshot = true; return Response.json([old]); }
-    if (params.has("page")) return Response.json(null, { status });
-    return Response.json({ ...wire([]), head: "b2", next: 1 });
-  }));
-
-  await act(async () => showMedia("t1"));
-  await render({ ...chat, messages: [] });
-  await settle();
-  expect(snapshot).toBe(true);
-  expect(tiles()).toEqual(["old.png"]);
-});
-
-it("includes a file streamed into the current head while older pages are pending", async () => {
-  const head: Message = { id: "b2", role: "bot", kind: "text", at: 2000, text: "Working" };
-  let finish!: (response: Response) => void;
-  const older = new Promise<Response>((resolve) => { finish = resolve; });
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("page=") ? older : Response.json({ ...wire([]), head: head.id, next: 1 })));
-  await act(async () => showMedia("t1"));
-  await render({ ...chat, messages: [head] });
-  await settle();
-
-  await render({ ...chat, messages: [{ ...head, text: "[plot.png](C:\\w\\plot.png)" }] });
-  expect(tiles()).toEqual(["plot.png"]);
-  finish(Response.json(wire([])));
-  await settle();
-});
-
-it("publishes older history in one update while keeping the newest page usable", async () => {
-  const picture = (n: number) => wire([[`b${n}`, n * 1000, "l", `picture-${n}.png`, `C:\\w\\picture-${n}.png`]]);
-  let finish!: (response: Response) => void;
-  const last = new Promise<Response>((resolve) => { finish = resolve; });
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    if (url.includes("page=2")) return last;
-    if (url.includes("page=1")) return Response.json({ ...picture(2), next: 2 });
-    return Response.json({ ...picture(3), head: "b3", next: 1 });
-  }));
-
-  await act(async () => showMedia("t1"));
-  await render({ ...chat, messages: [] });
-  await settle();
-  expect(tiles()).toEqual(["picture-3.png"]);
-  finish(Response.json(picture(1)));
-  await settle();
-  expect(tiles()).toEqual(["picture-3.png", "picture-2.png", "picture-1.png"]);
-});
-
-it("keeps an audio row playing when an older photo arrives", async () => {
-  const initial = wire([["b2", 2000, "l", "audio.mp3", "C:\\w\\audio.mp3"]]);
-  let finish!: (response: Response) => void;
-  const older = new Promise<Response>((resolve) => { finish = resolve; });
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    if (url.includes("size=")) return Response.json({ size: null });
-    if (url.includes("page=")) return older;
-    return Response.json({ ...initial, head: "b2", next: 1 });
-  }));
-
-  await act(async () => showMedia("t1"));
-  await render({ ...chat, messages: [] });
-  await settle();
-  await click(row("audio.mp3"));
-  const playing = host.querySelector("audio");
-  expect(playing).not.toBeNull();
-  finish(Response.json(wire([["b1", 1000, "l", "photo.png", "C:\\w\\photo.png"]])));
-  await settle();
-  expect(tab("Files").getAttribute("aria-selected")).toBe("true");
-  expect(host.querySelector("audio")).toBe(playing);
-  await click(tab("Photos"));
-  expect(tiles()).toEqual(["photo.png"]);
-});
-
-it("shows only the indexed files while older pages load and the head is off this branch", async () => {
-  const streamed: Message = { id: "b9", role: "bot", kind: "text", at: 3000, text: "[plot.png](C:\\w\\plot.png)" };
-  let finish!: (response: Response) => void;
-  const older = new Promise<Response>((resolve) => { finish = resolve; });
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("page=") ? older : Response.json({ ...wire([["b2", 2000, "l", "new.png", "C:\\w\\new.png"]]), head: "b2", next: 1 })));
-  await act(async () => showMedia("t1"));
-  await render({ ...chat, messages: [streamed] });
-  await settle();
-  expect(tiles()).toEqual(["new.png"]);
-
-  finish(Response.json(wire([])));
-  await settle();
-  expect(tiles()).toEqual(["plot.png", "new.png"]);
-});
-
-it("clears Retry once an automatic refresh loads the complete index", async () => {
-  const report: Entry = ["b1", 1000, "l", "report.pdf", "C:\\w\\report.pdf"];
-  let expire!: () => void;
-  const expiring = new Promise<void>((resolve) => { expire = resolve; });
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    if (url.includes("v=1&size=")) { await expiring; return Response.json({ error: "media version expired" }, { status: 409 }); }
-    if (url.includes("v=2&size=")) return Response.json({ size: 300 });
-    if (url.includes("page=") || url.includes("snapshot=")) return new Response(null, { status: 503 });
-    if (url.includes("paged=1&v=1")) return Response.json(wire([report], "2"));
-    return Response.json({ ...wire([report]), head: "b2", next: 1 });
-  }));
-  await act(async () => showMedia("t1"));
-  await render({ ...chat, messages: [] });
-  await settle();
-  expect(retry()).toBeDefined();
-
-  expire();
-  await settle();
-  expect(names()).toEqual(["report.pdf"]);
-  expect(retry()).toBeUndefined();
-});
-
-it("restores Retry when the reload after a failed history also fails", async () => {
-  let reload = false;
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    if (url.includes("page=") || url.includes("snapshot=") || reload) return new Response(null, { status: 503 });
-    return Response.json({ ...wire([]), head: "b2", next: 1 });
-  }));
-  await act(async () => showMedia("t1"));
-  await render({ ...chat, messages: [] });
-  await settle();
-  expect(retry()).toBeDefined();
-
-  reload = true;
-  await click(retry()!);
-  expect(retry()).toBeUndefined();
-  await vi.waitFor(async () => { await settle(); expect(retry()).toBeDefined(); }, { timeout: 3_000 });
-});
-
-// Only the very first of the unloaded messages brings a file.
+// `older` messages before the loaded page, paged or indexed; only the very first brings a file
 function longChat(older: number, fail = 0) {
-  const last = Math.ceil(Math.max(0, older - 255) / 2048);
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     calls.push(url);
     if (fail-- > 0) return new Response(null, { status: 503 });
-    if (url.includes("&size=")) return Response.json({ size: null });
-    const params = new URL(url, "http://x").searchParams;
-    if (url.includes("/media")) {
-      const page = Number(params.get("page"));
-      return Response.json(page === last
-        ? wire([["h0", 0, "l", "first.pdf", "C:\\w\\first.pdf"]])
-        : { ...wire([]), head: reply.id, next: page + 1 });
-    }
-    const before = params.get("before")!;
+    if (url.includes("/media")) return Response.json(wire([["h0", 0, "l", "first.pdf", "C:\\w\\first.pdf"]]));
+    const before = new URL(url, "http://x").searchParams.get("before")!;
     const end = before === "u1" ? older : Number(before.slice(1));
     const start = Math.max(0, end - 1_000);
     return Response.json({ hasMore: start > 0, messages: Array.from({ length: end - start }, (_, n): Message => ({ id: `h${start + n}`, role: "bot", kind: "text", at: 0, text: start + n ? "old" : "[first.pdf](C:\\w\\first.pdf)" })) });
@@ -473,7 +239,6 @@ it("lists the first file of a chat past 5,000 older messages", async () => {
   for (let i = 0; i < 4; i++) await settle();
   await click(tab("Files"));
   expect(names()).toContain("first.pdf");
-  expect(calls.filter((url) => url.includes("page=") && !url.includes("size="))).toHaveLength(3);
 });
 
 it("asks once more when the timeline fails to load, without reopening Media", async () => {
@@ -485,7 +250,7 @@ it("asks once more when the timeline fails to load, without reopening Media", as
   for (let i = 0; i < 4; i++) await settle();
   await click(tab("Files"));
   expect(names()).toContain("first.pdf");
-  expect(calls.filter((url) => url === "/api/threads/t1/media?paged=1")).toHaveLength(2);
+  expect(calls.filter((url) => url.includes("/media"))).toHaveLength(2);
 });
 
 it("keeps the grid as it is while a reply streams, and adds a file the moment it lands", async () => {
@@ -510,7 +275,7 @@ it("lists a room's files from the room, and shows its PDFs", async () => {
   await render(source);
   const { togglePane } = await import("@/lib/show-pane");
   await act(async () => togglePane("r-thread"));
-  await click(tab("Media"));
+  await openTool("media");
   await settle();
   expect(calls).toContain("/api/rooms/r1/files");
   expect(host.querySelector("[data-media-grid] img")?.getAttribute("src")).toBe(`/api/rooms/r1/files/${id(3)}/preview`);
@@ -527,6 +292,7 @@ it("lists a room's files from the room, and shows its PDFs", async () => {
 
 it("a room's pane has no Map tab, a bot chat's does", async () => {
   const room: MediaSource = { threadId: "r-thread", roomId: "r1", messages: [] };
+  await act(async () => { showMap("r-thread"); showMap("t1"); closeShow(); });
   await act(async () => root.render(createElement(ShowPane, { media: true, source: room, hidden: false })));
   expect(tab("Map")).toBeUndefined();
   await act(async () => root.render(createElement(ShowPane, { media: true, source: chat, botId: "b1", hidden: false })));
@@ -539,7 +305,7 @@ it("says so when there are no files yet, in English and Korean", async () => {
   await render({ threadId: "t9", messages: [] });
   await settle();
   expect(host.querySelector("[data-show-media]")?.textContent).toBe("No files yet");
-  expect(tab("Show").disabled).toBe(true);
+  expect([...host.querySelectorAll(".show-pane-tabs [role=tab]")].map((each) => each.textContent)).toEqual(["Media"]);
   applyLocale("ko");
   await render({ threadId: "t9", roomId: "r1", messages: [] });
   await settle();
@@ -590,6 +356,8 @@ it("dragging the scroll thumb shows the month beside it until 600 ms after relea
   await render({ threadId: "t1", messages: [] });
   await settle();
   const thumb = host.querySelector("[data-media-thumb]")!;
+  // a phone pane's right swipe to close leaves the thumb its drag
+  expect(thumb.closest("[data-no-swipe]")).not.toBeNull();
   const bubble = () => host.querySelector("[data-media-bubble]");
   expect(bubble()?.hasAttribute("data-shown") ?? false).toBe(false);
   await pointer(thumb, "pointerdown", 0);
@@ -647,7 +415,7 @@ it("sizes the scroll thumb to grab: 44px to catch on a phone, a wider bar on a d
   expect(phone).toBeGreaterThanOrEqual(GRAB);
 });
 
-it("closing with X neither asks again nor touches the grid", async () => {
+it("closing with the pane toggle neither asks again nor touches the grid", async () => {
   media.t1 = shots(200);
   await act(async () => showMedia("t1"));
   await act(async () => root.render(createElement(Presence, { source: { threadId: "t1", messages: [] } })));
@@ -659,7 +427,7 @@ it("closing with X neither asks again nor touches the grid", async () => {
   const changes: MutationRecord[] = [];
   const watch = new MutationObserver((records) => changes.push(...records));
   watch.observe(grid, { subtree: true, childList: true, attributes: true, characterData: true });
-  await click(host.querySelector('button[aria-label="Close"]'));
+  await click(host.querySelector(".show-pane-head [data-show-pane-button]"));
   expect(host.querySelector("[data-closing]")).not.toBeNull();
   expect(host.querySelector("[data-media-grid] img")).toBe(img);
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -928,7 +696,7 @@ it("a linked folder shows in Show, and its pictures step with the arrow keys", a
   await act(async () => showItem({ threadId: "t1", path: mock, kind: "folder" }));
   await render(chat);
   await settle();
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(tab("forum-look-mock-2").getAttribute("aria-selected")).toBe("true");
   expect(host.querySelector(".show-frame-name")?.textContent).toBe("forum-look-mock-2");
   expect(calls).toContain(`/api/threads/t1/linked-folder?path=${encodeURIComponent(mock)}`);
   expect(tiles()).toEqual(["icon-31-wink.png", "icon-25-pixel-bot.png", "icon-22-radar-rings.png"]);
@@ -998,10 +766,10 @@ it("clicking an open folder's link again draws the fresh listing, even behind an
   await act(async () => showFolder("t1", folder, added));
   await settle();
   expect(tiles()).toEqual(["icon-37-job-code.png", ...listing.files.slice(0, 3).map((file) => file.name)]);
-  await click(tab("Media"));
+  await openTool("media");
   await act(async () => showFolder("t1", folder, listing));
   await settle();
-  expect(tab("Show").getAttribute("aria-selected")).toBe("true");
+  expect(tab("forum-look-mock-2-again").getAttribute("aria-selected")).toBe("true");
   expect(tiles()).toHaveLength(3);
   expect(calls.filter((url) => url.includes("/linked-folder?"))).toEqual([]);
 });

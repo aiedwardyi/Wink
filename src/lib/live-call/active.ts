@@ -1,14 +1,15 @@
 // The live call outlives the chat it started in: a host above every view owns it, chats and the widget only read it.
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import type { Bot } from "@/state/store-types";
-import type { CallRoom } from "../../../shared/live-call";
+import type { CallAnswer, CallRoom } from "../../../shared/live-call";
+import type { CallAudio } from "./audio";
 import { holdReloadOpen } from "../reload-hold";
 import { trackScreen } from "../usage-stats";
 import { callAudio, type CallSound } from "./warm-audio";
 
-/** `bot` is the bot as it was when called, for a store that has not listed it yet; `opener` is the blocker a bot call rang about; `room` the team room it was placed from. */
-export type ActiveCall = { id: number; botId: string; bot: Bot; sound: CallSound; opener?: string; room?: CallRoom & { name: string } };
+/** `bot` is the bot as it was when called, for a store that has not listed it yet; `opener` is the blocker a bot call rang about; `room` the team room it was placed from; `answer` who answers; `handoff` the audio and mute of the session it took over from. */
+export type ActiveCall = { id: number; botId: string; bot: Bot; sound: CallSound; opener?: string; room?: CallRoom & { name: string }; answer?: CallAnswer; handoff?: { audio: CallAudio; muted: boolean } };
 
 let calls = 0;
 let call: ActiveCall | null = null;
@@ -32,8 +33,8 @@ export function callsSupported(): boolean {
   return typeof AudioContext !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
 }
 
-export function placeCall(bot: Bot, sound: CallSound, opener?: string, room?: ActiveCall["room"]): ActiveCall {
-  call = { id: ++calls, botId: bot.id, bot, sound, opener, room };
+export function placeCall(bot: Bot, sound: CallSound, opener?: string, room?: ActiveCall["room"], answer?: CallAnswer): ActiveCall {
+  call = { id: ++calls, botId: bot.id, bot, sound, opener, room, answer };
   releaseReload ??= holdReloadOpen();
   trackScreen("live-call");
   note = null;
@@ -41,9 +42,17 @@ export function placeCall(bot: Bot, sound: CallSound, opener?: string, room?: Ac
   return call;
 }
 
+/** The same call, now answered by the other session: it keeps the mic and speaker the old one hands over. */
+export function switchAnswer(from: ActiveCall, answer: CallAnswer, handoff: NonNullable<ActiveCall["handoff"]>): boolean {
+  if (call !== from) return false;
+  call = { ...from, id: ++calls, opener: undefined, answer, handoff };
+  notify();
+  return true;
+}
+
 /** A tapped bot call: the page may open with no tap of its own yet, so the first one lets the voice play. */
-export function answerCall(bot: Bot | undefined, opener: string | null): ActiveCall | null {
-  if (!bot || !opener || call || !callsSupported()) return null;
+export function answerCall(bot: Bot | undefined, opener: string | null, voiceCalls: boolean): ActiveCall | null {
+  if (!voiceCalls || !bot || !opener || call || !callsSupported()) return null;
   const sound = callAudio();
   if (sound.ctx.state === "suspended") {
     addEventListener("pointerdown", () => {
@@ -59,15 +68,23 @@ const RUNG_MS = 30_000;
 let rung: (Rung & { at: number }) | null = null;
 
 /** The voice briefs from the bot's active thread, so a tapped call waits for the switch to its thread to land; one that never lands lapses. */
-export function answerOnThread(bots: readonly Bot[], next?: Rung): ActiveCall | null {
+export function answerOnThread(bots: readonly Bot[], voiceCalls: boolean, next?: Rung): ActiveCall | null {
   if (next) rung = next.opener ? { ...next, at: Date.now() } : null;
   const want = rung;
   if (!want) return null;
   if (Date.now() - want.at > RUNG_MS) return (rung = null);
   const bot = bots.find((candidate) => candidate.id === want.botId);
   if (bot?.threadId !== want.threadId) return null;
+  if (!voiceCalls) return null;
   rung = null;
-  return answerCall(bot, want.opener);
+  return answerCall(bot, want.opener, voiceCalls);
+}
+
+/** A call must not outlive the right to place one: losing team membership mid-call hangs it up, mic included. */
+export function useEndCallUnlessAllowed(voiceCalls: boolean) {
+  useEffect(() => {
+    if (!voiceCalls && call) dropCall(call);
+  }, [voiceCalls]);
 }
 
 /** Only drops this call: a late teardown of an old one never hangs up a newer one. */

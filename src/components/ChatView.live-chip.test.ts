@@ -11,7 +11,7 @@ import { ChatView } from "./ChatView";
 const live = vi.hoisted(() => ({ current: { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} } as TurnStreamState }));
 vi.mock("@/state/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/store")>(),
-  useStreaming: () => live.current,
+  useStreamSelect: <T>(select: (stream: TurnStreamState) => T) => select(live.current),
 }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 

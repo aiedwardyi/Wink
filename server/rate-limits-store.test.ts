@@ -24,6 +24,11 @@ describe("rate-limits-store", () => {
         ],
         observedAt: "2026-09-20T00:00:00.000Z",
       }],
+      ["agy", {
+        windows: [{ id: "seven_day", usedPercent: 100, resetsAt: 1_790_000_000_000, windowMinutes: 10_080, otherPoolLeft: true }],
+        observedAt: "2026-09-20T00:00:00.000Z",
+        noteLimit: { resetsAt: 1_790_000_000_000 },
+      }],
     ]);
     saveRateLimits(map, dir);
     expect(loadRateLimits(dir)).toEqual(map);

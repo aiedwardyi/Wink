@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -13,6 +12,7 @@ import { reportOwnerHash, reportPayload, type TeamReport } from "../shared/team-
 import { loadOrCreateIdentity, writeTicket } from "./phone-relay/store.ts";
 import type { Message, Store } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { spawnTestNode as spawn } from "./testing/harness-auth.ts";
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());

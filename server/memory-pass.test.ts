@@ -1,7 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -14,23 +17,41 @@ import {
   noteSummary,
   parseFacts,
   pendingRows,
-  replyPictures,
   secretLike,
+  secretValue,
   userTyping,
   type MemoryPass,
   type NoteGenerator,
 } from "./memory-pass.ts";
+import * as atomic from "./atomic.ts";
 import { memoryNotesEnabled } from "./config.ts";
+import type { ProviderInstance } from "./contracts.ts";
+import { AntigravityDriver } from "./drivers/antigravity.ts";
+import { createCliText } from "./drivers/cli-text.ts";
+import { CodexDriver } from "./drivers/codex.ts";
+import { antigravityRateLimitWindows } from "./drivers/rate-limits.ts";
+import { memoryNotice } from "./memory-health.ts";
+import { createMemoryLookup } from "./memory-lookup.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
+import { replyTurns } from "./pick-sources.ts";
+import { loadProfileSyncSettings, saveProfileSyncSettings } from "./profile-sync.ts";
+import type { RateLimitsMap, RateLimitsReport } from "./rate-limits-store.ts";
 import type { Message, StoreChange } from "./store.ts";
-import { MEMORY_SEED, memoryFileRaw, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
+import { summaryInstance } from "./summary-instance.ts";
+import { MEMORY_MAX_BYTES, MEMORY_SEED, memoryFileRaw, memorySystemPrompt, readMemoryTopic, workspaceDir, writeMemoryFile } from "./workspace.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { BASE_SENDS, S32_ROWS, SECRET_CASES, TOKEN_TALK_LIMITS, secretCase, sendsValue } from "./testing/secret-cases.ts";
+import { removeTestData } from "./testing/test-home.ts";
+
+// oxlint-disable-next-line anti-slop/no-module-mocking -- a second writer has to land between the pass's read and its write.
+vi.mock("node:fs", async (importOriginal) => ({ ...await importOriginal<typeof import("node:fs")>() }));
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
 
 const MINUTE = 60_000;
 const NOW = new Date(2026, 9, 15, 12).getTime();
+const readBytes = fs.readFileSync;
 
 const row = (patch: Partial<Message> = {}): Message => ({ id: "m", at: 1, role: "user", kind: "text", text: "hi", ...patch });
 
@@ -83,13 +104,38 @@ describe("memory pass", () => {
   };
   const say = (threadId: string, text: string, patch: Partial<Message> = {}) =>
     store.appendMessage(threadId, { role: "user", kind: "text", text, ...patch });
+  const overflowPath = () => join(workspaceDir("bot-t1"), "memory", "auto-notes-overflow.md");
+  const overflowBytes = () => {
+    const path = overflowPath();
+    return fs.statSync(path, { throwIfNoEntry: false })?.isFile() ? readBytes(path) : Buffer.alloc(0);
+  };
+  const idle = async (before: Buffer) => {
+    await pass.idle();
+    expect(overflowBytes().subarray(0, before.length).equals(before)).toBe(true);
+  };
   const settle = async (threadId: string, wait = 0) => {
+    const before = overflowBytes();
     pass.onSettled(`bot-${threadId}`, threadId);
     if (wait) await vi.advanceTimersByTimeAsync(wait);
-    await pass.idle();
+    await idle(before);
   };
   const chips = (threadId: string) => store.rows(threadId).filter((m) => m.tool?.name === MEMORY_SAVE_TOOL);
   const stored = () => JSON.parse(readFileSync(join(dataDir, "memory-pass.json"), "utf8"));
+  const overflow = () => (existsSync(overflowPath()) ? readFileSync(overflowPath(), "utf8") : null);
+  const lockMemoryOnce = () => {
+    const path = join(workspaceDir("bot-t1"), "MEMORY.md");
+    const open = fs.openSync;
+    let failed = false;
+    // SAFETY: the wrapper passes every other call through and returns the real descriptor.
+    vi.spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof open>) => {
+      if (!failed && args[0] === path) {
+        failed = true;
+        throw Object.assign(new Error("locked"), { code: "EBUSY" });
+      }
+      return open(...args);
+    }) as typeof open);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  };
   const switchTo = (next: boolean) => {
     on = next;
     pass.onConfigChanged();
@@ -110,7 +156,7 @@ describe("memory pass", () => {
     on = true;
     botSwitch = new Map();
     writeMemoryFile("bot-t1", "");
-    rmSync(join(workspaceDir("bot-t1"), "memory"), { recursive: true, force: true });
+    removeTestData(join(workspaceDir("bot-t1"), "memory"));
     pass = start();
   });
 
@@ -138,18 +184,18 @@ describe("memory pass", () => {
       { instanceId: "claude-default", driverKind: "claudeAgent", enabled: true, generateText: defaultGenerateText },
       { instanceId: "claude-bound", driverKind: "claudeAgent", enabled: true, generateText },
     ], { instanceId: "claude-bound", available: true });
-    say("t1", "I prefer concise replies.");
-    say("t1", "I use pnpm for my projects.");
+    const first = say("t1", "I prefer concise replies.");
+    const second = say("t1", "I use pnpm for my projects.");
     await settle("t1", 3 * MINUTE);
     expect(defaultGenerateText).not.toHaveBeenCalled();
-    expect(generateText).toHaveBeenCalledExactlyOnceWith(notePrompt("", [{ text: "I prefer concise replies." }, { text: "I use pnpm for my projects." }]), {
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(notePrompt("", [{ id: first.id, text: first.text! }, { id: second.id, text: second.text! }]), {
       signal: expect.any(AbortSignal), timeoutMs: 120_000, ephemeral: true, lean: true,
     });
     expect(memoryFileRaw("bot-t1")).toBe(
       `${MEMORY_SEED}- Prefers concise replies (noted 2026-10-15)\n- Uses pnpm for projects (noted 2026-10-15)\n`,
     );
     expect(chips("t1")).toHaveLength(1);
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects", memoryBotId: "bot-t1" });
     expect(stored()).toEqual({ threads: {} });
   });
 
@@ -157,16 +203,16 @@ describe("memory pass", () => {
     const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-decisions.json", import.meta.url), "utf8"));
     const generateText = vi.fn(async () => recorded.reply.text);
     generator = noteGenerator([{ instanceId: "claude-default", driverKind: "claudeAgent", enabled: true, generateText }]);
-    store.appendMessage("t1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
-    say("t1", "the second one");
+    const question = store.appendMessage("t1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
+    const answer = say("t1", "the second one");
     say("t1", "I use pnpm for my projects.");
     await settle("t1", 3 * MINUTE);
-    expect(generateText).toHaveBeenCalledExactlyOnceWith(recorded.stamp.prompt, expect.anything());
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(`<source message_id="${answer.id}" question_id="${question.id}" />\n<context>${question.text}</context>\nthe second one`), expect.anything());
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Uses pnpm for projects (noted 2026-10-15)\n`);
     expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
       '## 2026-10-15 12:00 | model picker look | current\n- Picked: 2 - Follow the app theme\n- Over: 1 - Always dark; 3 - Always light\n- Said: "the second one"\n',
     );
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "model picker look: 2 - Follow the app theme, Uses pnpm for projects" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "model picker look: 2 - Follow the app theme, Uses pnpm for projects", memoryBotId: "bot-t1" });
   });
 
   it("attributes a helper batch once when its write waits for a busy turn", async () => {
@@ -180,6 +226,7 @@ describe("memory pass", () => {
         busy.add("bot-t1");
         return facts(["Prefers pnpm", "I prefer pnpm"]);
       });
+      generator = Object.assign(generate, { engine: "codex" });
       say("t1", "I prefer pnpm", { sendId: "source-send" });
       await settle("t1", 3 * MINUTE);
       busy.clear();
@@ -187,7 +234,7 @@ describe("memory pass", () => {
       expect(generate).toHaveBeenCalledTimes(1);
       const traces = readFileSync(join(dataDir, "turn-traces.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
       expect(traces).toHaveLength(1);
-      expect(traces[0]).toMatchObject({ botId: "bot-t1", threadId: "t1", sourceSendIds: ["source-send"], requests: [{ id: "request-1", usage: { input: 20, output: 2 }, nested: false }] });
+      expect(traces[0]).toMatchObject({ engine: "codex", botId: "bot-t1", threadId: "t1", sourceSendIds: ["source-send"], requests: [{ id: "request-1", usage: { input: 20, output: 2 }, nested: false }] });
       expect(chips("t1")).toHaveLength(1);
     } finally {
       if (timing === undefined) delete process.env.ORBIT_TURN_TIMING;
@@ -201,6 +248,214 @@ describe("memory pass", () => {
     for (let i = 0; i < 8; i += 1) say("t1", `line ${i}`);
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a malformed batch pending across restart and saves it on a healthy pass", async () => {
+    generate.mockResolvedValueOnce('[{"fact":1}]');
+    const ids = Array.from({ length: 8 }, () => say("t1", "I prefer pnpm").id);
+    await settle("t1");
+    pass.dispose();
+    expect(stored()).toEqual({ threads: { t1: ids } });
+    expect(memoryFileRaw("bot-t1")).toBe("");
+    expect(readMemoryTopic("bot-t1", "decisions.md")).toBeNull();
+    expect(chips("t1")).toHaveLength(0);
+    pass = start();
+    generate.mockResolvedValueOnce(facts(["Prefers pnpm", "I prefer pnpm"]));
+    await settle("t1");
+    expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Prefers pnpm (noted 2026-10-15)\n`);
+    expect(stored()).toEqual({ threads: {} });
+  });
+
+  it("makes five settlements cost one attempt on a limited account", async () => {
+    const limits: RateLimitsMap = new Map();
+    const own = { instanceId: "acct-live", enabled: true, driverKind: "codex", generateText: vi.fn(async () => {
+      throw new Error("HTTP 429");
+    }) };
+    pass.dispose();
+    pass = createMemoryPass({ store, dataDir, enabled: () => true, busy: () => false,
+      generate: () => noteGenerator([], undefined, own, { limits, save: () => {} }) });
+    passes.push(pass);
+    const ids = Array.from({ length: 8 }, () => say("t1", "I prefer pnpm").id);
+    for (let i = 0; i < 5; i++) await settle("t1");
+    pass.dispose();
+    expect(own.generateText).toHaveBeenCalledTimes(1);
+    expect(store.rows("t1").map(({ id }) => id)).toEqual(ids);
+    expect(stored()).toEqual({ threads: { t1: ids } });
+  });
+
+  it("makes five settlements cost one attempt on a signed-out account until a fresh probe", async () => {
+    const signedOut = new Set<string>();
+    const own = { instanceId: "acct-live", enabled: true, driverKind: "antigravityAgent", generateText: vi.fn(async () => {
+      throw new Error("UNAUTHENTICATED (code 401): Sign in again.");
+    }) };
+    pass.dispose();
+    pass = createMemoryPass({ store, dataDir, enabled: () => true, busy: () => false,
+      generate: () => noteGenerator([], undefined, own, { limits: new Map(), save: () => {}, signedOut }) });
+    passes.push(pass);
+    const ids = Array.from({ length: 8 }, () => say("t1", "I prefer pnpm").id);
+    for (let i = 0; i < 5; i++) await settle("t1");
+    expect(own.generateText).toHaveBeenCalledTimes(1);
+    signedOut.clear();
+    await settle("t1");
+    pass.dispose();
+    expect(own.generateText).toHaveBeenCalledTimes(2);
+    expect(store.rows("t1").map(({ id }) => id)).toEqual(ids);
+    expect(stored()).toEqual({ threads: { t1: ids } });
+  });
+
+  it("keeps a moved, renamed or restored batch and saves it on the new home", async () => {
+    const id = say("t1", "I use pnpm").id;
+    pass.dispose();
+    writeFileSync(join(dataDir, "memory-pass.json"), JSON.stringify({ host: "old-home", threads: { t1: [id] } }));
+    generate.mockResolvedValueOnce(facts(["Uses pnpm", "I use pnpm"]));
+    pass = createMemoryPass({ store, dataDir, host: "new-home", generate: () => generator, enabled: () => true, busy: () => false });
+    passes.push(pass);
+    expect(stored()).toEqual({ host: "new-home", threads: { t1: [id] }, foreign: { t1: [id] } });
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(memoryFileRaw("bot-t1")).toContain("Uses pnpm");
+    expect(stored()).toEqual({ host: "new-home", threads: {} });
+  });
+
+  it("runs a synced copy's restored batch only on the PC that saved it", async () => {
+    for (let i = 0; i < 8; i++) say("t1", "I use pnpm");
+    pass.dispose();
+    const startOn = (host: string, path: string) => {
+      const copy = createMemoryPass({ store, dataDir: path, host, generate: () => generator, enabled: () => true, busy: () => false });
+      passes.push(copy);
+      return copy;
+    };
+    pass = startOn("pc-a", dataDir);
+    say("t1", "I prefer tabs");
+    const mirrorDir = temps.make(join(tmpdir(), "memory-pass-mirror-"));
+    writeFileSync(join(mirrorDir, "memory-pass.json"), readFileSync(join(dataDir, "memory-pass.json")));
+    saveProfileSyncSettings(mirrorDir, { ...loadProfileSyncSettings(mirrorDir), folder: mirrorDir, syncChats: true, botMap: { "bot-t1": "synced-bot" } });
+    const mirror = startOn("pc-b", mirrorDir);
+    mirror.onSettled("bot-t1", "t1");
+    await mirror.idle();
+    expect(generate).not.toHaveBeenCalled();
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0]![0]).toContain("I use pnpm");
+    expect(generate.mock.calls[0]![0]).toContain("I prefer tabs");
+    expect(stored()).toEqual({ host: "pc-a", threads: {} });
+  });
+
+  it("leaves a restored batch to its source when the sync mapping lands after startup", async () => {
+    for (let i = 0; i < 8; i++) say("t1", "I use pnpm");
+    pass.dispose();
+    const startOn = (host: string, path: string) => {
+      const copy = createMemoryPass({ store, dataDir: path, host, generate: () => generator, enabled: () => true, busy: () => false });
+      passes.push(copy);
+      return copy;
+    };
+    pass = startOn("pc-a", dataDir);
+    const mirrorDir = temps.make(join(tmpdir(), "memory-pass-mirror-"));
+    writeFileSync(join(mirrorDir, "memory-pass.json"), readFileSync(join(dataDir, "memory-pass.json")));
+    const sync = { ...loadProfileSyncSettings(mirrorDir), folder: mirrorDir, syncChats: true, botMap: {} };
+    saveProfileSyncSettings(mirrorDir, sync);
+    startOn("pc-b", mirrorDir).dispose();
+    const mirror = startOn("pc-b", mirrorDir);
+    saveProfileSyncSettings(mirrorDir, { ...sync, botMap: { "bot-t1": "synced-bot" } });
+    mirror.onSettled("bot-t1", "t1");
+    await mirror.idle();
+    expect(generate).not.toHaveBeenCalled();
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["mapping, then one local send", ["map", "say"]],
+    ["one local send, then mapping", ["say", "map"]],
+    ["two local sends, then mapping", ["say", "say", "map"]],
+    ["mapping, a claimed turn, then the next settlement", ["map", "say", "claim"]],
+  ])("submits a restored copy's own rows once: %s", async (_name, steps) => {
+    for (let i = 0; i < 8; i++) say("t1", "I prefer short replies");
+    pass.dispose();
+    pass = createMemoryPass({ store, dataDir, host: "pc-a", generate: () => generator, enabled: () => true, busy: () => false });
+    passes.push(pass);
+    const mirrorDir = temps.make(join(tmpdir(), "memory-pass-mirror-"));
+    writeFileSync(join(mirrorDir, "memory-pass.json"), readFileSync(join(dataDir, "memory-pass.json")));
+    const sync = { ...loadProfileSyncSettings(mirrorDir), folder: mirrorDir, syncChats: true, botMap: {} };
+    saveProfileSyncSettings(mirrorDir, sync);
+    // B's own store: A's rows arrived by sync, B's typing never reaches A
+    const storeB = fakeStore();
+    for (let i = 0; i < 8; i++) storeB.appendMessage("t1", { role: "user", kind: "text", text: "I prefer short replies" });
+    const claimed = new Set<string>();
+    const mirror = createMemoryPass({ store: storeB, dataDir: mirrorDir, host: "pc-b", generate: () => generator, enabled: () => true, busy: (botId) => claimed.has(botId) });
+    passes.push(mirror);
+    const mine: string[] = [];
+    for (const step of steps) {
+      if (step === "map") saveProfileSyncSettings(mirrorDir, { ...sync, botMap: { "bot-t1": "synced-bot" } });
+      if (step === "say") mine.push(storeB.appendMessage("t1", { role: "user", kind: "text", text: `I use pnpm ${mine.length}` }).id);
+      if (step === "claim") {
+        claimed.add("bot-t1");
+        mirror.onSettled("bot-t1", "t1", true);
+        await mirror.idle();
+        expect(generate).not.toHaveBeenCalled();
+        claimed.delete("bot-t1");
+      }
+    }
+    mirror.onSettled("bot-t1", "t1", true);
+    await mirror.idle();
+    expect(generate).toHaveBeenCalledTimes(1);
+    const prompt = generate.mock.calls[0]![0];
+    for (const [i] of mine.entries()) expect(prompt).toContain(`I use pnpm ${i}`);
+    expect(prompt).not.toContain("I prefer short replies");
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate.mock.calls[1]![0]).toContain("I prefer short replies");
+    expect(generate.mock.calls[1]![0]).not.toContain("I use pnpm");
+  });
+
+  it("keeps a restored copy's local row out of the rows it leaves to the source", () => {
+    const theirs = Array.from({ length: 2 }, () => say("t1", "I prefer short replies").id);
+    pass.dispose();
+    writeFileSync(join(dataDir, "memory-pass.json"), JSON.stringify({ host: "pc-a", threads: { t1: theirs } }));
+    pass = createMemoryPass({ store, dataDir, host: "pc-b", generate: () => generator, enabled: () => true, busy: () => false });
+    passes.push(pass);
+    const mine = say("t1", "I use pnpm").id;
+    pass.dispose();
+    expect(stored()).toEqual({ host: "pc-b", threads: { t1: [...theirs, mine] }, foreign: { t1: theirs } });
+  });
+
+  it("never starts a helper for a turn claimed after the pass was scheduled", async () => {
+    say("t1", "I use pnpm");
+    pass.onSettled("bot-t1", "t1", true);
+    busy.add("bot-t1");
+    await pass.idle();
+    expect(generate).not.toHaveBeenCalled();
+    busy.delete("bot-t1");
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts a pass only after the settling call returns", async () => {
+    say("t1", "I use pnpm");
+    pass.onSettled("bot-t1", "t1", true);
+    expect(generate).not.toHaveBeenCalled();
+    await pass.idle();
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels an active extraction when the next turn starts and keeps its pending rows", async () => {
+    let finish: (output: string) => void = () => {};
+    generate.mockReturnValueOnce(new Promise<string>((resolve) => { finish = resolve; }));
+    say("t1", "I use pnpm");
+    pass.onSettled("bot-t1", "t1", true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(generate).toHaveBeenCalledTimes(1);
+    say("t1", "I prefer concise replies");
+    pass.onTurn("bot-t1");
+    expect(generate.mock.calls[0]![1].aborted).toBe(true);
+    expect(chips("t1")).toHaveLength(0);
+    pass.onSettled("bot-t1", "t1", true);
+    finish(facts(["Uses pnpm", "I use pnpm"]));
+    await pass.idle();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate.mock.calls[1]![0]).toContain("I use pnpm");
+    expect(generate.mock.calls[1]![0]).toContain("I prefer concise replies");
+    expect(stored()).toEqual({ threads: {} });
   });
 
   it("flushes at once before the engine compacts", async () => {
@@ -272,6 +527,24 @@ describe("memory pass", () => {
     await pass.idle();
   });
 
+  it("keeps a letters-only Hugging Face key from the note-taker", async () => {
+    const key = `${"hf" + "_"}${"AbCdEfGhIjKlMnOpQ".repeat(2)}`;
+    say("t1", "i'm 38");
+    say("t1", `usage doubled since i pasted ${key} into the config`);
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0]![0]).not.toContain(key.slice(3));
+  });
+
+  it("keeps a Hugging Face key with digits from the note-taker", async () => {
+    const key = `${"hf" + "_"}${"AbCd3fGhIjK1mNoPqR".repeat(2)}`;
+    say("t1", "i'm 38");
+    say("t1", `usage doubled since i pasted ${key} into the config`);
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0]![0]).not.toContain(key.slice(3));
+  });
+
   it("never takes notes from rows imported by thread sync", async () => {
     store.appendMessage("t1", { role: "user", kind: "text", text: "i'm 38" }, true);
     await settle("t1", 3 * MINUTE);
@@ -321,7 +594,7 @@ describe("memory pass", () => {
       "# Memory\n- Prefers pnpm\n- 38 years old (noted 2026-10-15)\n- Can't read Korean (noted 2026-10-15)\n- Hates drama (noted 2026-10-15)\n",
     );
     expect(chips("t1")).toHaveLength(1);
-    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "38 years old, Can't read Korean, Hates drama" });
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "38 years old, Can't read Korean, Hates drama", memoryBotId: "bot-t1" });
   });
 
   it("starts an empty file from the seed", async () => {
@@ -350,15 +623,1149 @@ describe("memory pass", () => {
     expect(stored()).toEqual({ threads: {} });
   });
 
-  it("skips an append that would pass the memory budget", async () => {
+  it("saves notes a MEMORY.md at its limit turns away to the overflow file", async () => {
     const full = `# Memory\n${"- note\n".repeat(198)}`;
     writeMemoryFile("bot-t1", full);
     generate.mockResolvedValue(facts(["38 years old", "i'm 38"], ["Can't read Korean", "can't read korean"]));
     say("t1", "i'm 38, can't read korean");
     await settle("t1", 3 * MINUTE);
-    expect(memoryFileRaw("bot-t1")).toBe(full);
-    expect(chips("t1")).toHaveLength(0);
+    const pointer = "- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-15)";
+    expect(memoryFileRaw("bot-t1")).toBe(`${full}${pointer}`);
+    expect(memorySystemPrompt("bot-t1")).toContain(`${pointer}`);
+    expect(memorySystemPrompt("bot-t1")).not.toContain("cut off");
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n- Can't read Korean (noted 2026-10-15)\n`);
+    expect(chips("t1").map((m) => m.tool?.spoken)).toEqual(["38 years old, Can't read Korean (MEMORY.md is full, saved in memory/auto-notes-overflow.md)"]);
     expect(console.info).toHaveBeenCalledWith(expect.stringContaining("too-large"));
+  });
+
+  it("adds one pointer line to the overflow file when it fits, and appends to the file after", async () => {
+    const full = `# Memory\n${"- note\n".repeat(197)}`;
+    writeMemoryFile("bot-t1", full);
+    generate.mockResolvedValueOnce(facts(["38 years old", "i'm 38"], ["Can't read Korean", "can't read korean"]));
+    say("t1", "i'm 38, can't read korean");
+    await settle("t1", 3 * MINUTE);
+    const pointed = `${full}- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-15)\n`;
+    expect(memoryFileRaw("bot-t1")).toBe(pointed);
+
+    generate.mockResolvedValueOnce(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(pointed);
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n- Can't read Korean (noted 2026-10-15)\n- Likes tea (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(2);
+  });
+
+  it("counts an overflowed note once when its pointer save conflicts and lands on retry", async () => {
+    const full = `# Memory\n${"- note\n".repeat(197)}`;
+    writeMemoryFile("bot-t1", full);
+    generate.mockImplementationOnce(async () => {
+      writeMemoryFile("bot-t1", `${full}- edited meanwhile\n`);
+      return facts(["38 years old", "i'm 38"], ["Likes tea", "i like tea"]);
+    });
+    say("t1", "i'm 38, i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n- Likes tea (noted 2026-10-15)\n`);
+    expect(pass.droppedNotes("bot-t1")).toEqual({ dropped: 2, since: NOW + 3 * MINUTE });
+    await settle("t1");
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n- Likes tea (noted 2026-10-15)\n`);
+    expect(pass.droppedNotes("bot-t1")).toEqual({ dropped: 2, since: NOW + 3 * MINUTE });
+  });
+
+  it("never writes an overflow note twice when its retry finds a later note on its subject", async () => {
+    const full = `# Memory\n${"- note\n".repeat(197)}`;
+    writeMemoryFile("bot-t1", full);
+    generate.mockImplementationOnce(async () => {
+      writeMemoryFile("bot-t1", `${full}- edited meanwhile\n`);
+      return facts(["Lives in Toronto", "i live in Toronto"], ["Likes tea", "i like tea"]);
+    });
+    say("t1", "i live in Toronto, i like tea");
+    await settle("t1", 3 * MINUTE);
+    fs.appendFileSync(overflowPath(), "- Lives in Vancouver (noted 2026-10-15)\n");
+    await settle("t1");
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- Lives in"))).toEqual(["- Lives in Toronto (noted 2026-10-15)", "- Lives in Vancouver (noted 2026-10-15)"]);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("writes a repeated note to the overflow file once, with one chip", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    generate.mockResolvedValue(facts(["38 years old", "i'm 38"]));
+    say("t1", "i'm 38");
+    await settle("t1", 3 * MINUTE);
+    say("t1", "i'm 38");
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n`);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("holds the batch when the overflow file cannot be read, never rewriting it", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(overflowPath(), { recursive: true });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    generate.mockResolvedValue(facts(["38 years old", "i'm 38"]));
+    say("t1", "i'm 38");
+    await settle("t1", 3 * MINUTE);
+    expect(chips("t1")).toHaveLength(0);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("auto-notes-overflow.md write failed"));
+    removeTestData(overflowPath());
+    writeFileSync(overflowPath(), "# Overflow\n- Uses pnpm\n");
+    await settle("t1");
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(overflow()).toBe("# Overflow\n- Uses pnpm\n- 38 years old (noted 2026-10-15)\n");
+  });
+
+  it("appends to an overflow file the bot already keeps", async () => {
+    const full = `# Memory\n- memory/auto-notes-overflow.md: overflow notes\n${"- note\n".repeat(197)}`;
+    writeMemoryFile("bot-t1", full);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), "# Overflow\n- Uses pnpm\n");
+    generate.mockResolvedValue(facts(["38 years old", "i'm 38"]));
+    say("t1", "i'm 38");
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(full);
+    expect(overflow()).toBe("# Overflow\n- Uses pnpm\n- 38 years old (noted 2026-10-15)\n");
+  });
+
+  it("keeps a note another writer adds to the overflow file while the pass saves its own", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), "# Existing notebook\n");
+    const read = fs.readFileSync;
+    // SAFETY: the wrapper passes every argument through and returns the real read.
+    vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof read>) => {
+      const out = read(...args);
+      if (args[0] === overflowPath()) execFileSync(process.execPath, ["-e", "require('node:fs').appendFileSync(process.argv[1], '- Uses cobalt blue\\n')", overflowPath()], { windowsHide: true });
+      return out;
+    }) as typeof read);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    vi.mocked(fs.readFileSync).mockRestore();
+    expect(overflow()).toBe("# Existing notebook\n- Uses cobalt blue\n- Likes tea (noted 2026-10-15)\n");
+  });
+
+  it("saves a fact that an overflow line names only inside a retraction", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), "# History\n- Retracted: ~~ - Likes tea (noted 2020-01-01) ~~\n- ~~Likes tea (noted 2020-01-02)~~\n");
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe("# History\n- Retracted: ~~ - Likes tea (noted 2020-01-01) ~~\n- ~~Likes tea (noted 2020-01-02)~~\n- Likes tea (noted 2026-10-15)\n");
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
+  });
+
+  it("keeps a line another writer adds to MEMORY.md after the revision check of its overflow pointer", async () => {
+    const full = `# Memory\n${"- note\n".repeat(198)}`;
+    writeMemoryFile("bot-t1", full);
+    const path = join(workspaceDir("bot-t1"), "MEMORY.md");
+    const open = fs.openSync;
+    let landed = false;
+    // SAFETY: the wrapper passes every argument through and returns the real descriptor.
+    vi.spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof open>) => {
+      // lands after the revision check, just before the pointer reaches MEMORY.md
+      if (!landed && args[0] === path) {
+        execFileSync(process.execPath, ["-e", "require('node:fs').appendFileSync(process.argv[1], '- Cobalt preference\\n')", path], { windowsHide: true });
+        landed = true;
+      }
+      return open(...args);
+    }) as typeof open);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    vi.mocked(fs.openSync).mockRestore();
+    expect(landed).toBe(true);
+    expect(memoryFileRaw("bot-t1")).toBe(`${full}- Cobalt preference\n- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-15)`);
+    expect(overflow()).toContain("- Likes tea (noted 2026-10-15)");
+  });
+
+  it("saves a fact that an overflow line names only inside a comment or code block", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const retired = "# Notebook\n<!-- Retired\n* Likes tea (noted 2020-01-01)\n-->\n```\n- Uses pnpm (noted 2020-01-02)\n```\n";
+    writeFileSync(overflowPath(), retired);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"], ["Uses pnpm", "i use pnpm"]));
+    say("t1", "i like tea, i use pnpm");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${retired}- Likes tea (noted 2026-10-15)\n- Uses pnpm (noted 2026-10-15)\n`);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(2);
+  });
+
+  it("saves a fact that an overflow line names only in an indented code example", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const examples = "# Notebook\n\nExample:\n\n    - Likes tea (noted 2026-10-14) <!-- example only -->\n    - Uses pnpm (noted 2026-10-14)\n";
+    writeFileSync(overflowPath(), examples);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"], ["Uses pnpm", "i use pnpm"]));
+    say("t1", "i like tea, i use pnpm");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${examples}- Likes tea (noted 2026-10-15)\n- Uses pnpm (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it.each(["pre", "details"])("appends a live note while preserving a hand-written %s example", async (tag) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const notes = `# Notebook\n\n<${tag}>\n- Likes tea (noted 2026-10-14)\n</${tag}>\n- Likes coffee\n`;
+    writeFileSync(overflowPath(), notes);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${notes}- Likes tea (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("still knows the notes after a literal comment opener in an overflow line", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const notes = "# Notebook\n- Opens comments with `<!--` in templates (noted 2026-10-14)\n- Writes <!-- by hand in notes (noted 2026-10-14)\n- Likes tea (noted 2026-10-14)\n- North office is in building 4 (noted 2026-10-14)\n";
+    writeFileSync(overflowPath(), notes);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    for (let turn = 0; turn < 3; turn++) {
+      say("t1", "i like tea");
+      await settle("t1", 3 * MINUTE);
+    }
+    expect(generate).toHaveBeenCalledTimes(3);
+    expect(overflow()).toBe(`${notes}- Likes tea (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
+  });
+
+  it.each([
+    ["an open comment", "<!-- draft\n- idea\n", "-->\n"],
+    ["an open fence", "```\nexample output\n", "```\n"],
+    ["a nested detail", "- Allergic to nuts (noted 2026-10-13)\n  - Carries an EpiPen in the blue bag\n- Owns a kayak\n", ""],
+    ["two headings", "## Mina\n- Allergic to nuts (noted 2026-10-13)\n## Sam\n- Allergic to nuts (noted 2026-10-14)\n- Owns a kayak\n", ""],
+  ])("leaves an overflow note in place with %s and adds the repeat after it", async (_kind, tail, close) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const notes = `# Notebook\n- Allergic to nuts (noted 2026-10-12)\n- Likes coffee\n${tail}`;
+    writeFileSync(overflowPath(), notes);
+    generate.mockResolvedValue(facts(["Allergic to nuts", "i am allergic to nuts"]));
+    say("t1", "i am allergic to nuts");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${notes}${close}- Allergic to nuts (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+  });
+  it("reads a line of inline code in an overflow file as text, not a fence", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const notes = "# Notebook\n- Likes tea (noted 2026-10-01)\n```js``` is how i write code\n- Owns a kayak (noted 2026-10-03)\n";
+    writeFileSync(overflowPath(), notes);
+    const turns: Array<[string, string]> = [["Owns a kayak", "i own a kayak"], ["Plays the cello", "i play the cello"]];
+    for (const [fact, quote] of turns) {
+      generate.mockResolvedValue(facts([fact, quote]));
+      say("t1", quote);
+      await settle("t1", 3 * MINUTE);
+    }
+    expect(overflow()).toBe(`${notes}- Plays the cello (noted 2026-10-15)\n`);
+  });
+
+  it("appends a note said again to an overflow file past the lookup budget and leaves the rows above it as they were", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n- memory/auto-notes-overflow.md: prior pointer\n${"- note\n".repeat(197)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const fact = "COBALT WALRUS invoice goes to the north office";
+    const notes = `# Notebook\n- ${fact} (noted 2026-10-01)\n- Likes coffee\n`.padEnd(2 * 1024 * 1024 + 4096, " ");
+    writeFileSync(overflowPath(), notes);
+    generate.mockResolvedValue(facts([fact, fact.toLowerCase()]));
+    say("t1", fact.toLowerCase());
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${notes}\n- ${fact} (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("saves a value an overflow file had before a later correction as the latest", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const moves = "# Notebook\n- Home city: Toronto (noted 2026-10-01)\n- Lives in Toronto (noted 2026-10-01)\n- Home city: Vancouver (noted 2026-10-10)\n- Lives in Vancouver (noted 2026-10-10)\n- Likes tea (noted 2026-10-11)\n";
+    writeFileSync(overflowPath(), moves);
+    generate.mockResolvedValue(facts(["Home city: Toronto", "i moved back to Toronto"], ["Lives in Toronto", "back to Toronto"], ["Likes tea", "i like tea"]));
+    say("t1", "i moved back to Toronto, i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${moves}- Home city: Toronto (noted 2026-10-15)\n- Lives in Toronto (noted 2026-10-15)\n- Likes tea (noted 2026-10-15)\n`);
+  });
+
+  it("saves a return to a multiword city after a one-word city as the latest", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    for (const city of ["New York", "Boston", "New York"]) {
+      generate.mockResolvedValue(facts([`Lives in ${city}`, `i now live in ${city}`]));
+      say("t1", `i now live in ${city}`);
+      await settle("t1", 3 * MINUTE);
+    }
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- Lives in"))).toEqual([
+      "- Lives in New York (noted 2026-10-15)",
+      "- Lives in Boston (noted 2026-10-15)",
+      "- Lives in New York (noted 2026-10-15)",
+    ]);
+  });
+
+  it.each([
+    ["Uses pnpm", "Uses npm"],
+    ["Prefers dark mode", "Prefers light mode"],
+    ["Favorite color blue", "Favorite color red"],
+    ["Moved to Toronto", "Moved to Vancouver"],
+    ["38 years old", "39 years old"],
+    ["Drinks oat milk", "Drinks soy milk"],
+    ["Lives in Toronto", "Moved to Vancouver"],
+    ["Uses pnpm", "Switched to npm"],
+    ["On macOS", "On Linux"],
+    ["Has a cat", "Has a dog"],
+    ["Vegetarian", "Eats meat again"],
+    ["Uses dark mode", "Switched to light theme"],
+    ["Single", "Married to Sam"],
+    ["Timezone is PST", "Now in EST"],
+  ])("saves a return to %s after %s as the latest, with a chip for each", async (a, b) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    for (const fact of [a, b, a]) {
+      generate.mockResolvedValue(facts([fact, `ok so now ${fact.toLowerCase()}`]));
+      say("t1", `ok so now ${fact.toLowerCase()}`);
+      await settle("t1", 3 * MINUTE);
+    }
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual([a, b, a].map((fact) => `- ${fact} (noted 2026-10-15)`));
+    expect(chips("t1")).toHaveLength(3);
+  });
+
+  it.each([
+    ["Uses pnpm", "Uses npm"],
+    ["Lives in Toronto", "Lives in Vancouver"],
+    ["Home city: Toronto", "Home city: Vancouver"],
+  ])("saves a return to %s said in one batch after %s as the latest", async (a, b) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    generate.mockResolvedValue(facts([a, `ok so now ${a.toLowerCase()}`]));
+    say("t1", `ok so now ${a.toLowerCase()}`);
+    await settle("t1", 3 * MINUTE);
+    generate.mockResolvedValue(facts([b, `ok so now ${b.toLowerCase()}`], [a, `no wait back to ${a.toLowerCase()}`]));
+    say("t1", `ok so now ${b.toLowerCase()}`);
+    say("t1", `no wait back to ${a.toLowerCase()}`);
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual([a, b, a].map((fact) => `- ${fact} (noted 2026-10-15)`));
+    expect(chips("t1")).toHaveLength(2);
+  });
+
+  it("saves a return after a hand-written row with no date as the latest", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    generate.mockResolvedValue(facts(["Uses pnpm", "i use pnpm"]));
+    say("t1", "i use pnpm");
+    await settle("t1", 3 * MINUTE);
+    fs.appendFileSync(overflowPath(), "- Uses npm\n");
+    say("t1", "no wait i use pnpm");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe("# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- Uses pnpm (noted 2026-10-15)\n- Uses npm\n- Uses pnpm (noted 2026-10-15)\n");
+    expect(chips("t1")).toHaveLength(2);
+  });
+  it.each([
+    ["Works at Acme", "i work at acme", "Works at Globex", "i work at globex", "i work at acme again"],
+    ["Drives a Honda", "i drive a honda", "Drives a Tesla", "i drive a tesla", "i drive a honda again"],
+    ["Uses Chrome", "i use chrome", "Uses Firefox", "i use firefox", "i use chrome again"],
+    ["Lives in seoul", "i live in seoul", "Lives in busan", "i live in busan", "i live in seoul again"],
+    ["Lives in Toronto, Canada", "i live in toronto, canada", "Lives in Vancouver, Canada", "i live in vancouver, canada", "back in toronto, canada"],
+    ["서울에 산다", "서울에 산다", "부산에 산다", "부산에 산다", "다시 서울에 산다"],
+    ["Favorite editor is Vim", "my favorite editor is vim", "Favorite editor is Emacs", "my favorite editor is emacs", "my favorite editor is vim after all"],
+    ["Phone is an iPhone", "my phone is an iphone", "Phone is a Pixel", "my phone is a pixel", "my phone is an iphone again"],
+    ["Is vegetarian", "i am vegetarian", "Eats meat", "i eat meat", "i am vegetarian again"],
+    ["Uses Python 3.11", "i use python 3.11", "Uses Python 3.12", "i use python 3.12", "i use python 3.11 again"],
+    ["Wakes up at 6am", "i wake up at 6am", "Wakes up at 9am", "i wake up at 9am", "i wake up at 6am again"],
+    ["Uses pnpm for work projects", "i use pnpm for work projects", "Uses npm for work projects", "i use npm for work projects", "i use pnpm for work projects again"],
+    ["Manager is Dana", "my manager is dana", "Manager is Lee", "my manager is lee", "my manager is dana again"],
+    ["Prefers tabs", "i prefer tabs", "Prefers spaces", "i prefer spaces", "i prefer tabs after all"],
+    ["Based in Toronto", "i am based in toronto", "Based in Vancouver", "i am based in vancouver", "i am based in toronto again"],
+    ["Is 38", "i am 38", "Is 39", "i am 39", "sorry i am 38"],
+    ["Subscribed to the Pro plan", "i am on the pro plan", "Subscribed to the Max plan", "i am on the max plan", "i am on the pro plan again"],
+    ["Team standup is at 9", "standup is at 9", "Team standup is at 10", "standup is at 10", "standup is at 9 again"],
+    ["Has a cat", "i have a cat", "Has a dog", "i have a dog", "sorry i meant i have a cat"],
+    ["Drinks oat milk", "i drink oat milk", "Drinks soy milk", "i drink soy milk", "i drink oat milk these days"],
+  ])("saves a return to %s (%s) after %s as the latest, in any wording", async (a, said, b, saidB, again) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    const turns: Array<[string, string]> = [[a, said], [b, saidB], [a, again]];
+    for (const [fact, quote] of turns) {
+      generate.mockResolvedValue(facts([fact, quote]));
+      say("t1", quote);
+      await settle("t1", 3 * MINUTE);
+    }
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual([a, b, a].map((fact) => `- ${fact} (noted 2026-10-15)`));
+    expect(chips("t1")).toHaveLength(3);
+  });
+
+  it("keeps what was said last as the newest overflow row in any script, through a held batch and a restart, and a plain repeat changes nothing", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    // seeded, so a failing run replays
+    let seed = 1991;
+    const pick = (n: number) => {
+      seed = (seed * 48_271) % 2_147_483_647;
+      return seed % n;
+    };
+    const scripts = ["abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", "0123456789", ".,;:!?'\"()&%#@/=_"];
+    const glyph = (script: number) => {
+      const letters = scripts[script];
+      return letters ? letters[pick(letters.length)]! : String.fromCodePoint(0xac00 + pick(11_172));
+    };
+    const word = () => {
+      const script = pick(4);
+      return Array.from({ length: 2 + pick(5) }, () => glyph(script)).join("");
+    };
+    const said: string[] = [];
+    const value = (): string => {
+      const text = said.length && !pick(4) ? said[pick(said.length)]! : Array.from({ length: 2 + pick(3) }, word).join(" ");
+      if (acceptFacts([{ fact: text, quote: text }], text, memoryFileRaw("bot-t1")).length !== 1) return value();
+      if (!said.includes(text)) said.push(text);
+      return text;
+    };
+    // the model says back what each message said, and may word a held one another way when asked again
+    const reworded = new Map<string, string>();
+    generate.mockImplementation(async (prompt) => facts(...[...prompt.matchAll(/message_id="([^"]+)"/g)].map(([, id]): [string, string] => {
+      const text = store.rows("t1").find((message) => message.id === id)!.text!;
+      return [reworded.get(id!) ?? text, text];
+    })));
+    const tell = async (...lines: string[]) => {
+      for (const line of lines) say("t1", line);
+      await settle("t1", 3 * MINUTE);
+    };
+    const newest = () => overflow()?.trimEnd().split("\n").at(-1)?.replace(/ \(noted \d{4}-\d{2}-\d{2}\)$/, "");
+    const rows = () => (overflow() ?? "").split("\n").filter((row) => row.startsWith("- ")).map((row) => row.slice(2).replace(/ \(noted \d{4}-\d{2}-\d{2}\)$/, ""));
+    for (let run = 0; run < 100; run++) {
+      const a = value();
+      let b = value();
+      while (b === a) b = value();
+      if (overflow() !== null && !pick(8)) fs.appendFileSync(overflowPath(), ["<!-- draft\n", "```\n", "<details>\n"][pick(3)]!);
+      await tell(a);
+      if (pick(3)) {
+        await tell(b);
+        await tell(a);
+      } else {
+        await tell(b, a);
+      }
+      expect(newest(), `run ${run}: ${a} then ${b} then ${a}`).toBe(`- ${a}`);
+      const text = overflow();
+      const saved = chips("t1").length;
+      const count = pass.droppedNotes("bot-t1");
+      const calls = generate.mock.calls.length;
+      await tell(a);
+      expect(generate).toHaveBeenCalledTimes(calls + 1);
+      expect(overflow(), `run ${run}: ${a} again`).toBe(text);
+      expect(chips("t1")).toHaveLength(saved);
+      expect(pass.droppedNotes("bot-t1")).toEqual(count);
+      // held after its overflow step, then the other PC's older copy of the file or another writer's row, and the same chat again, with a restart anywhere
+      const c = pick(2) ? a : value();
+      writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+      const prior = overflow()!;
+      const newestWhenSaid = rows().at(-1);
+      lockMemoryOnce();
+      await tell(c);
+      const heldDay = / \(noted (\d{4}-\d{2}-\d{2})\)$/.exec(overflow()!.trimEnd().split("\n").at(-1)!)?.[1];
+      vi.mocked(fs.openSync).mockRestore();
+      const asked = generate.mock.calls.length;
+      const restartAt = pick(5);
+      const restart = (at: number) => {
+        if (restartAt !== at) return;
+        pass.dispose();
+        pass = start();
+      };
+      restart(1);
+      if (pick(2)) reworded.set(store.rows("t1").findLast((message) => message.role === "user")!.id, [`${c}.`, `User ${c}`, `${c} too`][pick(3)]!);
+      let other = value();
+      while (other === c) other = value();
+      const swap = pick(3);
+      if (swap) writeFileSync(overflowPath(), `${prior}${swap === 2 ? `- ${other} (noted 2026-10-15)\n` : ""}`);
+      else if (pick(2)) fs.appendFileSync(overflowPath(), `- ${other} (noted 2026-10-15)\n`);
+      restart(2);
+      const later = [undefined, c, value()][pick(3)];
+      if (later !== undefined) say("t1", later);
+      restart(3);
+      // a row the older copy dropped is written again, unless it was the newest row already when said or a row in its words from that day is still there
+      const twin = swap && prior.split("\n").includes(`- ${c} (noted ${heldDay})`);
+      const before = swap && newestWhenSaid !== c && !twin ? [...rows(), c] : rows();
+      await settle("t1", 3 * MINUTE);
+      restart(4);
+      await settle("t1", 3 * MINUTE);
+      const want = later === undefined || later === before.at(-1) ? before : [...before, later];
+      expect(rows(), `run ${run}: ${c} held, then ${["no swap", "older copy", `older copy and ${other}`][swap]} and ${later}, restart ${restartAt}`).toEqual(want);
+      expect(newest()).toBe(`- ${want.at(-1)}`);
+      expect(rows()).toContain(c);
+      expect(generate).toHaveBeenCalledTimes(asked + (later === undefined ? 0 : 1));
+      expect(stored().held).toBeUndefined();
+      // the hand-kept log this test once wrote drew from the seed; drawing the same keeps each seeded run as it was
+      const key = Array.from({ length: 2 }, () => Array.from({ length: 6 }, () => glyph(0)).join("")).join(" ");
+      const dates = Array.from({ length: 2 + pick(3) }, () => `2026-0${1 + pick(9)}-${10 + pick(19)}`);
+      const copies = [...dates.map((date) => `- ${key} ${a} (noted ${date})`), ...said.slice(-3).map((note) => `- ${note}`)];
+      for (let at = copies.length - 1; at > 0; at--) {
+        const swap = pick(at + 1);
+        [copies[at], copies[swap]] = [copies[swap]!, copies[at]!];
+      }
+    }
+  }, 120_000);
+
+  it.each([
+    ["Likes tea", "Likes coffee"],
+    ["Works at Acme", "Works at night"],
+    ["Lives in Toronto", "Lives in a condo"],
+  ])("adds one dated row for %s said again after %s", async (a, b) => {
+    writeMemoryFile("bot-t1", `# Memory\n- memory/auto-notes-overflow.md: prior pointer\n${"- note\n".repeat(197)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const fillers = Array.from({ length: 120 }, (_, i) => `- filler kettle${i} harbor${i} lantern${i}\n`).join("");
+    const notes = `# Notebook\n\n- ${a} (noted 2026-10-01)\n- ${b} (noted 2026-10-02)\n- COBALT WALRUS: invoice goes to the north office\n${fillers}`
+      .padEnd(2 * 1024 * 1024 - Buffer.byteLength(memoryFileRaw("bot-t1")) - 8, " ");
+    writeFileSync(overflowPath(), notes);
+    generate.mockResolvedValue(facts([a, `ok so now ${a.toLowerCase()}`]));
+    say("t1", `ok so now ${a.toLowerCase()}`);
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${notes}\n- ${a} (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
+  });
+
+  it.each([
+    ["Has a cat", "Has a dog", "i have a cat"],
+    ["Drinks oat milk", "Drinks soy milk", "i drink oat milk"],
+    ["Uses pnpm", "Uses pip", "i use pnpm"],
+    ["Uses pnpm", "Switched to pnpm", "i use pnpm"],
+  ])("adds a repeat of %s after %s as the newest row", async (a, b, quote) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const notes = `# Notebook\n- ${a} (noted 2026-10-01)\n- ${b} (noted 2026-10-02)\n`;
+    writeFileSync(overflowPath(), notes);
+    generate.mockResolvedValue(facts([a, quote]));
+    say("t1", quote);
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${notes}- ${a} (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("keeps the count of notes an older version lost when a new note overflows", async () => {
+    pass.dispose();
+    writeFileSync(join(dataDir, "memory-pass.json"), JSON.stringify({ threads: {}, dropped: { "bot-t1": { dropped: 2, since: NOW - 2 * 86_400_000 } } }));
+    pass = start();
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    const notice = memoryNotice({ longLines: 0, orphans: [] }, pass.droppedNotes("bot-t1"));
+    expect(notice).toContain("2 auto notes since 10-13 were not saved because the file is full");
+    expect(notice).toContain("1 auto note since 10-15 went to memory/auto-notes-overflow.md because MEMORY.md is full");
+    pass.dispose();
+    expect(stored()).toEqual({ threads: {}, dropped: { "bot-t1": { dropped: 2, since: NOW - 2 * 86_400_000 } }, overflow: { "bot-t1": { dropped: 1, since: NOW + 3 * MINUTE } } });
+    pass = start();
+    expect(memoryNotice({ longLines: 0, orphans: [] }, pass.droppedNotes("bot-t1"))).toBe(notice);
+  });
+
+  it("retries the batch, without a second extraction, when its pointer append fails after the overflow write", async () => {
+    const full = `# Memory\n${"- note\n".repeat(198)}`;
+    writeMemoryFile("bot-t1", full);
+    const path = join(workspaceDir("bot-t1"), "MEMORY.md");
+    const open = fs.openSync;
+    let failed = false;
+    // SAFETY: the wrapper passes every other call through and returns the real descriptor.
+    vi.spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof open>) => {
+      if (!failed && args[0] === path) {
+        failed = true;
+        throw Object.assign(new Error("locked"), { code: "EBUSY" });
+      }
+      return open(...args);
+    }) as typeof open);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(failed).toBe(true);
+    expect(chips("t1")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
+    await pass.idle();
+    vi.mocked(fs.openSync).mockRestore();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(memoryFileRaw("bot-t1")).toBe(`${full}- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-15)`);
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- Likes tea (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("writes a held note again when another writer removed it before the retry", async () => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(chips("t1")).toHaveLength(0);
+    writeFileSync(overflowPath(), "# Auto notes overflow\n\n- Owns a kayak (noted 2026-10-01)\n");
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
+    await pass.idle();
+    expect(overflow()).toBe("# Auto notes overflow\n\n- Owns a kayak (noted 2026-10-01)\n- Likes tea (noted 2026-10-15)\n");
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it.each([
+    ["Uses pnpm", "Uses npm"],
+    ["Lives in Toronto", "Lives in Vancouver"],
+  ])("keeps the change last when a restart replays a held batch of %s then %s", async (a, b) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts([a, `i used to say ${a.toLowerCase()}`], [b, `ok so now ${b.toLowerCase()}`]));
+    say("t1", `i used to say ${a.toLowerCase()}`);
+    say("t1", `ok so now ${b.toLowerCase()}`);
+    await settle("t1", 3 * MINUTE);
+    pass.dispose();
+    pass = start();
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual([a, b].map((fact) => `- ${fact} (noted 2026-10-15)`));
+  });
+
+  it.each(["Works at Acme", "Works at Acme Corp", "Employed at Acme", "works at Acme", "Works at Acme.", "User works at Acme", "nothing"])("lands a held note after a restart as it was saved, where asking again would give %s", async (again) => {
+    const full = `# Memory\n${"- note\n".repeat(198)}`;
+    writeMemoryFile("bot-t1", full);
+    lockMemoryOnce();
+    generate.mockResolvedValueOnce(facts(["Works at Acme", "my job is at acme"]));
+    say("t1", "my job is at acme");
+    await settle("t1", 3 * MINUTE);
+    fs.appendFileSync(overflowPath(), "- Works at Globex (noted 2026-10-15)\n");
+    generate.mockResolvedValue(again === "nothing" ? "[]" : facts([again, "my job is at acme"]));
+    pass.dispose();
+    pass = start();
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe("# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- Works at Acme (noted 2026-10-15)\n- Works at Globex (noted 2026-10-15)\n");
+    expect(memoryFileRaw("bot-t1")).toBe(`${full}- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-15)`);
+    expect(chips("t1").map((m) => m.tool?.spoken)).toEqual(["Works at Acme (MEMORY.md is full, saved in memory/auto-notes-overflow.md)"]);
+    expect(stored()).toEqual({ threads: {}, overflow: { "bot-t1": { dropped: 1, since: NOW + 3 * MINUTE } } });
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["retry", "restart"])("writes a held return again when an older copy of the file replaces it before the %s", async (how) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const older = "# Auto notes overflow\n\n- Works at Acme (noted 2026-10-01)\n- Works at Globex (noted 2026-10-14)\n";
+    writeFileSync(overflowPath(), older);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme again"]));
+    say("t1", "my job is at acme again");
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${older}- Works at Acme (noted 2026-10-15)\n`);
+    // the other PC's copy, without this PC's row, wins a sync
+    writeFileSync(overflowPath(), `${older}- Likes tea (noted 2026-10-15)\n`);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${older}- Likes tea (noted 2026-10-15)\n- Works at Acme (noted 2026-10-15)\n`);
+    expect(chips("t1")).toHaveLength(1);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  const above = "# Auto notes overflow\n\n- Works at Acme (noted 2026-10-01)\n- Likes tea (noted 2026-10-01)\n- Has a cat (noted 2026-10-02)\n";
+  const aboveEdits: Array<[string, (text: string) => string]> = [
+    ["deletes a row", (text) => text.replace("- Likes tea (noted 2026-10-01)\n", "")],
+    ["deletes the older row in the same words", (text) => text.replace("- Works at Acme (noted 2026-10-01)\n", "")],
+    ["adds a row", (text) => text.replace("- Likes tea", "- Plays chess (noted 2026-09-30)\n- Likes tea")],
+    ["swaps two rows", (text) => text.replace("- Likes tea (noted 2026-10-01)\n- Has a cat (noted 2026-10-02)\n", "- Has a cat (noted 2026-10-02)\n- Likes tea (noted 2026-10-01)\n")],
+    ["puts a row in a comment", (text) => text.replace("- Likes tea (noted 2026-10-01)\n", "<!-- - Likes tea (noted 2026-10-01) -->\n")],
+  ];
+  it.each(aboveEdits.flatMap(([kind, edit]) => [[kind, "retry", edit], [kind, "restart", edit]] as const))("never writes a held note again when a hand edit %s above it, then a %s", async (_kind, how, edit) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), above);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme again"]));
+    say("t1", "my job is at acme again");
+    await settle("t1", 3 * MINUTE);
+    fs.appendFileSync(overflowPath(), "- Works at Globex (noted 2026-10-15)\n");
+    const edited = edit(overflow()!);
+    writeFileSync(overflowPath(), edited);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(edited);
+    expect(chips("t1")).toHaveLength(1);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  const chipEdits: Array<[string, (text: string) => string]> = [
+    ["a row above is deleted", (text) => text.replace("- Likes tea (noted 2026-10-01)\n", "")],
+    ["a shorter older copy replaces the file", () => "# Auto notes overflow\n\n- Works at Acme (noted 2026-10-01)\n"],
+  ];
+  it.each(chipEdits.flatMap(([kind, edit]) => [[kind, "retry", edit], [kind, "restart", edit]] as const))("shows the saved chip for a held note still the newest row after %s, then a %s", async (_kind, how, edit) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), above);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme again"]));
+    say("t1", "my job is at acme again");
+    await settle("t1", 3 * MINUTE);
+    const edited = edit(overflow()!);
+    writeFileSync(overflowPath(), edited);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(edited);
+    expect(chips("t1").map((m) => m.tool?.spoken)).toEqual(["Works at Acme (MEMORY.md is full, saved in memory/auto-notes-overflow.md)"]);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(1);
+    expect(stored().held).toBeUndefined();
+  });
+
+  it.each(["retry", "restart"])("keeps a held batch's later line last when only its earlier line is removed before the %s", async (how) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Uses pnpm", "i used to say i use pnpm"], ["Uses npm", "ok so now i use npm"]));
+    say("t1", "i used to say i use pnpm");
+    say("t1", "ok so now i use npm");
+    await settle("t1", 3 * MINUTE);
+    writeFileSync(overflowPath(), overflow()!.replace("- Uses pnpm (noted 2026-10-15)\n", ""));
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- "))).toEqual(["Uses npm", "Uses pnpm", "Uses npm"].map((fact) => `- ${fact} (noted 2026-10-15)`));
+    expect(chips("t1")).toHaveLength(1);
+    expect(pass.droppedNotes("bot-t1")?.dropped).toBe(2);
+  });
+
+  const mine = "- Works at Acme (noted 2026-10-15)\n";
+  const ownEdits: Array<[string, (text: string) => string]> = [
+    ["takes its date off", (text) => text.replace(mine, "- Works at Acme\n")],
+    ["moves its date a day on", (text) => text.replace(mine, "- Works at Acme (noted 2026-10-16)\n")],
+    ["moves its date a day back", (text) => text.replace(mine, "- Works at Acme (noted 2026-10-14)\n")],
+    ["takes every date off", (text) => text.replace(/ \(noted [0-9-]+\)/g, "")],
+  ];
+  it.each(ownEdits.flatMap(([kind, edit]) => [[kind, "retry", edit], [kind, "restart", edit]] as const))("never writes a held note again when a hand edit %s its row, then a %s", async (_kind, how, edit) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), above);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme again"]));
+    say("t1", "my job is at acme again");
+    await settle("t1", 3 * MINUTE);
+    fs.appendFileSync(overflowPath(), "- Works at Globex (noted 2026-10-15)\n");
+    const edited = edit(overflow()!);
+    writeFileSync(overflowPath(), edited);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(edited);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  const twinEdits: Array<[string, (text: string) => string]> = [
+    ["removes", (text) => text.replace(mine, "")],
+    ["comments out", (text) => text.replace(mine, "<!-- old: Works at Acme -->\n")],
+    ["retypes", (text) => text.replace(mine, "- Worked at Acme before (noted 2026-10-15)\n")],
+    ["moves the date of", (text) => text.replace(mine, "- Works at Acme (noted 2026-10-14)\n")],
+  ];
+  it.each(twinEdits.flatMap(([kind, edit]) => [[kind, "retry", edit], [kind, "restart", edit]] as const))("never writes a held note again when a hand edit %s an earlier copy from the same day, then a %s", async (_kind, how, edit) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), `${above}${mine}- Works at Globex (noted 2026-10-15)\n`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme again"]));
+    say("t1", "my job is at acme again");
+    await settle("t1", 3 * MINUTE);
+    fs.appendFileSync(overflowPath(), "- Works at Initech (noted 2026-10-15)\n");
+    const edited = edit(overflow()!);
+    writeFileSync(overflowPath(), edited);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(edited);
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it.each(["retry", "restart"])("writes a held note again when the file is swapped for an older copy in its words with a newer value after, then a %s", async (how) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    writeFileSync(overflowPath(), above);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme again"]));
+    say("t1", "my job is at acme again");
+    await settle("t1", 3 * MINUTE);
+    writeFileSync(overflowPath(), `${above}- Works at Acme (noted 2026-10-14)\n- Works at Globex (noted 2026-10-14)\n`);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()?.split("\n").filter((row) => row.startsWith("- ")).at(-1)).toBe(mine.trim());
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  it.each([
+    ["the same note", "# Memory\n- note\n- Works at Acme (noted 2026-10-15)\n"],
+    ["the note in other words", "# Memory\n- note\n- User's job is at Acme\n"],
+    ["the same note, then a newer value", "# Memory\n- note\n- Works at Acme (noted 2026-10-15)\n- Works at Globex (noted 2026-10-15)\n"],
+  ])("checks a held note against MEMORY.md after a restart once room is made with %s in it", async (_kind, room) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Works at Acme", "my job is at acme"]));
+    say("t1", "my job is at acme");
+    await settle("t1", 3 * MINUTE);
+    expect(stored().held).toBeDefined();
+    writeMemoryFile("bot-t1", room);
+    pass.dispose();
+    pass = start();
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(room);
+    expect(stored().held).toBeUndefined();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(chips("t1")).toHaveLength(1);
+    expect(pass.droppedNotes("bot-t1")).toBeUndefined();
+  });
+
+  it.each(["retry", "restart"])("lands a held correction on the quote it was accepted on, never one turned away, after a %s", async (how) => {
+    const old = "- Builds oak kayaks (noted 2026-10-01)";
+    writeMemoryFile("bot-t1", `# Memory\n- Plans cedar shelves\n${old}\n${"- note\n".repeat(196)}`);
+    const path = join(workspaceDir("bot-t1"), "MEMORY.md");
+    const write = atomic.writeFileAtomic;
+    let failed = false;
+    vi.spyOn(atomic, "writeFileAtomic").mockImplementation((target, ...args) => {
+      if (!failed && target === path) {
+        failed = true;
+        throw Object.assign(new Error("locked"), { code: "EBUSY" });
+      }
+      write(target, ...args);
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    generate.mockResolvedValue(JSON.stringify([
+      { fact: "Builds cedar kayaks", quote: "cedar" },
+      { fact: "Builds cedar kayaks", quote: "I build cedar kayaks", replaces: old },
+      { fact: "Collects flutes", quote: "I collect flutes" },
+    ]));
+    say("t1", "I build cedar kayaks");
+    say("t1", "I collect flutes");
+    await settle("t1", 3 * MINUTE);
+    expect(stored().held).toBeDefined();
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toContain("- Builds cedar kayaks (noted 2026-10-15)\n");
+    expect(memoryFileRaw("bot-t1")).not.toContain(old);
+    expect(stored().held).toBeUndefined();
+  });
+
+  it.each(["retry", "restart"])("keeps a later value of its label in recall when a hand edit dates a held row back above an older row, then a next-day %s", async (how) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const top = "# Auto notes overflow\n\n- Likes tea (noted 2026-10-01)\n- Has a cat (noted 2026-10-02)\n";
+    writeFileSync(overflowPath(), `${top}- Plays chess (noted 2026-10-03)\n`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Research station: Cobalt Acme", "my research station is cobalt acme"]));
+    say("t1", "my research station is cobalt acme");
+    await settle("t1", 3 * MINUTE);
+    const edited = `${top}- Research station: Cobalt Acme (noted 2026-10-01)\n- Plays chess (noted 2026-10-03)\n- Research station: Indigo Globex (noted 2026-10-15)\n`;
+    writeFileSync(overflowPath(), edited);
+    vi.setSystemTime(NOW + 24 * 60 * MINUTE);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    expect(overflow()).toBe(`${edited}- Research station: Cobalt Acme (noted 2026-10-15)\n`);
+    writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
+    const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
+    await lookup.refresh("bot-t1");
+    expect(lookup.take("bot-t1", "t1", "after", "indigo globex").join("")).toContain("Indigo Globex");
+  });
+
+  const restores: Array<[string, string, string]> = [
+    ["dates it above two later rows", "- Has a cat (noted 2026-10-02)\n", "- Research station: Cobalt Acme (noted 2026-10-01)\n- Plays chess (noted 2026-10-03)\n- Research station: Indigo Globex (noted 2026-10-15)\n"],
+    ["keeps only an older copy", "- Research station: Cobalt Acme (noted 2026-10-14)\n- Research station: Indigo Globex (noted 2026-10-15)\n", "- Research station: Cobalt Acme (noted 2026-10-14)\n- Research station: Indigo Globex (noted 2026-10-15)\n"],
+    ["moves an older copy to the end", "- Has a cat (noted 2026-10-02)\n", "- Research station: Indigo Globex (noted 2026-10-15)\n- Plays chess (noted 2026-10-03)\n- Research station: Cobalt Acme (noted 2026-10-01)\n"],
+    ["has an older copy above and at the end", "- Has a cat (noted 2026-10-02)\n", "- Research station: Cobalt Acme (noted 2026-10-01)\n- Research station: Indigo Globex (noted 2026-10-15)\n- Plays chess (noted 2026-10-03)\n- Research station: Cobalt Acme (noted 2026-10-01)\n"],
+  ];
+  it.each(restores.flatMap(([kind, before, restored]) => [[kind, "retry", before, restored], [kind, "restart", before, restored]] as const))("keeps a held return in recall and in its chip when a restored older file %s, then a %s", async (_kind, how, before, restored) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const top = "# Auto notes overflow\n\n- Likes tea (noted 2026-10-01)\n";
+    writeFileSync(overflowPath(), top + before);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Research station: Cobalt Acme", "I returned to the cobalt acme research station"]));
+    say("t1", "I returned to the cobalt acme research station");
+    await settle("t1", 3 * MINUTE);
+    writeFileSync(overflowPath(), top + restored);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
+    const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
+    await lookup.refresh("bot-t1");
+    expect(chips("t1").map((chip) => chip.tool?.spoken).join()).toContain("Cobalt Acme");
+    expect(lookup.take("bot-t1", "t1", "after", "cobalt acme").join("")).toContain("Cobalt Acme");
+  });
+
+  it.each(["retry", "restart"])("keeps another chat's newer value of its label in recall when a hand edit moves a held row below it, then a next-day %s", async (how) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    mkdirSync(dirname(overflowPath()), { recursive: true });
+    const top = "# Auto notes overflow\n\n- Likes tea (noted 2026-10-01)\n- Has a cat (noted 2026-10-02)\n";
+    writeFileSync(overflowPath(), `${top}- Plays chess (noted 2026-10-03)\n`);
+    lockMemoryOnce();
+    generate.mockResolvedValue(facts(["Research station: Cobalt Acme", "my research station is cobalt acme"]));
+    say("t1", "my research station is cobalt acme");
+    await settle("t1", 3 * MINUTE);
+    generate.mockResolvedValue(facts(["Research station: Indigo Globex", "my research station is indigo globex"]));
+    say("t2", "my research station is indigo globex");
+    pass.onSettled("bot-t1", "t2", true);
+    await pass.idle();
+    writeFileSync(overflowPath(), `${top}- Research station: Indigo Globex (noted 2026-10-15)\n- Research station: Cobalt Acme (noted 2026-10-02)\n- Plays chess (noted 2026-10-03)\n`);
+    vi.setSystemTime(NOW + 24 * 60 * MINUTE);
+    if (how === "restart") {
+      pass.dispose();
+      pass = start();
+    }
+    await settle("t1", 3 * MINUTE);
+    writeFileSync(join(dataDir, "lookup-bots.json"), JSON.stringify(["bot-t1"]));
+    const lookup = createMemoryLookup({ dataDir, notesPath: () => undefined, clock: () => 0 });
+    await lookup.refresh("bot-t1");
+    expect(lookup.take("bot-t1", "t1", "after", "indigo globex").join("")).toContain("Indigo Globex");
+  });
+
+  it.each(["rename-save", "open append handle"])("keeps another writer's overflow rows during %s", async (kind) => {
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    const path = overflowPath();
+    mkdirSync(dirname(path), { recursive: true });
+    const notes = "# Notebook\n- Uses pnpm (noted 2026-10-01)\n- Uses npm (noted 2026-10-02)\n";
+    const hand = "- Owns a kayak\n";
+    writeFileSync(path, notes);
+    const open = fs.openSync;
+    let edited = false;
+    let fd: number | undefined;
+    const edit = (target: fs.PathLike) => {
+      if (target !== path || edited) return;
+      edited = true;
+      if (kind === "rename-save") {
+        writeFileSync(`${path}.editor`, notes + hand);
+        fs.renameSync(`${path}.editor`, path);
+      } else {
+        fd = open(path, "a");
+        fs.writeSync(fd, hand);
+      }
+    };
+    const atomicWrite = atomic.writeFileAtomic;
+    vi.spyOn(atomic, "writeFileAtomic").mockImplementation((target, ...args) => {
+      edit(target);
+      atomicWrite(target, ...args);
+    });
+    // SAFETY: the wrapper passes each open through and returns the real descriptor.
+    vi.spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof open>) => {
+      if (args[1] === "a+") edit(args[0]);
+      return open(...args);
+    }) as typeof open);
+    generate.mockResolvedValue(facts(["Uses pnpm", "i use pnpm"]));
+    say("t1", "i use pnpm");
+    try {
+      const before = overflowBytes();
+      pass.onSettled("bot-t1", "t1");
+      await vi.advanceTimersByTimeAsync(3 * MINUTE);
+      await pass.idle();
+      if (fd !== undefined) fs.writeSync(fd, "- Daughter is Mina\n");
+      const second = kind === "open append handle" ? "- Daughter is Mina\n" : "";
+      expect(edited).toBe(true);
+      expect(overflow()).toBe(`${notes}${hand}- Uses pnpm (noted 2026-10-15)\n${second}`);
+      await idle(before);
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+    expect(chips("t1")).toHaveLength(1);
+  });
+
+  describe("a correction in a MEMORY.md at its limit, while another writer edits it", () => {
+    const old = "- Home city: Toronto (noted 2026-10-01)";
+    const full = `# Memory\n${old}\n${"- note\n".repeat(197)}`;
+    // lands after the revision check, just before the corrected file is written; `then` lands just after it
+    const editDuringSwap = (script: string, then?: string) => {
+      const path = join(workspaceDir("bot-t1"), "MEMORY.md");
+      const write = atomic.writeFileAtomic;
+      const edit = { landed: false };
+      vi.spyOn(atomic, "writeFileAtomic").mockImplementation((target, ...args) => {
+        const first = !edit.landed && target === path;
+        if (first) {
+          execFileSync(process.execPath, ["-e", script, path], { windowsHide: true });
+          edit.landed = true;
+        }
+        write(target, ...args);
+        if (first && then) execFileSync(process.execPath, ["-e", then, path], { windowsHide: true });
+      });
+      return edit;
+    };
+    const correct = async () => {
+      generate.mockResolvedValue(JSON.stringify([{ fact: "Home city: Vancouver", quote: "i now live in Vancouver", replaces: old }, { fact: "Uses pnpm", quote: "i use pnpm" }]));
+      say("t1", "i now live in Vancouver, i use pnpm");
+      await settle("t1", 3 * MINUTE);
+    };
+
+    it("keeps a line the other writer appended", async () => {
+      writeMemoryFile("bot-t1", full);
+      const edit = editDuringSwap("require('node:fs').appendFileSync(process.argv[1], '- Cobalt preference\\n')");
+      await correct();
+      await vi.advanceTimersByTimeAsync(3 * MINUTE);
+      await pass.idle();
+      vi.mocked(atomic.writeFileAtomic).mockRestore();
+      expect(edit.landed).toBe(true);
+      const after = memoryFileRaw("bot-t1");
+      expect(after).toContain("\n- Cobalt preference\n");
+      expect(after).toContain("- Home city: Vancouver (noted 2026-10-15)");
+      expect(after).not.toContain("Toronto");
+      expect(overflow()).toContain("- Uses pnpm (noted 2026-10-15)");
+      expect(chips("t1")).toHaveLength(1);
+    });
+
+    it.skipIf(process.platform !== "win32")("keeps a line the other writer changed in place", async () => {
+      writeMemoryFile("bot-t1", full);
+      const edit = editDuringSwap("const fs = require('node:fs'); const p = process.argv[1]; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace('- note\\n', '- edited by hand\\n'))");
+      await correct();
+      await vi.advanceTimersByTimeAsync(3 * MINUTE);
+      await pass.idle();
+      vi.mocked(atomic.writeFileAtomic).mockRestore();
+      expect(edit.landed).toBe(true);
+      const after = memoryFileRaw("bot-t1");
+      expect(after).toContain("\n- edited by hand\n");
+      expect(after).toContain("- Home city: Vancouver (noted 2026-10-15)");
+      expect(after).not.toContain("Toronto");
+      expect(overflow()).toContain("- Uses pnpm (noted 2026-10-15)");
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(chips("t1")).toHaveLength(1);
+    });
+
+    it("keeps a line another writer appends once the corrected file has landed, and parks the line changed in place", async () => {
+      writeMemoryFile("bot-t1", full);
+      const edit = editDuringSwap(
+        "const fs = require('node:fs'); const p = process.argv[1]; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace('- note\\n', '- Cobalt hand edit\\n'))",
+        "require('node:fs').appendFileSync(process.argv[1], '\\n- Indigo after install\\n')",
+      );
+      await correct();
+      await vi.advanceTimersByTimeAsync(3 * MINUTE);
+      await pass.idle();
+      vi.mocked(atomic.writeFileAtomic).mockRestore();
+      expect(edit.landed).toBe(true);
+      const after = memoryFileRaw("bot-t1");
+      expect(after).toContain("\n- Indigo after install\n");
+      expect(after).toContain("- Home city: Vancouver (noted 2026-10-15)");
+      const memory = dirname(overflowPath());
+      const parked = fs.readdirSync(memory).filter((name) => name.startsWith("MEMORY.conflict-")).map((name) => readFileSync(join(memory, name), "utf8"));
+      expect(parked).toHaveLength(1);
+      expect(parked[0]).toContain("\n- Cobalt hand edit\n");
+      expect(overflow()).toContain("- Uses pnpm (noted 2026-10-15)");
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(chips("t1")).toHaveLength(1);
+    });
+  });
+
+  it("swaps a correction into a MEMORY.md at its limit and sends the rest to the overflow file", async () => {
+    const old = "- Home city: Toronto (noted 2026-10-01)";
+    writeMemoryFile("bot-t1", `# Memory\n${old}\n${"- note\n".repeat(197)}`);
+    generate.mockResolvedValue(JSON.stringify([{ fact: "Home city: Vancouver", quote: "i now live in Vancouver", replaces: old }, { fact: "Uses pnpm", quote: "i use pnpm" }]));
+    say("t1", "i now live in Vancouver, i use pnpm");
+    await settle("t1", 3 * MINUTE);
+    expect(memorySystemPrompt("bot-t1")).toContain("- Home city: Vancouver (noted 2026-10-15)");
+    expect(memorySystemPrompt("bot-t1")).not.toContain("Toronto");
+    expect(overflow()).toContain("- Uses pnpm (noted 2026-10-15)");
+    expect(overflow()).not.toContain("Vancouver");
+  });
+
+  it("swaps a correction into a MEMORY.md that already ends on its overflow pointer", async () => {
+    const old = "- Home city: Toronto (noted 2026-10-01)";
+    const pointer = "- memory/auto-notes-overflow.md: Auto Notes saved while this file was full; read it when a fact seems missing (noted 2026-10-14)";
+    writeMemoryFile("bot-t1", `# Memory\n${old}\n${"- note\n".repeat(197)}${pointer}`);
+    generate.mockResolvedValue(JSON.stringify([{ fact: "Home city: Vancouver", quote: "i now live in Vancouver", replaces: old }]));
+    say("t1", "i now live in Vancouver");
+    await settle("t1", 3 * MINUTE);
+    expect(memorySystemPrompt("bot-t1")).toContain("- Home city: Vancouver (noted 2026-10-15)");
+    expect(memorySystemPrompt("bot-t1")).not.toContain("Toronto");
+    expect(overflow()).toBeNull();
+  });
+
+  it("takes a corrected line out of a MEMORY.md too full in bytes to swap it", async () => {
+    const old = "- Home city: Toronto (noted 2026-10-01)";
+    const head = `# Memory\n${old}\n`;
+    const filler = "x".repeat(98);
+    const rows = Math.floor((MEMORY_MAX_BYTES - head.length) / 101);
+    const rest = MEMORY_MAX_BYTES - 1 - head.length - rows * 101;
+    writeMemoryFile("bot-t1", `${head}${`- ${filler}\n`.repeat(rows)}${"y".repeat(rest - 1)}\n`);
+    generate.mockResolvedValue(JSON.stringify([{ fact: "Home city: Vancouver", quote: "i now live in Vancouver", replaces: old }]));
+    say("t1", "i now live in Vancouver");
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).not.toContain("Toronto");
+    expect(overflow()).toContain("- Home city: Vancouver (noted 2026-10-15)");
+  });
+
+  it("keeps a corrected line until its new value is on disk", async () => {
+    const old = "- Home city: Toronto (noted 2026-10-01)";
+    const head = `# Memory\n${old}\n`;
+    const rows = Math.floor((MEMORY_MAX_BYTES - head.length) / 101);
+    const rest = MEMORY_MAX_BYTES - 1 - head.length - rows * 101;
+    const full = `${head}${`- ${"x".repeat(98)}\n`.repeat(rows)}${"y".repeat(rest - 1)}\n`;
+    writeMemoryFile("bot-t1", full);
+    mkdirSync(overflowPath(), { recursive: true });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    generate.mockResolvedValue(JSON.stringify([{ fact: "Home city: Vancouver", quote: "i now live in Vancouver", replaces: old }]));
+    say("t1", "i now live in Vancouver");
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(full);
+    removeTestData(overflowPath());
+    await settle("t1");
+    expect(memoryFileRaw("bot-t1")).not.toContain("Toronto");
+    expect(overflow()).toContain("- Home city: Vancouver (noted 2026-10-15)");
+  });
+
+  it("writes no pointer past the bytes the prompt reads", async () => {
+    const full = `# Memory\n${`- ${"x".repeat(118)}\n`.repeat(199)}`;
+    writeMemoryFile("bot-t1", full);
+    generate.mockResolvedValue(facts(["Likes tea", "i like tea"]));
+    say("t1", "i like tea");
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(full);
+    expect(overflow()).toContain("- Likes tea (noted 2026-10-15)");
+  });
+
+  it("never reports notes an older version turned away as saved in the overflow file", () => {
+    pass.dispose();
+    writeFileSync(join(dataDir, "memory-pass.json"), JSON.stringify({ threads: {}, dropped: { "bot-t1": { dropped: 2, since: NOW } } }));
+    pass = start();
+    const notice = memoryNotice({ longLines: 0, orphans: [] }, pass.droppedNotes("bot-t1"));
+    expect(notice).toContain("2 auto notes since 10-15 were not saved because the file is full");
+    expect(notice).not.toContain("auto-notes-overflow.md");
+  });
+
+  it("saves every fact of a reply with more than 20", async () => {
+    const items = Array.from({ length: 21 }, (_, i): [string, string] => [`Project color ${i}`, `color ${i}`]);
+    generate.mockResolvedValue(facts(...items));
+    say("t1", items.map(([, quote]) => quote).join("\n\n"));
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toContain("- Project color 20 (noted 2026-10-15)");
+    expect(memoryFileRaw("bot-t1")).toContain("- Project color 0 (noted 2026-10-15)");
+  });
+
+  it("leaves the overflow file alone when the note fits an empty MEMORY.md", async () => {
+    generate.mockResolvedValue(facts(["38 years old", "i'm 38"]));
+    say("t1", "i'm 38");
+    await settle("t1", 3 * MINUTE);
+    expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- 38 years old (noted 2026-10-15)\n`);
+    expect(existsSync(overflowPath())).toBe(false);
+  });
+
+  it("saves a room member's turned-away note to its own overflow file", async () => {
+    Object.assign(store, {
+      // SAFETY: the pass reads only the member ids and the bot id.
+      groupByThread: (threadId: string) => (threadId.startsWith("room") ? ({ id: "g", memberIds: ["bot-t1"] } as never) : undefined),
+      // SAFETY: the pass reads only the bot id.
+      bot: (botId: string) => ({ id: botId }) as never,
+    });
+    writeMemoryFile("bot-t1", `# Memory\n${"- note\n".repeat(198)}`);
+    generate.mockResolvedValue(facts(["38 years old", "i'm 38"]));
+    say("room1", "i'm 38");
+    pass.onSettled("bot-t1", "room1");
+    await vi.advanceTimersByTimeAsync(3 * MINUTE);
+    await pass.idle();
+    expect(overflow()).toBe(`# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n- 38 years old (noted 2026-10-15)\n`);
+    expect(chips("room1")).toHaveLength(1);
   });
 
   it("records notes a full file turned away until a later save lands", async () => {
@@ -372,7 +1779,7 @@ describe("memory pass", () => {
     await vi.advanceTimersByTimeAsync(MINUTE);
     await settle("t1", 3 * MINUTE);
     expect(pass.droppedNotes("bot-t1")).toEqual({ dropped: 3, since: NOW + 3 * MINUTE });
-    expect(stored()).toEqual({ threads: {}, dropped: { "bot-t1": { dropped: 3, since: NOW + 3 * MINUTE } } });
+    expect(stored()).toEqual({ threads: {}, overflow: { "bot-t1": { dropped: 3, since: NOW + 3 * MINUTE } } });
     pass.dispose();
     pass = start();
     expect(pass.droppedNotes("bot-t1")).toEqual({ dropped: 3, since: NOW + 3 * MINUTE });
@@ -381,7 +1788,7 @@ describe("memory pass", () => {
     generate.mockResolvedValueOnce(facts(["Uses pnpm", "i use pnpm"]));
     say("t1", "i use pnpm");
     await settle("t1", 3 * MINUTE);
-    expect(chips("t1")).toHaveLength(1);
+    expect(chips("t1")).toHaveLength(3);
     expect(pass.droppedNotes("bot-t1")).toBeUndefined();
     expect(stored()).toEqual({ threads: {} });
   });
@@ -449,6 +1856,32 @@ describe("memory pass", () => {
     const prompt = generate.mock.calls[0]![0];
     for (const text of ["qwer1234", "hunter22", "비번", "wifi"]) expect(prompt).not.toContain(text);
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- 38 years old (noted 2026-10-15)\n`);
+  });
+
+  it("sends a message whose only secret word is token talk to the note-taker", async () => {
+    generate.mockResolvedValue("[]");
+    say("t1", "Glasses v1 is the CEO meeting tool, mind the token cost.\n\nPart 2 shows top 3 competitors and 1 news line.");
+    await settle("t1", 3 * MINUTE);
+    const prompt = generate.mock.calls[0]![0];
+    expect(prompt).toContain("mind the token cost");
+    expect(prompt).toContain("top 3 competitors");
+  });
+
+  it.each([
+    ["a plain fact", "I live in Seoul and build the glasses app", 1],
+    ["a value two paragraphs from its label", "password for the nas\n\nok so\n\nPurpleMonkeyDishwasher", 0],
+    ["a value with symbols beside its label", "the staging password is in the next line\n\nlet's go with option B for the header, and use Tr@ub!dor&xQ for the staging login", 0],
+    ["a plain-word value beside its label", "the staging password is in the next line\n\nlet's go with option B for the header, and use PurpleMonkeyDishwasher for the staging login", 0],
+    ["a login in a long paragraph", `router login is admin / PurpleMonkeyDishwasher ${"The glasses app should feel calm and fast for a founder walking into a meeting, with one glance views and no menus to dig through. ".repeat(4)}`, 0],
+    ["a value in a long sentence", "password for the nas\n\nok so\n\nit is PurpleMonkeyDishwasher and you type it exactly like that with capitals", 0],
+    ["a passphrase", "the vault password is below\n\nok\n\nseven purple otters dance under quiet moonlight tonight", 0],
+    ["4-digit pins past a decision", "my bank pin is in the last line\n\nFor the glasses app go with option B for the header: small logo on the left, the person brief in the middle, and the three competitor chips under it, because it reads faster at a glance than option A did in the demo yesterday.\n\nit's 4821 for the card and 7731 for the app, remember both of them", 0],
+    ["a Korean value", "와이파이 비밀번호 알려줄게\n\n알겠어\n\n손님용은 보라색원숭이식기세척기 이고 위층에서도 잘 잡혀 그러니까 그걸로 써", 0],
+    ...(["E2b", "E2e", "E3b", "E4b", "E4c", "E4e"] as const).map((id) => [`review case ${id}`, secretCase(id)[1]!, 0] as const),
+  ] as const)("calls the note-taker for %s only when no label points at a value", async (_, text, calls) => {
+    say("t1", text);
+    await settle("t1", 3 * MINUTE);
+    expect(generate).toHaveBeenCalledTimes(calls);
   });
 
   it("skips quietly when Claude is missing or signed out", async () => {
@@ -658,13 +2091,28 @@ describe("memory pass", () => {
     await settle("t1", 3 * MINUTE);
     const prompt = generate.mock.calls[0]![0];
     expect(prompt).toContain("<context>");
-    expect(prompt).toMatch(/<context>[^<]{1,400}follow the app theme, or stay dark always\?<\/context>\nthe first one\n\nI use pnpm for my projects\.\n<\/user_lines>/);
+    expect(prompt).toMatch(/<context>[^<]{1,400}follow the app theme, or stay dark always\?<\/context>\nthe first one\n\n<source [^>]+>/);
+    expect(prompt).toContain("\nI use pnpm for my projects.\n</user_lines>");
     expect(prompt).not.toContain("Some setup. ".repeat(40));
     expect(memoryFileRaw("bot-t1")).toBe(`${MEMORY_SEED}- Uses pnpm for projects (noted 2026-10-15)\n`);
     expect(readMemoryTopic("bot-t1", "decisions.md")).toContain(
       '## 2026-10-15 12:00 | Picker look follows the app theme | current\n- Picked: Picker look follows the app theme\n- Said: "the first one"\n',
     );
     expect(chips("t1")).toHaveLength(1);
+  });
+
+  it("keeps a tweak said after an unbound pick in the same pass", async () => {
+    store.appendMessage("t1", { role: "bot", kind: "text", text: "Should the picker follow the app theme, or stay dark always?" });
+    say("t1", "the first one");
+    say("t1", "and make the header smaller");
+    generate.mockResolvedValue(JSON.stringify([
+      { kind: "decision", fact: "Picker look follows the app theme", quote: "the first one", message_id: "not-a-message" },
+      { kind: "tweak", key: "Picker look follows the app theme", fact: "Make the header smaller", quote: "and make the header smaller" },
+    ]));
+    await settle("t1", 3 * MINUTE);
+    const timeline = readMemoryTopic("bot-t1", "decisions.md") ?? "";
+    expect(timeline).toContain("- Binding: unbound");
+    expect(timeline).toContain('"and make the header smaller"');
   });
 
   it("takes context from the bot's reply over a later options card, and from the card when no reply names the options", async () => {
@@ -730,16 +2178,20 @@ describe("memory pass", () => {
     const old = "- Repo uses spaces (noted 2026-10-01)";
     const notes = `# Memory\n\n## Decisions (settled, do not ask again)\n${old}\n\n## Notes\n- Likes tea\n`;
     writeMemoryFile("bot-t1", notes);
-    // a folder where the timeline goes fails its write
     const side = join(workspaceDir("bot-t1"), "memory", "decisions.md");
-    mkdirSync(side, { recursive: true });
+    const write = atomic.writeFileAtomic;
+    const failWrite = vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, ...args) => {
+      if (path === side) throw new Error("timeline write failed");
+      write(path, ...args);
+    });
     vi.spyOn(console, "warn").mockImplementation(() => {});
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Tabs or spaces for this repo?" });
     say("t1", "tabs");
     generate.mockResolvedValueOnce(JSON.stringify([{ kind: "decision", key: "repo indent", fact: "Repo uses tabs", quote: "tabs", replaces: old }]));
     await settle("t1", 3 * MINUTE);
+    expect(failWrite).toHaveBeenCalledWith(side, expect.any(String), expect.anything());
     expect(memoryFileRaw("bot-t1")).toBe(notes);
-    rmSync(side, { recursive: true });
+    failWrite.mockRestore();
     await settle("t1");
     expect(generate).toHaveBeenCalledTimes(1);
     expect(memoryFileRaw("bot-t1")).toBe("# Memory\n\n## Decisions (settled, do not ask again)\n\n## Notes\n- Likes tea\n");
@@ -747,11 +2199,11 @@ describe("memory pass", () => {
     expect(chips("t1")).toHaveLength(1);
   });
 
-  it("keeps the root of a picture path a bot names", () => {
+  it("does not offer files only named in a bot reply as saved pictures", () => {
     store.appendMessage("t1", { role: "bot", kind: "text", text: "Mocks: /tmp/mock/C.png, ~/mock/B.png and C:\\mocks\\A.png. Which one?" });
     const { id } = say("t1", "c");
-    const shown = replyPictures(store.messagesFor("t1"), [id], join(dataDir, "attachments")).get(id);
-    expect(shown?.map(({ path }) => path)).toEqual(["/tmp/mock/C.png", "~/mock/B.png", "C:\\mocks\\A.png"]);
+    const shown = replyTurns(store.messagesFor("t1"), [id], join(dataDir, "attachments")).get(id);
+    expect(shown?.pictures).toEqual([]);
   });
 
   it("never lands the same pick twice", async () => {
@@ -813,6 +2265,129 @@ describe("memory pass filters", () => {
       "1\n2\n3\n4\n5\n6\n7",
     ].join("\n\n");
     expect(userTyping(text)).toBe("i'm 38\n\nhe said  ok");
+  });
+
+  it("keeps a message whose only secret word is token talk, unless it hints at a value", () => {
+    const spec = "Glasses v1 is the CEO meeting tool, keep the brief short and mind the token cost.\n\nPart 2 shows top 3 competitors and 1 news line.";
+    expect(userTyping(spec)).toBe(spec);
+    expect(secretValue(spec)).toBe(false);
+    expect(userTyping("keep it short, token cost matters")).toBe("keep it short, token cost matters");
+    for (const said of [
+      spec.replace("mind the token cost", "watch the tokens"),
+      `${spec}\n\nthe wifi one is HarborLanternQuartz`,
+      `${spec}\n\nthe staging one is: willowbasket`,
+      `${spec}\n\nmy code is 482913`,
+      "the access token usage page wants velvetpinecone",
+      "깃허브 token usage page wants velvetpinecone",
+      "(github) token usage page wants velvetpinecone",
+      "github.token usage page wants velvetpinecone",
+    ]) {
+      expect(secretValue(said)).toBe(true);
+      expect(userTyping(said)).toBe("");
+    }
+  });
+
+  it("drops the whole message for a password label or a key handed over, since a plain-word value has no shape", () => {
+    const kept = "I live in Seoul and build the glasses app for founders walking into a meeting";
+    const word = "PurpleMonkeyDishwasher";
+    const prose = (length: number) => "The glasses app should feel calm and fast for a founder walking into a meeting, with one glance views and no menus to dig through. ".repeat(5).slice(0, length).trimEnd();
+    const decision = "For the glasses app go with option B for the header: small logo on the left, the person brief in the middle, and the three competitor chips under it, because it reads faster at a glance than option A did in the demo yesterday.";
+    for (const said of [
+      `${kept}\n\nmy wifi password is\n\nhunter22`,
+      `${kept}\n\nhunter22\n\nthat's my wifi password`,
+      `${kept}\n\nmy wifi password:\n\nit's hunter22`,
+      `the staging password is in the next line\n\nlet's go with option B for the header, and use ${word} for the staging login`,
+      `${prose(120)} The router login is admin / ${word} for now. ${prose(420)}\n\npassword: hunter2!Xy9zz`,
+      `router login is admin / ${word} ${prose(520)}`,
+      `와이파이 비밀번호 알려줄게\n\n손님용은 ${word} 이고 위층에서도 잘 잡혀 그러니까 그걸로 쓰고 다른 사람한테는 절대 알려주지 마`,
+      `password for the nas\n\nok so\n\nit is ${word} and you type it exactly like that with capitals`,
+      "the vault password is below\n\nok\n\nseven purple otters dance under quiet moonlight tonight",
+      `${word} is what I set last night for everything\n\n${decision}\n\nthat first line is the root password btw`,
+      "The nas password is below.\n\nIt is MarigoldTeacupSaxophone, all one word, capitals as shown.",
+      "the safe password is below\n\nit's the word tulipgarden typed twice with no space between the two copies ok thanks",
+      `my bank pin is in the last line\n\n${decision}\n\nit's 4821 for the card and 7731 for the app, remember both of them`,
+      "와이파이 비밀번호 알려줄게\n\n알겠어\n\n손님용은 보라색원숭이식기세척기 이고 위층에서도 잘 잡혀 그러니까 그걸로 써",
+      `wifi password below, then the plan\n\nlantern orchid granite whisper velvet thunder maple and that is all lowercase with single spaces between the seven words\n\n${decision}`,
+      "here is the api token for the staging box\n\nuse maple-otter-canyon-drift as the value and put it in the header named x-wink on every call",
+      "password: hunter2!Xy9zz\n\nand the backup one is MarigoldTeacupSaxophone in case the first one stops working after the router update next week",
+    ]) expect(userTyping(said)).toBe("");
+  });
+
+  it("still sends what base sent beside the words a password or key label uses", () => {
+    for (const said of ["PR 2140 ea5032e5f", "#2140 is next", "$29.99", "15:38", "server/store.ts", "the login page is ugly", "pw reset email is ugly"]) expect(userTyping(said)).toBe(said);
+  });
+
+  it("never sends a value whose label sits paragraphs away or that a long paragraph holds", () => {
+    const value = "Tr0ub4dor&3xQ";
+    const phrase = "correct horse battery staple zebra";
+    const prose = (length: number) => "The glasses app should feel calm and fast for a founder walking into a meeting. ".repeat(10).slice(0, length).trimEnd();
+    const decision = "For the glasses app go with option B for the header: small logo on the left and the person brief in the middle, because it reads faster at a glance.";
+    for (const said of [
+      `the key is ${value} ${prose(560)}`,
+      `password for the wifi\n\nok\n\n${value}`,
+      `${prose(430)} and the admin password is:\n\nit is ${value} for now`,
+      `${phrase}\n\n^ that's my bank password`,
+      `${value} ${prose(500)}`,
+      `my wifi password:\n\nthe value is ${value} ok`,
+      `my wifi password is\n\n${value}\nand the guest one is Vx9mK2pQ7zLw`,
+      `${decision}\n\nhere is the admin password\n\n${decision.slice(0, 80)}\n\n${value}`,
+    ]) expect(userTyping(said)).not.toMatch(/Tr0ub4dor|horse battery|Vx9mK2pQ7zLw/);
+    expect(userTyping(`this is the wifi password\n\n${phrase}\n\n${decision}`)).toBe("");
+  });
+
+  it("drops a value with no digit beside its label", () => {
+    expect(userTyping("the staging password is in the next line\n\nlet's use Fr@nk!ly&On for the staging login from now on ok")).toBe("");
+  });
+
+  it("drops a passphrase over 6 words beside its label", () => {
+    expect(userTyping("the vault password is below\n\nlantern copper river eleven quiet maple storm")).toBe("");
+  });
+
+  it("drops digits-only values beside their label", () => {
+    expect(userTyping("my bank card secret details\n\n5500 0000 0000 0004 09 28 321 7395")).toBe("");
+  });
+
+  it("drops a value spelled out with spaces", () => {
+    expect(userTyping("the safe password is below\n\nk 9 v x 2 m p q 7 z")).toBe("");
+  });
+
+  it("drops a value two paragraphs from its label, before or after it", () => {
+    const decision = "For the glasses app go with option B for the header: small logo on the left and the person brief in the middle, because it reads faster at a glance.";
+    expect(userTyping("password for the nas\n\nok so\n\nOrangeWalrusTeapot")).toBe("");
+    expect(userTyping(`J@zz!hands&Go\n\n${decision}\n\nthat first line is the root password btw`)).toBe("");
+  });
+
+  it("never clips and sends a long paragraph holding a value with no digit", () => {
+    const prose = "The glasses app should feel calm and fast for a founder walking into a meeting. ".repeat(8);
+    expect(userTyping(`router login is admin / Fr@nk!ly&On ${prose}`)).toBe("");
+    expect(userTyping(`${prose.slice(0, 120)} The router login is admin / Red-Kite-Paper-Lamp for now. ${prose}\n\npassword: hunter2!Xy9zz`)).toBe("");
+  });
+
+  it("drops a value beside a Korean label", () => {
+    expect(userTyping("와이파이 비밀번호 알려줄게\n\n손님용은 OrangeWalrusTeapot 이고 위층에서도 잘 잡혀 그러니까 그걸로 써")).toBe("");
+  });
+
+  it.each(["E2b", "E2e", "E3b", "E4b", "E4c", "E4e", ...Array.from({ length: 21 }, (_, at) => `F${at + 1}`)])("sends no value from review case %s", (id) => {
+    const [, text, values] = secretCase(id);
+    const seen = userTyping(text!);
+    expect(values.filter((value) => sendsValue(seen, value))).toEqual([]);
+  });
+
+  it("sends no value from any review round that base held back", () => {
+    const leaks = Object.entries(SECRET_CASES).flatMap(([set, cases]) => cases.flatMap(([id, text, values]) => {
+      const seen = text === null ? S32_ROWS.map((row) => userTyping(row)).join("\n\n") : userTyping(text);
+      return values.filter((value) => sendsValue(seen, value) && !BASE_SENDS.get(id)?.includes(value) && !TOKEN_TALK_LIMITS.get(id)?.includes(value)).map((value) => `${set} ${id}: ${value}`);
+    }));
+    expect(leaks).toEqual([]);
+  });
+
+  it("keeps a goal the user set, marked as a goal", () => {
+    const text = "glasses v1 is a CEO meeting tool: person brief, top 3 competitors, 1 news line";
+    expect(notePrompt("", [{ text }])).toContain(`"goal"`);
+    expect(acceptFacts([{ kind: "goal", fact: "Glasses v1 is a CEO meeting tool: person brief, top 3 competitors, 1 news line", quote: "glasses v1 is a CEO meeting tool" }], text, ""))
+      .toEqual([{ line: "Goal: Glasses v1 is a CEO meeting tool: person brief, top 3 competitors, 1 news line" }]);
+    expect(acceptFacts([{ kind: "goal", fact: "Wifi password is hunter22", quote: "my wifi password is hunter22" }], "my wifi password is hunter22", "")).toEqual([]);
+    expect(acceptFacts([{ kind: "goal", fact: "Reduce token cost", quote: "Reduce token cost" }], "Reduce token cost", "")).toEqual([{ line: "Goal: Reduce token cost" }]);
   });
 
   it("masks secrets before text leaves Wink", () => {
@@ -937,13 +2512,13 @@ describe("memory pass filters", () => {
       expect(picked([decision("Repo password stays Tr0ub4dor", "yes")], [{ text: "yes", context: "Keep the repo password Tr0ub4dor?" }], "")).toEqual([]);
     });
 
-    it("keeps 3 per pass and one line per quote", () => {
+    it("keeps every decision in a pass and one line per quote", () => {
       const text = "dark, tabs, pnpm, vitest and npm";
       const context = "dark or light, tabs or spaces, pnpm or npm, vitest or jest, npm or yarn?";
       const own = [decision("Dark theme", "dark"), decision("Tabs for indent", "tabs"), decision("Pnpm for installs", "pnpm"), decision("Vitest for tests", "vitest")];
-      expect(picked(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(picked(own, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs", "Vitest for tests"]);
       const shared = own.map((pick) => ({ ...pick, quote: text }));
-      expect(picked(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs"]);
+      expect(picked(shared, [{ text, context }], "").map((note) => note.line)).toEqual(["Dark theme", "Tabs for indent", "Pnpm for installs", "Vitest for tests"]);
       expect(picked([{ fact: "Uses npm", quote: "npm" }, decision("Npm for publishing", "npm")], [{ text, context }], "")).toEqual([
         { line: "Npm for publishing", kind: "decision" },
       ]);
@@ -997,8 +2572,11 @@ describe("memory pass filters", () => {
 
   it("parses the model's JSON reply", () => {
     expect(parseFacts('```json\n[{"fact":"a","quote":"b"}]\n```')).toEqual([{ fact: "a", quote: "b" }]);
-    expect(parseFacts("nothing")).toEqual([]);
-    expect(parseFacts('[{"fact":1}]')).toEqual([]);
+    expect(parseFacts("[]")).toEqual([]);
+    expect(parseFacts("nothing")).toBeNull();
+    expect(parseFacts('[{"fact":1}]')).toBeNull();
+    expect(parseFacts('{"error":"incomplete response","details":[]')).toBeNull();
+    expect(parseFacts('{"facts":[{"fact":"a","quote":"b"}]}')).toBeNull();
   });
 
   it("appends within the budget only", () => {
@@ -1035,12 +2613,265 @@ describe("note generator", () => {
     expect(noteGenerator([])).toBeNull();
   });
 
+  it.each(["codex", "grokAgent", "antigravityAgent", "museAgent"])("runs %s on its resolved account even with Main Claude ready", async (engine) => {
+    const own = instance(engine);
+    const claude = { ...instance("claudeAgent"), instanceId: "claude-main" };
+    const base = instance(engine, { text: "wrong account" });
+    const signal = new AbortController().signal;
+    const account = { instanceId: "claude-main", available: true };
+    const generate = noteGenerator([base, claude], account, own);
+    await expect(generate?.("prompt", signal)).resolves.toBe(engine);
+    expect(own.generateText).toHaveBeenCalledExactlyOnceWith("prompt", { signal, timeoutMs: 120_000, ephemeral: true, lean: true });
+    expect(claude.generateText).not.toHaveBeenCalled();
+    expect(base.generateText).not.toHaveBeenCalled();
+    expect(noteGenerator([base, claude], account, null)).toBeNull();
+    expect(noteGenerator([], undefined, instance("codex", { enabled: false }))).toBeNull();
+    expect(noteGenerator([], undefined, instance("codex", { text: null }))).toBeNull();
+  });
+
+  it("labels the background trace with the engine that runs the pass", async () => {
+    const own = instance("grokAgent");
+    expect(noteGenerator([], undefined, own)?.engine).toBe("grok");
+  });
+
   it("passes an optional usage observer without changing the helper call", async () => {
     const claude = instance("claudeAgent");
     const signal = new AbortController().signal;
     const onUsage = vi.fn();
     await noteGenerator([claude])!("prompt", signal, onUsage);
     expect(claude.generateText).toHaveBeenCalledWith("prompt", { signal, timeoutMs: 120_000, ephemeral: true, lean: true, onUsage });
+  });
+
+  describe("account limits", () => {
+    const HOUR = 3_600_000;
+    const now = Date.parse("2026-11-22T00:00:00Z");
+    const own = (error?: Error) => ({ instanceId: "grok", driverKind: "grokAgent", enabled: true, generateText: vi.fn(async () => {
+      if (error) throw error;
+      return "[]";
+    }) });
+    const usage = (report?: RateLimitsReport) => ({ limits: new Map<string, RateLimitsReport>(report ? [["grok", report]] : []), save: vi.fn() });
+    beforeEach(() => vi.spyOn(Date, "now").mockReturnValue(now));
+    afterEach(() => vi.restoreAllMocks());
+
+    it("holds notes after a limit with no reset time only for the shortest window", async () => {
+      const limits = usage();
+      await expect(noteGenerator([], undefined, own(new Error("xAI HTTP 429: Too Many Requests")), limits)?.("notes", new AbortController().signal)).rejects.toThrow();
+      expect(limits.limits.get("grok")?.noteLimit).toEqual({ resetsAt: now + 5 * HOUR });
+      expect(noteGenerator([], undefined, own(), limits)).toBeNull();
+      vi.spyOn(Date, "now").mockReturnValue(now + 5 * HOUR);
+      expect(noteGenerator([], undefined, own(), limits)).not.toBeNull();
+    });
+
+    it("keeps a limit's own reset time, and stops reading a stored limit with none", async () => {
+      const limits = usage();
+      const error = Object.assign(new Error("429"), { data: { error: { type: "rate_limit_exceeded" }, resetsAt: (now + 30 * HOUR) / 1000 } });
+      await expect(noteGenerator([], undefined, own(error), limits)?.("notes", new AbortController().signal)).rejects.toThrow();
+      expect(limits.limits.get("grok")?.noteLimit).toEqual({ resetsAt: now + 30 * HOUR });
+      vi.spyOn(Date, "now").mockReturnValue(now + 29 * HOUR);
+      expect(noteGenerator([], undefined, own(), limits)).toBeNull();
+      vi.spyOn(Date, "now").mockReturnValue(now + 30 * HOUR + 1);
+      expect(noteGenerator([], undefined, own(), limits)).not.toBeNull();
+      expect(noteGenerator([], undefined, own(), usage({ windows: [], observedAt: new Date(now).toISOString(), noteLimit: { resetsAt: null } }))).not.toBeNull();
+    });
+
+    it("pauses on a spent window unless another pool of it still has room", () => {
+      const spent = { id: "seven_day", usedPercent: 100, resetsAt: now + 48 * HOUR };
+      const report = (otherPoolLeft?: boolean) => usage({ windows: [{ ...spent, ...(otherPoolLeft && { otherPoolLeft }) }], observedAt: new Date(now).toISOString() });
+      expect(noteGenerator([], undefined, own(), report())).toBeNull();
+      expect(noteGenerator([], undefined, own(), report(true))).not.toBeNull();
+    });
+
+    it("helper's own Gemini Models pool spent, another pool free: helper stays off, 0 calls until reset", async () => {
+      const live = JSON.parse(readFileSync(new URL("./testing/fixtures/agy-usage-live.jsonl", import.meta.url), "utf8").split("\n")[0]!).command.data;
+      const reset = now + 72 * HOUR;
+      // a fresh usage report every hour replaces the whole entry, as the client's refresh does
+      const report = (at: number): RateLimitsReport => {
+        const data = structuredClone(live);
+        for (const group of data.groups) for (const bucket of group.buckets) {
+          bucket.reset_time = new Date(reset).toISOString();
+          if (at < reset && bucket.id === "gemini-weekly") bucket.remaining_fraction = 0;
+        }
+        return { windows: antigravityRateLimitWindows(data, at), observedAt: new Date(at).toISOString() };
+      };
+      const helper = { ...own(new Error("RESOURCE_EXHAUSTED (code 429): Quota exceeded")), driverKind: "antigravityAgent" };
+      const limits = usage();
+      for (let at = now; at < reset; at += HOUR) {
+        vi.spyOn(Date, "now").mockReturnValue(at);
+        limits.limits.set("grok", report(at));
+        await noteGenerator([], undefined, helper, limits)?.("notes", new AbortController().signal).catch(() => {});
+      }
+      expect(helper.generateText.mock.calls.length).toBe(0);
+      vi.spyOn(Date, "now").mockReturnValue(reset + 1);
+      limits.limits.set("grok", report(reset + 1));
+      expect(noteGenerator([], undefined, helper, limits)).not.toBeNull();
+    });
+  });
+});
+
+describe("notes on the bot's own engine", () => {
+  const FAKE_CODEX = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-codex-app-server.ts");
+  let codex: ProviderInstance | undefined;
+
+  afterEach(async () => {
+    await codex?.dispose();
+    delete process.env.FAKE_CODEX_MESSAGES;
+    vi.restoreAllMocks();
+  });
+
+  it("keeps a real helper rejection on its account without submitting again", async () => {
+    chmodSync(FAKE_CODEX, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-codex-limit-"));
+    writeFileSync(join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-fake", context_window: 200_000 }] }));
+    codex = await CodexDriver.create({ instanceId: "codex", displayName: "Codex", enabled: true,
+      environment: { CODEX_HOME: home, FAKE_CODEX_MODE: "text-rate-limited" }, config: { cli: FAKE_CODEX, fullAuto: false } });
+    const own = summaryInstance(codex, "gpt-fake");
+    const limits: RateLimitsMap = new Map();
+    const usage = { limits, save: vi.fn() };
+    await expect(noteGenerator([], undefined, own, usage)?.("notes", new AbortController().signal)).rejects.toThrow("Account text rate limit");
+    expect(noteGenerator([], undefined, own, usage)).toBeNull();
+    expect(usage.save).toHaveBeenCalledTimes(1);
+    expect(limits.get("codex")?.noteLimit?.resetsAt).toBeGreaterThan(Date.now());
+  });
+
+  it("agy denies the text model, fallback model's pool spent, Gemini Models free: helper stays off, 0 calls until reset", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const FAKE_AGY = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-agy-cli.ts");
+    chmodSync(FAKE_AGY, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-agy-denied-"));
+    const errorFile = join(home, "result-error.txt");
+    const agy = await AntigravityDriver.create({ instanceId: "Gemini", displayName: undefined, enabled: true,
+      environment: { HOME: home, USERPROFILE: home, FAKE_AGY_DENIED_MODEL: "gemini-3.8-flash-low", FAKE_AGY_RESULT_ERROR_FILE: errorFile }, config: { cli: FAKE_AGY, fullAuto: false } });
+    const live = JSON.parse(readFileSync(new URL("./testing/fixtures/agy-usage-live.jsonl", import.meta.url), "utf8").split("\n")[0]!).command.data;
+    const reset = Date.now() + 72 * 3_600_000;
+    const report = (argonSpent: boolean, at = Date.now()): RateLimitsReport => {
+      const data = structuredClone(live);
+      for (const group of data.groups) for (const bucket of group.buckets) {
+        bucket.reset_time = new Date(reset).toISOString();
+        if (argonSpent && at < reset && bucket.id === "gemini-argon-wtu-weekly") bucket.remaining_fraction = 0;
+      }
+      return { windows: antigravityRateLimitWindows(data, at), observedAt: new Date(at).toISOString() };
+    };
+    const own = summaryInstance(agy, "gemini-4-argon-low");
+    const generateText = vi.fn(own.generateText!);
+    const limits: RateLimitsMap = new Map();
+    const usage = { limits, save: vi.fn(), signedOut: new Set<string>() };
+    const notes = () => noteGenerator([], undefined, { ...own, generateText }, usage);
+    try {
+      // denied the text model, the account writes its notes on the bot's Argon model
+      usage.limits.set("Gemini", report(false));
+      await expect(notes()!("notes", new AbortController().signal)).resolves.toBe("done from fake agy");
+      // then Argon runs out while Gemini Models has room; agy's weekly wording stores no limit
+      writeFileSync(errorFile, "RESOURCE_EXHAUSTED: You have reached your weekly limit. Upgrade your plan or try again later.");
+      usage.limits.set("Gemini", report(true));
+      generateText.mockClear();
+      for (let i = 0; i < 5; i++) await notes()?.("notes", new AbortController().signal).catch(() => {});
+      expect(generateText).not.toHaveBeenCalled();
+      vi.spyOn(Date, "now").mockReturnValue(reset + 1);
+      usage.limits.set("Gemini", report(true, reset + 1));
+      expect(notes()).not.toBeNull();
+    } finally {
+      await agy.dispose();
+    }
+  });
+
+  it.each([
+    ["an RPC error", undefined],
+    ["an error event", { method: "error", params: { error: { message: "unexpected status 401 Unauthorized" }, willRetry: false } }],
+    ["a failed turn", { method: "turn/completed", params: { turn: { status: "failed", error: { message: "unexpected status 401 Unauthorized" } } } }],
+  ])("holds a Codex helper signed out by %s until a fresh account probe", async (_path, frame) => {
+    chmodSync(FAKE_CODEX, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-codex-signed-out-"));
+    writeFileSync(join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-fake", context_window: 200_000 }] }));
+    const environment: Record<string, string> = frame ? { FAKE_CODEX_TOOL_FIXTURE: join(home, "frames.json") } : { FAKE_CODEX_MODE: "unauthorized" };
+    if (frame) writeFileSync(join(home, "frames.json"), JSON.stringify([frame]));
+    codex = await CodexDriver.create({ instanceId: "codex", displayName: "Codex", enabled: true,
+      environment: { CODEX_HOME: home, ...environment }, config: { cli: FAKE_CODEX, fullAuto: false } });
+    const own = summaryInstance(codex, "gpt-fake");
+    const usage = { limits: new Map() as RateLimitsMap, save: vi.fn(), signedOut: new Set<string>() };
+    await expect(noteGenerator([], undefined, own, usage)?.("notes", new AbortController().signal)).rejects.toThrow("401");
+    expect(noteGenerator([], undefined, own, usage)).toBeNull();
+    usage.signedOut.clear();
+    expect(noteGenerator([], undefined, own, usage)).not.toBeNull();
+    expect(usage.save).not.toHaveBeenCalled();
+  });
+
+  it("fills notes and the timeline for a Codex bot on a PC with no Claude", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-decisions.json", import.meta.url), "utf8"));
+    process.env.FAKE_CODEX_MESSAGES = JSON.stringify([{ text: recorded.reply.text, phase: "final_answer" }]);
+    chmodSync(FAKE_CODEX, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-codex-"));
+    writeFileSync(join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-fake", context_window: 200_000 }] }));
+    codex = await CodexDriver.create({ instanceId: "codex", displayName: "Codex", enabled: true, environment: { CODEX_HOME: home }, config: { cli: FAKE_CODEX, fullAuto: false } });
+    const own = summaryInstance(codex, "gpt-fake");
+    const store = fakeStore();
+    writeMemoryFile("bot-c1", "");
+    removeTestData(join(workspaceDir("bot-c1"), "memory"));
+    const pass = createMemoryPass({ store, dataDir: temps.make(join(tmpdir(), "memory-pass-")), generate: () => noteGenerator([codex!], undefined, own), enabled: () => true, busy: () => false });
+    store.appendMessage("c1", { role: "bot", kind: "text", text: "Which look should the model picker have? 1. Always dark 2. Follow the app theme 3. Always light. Pick one and I'll build it." });
+    store.appendMessage("c1", { role: "user", kind: "text", text: "the second one" });
+    store.appendMessage("c1", { role: "user", kind: "text", text: "I use pnpm for my projects." });
+    pass.onSettled("bot-c1", "c1", true);
+    await pass.idle();
+    pass.dispose();
+    expect(memoryFileRaw("bot-c1")).toMatch(/^- Uses pnpm for projects \(noted \d{4}-\d{2}-\d{2}\)$/m);
+    expect(readMemoryTopic("bot-c1", "decisions.md")).toContain("- Picked: 2 - Follow the app theme\n- Over: 1 - Always dark; 3 - Always light\n");
+  });
+});
+
+describe("signed-out note helpers", () => {
+  const FAKE_AGY = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-agy-cli.ts");
+  const cliHelper = (name: string, stderr: string) => {
+    const text = createCliText({ name, model: "text", timeoutMs: 30_000, parse: (stdout) => stdout,
+      command: async () => ({ cli: process.execPath, args: ["-e", `process.stderr.write(${JSON.stringify(stderr)});process.exit(1)`], env: { ...process.env } }) });
+    return { instanceId: name, driverKind: `${name.toLowerCase()}Agent`, enabled: true, generateText: text.generateText, dispose: async () => text.dispose() };
+  };
+  const geminiHelper = async (error: string) => {
+    chmodSync(FAKE_AGY, 0o755);
+    const home = temps.make(join(tmpdir(), "memory-pass-agy-signed-out-"));
+    return AntigravityDriver.create({ instanceId: "Gemini", displayName: undefined, enabled: true,
+      environment: { HOME: home, USERPROFILE: home, FAKE_AGY_RESULT_ERROR: error }, config: { cli: FAKE_AGY, fullAuto: false } });
+  };
+
+  // each engine's own words for a signed-out account; a wording missing here retries on every settlement
+  it.each([
+    ["Muse", "run ended with Failed: your API key from META_API_KEY was rejected — update or unset it"],
+    ["Muse", "run ended with Failed: your saved API key was rejected — run `muse login` or add a new key"],
+    ["Muse", "run ended with Failed: still unauthorized after a token refresh; run `muse login` again"],
+    ["Muse", "missing meta credentials: run `muse login` or set META_API_KEY"],
+    ["Grok", "Error: Not signed in. To authenticate without a browser, run:\n  grok login --device-code"],
+    ["Grok", "Error: Session expired. Run `grok login` to re-authenticate."],
+    ["Grok", "Error: Authentication failed. Run `grok login`, set XAI_API_KEY, or add api_key to ~/.grok/config.toml."],
+    ["Grok", "HTTP 401 Unauthorized: session expired"],
+    ["Gemini", "Unauthorized (code 401)"],
+    ["Gemini", "UNAUTHENTICATED (code 401): Sign in again."],
+  ])("makes five settlements cost one %s attempt: %s", async (engine, text) => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const helper = engine === "Gemini" ? await geminiHelper(text) : cliHelper(engine, text);
+    const generateText = vi.fn(helper.generateText!);
+    const usage = { limits: new Map() as RateLimitsMap, save: vi.fn(), signedOut: new Set<string>() };
+    const store = fakeStore();
+    const pass = createMemoryPass({ store, dataDir: temps.make(join(tmpdir(), "memory-pass-")), enabled: () => true, busy: () => false,
+      generate: () => noteGenerator([], undefined, { ...helper, generateText }, usage) });
+    try {
+      store.appendMessage("s1", { role: "user", kind: "text", text: "I use pnpm." });
+      for (let i = 0; i < 5; i++) {
+        pass.onSettled("bot-s1", "s1", true);
+        await pass.idle();
+      }
+      expect(generateText).toHaveBeenCalledTimes(1);
+      expect([...usage.signedOut]).toEqual([helper.instanceId]);
+      expect(store.rows("s1").map(({ role }) => role)).toEqual(["user"]);
+      // a fresh account probe clears the hold
+      usage.signedOut.clear();
+      expect(noteGenerator([], undefined, helper, usage)).not.toBeNull();
+    } finally {
+      pass.dispose();
+      await helper.dispose();
+      vi.restoreAllMocks();
+    }
   });
 });
 
@@ -1049,10 +2880,46 @@ describe("memory pass wiring", () => {
   const index = readFileSync(join(here, "index.ts"), "utf8");
   const bots = readFileSync(join(here, "bot-routes.ts"), "utf8");
 
-  it("runs every bot's pass on Claude, after 1:1 turns, without a session transcript", () => {
-    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: \(\) => noteGenerator\(registry\.instances\(\), botAccounts\.noteAccount\(\)\),[\s\S]*?botHasActiveTurn/);
+  it("keeps the legacy Claude selector and uses the resolved own account for other bots", () => {
+    expect(index).toContain("botAccounts.notes(bot, { limits: rateLimitsByInstance,");
+    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: noteHelper,[\s\S]*?botHasActiveTurn/);
+    expect(index).toMatch(/createMemorySleep\(\{[\s\S]*?judges: \(\) => botAccounts\.dreamJudges\(\{ limits: rateLimitsByInstance,/);
     expect(index).toMatch(/memoryPass\.onSettled\(bot\.id, event\.threadId, flushNotes\);\s*if \(!store\.groupByThread\(event\.threadId\)\)/);
     expect(index).toContain("memoryPass.dispose();");
+  });
+
+  it("lifts a signed-out helper only on a fresh account probe", () => {
+    expect(index).toContain("registry.onProbed((instanceId) => signedOutHelpers.delete(instanceId));");
+    expect(index).toContain("signedOut: signedOutHelpers");
+  });
+
+  it("stops a Gemini bot's note helpers as soon as a foreground send claims it", async () => {
+    const source = index.replace(/\r\n/g, "\n");
+    const start = source.indexOf("function tryClaimTurnStart(");
+    const claims = new Map<string, string | undefined>();
+    const kinds: Record<string, string> = { "bot-g1": "antigravityAgent", "bot-c1": "codex" };
+    const generate = vi.fn((_prompt: string, signal: AbortSignal) => new Promise<string>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    }));
+    const store = fakeStore();
+    const pass = createMemoryPass({ store, dataDir: temps.make(join(tmpdir(), "memory-pass-")), generate: () => generate, enabled: () => true, busy: (botId) => claims.has(botId) });
+    const memorySleep = { onTurn: vi.fn() };
+    const claim = new Function("scope", `with (scope) { ${ts.transpile(source.slice(start, source.indexOf("\n}\n", start) + 2), { target: ts.ScriptTarget.ES2022 })} return tryClaimTurnStart; }`)({
+      turnStartClaims: claims, memoryPass: pass, memorySleep,
+      store: { bot: (id: string) => ({ modelSelection: { instanceId: id } }) },
+      registry: { get: (id: string) => ({ driverKind: kinds[id] }) },
+    }) as (botId: string, threadId?: string) => boolean;
+    for (const thread of ["g1", "c1"]) {
+      writeMemoryFile(`bot-${thread}`, "");
+      store.appendMessage(thread, { role: "user", kind: "text", text: "I use pnpm for my projects." });
+      pass.onSettled(`bot-${thread}`, thread, true);
+    }
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(2));
+    expect(claim("bot-g1", "g1")).toBe(true);
+    expect(claim("bot-c1", "c1")).toBe(true);
+    expect(generate.mock.calls.map(([, signal]) => signal.aborted)).toEqual([true, false]);
+    expect(memorySleep.onTurn).toHaveBeenCalledExactlyOnceWith("bot-g1");
+    pass.dispose();
   });
 
   it("runs the pass after a room turn, for the member that spoke", () => {
@@ -1060,7 +2927,7 @@ describe("memory pass wiring", () => {
   });
 
   it("reads the Settings switch live and drops pending notes on a config change", () => {
-    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?enabled: \(botId\) => \{[\s\S]*?memoryNotesEnabled\(cfg, bot\);[\s\S]*?\}\);/);
+    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?enabled: memoryJobEnabled,/);
     expect(index).toMatch(/saveConfig\(patch\);[\s\S]*?Object\.assign\(cfg, loadConfig\(\)\);\s*\}\s*if \(\(cfg\.profile[^\n]*\n\s*memoryPass\.onConfigChanged\(\);/);
     expect(index).toContain("memoryNotes: memoryNotesEnabled(cfg),");
   });
@@ -1074,7 +2941,7 @@ describe("memory pass wiring", () => {
 
   it("takes notes only for engines that load MEMORY.md", () => {
     expect(index).toMatch(
-      /enabled: \(botId\) => \{\s*const bot = store\.bot\(botId\);\s*const instance = bot && registry\.get\(bot\.modelSelection\.instanceId\);\s*return Boolean\(instance && supportsWorkspaceFiles\(instance\.driverKind\)\) && memoryNotesEnabled\(cfg, bot\);/,
+      /const memoryJobEnabled = \(botId: string\) => \{\s*const bot = store\.bot\(botId\);\s*const instance = bot && registry\.get\(bot\.modelSelection\.instanceId\);\s*return Boolean\(instance && supportsWorkspaceFiles\(instance\.driverKind\)\) && memoryNotesEnabled\(cfg, bot\);/,
     );
   });
 
@@ -1082,5 +2949,51 @@ describe("memory pass wiring", () => {
     const source = readFileSync(join(here, "memory-pass.ts"), "utf8");
     expect(source.replace(/\r\n/g, "\n")).toContain("const messages = deps.store.messagesFor(sourceThread(threadId));\n    const rows = pendingRows(messages, ids);");
     expect(source).not.toMatch(/new Map\(deps\.store\.messagesFor/);
+  });
+  it("picks overflow rows without reading their wording", () => {
+    const path = join(here, "memory-pass.ts");
+    const source = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true);
+    const all = <T extends ts.Node>(root: ts.Node, test: (node: ts.Node) => node is T) => {
+      const found: T[] = [];
+      const walk = (node: ts.Node) => {
+        if (test(node)) found.push(node);
+        node.forEachChild(walk);
+      };
+      walk(root);
+      return found;
+    };
+    const statementOf = (node: ts.Node): ts.Node => (node.parent && node.parent !== source ? statementOf(node.parent) : node);
+    const names = (statement: ts.Node) =>
+      ts.isFunctionDeclaration(statement) && statement.name ? [statement.name.text]
+        : ts.isVariableStatement(statement) ? statement.declarationList.declarations.flatMap(({ name }) => (ts.isIdentifier(name) ? [name.text] : []))
+          : [];
+    const owner = (node: ts.Node) => names(statementOf(node))[0] ?? "";
+    const line = (node: ts.Node) => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+    // a pattern's own text, escapes and character classes left out
+    const literal = (pattern: ts.Node) => {
+      const text = pattern.getText(source);
+      return text.slice(1, text.lastIndexOf("/")).replace(/\[(?:\\.|[^\]\\])*\]/g, " ").replace(/\\./g, " ");
+    };
+    const tables = [...all(source, ts.isArrayLiteralExpression), ...all(source, ts.isObjectLiteralExpression)]
+      .filter((node) => all(node, ts.isRegularExpressionLiteral).filter((pattern) => /\p{L}{2,} \p{L}{2,}/u.test(literal(pattern))).length >= 2)
+      .map((node) => `memory-pass.ts:${line(node)} ${owner(node)}: a table of sentence patterns`);
+    const appends = all(source, ts.isCallExpression).filter((call) => call.expression.getText(source) === "appendLines");
+    const holds = (outer: ts.Node, inner: ts.Node) => outer.getStart(source) <= inner.getStart(source) && inner.getEnd() <= outer.getEnd();
+    const writers = all(source, ts.isIdentifier).filter((name) => name.text === "OVERFLOW_FILE").map((name) => {
+      let node: ts.Node = name;
+      while (node.parent && !appends.some((call) => holds(node, call))) node = node.parent;
+      return node;
+    });
+    const writer = writers.sort((a, b) => a.getWidth(source) - b.getWidth(source))[0];
+    if (!writer) throw new Error("no overflow write found in memory-pass.ts");
+    const declared = new Map(source.statements.flatMap((statement) => names(statement).map((name): [string, ts.Node] => [name, statement])));
+    const reached = new Set<ts.Node>([writer]);
+    for (const node of reached) for (const name of all(node, ts.isIdentifier)) reached.add(declared.get(name.text) ?? writer);
+    // Markdown structure, not what a note says
+    const markup = new Set(["liveRows", "NOTED"]);
+    const wording = [...reached].flatMap((node) => all(node, ts.isRegularExpressionLiteral))
+      .filter((pattern) => !markup.has(owner(pattern)) && /\p{L}{2,}/u.test(literal(pattern)))
+      .map((pattern) => `memory-pass.ts:${line(pattern)} ${owner(pattern)}: ${pattern.getText(source)}`);
+    expect([...tables, ...wording], "Overflow returns are language-free: a line lands unless it is already the file's newest row. Delete the wording list instead of growing it.").toEqual([]);
   });
 });

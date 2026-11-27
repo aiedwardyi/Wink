@@ -1,0 +1,486 @@
+// A same-bot call: his words go to the bot as a chat message, and the bot's own reply is read out. Gemini Live is only the ears and the mouth.
+import { toUtterances } from "../../../server/tts/speech-text.ts";
+import { callPace, isVoiceLine, spokenText, type CallPrefs } from "../../../shared/live-call";
+import { activeLocale } from "@/lib/i18n";
+import { isShownMessage } from "@/lib/shown-message";
+import type { Message } from "@/state/store-types";
+import { MAX_RECONNECTS, MIC_ERRORS, READY_MS, VOICE_OUT, type CallAudioPort, type CallState, type Posted } from "./controller";
+import type { LiveEngine, LiveEvents, LiveSession } from "./engine";
+import { afterNods, echoOf, readOn, readTo } from "./guard";
+
+const QUOTA = /quota|resource.?exhausted/i;
+const READ = "[READ]\n";
+// A mutter is not a message to the bot; a yes or a no is.
+const MUTTER = /^(?:h?m+|mhm|u[hm]+|uh-?huh|er+|음+|어+)[.!?,\s]*$/i;
+
+function loud(pcm: ArrayBuffer): boolean {
+  for (const sample of new Int16Array(pcm)) if (sample > 1_000 || sample < -1_000) return true;
+  return false;
+}
+
+type Deps = {
+  botId: string;
+  engine: () => LiveEngine;
+  audio: CallAudioPort;
+  post: (path: string, body: object) => Promise<Posted>;
+  /** The same send a typed message takes; unsent runs once when the bot never gets it, stopped when Stop took it back. */
+  send: (text: string, sendId: string, unsent: (stopped?: boolean) => void) => void;
+  prefs?: CallPrefs;
+  now?: () => number;
+};
+
+export class SameBotCall {
+  private readonly deps: Deps;
+  private readonly now: () => number;
+  private listeners = new Set<() => void>();
+  private snapshot: CallState = { status: "starting", muted: false };
+  private engine: LiveEngine | null = null;
+  private connected = false;
+  private callId?: string;
+  private attempts = 0;
+  private prefs?: CallPrefs;
+  /** What the live session speaks with; a pick that differs swaps it. */
+  private voice?: string;
+  private language?: string;
+  private swapping = false;
+  private handle?: string;
+  private reconnects = 0;
+  private readyTimer?: ReturnType<typeof setTimeout>;
+  private stalled = false;
+  private busy = false;
+  /** This call's sends: only the bot's replies to these are read. */
+  private sends = new Set<string>();
+  /** Sent to the bot, its turn not settled yet. */
+  private waiting = new Set<string>();
+  private readIds = new Set<string>();
+  /** The line the voice was asked to read; a reconnect that cuts it reads it again. */
+  private reading?: string;
+  private heard = "";
+  private said = "";
+  /** Heard while it reads, not yet his: it may be the voice coming back. */
+  private over = "";
+  /** A sound reached Google while it read: until Google's turn for it, its words may be the voice's own, even once the read is over. */
+  private overSound = false;
+  /** Its own voice already dropped from what was heard over it: after the read only the words of the read that come next are its voice too. */
+  private echoed = "";
+  /** The read is over: what is heard is his unless it goes on from where its own words written back reached. */
+  private overLate = false;
+  private lastSaid = "";
+  /** Whose words the voice is answering: his (never played) or a [READ] it was sent. */
+  private turn: "user" | "read" | null = null;
+  private asked = false;
+  private reads: string[] = [];
+  /** Tapped to stop: the rest of the read turn never plays. */
+  private cut = false;
+  private micOpen = false;
+  private loudAt = 0;
+  private spokeAt = 0;
+  private captions = 0;
+  readonly firstWordMs: number[] = [];
+
+  constructor(deps: Deps) {
+    this.deps = deps;
+    this.now = deps.now ?? Date.now;
+    this.prefs = deps.prefs;
+    deps.audio.onStart = () => {
+      if (this.spokeAt) this.firstWordMs.push(this.now() - this.spokeAt);
+      this.spokeAt = 0;
+      this.refresh();
+    };
+    deps.audio.onIdle = () => this.refresh();
+  }
+
+  subscribe = (fn: () => void) => {
+    this.listeners.add(fn);
+    return () => { this.listeners.delete(fn); };
+  };
+
+  state = (): CallState => this.snapshot;
+
+  private set(patch: Partial<CallState>) {
+    this.snapshot = { ...this.snapshot, ...patch };
+    for (const fn of [...this.listeners]) fn();
+  }
+
+  private get ended() {
+    return this.snapshot.status === "ended" || this.snapshot.status === "failed";
+  }
+
+  private get speaking() {
+    return this.deps.audio.playing || (!this.cut && (this.turn === "read" || this.asked));
+  }
+
+  private refresh() {
+    const { status } = this.snapshot;
+    if (status === "ended" || status === "failed" || status === "needsKey" || status === "starting") return;
+    const next = this.stalled ? "paused" : this.speaking ? "speaking" : this.busy || this.waiting.size ? "working" : "listening";
+    if (next !== status) this.set({ status: next });
+  }
+
+  async start() {
+    const attempt = ++this.attempts;
+    this.set({ status: "starting", error: undefined });
+    const mic = this.deps.audio.capture((pcm) => this.frame(pcm)).then((played) => {
+      if (played === false) {
+        this.stalled = true;
+        this.set({ noSound: true });
+      }
+      return null;
+    }, (error) => error ?? new Error("mic failed"));
+    const session = await this.token();
+    if (!session) {
+      void mic.then(() => { if (attempt === this.attempts && !this.connected) this.deps.audio.stopMic(); });
+      return;
+    }
+    const error = await mic;
+    if (this.ended) return;
+    if (error) return this.fail((error instanceof Error && MIC_ERRORS[error.name]) || String(error));
+    this.set({ startedAt: this.now() });
+    this.connect(session);
+  }
+
+  /** A swap that cannot be had leaves the live session as it is. */
+  private async token(swap = false): Promise<LiveSession | null> {
+    const lose = (error: string) => {
+      if (!swap) this.fail(error);
+      return null;
+    };
+    const base = { locale: activeLocale(), mode: "bot", call: this.prefs };
+    const body = !this.callId ? base : swap ? { ...base, callId: this.callId, swap: true } : { ...base, callId: this.callId, resume: true };
+    let posted: Posted;
+    try {
+      posted = await this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/token`, body);
+    } catch (error) {
+      return lose(error instanceof Error ? error.message : String(error));
+    }
+    if (posted.status === 409 && !this.callId) {
+      this.set({ status: "needsKey" });
+      return null;
+    }
+    if (posted.status === 429) return lose(VOICE_OUT);
+    if (posted.status !== 200) return lose(String(posted.data.error ?? `call failed (${posted.status})`));
+    this.callId = posted.data.callId;
+    this.voice = posted.data.voice;
+    this.language = posted.data.locale === "ko" ? "ko" : "en";
+    return { url: posted.data.url, token: posted.data.token, model: posted.data.model, voice: posted.data.voice, ...(this.handle ? { handle: this.handle } : {}) };
+  }
+
+  private connect(session: LiveSession) {
+    const engine = this.deps.engine();
+    this.engine = engine;
+    clearTimeout(this.readyTimer);
+    this.readyTimer = setTimeout(() => { if (this.engine === engine && !this.ended) void this.reconnect(); }, READY_MS);
+    engine.connect(session, this.events(engine));
+  }
+
+  private frame(pcm: ArrayBuffer) {
+    if (!this.connected || this.snapshot.muted) return;
+    this.micOpen = true;
+    if (loud(pcm)) {
+      if (this.speaking) this.overSound = true;
+      else this.loudAt = this.now();
+    }
+    this.engine?.sendAudio(pcm);
+  }
+
+  private events(engine: LiveEngine): LiveEvents {
+    const mine = () => this.engine === engine && !this.ended;
+    return {
+      ready: () => {
+        if (!mine()) return;
+        clearTimeout(this.readyTimer);
+        this.connected = true;
+        this.reconnects = 0;
+        if (this.snapshot.status === "starting") this.set({ status: "listening" });
+        this.refresh();
+        this.readNext();
+        this.restyle();
+      },
+      audio: (pcm) => {
+        if (mine() && this.turn === "read" && !this.cut) this.deps.audio.play(pcm);
+      },
+      heard: (text) => {
+        if (!mine()) return;
+        if (this.speaking || this.overSound) return this.overlap(text);
+        this.dropHeld();
+        this.heard += text;
+        this.caption("user", this.heard);
+      },
+      said: (text) => {
+        if (!mine() || this.turn !== "read" || this.cut) return;
+        this.said += text;
+        this.caption("voice", this.said);
+      },
+      answering: () => {
+        if (!mine()) return;
+        this.turn = this.asked ? "read" : "user";
+        this.asked = false;
+      },
+      turnDone: () => {
+        if (!mine()) return;
+        if (this.turn === "read") {
+          this.deps.audio.endTurn();
+          this.reading = undefined;
+          this.lastSaid += ` ${this.said}`;
+        } else {
+          this.overSound = false;
+          this.dropHeld();
+          this.commit();
+        }
+        this.turn = null;
+        this.said = "";
+        this.cut = false;
+        this.readNext();
+        this.refresh();
+        this.restyle();
+      },
+      interrupted: () => {
+        if (!mine()) return;
+        if (this.turn === "read") {
+          this.deps.audio.flush();
+          this.reading = undefined;
+          this.reads = [];
+        }
+        this.turn = null;
+        this.refresh();
+      },
+      toolCall: () => {},
+      toolCancel: () => {},
+      resumable: (handle) => { if (mine()) this.handle = handle; },
+      goAway: () => { if (mine()) void this.reconnect(); },
+      usage: () => {},
+      closed: (_code, reason) => {
+        if (this.engine !== engine || this.ended) return;
+        if (QUOTA.test(reason)) return this.fail(VOICE_OUT);
+        void this.reconnect();
+      },
+    };
+  }
+
+  /** Words heard while it reads: its own voice coming back, even behind a nod, is dropped and a nod lets it go on; anything else stops it like a tap and is his line. After the read only its next words are its voice: a nod, a "not" or another number is his. */
+  private overlap(text: string) {
+    const voice = `${this.lastSaid} ${this.said}`;
+    const next = (heard: string) => readOn(heard, voice, readTo(this.echoed, voice));
+    if (!this.speaking && !this.overLate) {
+      this.overLate = true;
+      this.echoed += this.over.slice(0, this.over.length - next(this.over).length);
+      this.over = "";
+    }
+    this.over += text;
+    let his = this.over;
+    if (this.overLate) {
+      his = next(this.over);
+      this.echoed += this.over.slice(0, this.over.length - his.length);
+      this.over = "";
+      if (!spokenText(his)) return;
+    } else {
+      const words = afterNods(spokenText(this.over));
+      if (!words) return;
+      const echo = echoOf(words, voice, true);
+      if (echo === "echo") {
+        this.echoed += this.over;
+        this.over = "";
+      }
+      if (echo !== "no") return;
+    }
+    this.interrupt();
+    this.overSound = false;
+    this.heard += his;
+    this.over = "";
+    this.echoed = "";
+    this.overLate = false;
+    this.caption("user", this.heard);
+  }
+
+  /** What is still held from the read is its own voice or a nod while it talked. */
+  private dropHeld() {
+    this.over = "";
+    this.echoed = "";
+    this.overLate = false;
+  }
+
+  private caption(who: "user" | "voice", text: string) {
+    const words = spokenText(text);
+    if (!words) return;
+    const last = this.snapshot.caption;
+    this.set({ caption: { id: last?.who === who ? last.id : ++this.captions, who, text: words } });
+  }
+
+  /** His line is whole once the voice's turn for it ends: it goes to the bot exactly like a typed message. */
+  private commit() {
+    const text = spokenText(this.heard);
+    this.heard = "";
+    if (!text || MUTTER.test(text)) return;
+    const sendId = crypto.randomUUID();
+    this.sends.add(sendId);
+    this.waiting.add(sendId);
+    this.spokeAt = this.loudAt;
+    if (this.snapshot.notice) this.set({ notice: undefined });
+    this.deps.send(text, sendId, (stopped) => this.unsent(sendId, text, stopped));
+  }
+
+  /** A send the bot never got: the call stops working on it and, unless Stop took it back, says so, as a Gemini call does. Its row may already have settled it. */
+  private unsent(sendId: string, text: string, stopped?: boolean) {
+    this.waiting.delete(sendId);
+    if (this.ended || !this.sends.delete(sendId)) return;
+    if (!stopped) this.set({ notice: { kind: "notSent", text } });
+    this.refresh();
+  }
+
+  /** The bot's replies to this call's own sends, each read once and in order once its turn settles; another task or older chat stays unread. */
+  observe({ busy, messages }: { busy: boolean; messages: Message[] }) {
+    this.busy = busy;
+    if (!busy) this.settle(messages);
+    this.refresh();
+  }
+
+  /** A task he has left: its turn ended, and these are its messages. */
+  settle(messages: Message[]) {
+    let ours = false;
+    const asked: string[] = [];
+    for (const message of messages) {
+      if (message.role === "user") {
+        ours = Boolean(message.sendId && this.sends.has(message.sendId));
+        if (ours) asked.push(message.sendId!);
+        continue;
+      }
+      if (!isShownMessage(message)) continue;
+      for (const sendId of asked.splice(0)) this.waiting.delete(sendId);
+      if (!ours || message.role !== "bot" || message.kind !== "text" || isVoiceLine(message) || !message.text?.trim() || this.readIds.has(message.id)) continue;
+      this.readIds.add(message.id);
+      this.read(message.text);
+    }
+    this.refresh();
+  }
+
+  private read(text: string) {
+    if (!this.speaking) {
+      this.lastSaid = "";
+      this.dropHeld();
+    }
+    this.reads.push(...toUtterances(text));
+    this.readNext();
+  }
+
+  // One utterance per voice turn: the next goes out when the last is generated, so it queues behind the words still playing.
+  private readNext() {
+    if (!this.engine || !this.connected || this.turn || this.asked || spokenText(this.heard)) return;
+    const next = this.reads.shift();
+    if (!next) return;
+    this.asked = true;
+    this.reading = next;
+    this.engine.sendText(`${READ}${next}`);
+    this.refresh();
+  }
+
+  /** A tap while it reads: the rest is dropped and the mic opens. */
+  interrupt() {
+    if (!this.speaking) return;
+    this.reads = [];
+    this.reading = undefined;
+    this.cut = this.turn === "read" || this.asked;
+    this.deps.audio.flush();
+    this.refresh();
+  }
+
+  /** Nothing read, heard or waited on: another session can take over and lose nothing. */
+  idle(): boolean {
+    return this.snapshot.status === "listening" && !this.turn && !this.asked && !this.reads.length && !spokenText(this.heard);
+  }
+
+  retune(prefs: CallPrefs, volume = 1) {
+    this.deps.audio.tune(callPace(prefs), volume);
+    this.prefs = prefs;
+    this.restyle();
+  }
+
+  // A new voice or language opens a new session, never mid-word: it waits until nothing is being said or heard.
+  private restyle() {
+    const prefs = this.prefs;
+    if (!prefs || !this.connected || this.ended || this.swapping || this.turn || this.asked || spokenText(this.heard)) return;
+    if ((prefs.voice ?? this.voice) === this.voice && (prefs.language ?? (activeLocale() === "ko" ? "ko" : "en")) === this.language) return;
+    this.swapping = true;
+    void this.swap().finally(() => { this.swapping = false; });
+  }
+
+  private async swap() {
+    const session = await this.token(true);
+    if (!session || !this.connected || this.ended || this.turn || this.asked || spokenText(this.heard)) return;
+    const old = this.engine;
+    this.engine = null;
+    this.connected = false;
+    this.handle = undefined;
+    old?.close();
+    this.connect(session);
+  }
+
+  mute(muted: boolean) {
+    this.set({ muted });
+    if (muted && this.micOpen) this.engine?.audioPaused();
+    this.micOpen = false;
+  }
+
+  hidden(isHidden: boolean) {
+    if (!isHidden) void this.heal();
+  }
+
+  resume() {
+    void this.heal();
+  }
+
+  private async heal() {
+    if (this.ended || this.snapshot.startedAt === undefined) return;
+    const ok = await this.deps.audio.heal();
+    if (this.ended) return;
+    this.stalled = !ok;
+    if (ok && this.snapshot.noSound) this.set({ noSound: undefined });
+    this.refresh();
+  }
+
+  private async reconnect() {
+    const old = this.engine;
+    this.engine = null;
+    this.connected = false;
+    this.turn = null;
+    this.asked = false;
+    if (this.reading) this.reads.unshift(this.reading);
+    this.reading = undefined;
+    old?.close();
+    if (this.ended) return;
+    if (!this.handle || this.reconnects >= MAX_RECONNECTS) return this.fail("The call dropped");
+    this.reconnects += 1;
+    const session = await this.token();
+    if (session && !this.ended) this.connect(session);
+  }
+
+  private fail(error: string) {
+    if (this.ended) return;
+    this.teardown();
+    this.set({ status: "failed", error });
+  }
+
+  end() {
+    if (this.snapshot.status === "ended") return;
+    if (this.snapshot.status !== "failed") {
+      if (this.connected && !this.snapshot.muted) this.deps.audio.boop();
+      this.teardown();
+    }
+    this.set({ status: "ended" });
+  }
+
+  private teardown() {
+    const engine = this.engine;
+    this.engine = null;
+    this.connected = false;
+    this.reads = [];
+    clearTimeout(this.readyTimer);
+    engine?.close();
+    this.deps.audio.close();
+    const started = this.snapshot.startedAt;
+    if (this.callId && started !== undefined) {
+      const sorted = [...this.firstWordMs].sort((a, b) => a - b);
+      const at = (p: number) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]! : null);
+      void this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/end`, { callId: this.callId, stats: { ms: Math.max(0, this.now() - started), ttfaMs: { p50: at(0.5), p90: at(0.9) } } }).catch(() => {});
+    }
+  }
+}

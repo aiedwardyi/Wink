@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Brain, ChevronDown, Loader2 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { useStore, type Message } from "@/state/store";
 import { memorySaveTarget } from "@/lib/memory-recent";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { Fold } from "./Fold";
 
 const FLICKER_MS = 700;
@@ -41,11 +42,19 @@ export function MemorySaveChip({ summary, at, lines, room = false }: { summary: 
   );
 }
 
+// A display:contents wrapper has no box to scroll to, so go down to the first element that has one.
+function firstNote(from: HTMLElement | null) {
+  let node = from?.firstElementChild ?? null;
+  while (node && getComputedStyle(node).display === "contents") node = node.firstElementChild;
+  return node instanceof HTMLElement ? node : null;
+}
+
 /** Two or more saves in a row, folded to one row; `children` are the notes. */
 export function MemorySaveRun({ messages, forceOpen = false, children }: { messages: Message[]; forceOpen?: boolean; children: React.ReactNode }) {
   const { t } = useI18n();
   const saved = useSaved(messages[messages.length - 1].at);
   const [open, setOpen] = useState(forceOpen);
+  const notes = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (forceOpen) setOpen(true);
   }, [forceOpen]);
@@ -65,8 +74,8 @@ export function MemorySaveRun({ messages, forceOpen = false, children }: { messa
           <ChevronDown size={13} className={open ? "shrink-0 rotate-180 transition-transform" : "shrink-0 transition-transform"} />
         </button>
       </div>
-      <Fold open={open}>
-        <div className="flex flex-col gap-1 pt-1">{children}</div>
+      <Fold open={open} onOpened={() => revealOnOpen(firstNote(notes.current))}>
+        <div ref={notes} className="flex flex-col gap-1 pt-1">{children}</div>
       </Fold>
     </div>
   );

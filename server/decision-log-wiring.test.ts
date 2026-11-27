@@ -9,15 +9,15 @@
 //   2. a card and the human's answer write two rows (allow and deny)
 //   3. an answer that could not be delivered writes NO approval row
 import type { ChildProcess } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { readDecisions, type DecisionRow } from "./decision-log.ts";
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
@@ -86,7 +86,7 @@ async function makePermissionBot(patch: Record<string, unknown>, instanceId = "g
 posixOnly("authorization decisions are logged", () => {
   beforeAll(async () => {
     chmodSync(FAKE_CLI, 0o755);
-    home = mkdtempSync(join(tmpdir(), "omb-decisions-e2e-"));
+    home = createFixtureHome("omb-decisions-e2e-");
     mkdirSync(join(home, ".orbit"), { recursive: true });
     writeFileSync(
       join(home, ".orbit", "config.json"),
@@ -132,7 +132,7 @@ posixOnly("authorization decisions are logged", () => {
 
   afterAll(async () => {
     await waitForExit(child, { signal: "SIGTERM" });
-    await removeTempDir(home);
+    removeTestData(home);
   });
 
   it(

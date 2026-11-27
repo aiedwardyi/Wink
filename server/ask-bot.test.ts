@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
@@ -8,6 +7,7 @@ import { findDelegationReceipt, finishDelegatedTurn, pollDelegation, _resetPendi
 import { EventBus } from "./harness/bus.ts";
 import { Store, type BotRecord, type GroupRecord } from "./store.ts";
 import { ownTurnReply } from "./turn-reply.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 process.env.OMB_ASK_BOT_TIMEOUT_MS = "300";
 const { ASK_BOT_TIMEOUT_MS, waitForPeerReply } = await import("./ask-bot.ts");
@@ -25,7 +25,7 @@ describe("ask_bot past its wait", () => {
   let watched: DelegatedTurn | undefined;
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     _resetPending();
     store = new Store(selection);
     caller = store.patchBot(store.createBot().id, { name: "Metaverse" })!;

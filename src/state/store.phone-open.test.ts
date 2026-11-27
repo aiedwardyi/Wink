@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ReconnectingCue } from "@/components/ReconnectingCue";
 import { applyLocale } from "@/lib/i18n";
+import { lastMemory, rememberMemory } from "@/lib/memory-last";
 import { SNAPSHOT_CACHE_KEY } from "./snapshot-cache";
 import { StoreProvider, useStore, useStreaming, type Bot, type Message } from "./store";
 
@@ -86,6 +87,20 @@ describe("phone cold open", () => {
     await act(async () => reply(Response.json({ bot: { ...bot(), name: "Edited" } })));
     expect(store.state.bots.map((row) => row.id)).toEqual(["b2"]);
     expect(signal.aborted).toBe(true);
+  });
+
+  it("drops a deleted bot's kept memory, deleted here or on another device", async () => {
+    await mount(true);
+    await hello();
+    await finish(0, "s:1");
+    const kept = { text: "- Likes tea", truncated: false, topics: [] };
+    rememberMemory("b1", kept);
+    rememberMemory("b2", kept);
+    await act(async () => store.dispatch({ type: "deleteBot", botId: "b1" }));
+    expect(lastMemory("b1")).toBeNull();
+    expect(lastMemory("b2")).toEqual(kept);
+    await emit({ kind: "bot.deleted", seq: 2, botId: "b2" }, "s:2");
+    expect(lastMemory("b2")).toBeNull();
   });
 
   it.each([ ["en", "Reconnecting"], ["ko", "다시 연결 중"] ] as const)("keeps the disconnected cue after HTTP-only hydration in %s", async (locale, reconnecting) => {

@@ -955,15 +955,21 @@ it("forwards binary mouse reports to the PTY", async () => {
   expect(write).toHaveBeenCalledWith("session-bin", "\x1b[M\x60\x21\x10");
 });
 
-it("forces an app repaint after attaching an alt-screen snapshot", async () => {
+it.each([
+  { cols: 80, rows: 24, sizes: [[80, 23], [80, 24]] },
+  { cols: 110, rows: 30, sizes: [[80, 24]] },
+])("repaints an alternate screen without restoring stale dimensions ($cols by $rows)", async ({ cols, rows, sizes }) => {
+  let frame!: FrameRequestCallback;
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => { frame = cb; return 1; });
+  vi.stubGlobal("cancelAnimationFrame", () => {});
   const resize = vi.fn(async () => {});
-  const open = vi.fn(async () => ({ id: "session-alt", cwd: "C:\\work", shell: "pwsh.exe", output: "TUI", seq: 1, exitCode: null, alternate: true }));
+  const open = vi.fn(async () => ({ id: "session-alt", cwd: "C:\\work", shell: "pwsh.exe", output: "TUI", seq: 1, exitCode: null, cols, rows, alternate: true }));
   const bridge: TerminalBridge = { appearance: vi.fn(async () => null), open, write: vi.fn(async () => {}), resize, onData: () => vi.fn(), onExit: () => vi.fn() };
   const bot = mountBridge(bridge, { id: "bot-alt", name: "Alt", cwd: "C:\\work" });
   await act(async () => root.render(createElement(TerminalWorkspace, { bot, visible: true, focusBlocked: false, onClose: vi.fn() })));
-  await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
-  // Size bounce (rows - 1, then rows) makes a diff-rendering TUI repaint from live state.
-  expect(resize.mock.calls).toEqual([["session-alt", 80, 23], ["session-alt", 80, 24]]);
+  Object.defineProperties(host.querySelector("[data-orbit-terminal] > div")!, { clientWidth: { value: 800 }, clientHeight: { value: 600 } });
+  await act(async () => frame(0));
+  expect(resize.mock.calls).toEqual(sizes.map((size) => ["session-alt", ...size]));
 });
 
 it("replays history at the PTY's size and fits only after the replay", async () => {
@@ -1026,6 +1032,77 @@ it("re-runs fit, refresh, and PTY sync when the terminal becomes visible again",
   } finally {
     if (widthDesc) Object.defineProperty(HTMLElement.prototype, "clientWidth", widthDesc);
     if (heightDesc) Object.defineProperty(HTMLElement.prototype, "clientHeight", heightDesc);
+  }
+});
+
+it("keeps the PTY size on close and sends each visible size once, before the next command", async () => {
+  let frame!: FrameRequestCallback;
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => { frame = cb; return 1; });
+  vi.stubGlobal("cancelAnimationFrame", () => {});
+  const resize = vi.fn(async () => {});
+  const write = vi.fn(async () => {});
+  const open = vi.fn(async () => ({ id: "session-size", cwd: "C:\\work", shell: "pwsh.exe", output: "", seq: 0, exitCode: null }));
+  const bot = mountBridge({ appearance: vi.fn(async () => null), open, write, resize, onData: () => vi.fn(), onExit: () => vi.fn() });
+  let observed!: () => void;
+  vi.stubGlobal("ResizeObserver", class { constructor(cb: () => void) { observed = cb; } observe() {} disconnect() {} });
+  const render = (visible: boolean) => act(async () => root.render(createElement(TerminalWorkspace, { bot, visible, focusBlocked: false, onClose: vi.fn() })));
+  const tick = () => act(async () => frame(0));
+  await render(true);
+  const element = host.querySelector("[data-orbit-terminal] > div")!;
+  Object.defineProperties(element, { clientWidth: { value: 800 }, clientHeight: { value: 600 } });
+  await tick();
+  resize.mockClear();
+  try {
+    await render(false);
+    terminal.cols = 68;
+    observed();
+    await tick();
+    expect(resize).not.toHaveBeenCalled();
+
+    terminal.cols = 85;
+    await render(true);
+    await tick();
+    observed();
+    await tick();
+    expect(resize.mock.calls).toEqual([["session-size", 85, 24]]);
+
+    terminal.cols = 75;
+    observed();
+    await act(async () => terminal.__emitData("ls\r"));
+    await tick();
+    expect(resize.mock.calls).toEqual([["session-size", 85, 24], ["session-size", 75, 24]]);
+    expect(resize.mock.invocationCallOrder.at(-1)).toBeLessThan(write.mock.invocationCallOrder[0]!);
+  } finally {
+    terminal.cols = 80;
+  }
+});
+
+it("sends typing and submits in channel order during an unacknowledged resize", async () => {
+  let frame!: FrameRequestCallback;
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => { frame = cb; return 1; });
+  vi.stubGlobal("cancelAnimationFrame", () => {});
+  const acks: Array<() => void> = [];
+  const resize = vi.fn(() => new Promise<void>((resolve) => { acks.push(resolve); }));
+  const write = vi.fn(async () => {});
+  const open = vi.fn(async () => ({ id: "session-input", cwd: "C:\\work", shell: "pwsh.exe", output: "", seq: 0, exitCode: null }));
+  const bot = mountBridge({ appearance: vi.fn(async () => null), open, write, resize, onData: () => vi.fn(), onExit: () => vi.fn() });
+  await act(async () => root.render(createElement(TerminalWorkspace, { bot, visible: true, focusBlocked: false, onClose: vi.fn() })));
+  Object.defineProperties(host.querySelector("[data-orbit-terminal] > div")!, { clientWidth: { value: 800 }, clientHeight: { value: 600 } });
+  await act(async () => frame(0));
+
+  try {
+    terminal.cols = 75;
+    await act(async () => {
+      terminal.__emitData("ls");
+      terminal.__emitData("\r");
+      terminal.__emitData("pwd");
+    });
+    expect(resize.mock.calls).toEqual([["session-input", 80, 24], ["session-input", 75, 24]]);
+    expect(write.mock.calls).toEqual([["session-input", "ls"], ["session-input", "\r"], ["session-input", "pwd"]]);
+    expect(resize.mock.invocationCallOrder.at(-1)).toBeLessThan(write.mock.invocationCallOrder[1]!);
+  } finally {
+    terminal.cols = 80;
+    await act(async () => { for (const ack of acks) ack(); });
   }
 });
 
@@ -2223,7 +2300,7 @@ it("runs on a web bridge prop with no preload, without new-shell controls, and h
   await act(async () => root.render(createElement(TerminalWorkspace, { bot: { id: "bot-web", name: "Web", cwd: "C:\\work" }, visible: true, focusBlocked: false, onClose: vi.fn(), webBridge })));
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   expect(window.ogb).toBeUndefined();
-  expect(readBot).toHaveBeenCalledWith("bot-web");
+  expect(readBot).toHaveBeenCalledWith("bot-web", { panesOnly: true });
   expect(webBridge.open).toHaveBeenCalledTimes(1);
   expect(host.querySelector('[aria-label="Choose a folder"]')).toBeNull();
   expect(host.textContent).toContain("work");
@@ -2315,4 +2392,136 @@ it("never restarts Main on a pane switch after a folder pick", async () => {
   await f.select("one");
   await f.select(null);
   expect(f.open.mock.calls.filter(([input]) => !input.sessionId).map(([input]) => input.restart)).toEqual([false, false, false]);
+});
+
+it("never shows Main or sends it a key while a clicked worker waits on the pane list", async () => {
+  const { createWebTerminalBridge } = await import("@/lib/web-terminal-bridge");
+  vi.stubGlobal("localStorage", window.localStorage);
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const writes: { sessionId: string; data: string }[] = [];
+  const lives: string[] = [];
+  let release!: () => void;
+  const listed = new Promise<void>((resolve) => { release = resolve; });
+  let asked!: () => void;
+  const rosterAsked = new Promise<void>((resolve) => { asked = resolve; });
+  const roster = [{ sessionId: "main", label: "Main", generation: 1, main: true }, { sessionId: "worker", label: "Worker", generation: 1, main: false }];
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    const url = new URL(String(input), "http://127.0.0.1");
+    if (url.pathname.endsWith("/terminal/live")) {
+      const sessionId = url.searchParams.get("sessionId") ?? "main";
+      lives.push(sessionId);
+      const frame = { kind: "snapshot", lease: "lease", sessionId, generation: 1, output: `${sessionId} scrollback`, seq: 5, cols: 80, rows: 24, exitCode: null };
+      const body = new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));
+        init?.signal?.addEventListener("abort", () => { try { controller.close(); } catch {} }, { once: true });
+      } });
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    }
+    if (url.pathname.endsWith("/terminal/input")) {
+      writes.push(JSON.parse(String(init?.body)));
+      return Response.json({ ok: true });
+    }
+    if (url.pathname.endsWith("/terminal")) {
+      asked();
+      await listed;
+      return Response.json({ panes: roster });
+    }
+    return Response.json({ ok: true });
+  }));
+  const webBridge = createWebTerminalBridge("bot-web");
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  const painted = terminal.write.mock.calls.length;
+  try {
+    await act(async () => root.render(createElement(TerminalWorkspace, { bot: { id: "bot-web", name: "Web" }, visible: true, focusBlocked: false, onClose: vi.fn(), paneFocus: { sessionId: "worker" }, webBridge })));
+    await act(async () => { await rosterAsked; });
+    await act(async () => { terminal.__emitData("q"); });
+    expect(lives).toEqual([]);
+    expect(terminal.write.mock.calls.slice(painted).map(([text]) => text)).not.toContain("main scrollback");
+    expect(writes).toEqual([]);
+    await act(async () => { release(); });
+    await vi.waitFor(() => expect(terminal.write.mock.calls.slice(painted).map(([text]) => text)).toContain("worker scrollback"));
+    expect(lives.at(-1)).toBe("worker");
+    await act(async () => { terminal.__emitData("z"); });
+    await vi.waitFor(() => expect(writes).toEqual([expect.objectContaining({ sessionId: "worker", data: "z" })]));
+  } finally {
+    release();
+    await webBridge.cancelOpen?.("bot-web");
+  }
+});
+
+it("never sends Main a key when the bridge's pane list would land before the workspace's", async () => {
+  const { createWebTerminalBridge } = await import("@/lib/web-terminal-bridge");
+  vi.stubGlobal("localStorage", window.localStorage);
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const writes: { sessionId: string; data: string }[] = [];
+  const lives: string[] = [];
+  let bridgeRosters = 0;
+  let release!: () => void;
+  const listed = new Promise<void>((resolve) => { release = resolve; });
+  let asked!: () => void;
+  const rosterAsked = new Promise<void>((resolve) => { asked = resolve; });
+  const roster = [{ sessionId: "main", label: "Main", generation: 1, main: true }, { sessionId: "worker", label: "Worker", generation: 1, main: false }];
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    const url = new URL(String(input), "http://127.0.0.1");
+    if (url.pathname.endsWith("/terminal/live")) {
+      const sessionId = url.searchParams.get("sessionId") ?? "main";
+      lives.push(sessionId);
+      const frame = { kind: "snapshot", lease: "lease", sessionId, generation: 1, output: `${sessionId} scrollback`, seq: 5, cols: 80, rows: 24, exitCode: null };
+      const body = new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));
+        init?.signal?.addEventListener("abort", () => { try { controller.close(); } catch {} }, { once: true });
+      } });
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    }
+    if (url.pathname.endsWith("/terminal/input")) {
+      writes.push(JSON.parse(String(init?.body)));
+      return Response.json({ ok: true });
+    }
+    if (url.pathname.endsWith("/terminal")) {
+      // The bridge's own pane read carries its abort signal and answers at once; the workspace's waits.
+      if (init?.signal) bridgeRosters++;
+      else {
+        asked();
+        await listed;
+      }
+      return Response.json({ panes: roster });
+    }
+    return Response.json({ ok: true });
+  }));
+  const webBridge = createWebTerminalBridge("bot-web");
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  const painted = terminal.write.mock.calls.length;
+  try {
+    await act(async () => root.render(createElement(TerminalWorkspace, { bot: { id: "bot-web", name: "Web" }, visible: true, focusBlocked: false, onClose: vi.fn(), paneFocus: { sessionId: "worker" }, webBridge })));
+    await act(async () => { await rosterAsked; });
+    await act(async () => { terminal.__emitData("q"); });
+    expect(bridgeRosters).toBe(0);
+    expect(lives).toEqual([]);
+    expect(writes).toEqual([]);
+    await act(async () => { release(); });
+    await vi.waitFor(() => expect(terminal.write.mock.calls.slice(painted).map(([text]) => text)).toContain("worker scrollback"));
+    expect(lives).toEqual(["worker"]);
+    await act(async () => { terminal.__emitData("z"); });
+    await vi.waitFor(() => expect(writes).toEqual([expect.objectContaining({ sessionId: "worker", data: "z" })]));
+  } finally {
+    release();
+    await webBridge.cancelOpen?.("bot-web");
+  }
+});
+
+it("opens Main once the pane list lands without the clicked worker", async () => {
+  const f = paneFixture();
+  let release!: (snapshot: typeof f.snapshot) => void;
+  f.readBot.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+  await act(async () => root.render(createElement(TerminalWorkspace, { ...f.props, paneFocus: { sessionId: "pane-gone" } })));
+  expect(f.open).not.toHaveBeenCalled();
+  await act(async () => { release(f.snapshot); });
+  expect(f.open).toHaveBeenCalledTimes(1);
+  expect(f.open.mock.calls[0]?.[0].sessionId).toBeUndefined();
 });

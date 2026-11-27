@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
+import { roomAuthorIsMine } from "../../shared/room-routing";
 
 import { useI18n } from "@/lib/i18n";
 import { useJoinedRooms, useLoadedJoinedRooms } from "@/lib/joined-rooms";
@@ -22,8 +23,8 @@ export function useSidebarRooms() {
   const groups = useMemo<Group[]>(() => rooms.map((room) => {
     const phase = joinedPhase(room);
     const last = room.lastEntry;
-    const preview = phase === "removed" ? t("teamRoom.removed") : phase === "left" ? t("teamRoom.left") : last ? t(last.author.kind === "person" && last.author.id === room.me.id ? "chrome.youPrefix" : "chrome.speakerPrefix", {
-      name: last.author.name, text: last.text || last.files?.map((file) => file.name).join(", ") || "",
+    const preview = phase === "removed" ? t("teamRoom.removed") : phase === "left" ? t("teamRoom.left") : last ? t(roomAuthorIsMine(last.author, room.me) ? "chrome.youPrefix" : "chrome.speakerPrefix", {
+      name: last.author.kind === "host" ? room.state?.host ?? last.author.name : last.author.name, text: last.text || last.files?.map((file) => file.name).join(", ") || "",
     }) : (room.state?.host ?? "");
     return {
       id: joinedSelection(room.roomId), threadId: joinedSelection(room.roomId),

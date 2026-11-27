@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { BOT_AVATAR_PICKER_ORDER, botAvatarChoiceSchema, botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
+import { ABOUT_YOU_MAX_PASTE, addToBotMemory, day, readImportRequest } from "./about-you.ts";
 import { saveImage } from "./attachments.ts";
 import { avatarGenerationRequestSchema, avatarGenerationStateMatches, generateAvatarImage, snapshotAvatarGenerationState } from "./avatar-image.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
@@ -13,16 +14,18 @@ import { parseBotProfilePatch, type BotProfilePatchInput } from "./bot-profile.t
 import { cloudBackendChangeError } from "./cloud-backend.ts";
 import type { AppConfig } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
+import { warmPool } from "./drivers/warm-pool.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
 import type { KeepGoing } from "./keep-going.ts";
 import { applyEffortPick } from "./live-effort.ts";
 import type { createMemoryHealthCheck } from "./memory-health.ts";
 import { modelPickPatch } from "./pending-model.ts";
-import { parseTimeline, PICKS_FILE } from "./picks.ts";
+import { parseTimeline, PICKS_FILE, timelineEntries } from "./picks.ts";
 import { validateProjectNotes, type createProjectNotesCheck } from "./project-notes.ts";
 import { sectionKey, type BotRecord, type Message, type Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
+import { timelinePicks } from "./timeline-picks.ts";
 import { isMemoryTopicName, listMemoryTopics, MEMORY_FILE_MAX_BYTES, readMemoryFile, readMemoryTopic, saveMemoryFile, workspaceDir } from "./workspace.ts";
 
 type BotRouteDeps = {
@@ -45,6 +48,8 @@ type BotRouteDeps = {
   projectNotesCheck: ReturnType<typeof createProjectNotesCheck>;
   memoryHealthCheck: ReturnType<typeof createMemoryHealthCheck>;
   noteTalked: (botId: string) => void;
+  /** Rebuilds the bot's memory lookup index (memory-lookup.ts refresh). */
+  refreshLookup: (botId: string) => Promise<void>;
   activeVpsThreads: Map<string, string>;
   resumePaneWakes: (botId: string) => void;
 };
@@ -471,8 +476,17 @@ export function createBotRoutes(deps: BotRouteDeps) {
         if (!sameModelSelection(existingBot.pendingModelSelection ?? existingBot.modelSelection, normalizedSelection)) deps.cancelUsageWait?.(existingBot.id);
         Object.assign(patch, modelPickPatch(existingBot, normalizedSelection));
       }
+      const instanceOf = (record: BotRecord) => deps.accountBots ? deps.accountBots.instance(record) : registry.get(record.modelSelection.instanceId);
+      const engineBefore = normalizedSelection && existingBot && instanceOf(existingBot)?.instanceId;
+      // a pick held for the running turn moves the bot all the same once it ends; instance() would name the running turn's engine
+      const engineAfter = (record: BotRecord) => {
+        const selection = record.pendingModelSelection ?? record.modelSelection;
+        try { return deps.accountBots ? deps.accountBots.resolve({ modelSelection: selection }).instanceId : selection.instanceId; } catch { return undefined; }
+      };
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      // a warm child serves only the engine it started for; the new engine's Stop and Delete never reach it
+      if (engineBefore && engineBefore !== engineAfter(bot)) warmPool.retire({ instanceId: engineBefore, threadId: bot.threadId }, "engine switched");
       // A changed working folder must reach existing tasks: their pinned
       // cwd predates the change and their resume cursors point at
       // old-rooted CLI sessions. Reset both so the next turn re-pins the
@@ -511,8 +525,26 @@ export function createBotRoutes(deps: BotRouteDeps) {
       // truncated echoes back so the editor can warn about the load budget
       return json(res, 200, { ok: true, truncated: saved.truncated, revision: saved.revision });
     },
-    memoryTopic: async (res: ServerResponse, m: RegExpMatchArray) => {
+    importMemory: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const asked = await readImportRequest(req);
+      if (!asked) return json(res, 400, { error: "text must be a string" });
+      const result = addToBotMemory(m[1], asked, day(Date.now()));
+      if ("error" in result) {
+        if (result.error === "too-large") return json(res, 413, { error: result.error, maxBytes: ABOUT_YOU_MAX_PASTE });
+        return json(res, result.error === "empty" ? 400 : 500, { error: result.error });
+      }
+      if (result.added) {
+        deps.noteTalked(m[1]);
+        memoryHealthCheck.refresh(m[1]);
+        // lines past the prompt's cut are found from the next turn on, so the index is current before the reply
+        await deps.refreshLookup(m[1]);
+      }
+      return json(res, 200, result);
+    },
+    memoryTopic: async (res: ServerResponse, m: RegExpMatchArray) => {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
       // Decode before validating: a UI-sent name arrives percent-encoded
       // ("my notes.md" → "my%20notes.md"), and an encoded traversal
       // ("..%2F..") must be judged by what it decodes TO, not slip through
@@ -525,9 +557,17 @@ export function createBotRoutes(deps: BotRouteDeps) {
         return json(res, 400, { error: "invalid topic name" });
       }
       if (!isMemoryTopicName(name)) return json(res, 400, { error: "invalid topic name" });
-      const text = readMemoryTopic(m[1], name);
+      let text: string | null;
+      try {
+        text = readMemoryTopic(m[1], name);
+      } catch {
+        return json(res, 500, { error: "internal error" });
+      }
+      if (text === null && name === PICKS_FILE) return json(res, 200, { name, text: "", entries: [] });
       if (text === null) return json(res, 404, { error: "no such topic file" });
-      return json(res, 200, name === PICKS_FILE ? { name, text, entries: parseTimeline(text).entries } : { name, text });
+      if (name !== PICKS_FILE) return json(res, 200, { name, text });
+      const entries = timelinePicks(timelineEntries(parseTimeline(text).entries), bot, store);
+      return json(res, 200, { name, text, entries });
     },
   };
 }

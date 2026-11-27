@@ -4,7 +4,7 @@ import { File as FileIcon, FileArchive, FileAudio, FileCode, FileSpreadsheet, Fi
 import { formatSize } from "@/lib/composer-attachments";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { FILE_ROW, GAP, HEAD, PAD, monthAt, useMediaGrid, type GridLayout, type GridMonth } from "@/lib/media-grid";
-import { heldMedia, loadMedia, loadOlderMedia, mediaMonths, pickKind, pickedKind, withLive, type MediaKind } from "@/lib/media-index";
+import { heldMedia, loadMedia, mediaMonths, pickKind, pickedKind, withLive, type MediaKind } from "@/lib/media-index";
 import { useThumb } from "@/lib/media-thumbs";
 import { openFile } from "@/lib/open-file";
 import { chatMedia, type MediaFile, type MediaSource } from "@/lib/show-media";
@@ -31,65 +31,31 @@ const ICONS: Array<[RegExp, LucideIcon]> = [
 /** Mounts only while the Media tab is open, so nothing here loads on a keystroke. */
 function useMediaFiles({ threadId, messages, roomId }: MediaSource) {
   const [index, setIndex] = useState(() => heldMedia(threadId, roomId));
-  const [historyFailed, setHistoryFailed] = useState(false);
-  const [attempt, reload] = useReducer((n: number) => n + 1, 0);
-  const expiredVersion = useRef<string>(undefined);
-  const replacingVersion = useRef<string>(undefined);
-  const version = index?.v;
-  const onSizeExpired = useCallback(() => {
-    if (!version || expiredVersion.current === version || replacingVersion.current === version) return;
-    expiredVersion.current = version;
-    reload();
-  }, [version]);
   const latest = roomId ? messages.findLast((message) => message.roomFiles?.length)?.id : undefined;
   const removed = useRoomFilesRemoved();
 
   // A room lists again when a new message brings files.
   useEffect(() => {
-    const controller = new AbortController();
-    const { signal } = controller;
-    void loadMedia(threadId, roomId).then((got) => {
-      if (signal.aborted) return;
-      replacingVersion.current = got.previous?.v;
-      setIndex(got.previous ?? got);
-      if (!got.next) { setHistoryFailed(false); return; }
-      void loadOlderMedia(threadId, got, signal, setIndex).then((full) => {
-        if (signal.aborted) return;
-        setIndex(full);
-        setHistoryFailed(false);
-      }, () => { if (!signal.aborted) setHistoryFailed(true); });
-    }, () => {
-      if (signal.aborted) return;
-      setIndex((was) => was ?? { files: [], list: roomId ? { files: [], error: "unreachable" } : undefined });
-      if (!roomId && heldMedia(threadId)) setHistoryFailed(true);
-    });
-    return () => controller.abort();
-  }, [threadId, roomId, latest, removed, attempt]);
+    let alive = true;
+    loadMedia(threadId, roomId).then((got) => { if (alive) setIndex(got); }, () => { if (alive) setIndex((was) => was ?? { files: [], list: roomId ? { files: [], error: "unreachable" } : undefined }); });
+    return () => { alive = false; };
+  }, [threadId, roomId, latest, removed]);
 
-  const files = useMemo(() => {
-    if (roomId || !index) return index?.files ?? null;
-    if (!index.next) return withLive(index.files, chatMedia(threadId, messages));
-    const head = messages.findLastIndex((message) => message.id === index.head);
-    return head < 0 ? index.files : withLive(index.files, chatMedia(threadId, messages.slice(head)));
-  }, [threadId, roomId, index, messages]);
-  return { files: index?.next && !files?.length ? null : files, room: index?.list ?? null, historyFailed, onSizeExpired,
-    retry: () => { setHistoryFailed(false); reload(); } };
+  const files = useMemo(() => roomId || !index ? index?.files ?? null : withLive(index.files, chatMedia(threadId, messages)), [threadId, roomId, index, messages]);
+  return { files, room: index?.list ?? null };
 }
 
-export const ShowMedia = memo(function ShowMedia({ source, maximized }: { source: MediaSource; maximized: boolean }) {
-  const { t } = useI18n();
-  const { files, room, historyFailed, onSizeExpired, retry } = useMediaFiles(source);
+export const ShowMedia = memo(function ShowMedia({ source, maximized, kept }: { source: MediaSource; maximized: boolean; kept?: boolean }) {
+  const { files, room } = useMediaFiles(source);
   return (
-    <div className="verify-watch-frame show-media" data-show-media data-maximized={maximized || undefined} aria-busy={(!files && !historyFailed) || undefined}>
-      <MediaFiles files={files} room={room} pickFor={source.threadId} roomId={source.roomId} onSizeExpired={onSizeExpired}>
-        {historyFailed && <button type="button" className="show-media-empty" onClick={retry}>{t("viewer.retry")}</button>}
-      </MediaFiles>
+    <div className="verify-watch-frame show-media" data-show-media data-maximized={maximized || undefined} data-kept={kept} aria-busy={!files || undefined}>
+      <MediaFiles files={files} room={room} pickFor={source.threadId} roomId={source.roomId} />
     </div>
   );
 });
 
 /** The Photos and Files list, for a chat's Media tab or a linked folder in Show. `pickFor` keeps its own Photos or Files pick. */
-export function MediaFiles({ files, room = null, pickFor, roomId, empty = "show.empty", children, onSizeExpired }: { files: MediaFile[] | null; room?: RoomFiles | null; pickFor: string; roomId?: string; empty?: MessageKey; children?: ReactNode; onSizeExpired?: () => void }) {
+export function MediaFiles({ files, room = null, pickFor, roomId, empty = "show.empty", children }: { files: MediaFile[] | null; room?: RoomFiles | null; pickFor: string; roomId?: string; empty?: MessageKey; children?: ReactNode }) {
   const { t, locale } = useI18n();
   const photos = useMemo(() => files?.filter((file) => file.image || file.video) ?? [], [files]);
   const others = useMemo(() => files?.filter((file) => !file.image && !file.video) ?? [], [files]);
@@ -128,7 +94,7 @@ export function MediaFiles({ files, room = null, pickFor, roomId, empty = "show.
           {layout.height > 0 && (
             <div data-media-grid style={{ height: layout.height }}>
               {layout.months.map((month) => month.top < to && month.top + month.height > from && (
-                <MediaMonthRows key={month.key} month={month} layout={layout} from={from - month.top} to={to - month.top} day={day} onOpen={openFile} onPlay={keepFiles} onSizeExpired={onSizeExpired} />
+                <MediaMonthRows key={month.key} month={month} layout={layout} from={from - month.top} to={to - month.top} day={day} onOpen={openFile} onPlay={keepFiles} />
               ))}
             </div>
           )}
@@ -146,7 +112,7 @@ export function MediaFiles({ files, room = null, pickFor, roomId, empty = "show.
   );
 }
 
-const MediaMonthRows = memo(function MediaMonthRows({ month, layout, from, to, day, onOpen, onPlay, onSizeExpired }: { month: GridMonth; layout: GridLayout; from: number; to: number; day: Intl.DateTimeFormat; onOpen: (file: MediaFile) => void; onPlay: () => void; onSizeExpired?: () => void }) {
+const MediaMonthRows = memo(function MediaMonthRows({ month, layout, from, to, day, onOpen, onPlay }: { month: GridMonth; layout: GridLayout; from: number; to: number; day: Intl.DateTimeFormat; onOpen: (file: MediaFile) => void; onPlay: () => void }) {
   const { columns, cell } = layout;
   const pitch = cell + GAP;
   const rows = Math.ceil(month.images.length / columns);
@@ -163,7 +129,7 @@ const MediaMonthRows = memo(function MediaMonthRows({ month, layout, from, to, d
         const left = ((firstCell + n) % columns) * pitch;
         return file.video ? <MediaVideo key={file.key} file={file} top={top} left={left} size={cell} onOpen={onOpen} /> : <MediaCell key={file.key} file={file} top={top} left={left} size={cell} onOpen={onOpen} />;
       })}
-      {month.files.slice(firstFile, Math.max(firstFile, endFile)).map((file, n) => <MediaRow key={file.key} file={file} top={filesTop + (firstFile + n) * FILE_ROW} day={day} onPlay={onPlay} onSizeExpired={onSizeExpired} />)}
+      {month.files.slice(firstFile, Math.max(firstFile, endFile)).map((file, n) => <MediaRow key={file.key} file={file} top={filesTop + (firstFile + n) * FILE_ROW} day={day} onPlay={onPlay} />)}
     </section>
   );
 });
@@ -234,7 +200,7 @@ function MediaScrollThumb({ scroller, layout, viewport }: { scroller: RefObject<
   return (
     <>
       <div className="show-media-rail" aria-hidden="true">
-        <div ref={thumb} data-media-thumb className="show-media-thumb" style={{ height: size }}
+        <div ref={thumb} data-media-thumb data-no-swipe className="show-media-thumb" style={{ height: size }}
           onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} />
       </div>
       <div ref={bubble} data-media-bubble data-shown={shown || undefined} className="show-media-bubble" aria-hidden="true">{label}</div>
@@ -252,22 +218,9 @@ function MediaVideo({ file, top, left, size, onOpen }: { file: MediaFile; top: n
   );
 }
 
-function MediaRow({ file, top, day, onPlay, onSizeExpired }: { file: MediaFile; top: number; day: Intl.DateTimeFormat; onPlay: () => void; onSizeExpired?: () => void }) {
-  const readSize = file.readSize;
-  const [loaded, setLoaded] = useState<{ readSize: typeof readSize; size: number | null }>();
-  useEffect(() => {
-    if (!readSize) return;
-    const controller = new AbortController();
-    void readSize(controller.signal).then((size) => {
-      if (controller.signal.aborted) return;
-      if (size === undefined) onSizeExpired?.();
-      else setLoaded({ readSize, size });
-    });
-    return () => controller.abort();
-  }, [readSize, onSizeExpired]);
-  const size = file.size ?? (loaded?.readSize === readSize ? loaded?.size : null);
+function MediaRow({ file, top, day, onPlay }: { file: MediaFile; top: number; day: Intl.DateTimeFormat; onPlay: () => void }) {
   const Icon = ICONS.find(([type]) => type.test(file.name))?.[1] ?? FileIcon;
-  const about = [size != null && formatSize(size), file.sender, day.format(file.at)].filter(Boolean).join(" · ");
+  const about = [file.size !== undefined && formatSize(file.size), file.sender, day.format(file.at)].filter(Boolean).join(" · ");
   return (
     <MediaOpen file={file} style={{ top }} className={ROW} row onPlay={onPlay}>
       <Icon aria-hidden="true" className="size-8 shrink-0 rounded-md bg-raised p-2 text-ink-secondary" />

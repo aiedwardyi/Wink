@@ -3,13 +3,15 @@ import { Ellipsis } from "lucide-react";
 import { api, useStore, type InstanceInfo } from "@/state/store";
 import { accountReady, type UsageAccount } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
+import { engineSignInFlow } from "@/lib/devices-setup";
 import { afterFold } from "@/lib/fold-press";
 import { useI18n } from "@/lib/i18n";
-import { isPhone } from "@/lib/phone-swipe";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { safeProviderText } from "@/lib/safe-provider-text";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import type { UsageBoardAccount } from "@/lib/usage-board";
 import { useUsageBoard } from "@/lib/use-usage-board";
+import { shownLogin } from "../../shared/usage-identity";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { ordered, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
@@ -56,44 +58,55 @@ export function AccountHead({ name, email, control }: { name: ReactNode; email?:
   );
 }
 
-export function SignInRow({ instance, mark, name, after, onUpdated }: { instance: InstanceInfo; mark?: ReactNode; name?: ReactNode; after?: ReactNode; onUpdated?: (instance: InstanceInfo) => void }) {
+export function SignInRow({ instance, mark, name, after, head, onUpdated }: {
+  instance: InstanceInfo; mark?: ReactNode; name?: ReactNode; after?: ReactNode;
+  /** Draws the line as an account row's head instead: it places the sign-in controls and the status text, and the steps fold under it. */
+  head?: (actions: ReactNode, status: ReactNode) => ReactNode;
+  onUpdated?: (instance: InstanceInfo) => void;
+}) {
   const { t } = useI18n();
-  const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
-  const status = waiting ? t(copyFallback ? "engine.pasteAndEnter" : capture.code ? "engines.enterCode" : "engines.finishInBrowser")
+  const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
+  const status = waiting ? t(capture.code ? "engines.enterCode" : "engines.finishInBrowser")
     : failed ? t(failed) : "";
-  const steps = waiting && (copyFallback || capture.code || capture.inputGeneration || failed);
+  const steps = waiting && (capture.code || capture.inputGeneration || failed);
+  const line = !loading && (connected ? t("connections.connected") : status || t("accounts.signedOut"));
+  const actions = <>{loading || connected ? null : computerOnly ? <span data-computer-only="">{t("engines.signInFromComputer")}</span> : waiting ? <>
+    {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className={STRONG_BUTTON}>{t(deviceFlow ? "engines.openLink" : "engines.openAgain")}</a>}
+    <button type="button" onClick={() => void cancel()} disabled={busy} className={ROW_BUTTON}>{t("engines.cancel")}</button>
+  </> : <button type="button" disabled={busy} onClick={() => void start()} className={STRONG_BUTTON}>{t("engines.signIn")}</button>}</>;
+  const detail = (name && status || steps) && <>
+    {name && status && <span>{status}</span>}
+    {waiting && capture.code && <code className="select-all break-all font-mono text-[14px] text-ink">{capture.code}</code>}
+    {waiting && capture.inputGeneration && <form className="flex flex-wrap items-center gap-x-3 gap-y-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
+      <input type="password" value={loginCode} onInput={(event) => setLoginCode(event.currentTarget.value)}
+        aria-label={t("accounts.loginCode")} placeholder={t("accounts.loginCode")} autoComplete="off" maxLength={4096}
+        className="h-8 min-w-0 flex-1 basis-56 rounded border border-hairline bg-control px-2 text-ink [@media(pointer:coarse)]:h-11" />
+      <button type="submit" disabled={busy || !loginCode} className={cn(STRONG_BUTTON, "ml-auto")}>{t("accounts.submitCode")}</button>
+    </form>}
+    {waiting && failed && <span>{t(failed)}</span>}
+  </>;
+  if (head) return (
+    <div aria-live="polite">
+      {head(actions, line)}
+      <Fold open={Boolean(detail)} keep><div className="flex min-w-0 flex-col items-stretch gap-2 pt-2">{detail}</div></Fold>
+    </div>
+  );
   return (
     <div aria-live="polite">
-      <ConnectionRow mark={mark}
-        label={name ?? (!loading && <><span className="min-w-0 break-words">{connected ? t("connections.connected") : status || t("accounts.signedOut")}</span>{after}</>)}
-        actions={<>{loading || connected ? null : computerOnly ? <span data-computer-only="">{t("engines.signInFromComputer")}</span> : waiting ? <>
-          {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className={STRONG_BUTTON}>{t(deviceFlow ? "engines.openLink" : "engines.openAgain")}</a>}
-          <button type="button" onClick={() => void cancel()} disabled={busy} className={ROW_BUTTON}>{t("engines.cancel")}</button>
-        </> : <button type="button" disabled={busy} onClick={() => void start()} className={STRONG_BUTTON}>{t("engines.signIn")}</button>}</>}>
-        {(name && status || steps) && <>
-          {name && status && <span>{status}</span>}
-          {waiting && copyFallback && <code className="select-all break-all font-mono text-ink">{instance.install?.signInCommand}</code>}
-          {waiting && capture.code && <code className="select-all break-all font-mono text-[14px] text-ink">{capture.code}</code>}
-          {waiting && capture.inputGeneration && <form className="flex flex-wrap items-center gap-x-3 gap-y-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
-            <input type="password" value={loginCode} onInput={(event) => setLoginCode(event.currentTarget.value)}
-              aria-label={t("accounts.loginCode")} placeholder={t("accounts.loginCode")} autoComplete="off" maxLength={4096}
-              className="h-8 min-w-0 flex-1 basis-56 rounded border border-hairline bg-control px-2 text-ink [@media(pointer:coarse)]:h-11" />
-            <button type="submit" disabled={busy || !loginCode} className={cn(STRONG_BUTTON, "ml-auto")}>{t("accounts.submitCode")}</button>
-          </form>}
-          {waiting && failed && <span>{t(failed)}</span>}
-        </>}
-      </ConnectionRow>
+      <ConnectionRow mark={mark} label={name ?? (line && <><span className="min-w-0 break-words">{line}</span>{after}</>)} actions={actions}>{detail}</ConnectionRow>
     </div>
   );
 }
 
-function ConnectionAccount({ account, label, named, revision, busy, disabled, signOut, reload, reorder }: {
+function ConnectionAccount({ account, label, named, revision, busy, disabled, removable, signOut, reload, reorder }: {
   account: UsageAccount;
   label: string;
   named?: UsageBoardAccount;
   revision: number;
   busy: boolean;
   disabled: boolean;
+  /** Remove clears this row: another account of the engine stays listed, or it is an added account. */
+  removable: boolean;
   signOut: () => void;
   reload: () => Promise<void>;
   reorder: boolean;
@@ -130,41 +143,50 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
     }
   }, [editing, phone]);
   const closeEditor = () => { restoreFocus.current = true; setEditing(false); };
+  const draining = account.drain && account.drain.phase !== "failed";
+  // Its first check has not answered: neither signed in nor signed out yet.
+  const checking = !ready && !account.drain && engineChecking(account);
+  const signInRow = !ready && !account.drain && !checking;
+  // A signed-out row is cleared through the same sign-out: the server marks it and Usage and Connections drop it.
+  const remove = <button type="button" data-remove-account="" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
+    className={ROW_BUTTON}>{t("accounts.remove")}</button>;
   const controls = <>
     {phone && canName && <button type="button" disabled={busy} className={ROW_BUTTON}
       onClick={() => { inlineEditor.current = false; setMenu(false); setEditing(true); }}>{t("accounts.name.edit")}</button>}
     {(ready || account.drain?.phase === "failed") && <button type="button" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
+    {signInRow && removable && remove}
   </>;
-  const draining = account.drain && account.drain.phase !== "failed";
-  // Its first check has not answered: neither signed in nor signed out yet.
-  const checking = !ready && !account.drain && engineChecking(account);
-  const signInRow = !ready && !account.drain && !checking;
   const toggleMenu = () => afterFold(`${id}-actions`, () => setMenu(!menu));
   const more = <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu} aria-controls={`${id}-actions`}
     onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button>;
-  // A signed-out row keeps its menu on the name line and Sign In on its own line below, so neither covers the other.
   const control = draining ? <span role="status">{t("accounts.removing")}</span> : checking ? <span aria-live="polite">{t("engines.checking")}</span>
-    : signInRow ? phone && canName && more : phone ? more : controls;
+    : phone ? more : controls;
+  const head = (slot: ReactNode, email: ReactNode) => <AccountHead control={slot} email={email} name={<>
+    {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
+      onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
+      : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
+        className="min-w-0 max-w-full truncate text-left">{name?.name}</button>}
+  </>} />;
   return (
     <div data-connection-account={account.instanceId} data-account-row={account.instanceId} tabIndex={-1} {...(reorder && reorderable(t("usage.desk.reorder", { name: name?.name ?? account.displayName })))} className={ACCOUNT_ROW}>
-      {(name || !signInRow) && <AccountHead control={control} email={!signInRow && !checking && label} name={<>
-        {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
-          onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
-          : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
-            className="min-w-0 max-w-full truncate text-left">{name?.name}</button>}
-      </>} />}
+      {/* A signed-out row keeps a signed-in row's shape: its status where the address goes, Sign In beside Remove (desktop) or the menu (phone). */}
+      {signInRow ? <SignInRow instance={account} onUpdated={() => void reload()} head={name ? (signIn, status) => head(<>{!phone && removable && remove}{signIn}{phone && (canName || removable) && more}</>, status) : undefined} />
+        : head(control, !checking && label)}
       {named?.codexPromo && <p className="pb-2 text-[12px] text-ink-secondary">{t("usage.desk.codexPromo")}</p>}
-      <Fold open={menu} id={`${id}-actions`}>
+      <Fold open={menu} id={`${id}-actions`} onOpened={() => revealOnOpen(actions.current)}>
         <div ref={actions} className="flex min-w-0 flex-wrap justify-end gap-2 pt-2"
           onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMenu(false); menuButton.current?.focus(); } }}>
           {controls}
         </div>
       </Fold>
-      {signInRow && <SignInRow instance={account} onUpdated={() => void reload()} />}
     </div>
   );
 }
+
+/** The addition each engine waits on outlives a remount of Connections, so its failure line still shows,
+ * even when the failed row was retired while Connections was closed: the server keeps that result. */
+const pendingAdds = new Map<string, string>();
 
 export function AccountConnections({ accounts, reload }: { accounts: UsageAccount[]; reload: () => Promise<void> }) {
   const { t } = useI18n();
@@ -172,11 +194,13 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const { board } = useUsageBoard();
   const terminal = isTerminalSkin(useSkin());
   const [busy, setBusy] = useState(false);
-  const [adding, setAdding] = useState<string | null>(null);
+  const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
+  const [adding, setAdding] = useState<string | null>(() => pendingAdds.get(base) ?? null);
   const [existingId, setExistingId] = useState<string | null>(null);
   const [error, setError] = useState<{ message: string; signInIds: string[] } | null>(null);
   useEffect(() => {
-    if (!adding) return;
+    if (!adding) { pendingAdds.delete(base); return; }
+    pendingAdds.set(base, adding);
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -189,21 +213,32 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
           void reload();
           return;
         }
-        if (["complete", "failed", "cancelled"].includes(result.state)) { setAdding(null); return; }
-      } catch { if (cancelled) return; }
+        if (["complete", "failed", "cancelled"].includes(result.state)) {
+          // A failed addition is retired with its row, so the failure line stays here.
+          if (result.state === "failed") setError({ message: t("engines.didntFinish"), signInIds: [] });
+          setAdding(null);
+          return;
+        }
+      } catch (error) {
+        if (cancelled) return;
+        // The server no longer knows this addition (it restarted): nothing is left to wait on.
+        if ((error as { status?: number }).status === 404) { setAdding(null); return; }
+      }
       timer = setTimeout(() => void poll(), 1000);
     };
     void poll();
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [adding, reload]);
+  }, [adding, base, reload]);
   useEffect(() => {
     if (error?.signInIds.length && !accounts.some((account) => error.signInIds.includes(account.instanceId)
       && signInPending(account))) setError(null);
   }, [accounts, error]);
-  const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
   const drag = useUsageDrag([{ base, accounts: accounts.map((account) => ({ id: account.instanceId })) }]);
+  // Usage shows one row per sign-in; the base signed in as an added account folds into that account's row here too.
+  const folded = board?.engines.find((engine) => engine.base === base)?.duplicates ?? [];
+  const shown = accounts.filter((account) => !folded.includes(account.instanceId));
   const login = accounts[0]!.install?.login;
-  const computerOnly = !window.ogb && isPhone() && !login?.deviceArgs;
+  const { device, computerOnly } = engineSignInFlow(login, true);
   const mutate = async (path: string, body: object, sourceId?: string) => {
     if (busy) return;
     const signInIds = accounts.filter(signInPending).map((account) => account.instanceId);
@@ -211,11 +246,13 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
     setError(null);
     setExistingId(null);
     try {
-      if (sourceId) body = await api(`/api/accounts/${encodeURIComponent(sourceId)}/destination`);
+      if (sourceId) body = { ...await api(`/api/accounts/${encodeURIComponent(sourceId)}/destination`), ...body };
       const result = await api(path, { method: "POST", body: JSON.stringify(body) });
       if (path === "/api/accounts" && typeof result.id === "string") setAdding(result.id);
       await reload();
     } catch (error) {
+      // Another client changed this sign-in since the row was drawn: the row redraws, nothing was signed out.
+      if ((error as { code?: string }).code === "login-changed") { await reload(); return; }
       const message = error instanceof Error ? error.message : "";
       setError({ message: message === "No ready account can take over this profile"
         ? t("accounts.noDestination") : safeProviderText(message, accounts.map((account) => account.snapshot.account)) || t("engines.didntFinish"),
@@ -228,21 +265,22 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const existingName = board?.engines.flatMap((engine) => engine.accounts).find((account) => account.id === existingId)?.name
     ?? existing?.snapshot.account ?? existing?.displayName;
   const add = addable && (computerOnly ? <span data-computer-only="">{t("connections.addOnComputer")}</span>
-    : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) })}
+    : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device })}
       className={STRONG_BUTTON}>{t("accounts.add")}</button>);
   return (
     <div data-engine-row={base} data-usage-engine="" data-usage-base={base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="min-w-0">
       <ConnectionRow mark={<ProviderBrandMark driverKind={accounts[0]!.driverKind} size={16} />}
         label={<span className="min-w-0 truncate text-[14px] font-semibold text-ink">{accounts[0]!.displayName}</span>} actions={add || undefined} />
       <AccountGroup label={accounts[0]!.displayName} terminal={terminal}>
-        {ordered(accounts, drag.orders[base], (account) => account.instanceId).map((account) => {
+        {ordered(shown, drag.orders[base], (account) => account.instanceId).map((account) => {
           const drain = account.drain;
           const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
           const hasDestination = accounts.some((other) => other !== account && accountReady(other));
           return (
-            <ConnectionAccount key={account.instanceId} reorder={accounts.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
+            <ConnectionAccount key={account.instanceId} reorder={shown.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
+              removable={account.instanceId !== base || shown.some((other) => other !== account && !other.drain)}
               named={board?.engines.flatMap((engine) => engine.accounts).find((row) => row.id === account.instanceId)} revision={board?.revision ?? -1}
-              reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)} />
+              reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : { login: shownLogin(account.snapshot) }, main && !drain ? account.instanceId : undefined)} />
           );
         })}
       </AccountGroup>

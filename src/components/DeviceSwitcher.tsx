@@ -16,6 +16,7 @@ export interface DeviceItem {
   deviceId: string;
   name: string;
   host: string;
+  relayHost?: string;
   current: boolean;
   offline: boolean;
   checking?: boolean;
@@ -125,7 +126,7 @@ export function DeviceSwitcher({
   const remoteWindow = !window.ogb && /\bElectron\//.test(navigator.userAgent);
   const visible = labeled || Boolean(deviceWindow) || (!window.ogb && !isPhone());
   const [open, setOpen] = useState(false);
-  const [devices, reload] = useDevices(visible, open);
+  const [devices, reload] = useDevices(visible, open, true);
   // The drawer is transformed, so a phone menu pinned inside it would clip. Portal it instead.
   const [pinned, setPinned] = useState<CSSProperties>();
   const [renaming, setRenaming] = useState(false);
@@ -213,7 +214,7 @@ export function DeviceSwitcher({
                       // A browser sent to an offline PC lands on a raw error, so say so in place.
                       if (!deviceWindow && device.offline) return setOfflineNote(t("chrome.deviceOfflineNote", { name: device.name }));
                       if (!deviceWindow) return navigate(`https://${device.host}/`);
-                      void deviceWindow.open(device.host, device.name).then((opened) => {
+                      void deviceWindow.open(device.host, device.name, device.relayHost).then((opened) => {
                         if (!opened) dispatch({ type: "toggleAppSettings", open: true, section: "companion" });
                       }).catch(() => {});
                       close();

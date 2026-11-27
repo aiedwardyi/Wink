@@ -31,10 +31,10 @@ export function SignInCard({ instance, help, onRetry, title, buttonLabel }: { in
   const { t } = useI18n();
   return (
     <Row instance={instance} title={title ?? t("engine.signInTo", { name: instance.displayName })} help={help}>
-      <div className="flex flex-col items-end gap-1.5">
-        <EngineSignIn instance={instance} buttonClassName={BUTTON} buttonLabel={buttonLabel} forceSignIn lineInTitle />
+      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1.5">
         {/* agy never reports signed-in, so this card can't flip to Retry */}
         {onRetry && <button type="button" onClick={onRetry} className="text-[12px] text-ink-secondary underline hover:text-ink">{t("composer.retry")}</button>}
+        <EngineSignIn instance={instance} buttonClassName={BUTTON} buttonLabel={buttonLabel} forceSignIn lineInTitle />
       </div>
     </Row>
   );

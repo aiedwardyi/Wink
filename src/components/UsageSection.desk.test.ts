@@ -718,7 +718,7 @@ describe("Usage desk", () => {
       { ...accountOf(server.board, "muse").windows[1]!, usedPercent: 20 },
     ] };
     h.api = async (path, init) => {
-      if (path === "/api/usage/refresh/muse" || path === "/api/usage/check/muse") {
+      if (path === "/api/usage/refresh/muse?fresh=1" || path === "/api/usage/check/muse") {
         server.calls.push(`${init?.method} ${path}`);
         return path.includes("/check/") ? check.promise : { status: "no_observation" };
       }
@@ -747,7 +747,7 @@ describe("Usage desk", () => {
     server.board.engines.push(museEngine(usageBoardNow));
     await mount();
     const api = h.api;
-    h.api = async (path, init) => path === "/api/usage/refresh/muse" ? { status: "fresh" } : api(path, init);
+    h.api = async (path, init) => path === "/api/usage/refresh/muse?fresh=1" ? { status: "fresh" } : api(path, init);
     await click(q("[data-usage-refresh]"));
     expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);
   });
@@ -761,8 +761,9 @@ describe("Usage desk", () => {
       return { status: "no_observation" };
     };
     await mount();
+    expect(server.calls).not.toContain("POST /api/usage/refresh/muse");
     const { useAutoRefresh } = await import("@/lib/usage-auto-refresh");
-    function QuickRefresh() { useAutoRefresh(server.board); return null; }
+    function QuickRefresh() { useAutoRefresh(server.board, "quick"); return null; }
     await act(async () => root.render(createElement(QuickRefresh)));
     await settle();
     expect(server.calls).toContain("POST /api/usage/refresh/muse");
@@ -783,7 +784,7 @@ describe("Usage desk", () => {
     await mount({ locale });
     const api = h.api;
     h.api = async (path, init) => {
-      if (path === "/api/usage/refresh/muse") return { status: "no_observation" };
+      if (path === "/api/usage/refresh/muse?fresh=1") return { status: "no_observation" };
       if (path === "/api/usage/check/muse") {
         server.calls.push(`${init?.method} ${path}`);
         if (status === "reject") throw new Error("offline");
@@ -1247,29 +1248,29 @@ describe("Usage desk", () => {
     expect(mainPosts()).toEqual([]);
   });
 
-  it("folds an engine with no ready account by default, sums it up with its Main's state, and a stored fold wins", async () => {
+  it("opens every engine by default, signed in or not, sums up a folded one with its Main's state, and a stored fold wins", async () => {
     engineOf(server.board, "codex").mainId = CODEX_2;
     accountOf(server.board, "codex").signIn = "signed-out";
     accountOf(server.board, CODEX_2).signIn = "draining";
     accountOf(server.board, "grok").signIn = "signing-in";
     const expanded = () => ["claude", "codex", "grok", "gemini"].map((engine) => fold(engine)?.getAttribute("aria-expanded"));
     await mount();
-    expect(expanded()).toEqual(["true", "false", "false", "true"]);
-    expect(["claude", "codex", "grok", "gemini"].map((engine) => summary(engine))).toEqual(["", "Finishing work", "Signing in", ""]);
-    expect([row("codex"), row(CODEX_2), row("grok")]).toEqual([null, null, null]);
-    expect(localStorage.getItem(FOLDS)).toBeNull();
-    await reload();
-    localStorage.setItem(FOLDS, JSON.stringify({ claude: true, codex: false }));
-    await mount();
-    expect(expanded()).toEqual(["false", "true", "false", "true"]);
-    expect(summary()).toBe("5h 34% left · 7d 59% left");
+    expect(expanded()).toEqual(["true", "true", "true", "true"]);
     expect(visible("codex")).toEqual(["codex", CODEX_2]);
     expect(text(row(CODEX_2)?.querySelector("[data-row-status]"))).toBe("Finishing work");
+    expect(row("grok")).not.toBeNull();
+    expect(localStorage.getItem(FOLDS)).toBeNull();
+    await reload();
+    localStorage.setItem(FOLDS, JSON.stringify({ claude: true, codex: true, grok: true }));
+    await mount();
+    expect(expanded()).toEqual(["false", "false", "false", "true"]);
+    expect(["claude", "codex", "grok", "gemini"].map((engine) => summary(engine))).toEqual(["5h 34% left · 7d 59% left", "Finishing work", "Signing in", ""]);
+    expect([row("codex"), row(CODEX_2), row("grok")]).toEqual([null, null, null]);
     for (const bad of ["{", JSON.stringify({ claude: "yes", codex: false })]) {
       await reload();
       localStorage.setItem(FOLDS, bad);
       await mount();
-      expect(expanded(), bad).toEqual(["true", "false", "false", "true"]);
+      expect(expanded(), bad).toEqual(["true", "true", "true", "true"]);
     }
   });
 

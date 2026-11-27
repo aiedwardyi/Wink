@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closedAskNotes } from "./ask-user.ts";
 import { estimateContextTokens, holdWorkerNotes, paneNotesForTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, summarizesOnEstimate, withoutTurnNotes } from "./context-compaction.ts";
 import { joinRunningTurn } from "./continuation-turn.ts";
+import { guestTurnInput } from "./drivers/turn-access.ts";
 import { composeUserTurnPrompt, userTurnReactionKeys } from "./replies.ts";
 import { adoptHumanRoot } from "./comms-root.ts";
 import { KEEP_GOING_RULES, keepGoingTurnOptions } from "./keep-going.ts";
@@ -14,6 +15,7 @@ import { _resetSteerQueue, foldQueuedSends, queueMark, queueSteeredMessage } fro
 import type { Message } from "./store.ts";
 import { createSummaryBuild, type SummaryWait } from "./summary-build.ts";
 import { asksNudge } from "./task-asks.ts";
+import { nativeReplayBudget } from "./context-compaction.ts";
 import { buildResumeFallback, buildTurnContext, resumeSessionUnseeded, systemTurnInput, withSystemChanges, withTaskRecord } from "./turn-context.ts";
 import { currentTurnTrace, tracePart } from "./turn-timing.ts";
 import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
@@ -97,7 +99,9 @@ describe("summary grace dispatch", () => {
     const instance = { driverKind: "claude", generateText, textTimeoutMs: 90_000, adapter: { capabilities: { queueing: true } } };
     const store = {
       taskByThread: () => undefined,
+      otherChatAsks: () => [],
       activePath: () => [...messages],
+      pathTail: (_threadId: string, count: number) => messages.slice(-count),
       activeLeaf: () => messages.at(-1)?.id ?? null,
       messagesFor: () => messages,
       appendMessage: (_threadId: string, row: Omit<Message, "id" | "at">) => {
@@ -185,10 +189,10 @@ describe("summary grace dispatch", () => {
         } },
         instanceId: "claude", threadId: "thread", bot: { id: "bot" }, claimMark, store, instance, routineTurnThreads: new Set(),
         turnStartedByUser: () => false, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, withoutTurnNotes,
-        buildTurnContext, buildResumeFallback, resumeSessionUnseeded, systemTurnInput, withSystemChanges, withTaskRecord, planSummaryGrace, summarizesOnEstimate, asksNudge,
+        buildTurnContext, buildResumeFallback, resumeSessionUnseeded, systemTurnInput, withSystemChanges, withTaskRecord, planSummaryGrace, summarizesOnEstimate, asksNudge, stampShownAsks: () => {},
         clearUnattended: () => {}, resumePaneWakes: () => {}, paneNoteTurnThreads: new Set(),
         mailForTurn: () => event === "mail" || event === "held mail" ? [{ id: "reply", text: "folded peer reply", upto: 17 }] : [], markMailRead: vi.fn(), markPaneMailRead: vi.fn(), holdNotes,
-        opensHostFiles: () => false, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
+        opensHostFiles: () => false, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), notOwnerChats: () => new Set(), privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
         persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",
         computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
         commsDepth: 0, MAX_COMMS_DEPTH: 1,
@@ -197,16 +201,16 @@ describe("summary grace dispatch", () => {
         skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", opts: {}, tagged: [],
         text: "next request", activeMessages, skipTranscript, userMessage, replaysTranscript: false, replaysNatively: false,
         reactions: {}, rewound: false, fresh: false, recycled: false, recycleReason: undefined, modelContextWindow: 200_000,
-        recycleDeferred: false,
+        recycleDeferred: false, coldLoading: () => undefined,
         transcript: prepared.transcript, compactedThisTurn: Boolean(prepared.compaction), taskRecord: undefined, durableTaskRecordText: taskRecordText,
         recovering: false, unsettled: "", recoveryLatestUserText: "next request", latestCompactionId: null, sessionCompactionId: null, seed,
         seedInputs: { instanceId: "claude", cursor: "session", seed: summaryGrace.native.seed, latestCompactionId: null },
-        summarySkipped: true, summaryGrace, graceInputs, planBeforeSummary, summaryBuild: build, prepareContext,
-        inlineNotes: null, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) },
+        summarySkipped: true, codexHistory: false, summaryGrace, graceInputs, planBeforeSummary, summaryBuild: build, prepareContext,
+        inlineNotes: null, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, askNotes: [], closes: { notes: () => [] },
         onSummaryWait, logSummaryWait, latencySendId: "send", isSendCancelled: () => false,
         systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
         pendingInterruptThreads: { started: () => {} }, model: "claude-opus-5-5", effort: undefined,
-        leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, runningTurnIdByThread: new Map(), readOnly: false,
+        leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, guestTurnInput, runningTurnIdByThread: new Map(), readOnly: false,
       };
       const dispatched = runDispatch(scope);
       await vi.advanceTimersByTimeAsync(0);
@@ -277,5 +281,98 @@ describe("summary grace dispatch", () => {
     } finally {
       build.dispose();
     }
+  });
+
+  it("summarizes when a late send pushes a native history replay past its room", async () => {
+    const messages: Message[] = Array.from({ length: 70 }, (_, index) => [
+      { id: `u${index}`, at: index * 2, role: "user", kind: "text", text: `request ${index}` },
+      { id: `b${index}`, at: index * 2 + 1, role: "bot", kind: "text", text: `outcome ${index} ${"x".repeat(4_500)}` },
+    ] as Message[]).flat();
+    const taskRecordText = "Goal: preserve context";
+    const store = {
+      taskByThread: () => undefined,
+      otherChatAsks: () => [],
+      activePath: () => [...messages],
+      pathTail: (_threadId: string, count: number) => messages.slice(-count),
+      activeLeaf: () => messages.at(-1)?.id ?? null,
+      messagesFor: () => messages,
+      appendMessage: (_threadId: string, row: Omit<Message, "id" | "at">) => {
+        const saved = { ...row, id: `m${messages.length}`, at: 1 };
+        messages.push(saved);
+        return saved;
+      },
+      patchMessage: () => null,
+      appendCompaction: (_threadId: string, compaction: ContextCompactionV1) => {
+        const saved: Message = { id: "summary", at: 1, role: "bot", kind: "compaction", compaction };
+        messages.push(saved);
+        return saved;
+      },
+      sessionSystem: () => "system",
+      clearResumeCursors: vi.fn(),
+      markProviderSessionBound: vi.fn(),
+      markPaneNotesDelivered: vi.fn(),
+    };
+    const userMessage = store.appendMessage("thread", { role: "user", kind: "text", text: "next request" });
+    const activeMessages = store.activePath();
+    const skipTranscript = new Set([userMessage.id]);
+    const input = { messages: activeMessages, contextWindow: 200_000, taskRecordText, excludeIds: skipTranscript };
+    const planBeforeSummary = planCompaction(input);
+    if (!planBeforeSummary.needed) throw new Error("expected a plan");
+    expect(planBeforeSummary.estimatedTokensBefore).toBeLessThan(nativeReplayBudget(200_000));
+    const summaryGrace = { knownWindow: 200_000, requestText: "next request", fresh: true, rewound: false, recycle: false, local: false };
+    const graceInputs = { plan: planBeforeSummary, grace: summaryGrace, taskRecordText };
+    const summarize = vi.fn(async () => "SUMMARY\nretained decisions");
+    const prepareContext = vi.fn(async (rows: Message[]) => prepareModelContext({ ...input, messages: rows, summarize }));
+    const summaryBuild = { settle: vi.fn(async () => 0) };
+    const claimMark = queueMark();
+    const payload = "y".repeat(150_000);
+    const sendTurn = vi.fn(async (_turn: { text: string; nativeReplayPrefix?: string }) => ({ turnId: "turn" }));
+    const live = { adapter: { capabilities: { pinnedSystem: false }, sendTurn, access: () => ({}), hasBackgroundWork: () => false } };
+    const instance = { driverKind: "codex", adapter: live.adapter };
+    const seed: { cursor: unknown; compactionId: string | null; nativeReplay?: true } = { cursor: undefined, compactionId: null, nativeReplay: true };
+    const scope = {
+      currentTurnEpoch: () => 1, epoch: 1, tracePart, trace: currentTurnTrace(),
+      accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
+      providerReload: { started: () => {
+        queueSteeredMessage("bot", "thread", payload);
+        return live;
+      } },
+      instanceId: "codex", threadId: "thread", bot: { id: "bot" }, claimMark, store, instance, routineTurnThreads: new Set(),
+      turnStartedByUser: () => false, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, withoutTurnNotes,
+      buildTurnContext, buildResumeFallback, resumeSessionUnseeded, systemTurnInput, withSystemChanges, withTaskRecord, planSummaryGrace, summarizesOnEstimate, asksNudge, stampShownAsks: () => {},
+      estimateContextTokens, nativeReplayBudget, replayRoom: 0, limitWaits: { track() {}, bind() {} }, selection: {},
+      clearUnattended: () => {}, resumePaneWakes: () => {}, paneNoteTurnThreads: new Set(),
+      mailForTurn: () => [], markMailRead: vi.fn(), markPaneMailRead: vi.fn(), holdNotes: undefined,
+      opensHostFiles: () => false, aboutYouPrompt: () => "", roomTaskThreads: () => new Set(), notOwnerChats: () => new Set(), privateWorkspace: false, task: { resumeCursors: {} },
+      persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",
+      computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
+      commsDepth: 0, MAX_COMMS_DEPTH: 1,
+      taskStatePrompt: "", reactPrompt: "", showImagePrompt: "", detailedRepliesEnabled: () => false, cfg: {},
+      ALWAYS_REPLY_INSTRUCTIONS: "", DEFAULT_RULES: "", accessRules: () => "", keepGoing: { rules: () => "" },
+      skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", opts: {}, tagged: [],
+      text: "next request", activeMessages, skipTranscript, userMessage, replaysTranscript: true, replaysNatively: false,
+      reactions: {}, rewound: false, fresh: true, recycled: false, recycleReason: undefined, modelContextWindow: 200_000,
+      recycleDeferred: false, coldLoading: () => undefined,
+      transcript: planBeforeSummary.transcript, compactedThisTurn: false, taskRecord: undefined, durableTaskRecordText: taskRecordText,
+      recovering: false, unsettled: "", recoveryLatestUserText: "next request", latestCompactionId: null, sessionCompactionId: null, seed,
+      seedInputs: { instanceId: "codex", cursor: undefined, seed: undefined, latestCompactionId: null },
+      summarySkipped: false, codexHistory: true, summaryGrace, graceInputs, planBeforeSummary, summaryBuild, prepareContext,
+      inlineNotes: null, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, askNotes: [], closes: { notes: () => [] },
+      onSummaryWait: () => {}, logSummaryWait: () => {}, latencySendId: "send", isSendCancelled: () => false,
+      systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
+      pendingInterruptThreads: { started: () => {} }, model: "gpt-6.2-sol", effort: undefined,
+      leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(), joinRunningTurn, guestTurnInput, runningTurnIdByThread: new Map(), readOnly: false,
+    };
+    await runDispatch(scope);
+    expect(summaryBuild.settle).toHaveBeenCalledOnce();
+    expect(prepareContext).toHaveBeenCalledOnce();
+    expect(summarize).toHaveBeenCalled();
+    const turn = sendTurn.mock.calls[0]![0];
+    expect(estimateContextTokens([{ text: turn.text }])).toBeLessThanOrEqual(nativeReplayBudget(200_000));
+    expect(turn.text).toContain("retained decisions");
+    expect(turn.text.split(payload)).toHaveLength(2);
+    expect(turn.nativeReplayPrefix && turn.text.startsWith(turn.nativeReplayPrefix)).toBeFalsy();
+    expect(store.clearResumeCursors).toHaveBeenCalledOnce();
+    expect(seed).toEqual({ cursor: undefined, compactionId: "summary", turnId: "turn" });
   });
 });

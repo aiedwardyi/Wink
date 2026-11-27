@@ -8,6 +8,11 @@ const MINUTES_PER_DAY = 24 * 60;
 const FIVE_HOURS = 5 * 60;
 const SEVEN_DAYS = 7 * MINUTES_PER_DAY;
 
+/** The model agy's one-shot helper (notes) runs on, and the quota pool it
+ * draws from: a spent window lets notes run on only while this pool has room. */
+export const AGY_TEXT_MODEL = "gemini-3.8-flash-low";
+export const AGY_TEXT_POOL = "Gemini Models";
+
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 /** One decimal for display — but never rounded up across 100, because the
@@ -123,7 +128,8 @@ export function grokRateLimitWindows(payload: unknown): RateLimitWindow[] {
 /** Antigravity quota buckets into subscription windows. Three wire shapes,
  * one account: the statusline JSON dict (`gemini-5h` / `gemini-weekly` with
  * `remaining_fraction` + `reset_in_seconds`), RetrieveUserQuotaSummary
- * `groups[].buckets[]` (the same RPC behind agy's own `/usage`), and the
+ * `groups[].buckets[]` (the same RPC behind agy's own `/usage`; agy 1.5's
+ * `-p /usage` prints the same groups with `id` / `name` / `reset_time`), and the
  * legacy GetUserStatus model configs. A bucket is matched by the window
  * length named in its id or display name; anything without a fill level is
  * dropped. Both pools (Gemini, Claude + GPT) report the same two windows,
@@ -151,7 +157,7 @@ export function antigravityRateLimitWindows(payload: unknown, now = Date.now()):
     }
     return epochMs(value);
   };
-  type Candidate = { name: string; fraction: unknown; resetMs: number | null };
+  type Candidate = { name: string; fraction: unknown; resetMs: number | null; own?: boolean };
   const candidates: Candidate[] = [];
   if (isRecord(body)) {
     for (const [bucket, entry] of Object.entries(body)) {
@@ -172,13 +178,15 @@ export function antigravityRateLimitWindows(payload: unknown, now = Date.now()):
     if (Array.isArray(body.groups)) {
       for (const group of body.groups) {
         if (!isRecord(group) || !Array.isArray(group.buckets)) continue;
+        const own = String(group.displayName ?? group.name ?? "") === AGY_TEXT_POOL;
         for (const bucket of group.buckets) {
           if (!isRecord(bucket)) continue;
           const remaining = isRecord(bucket.remaining) ? bucket.remaining : null;
           candidates.push({
-            name: `${String(bucket.bucketId ?? "")} ${String(bucket.displayName ?? "")}`,
+            name: `${String(bucket.bucketId ?? bucket.id ?? "")} ${String(bucket.displayName ?? bucket.name ?? "")}`,
             fraction: remaining?.remainingFraction ?? bucket.remainingFraction ?? bucket.remaining_fraction,
-            resetMs: resetFromUnknown(bucket.resetTime ?? bucket.resetsAt ?? bucket.reset_at),
+            resetMs: resetFromUnknown(bucket.resetTime ?? bucket.resetsAt ?? bucket.reset_at ?? bucket.reset_time),
+            own,
           });
         }
       }
@@ -197,12 +205,14 @@ export function antigravityRateLimitWindows(payload: unknown, now = Date.now()):
     }
   }
   const best = new Map<string, RateLimitWindow>();
+  const ownUsed = new Map<string, number>();
   for (const candidate of candidates) {
     const kind = classify(candidate.name);
     if (!kind) continue;
     if (typeof candidate.fraction !== "number" || !Number.isFinite(candidate.fraction)) continue;
     if (candidate.fraction < 0 || candidate.fraction > 1) continue;
     const usedPercent = round1((1 - candidate.fraction) * 100);
+    if (candidate.own) ownUsed.set(kind.id, Math.max(usedPercent, ownUsed.get(kind.id) ?? 0));
     const current = best.get(kind.id);
     if (!current || usedPercent > current.usedPercent) {
       best.set(kind.id, { id: kind.id, usedPercent, resetsAt: candidate.resetMs, windowMinutes: kind.windowMinutes });
@@ -211,6 +221,8 @@ export function antigravityRateLimitWindows(payload: unknown, now = Date.now()):
   const out: RateLimitWindow[] = [];
   for (const id of ["five_hour", "seven_day", "daily"] as const) {
     const window = best.get(id);
+    // the bar shows the spent pool; the note helper still runs while its own pool has room
+    if (window && window.usedPercent >= 100 && (ownUsed.get(id) ?? 100) < 100) window.otherPoolLeft = true;
     if (window) out.push(window);
   }
   return out;
@@ -353,6 +365,11 @@ export function usageLimitFromError(
   const blob = `${error.message} ${detail}`;
   if (!EXHAUSTED_PATTERN.test(blob) && !(subscription && THROTTLE_PATTERN.test(blob))) return null;
   return { resetsAt: resetFromRejection(data, now) };
+}
+
+export function textUsageError(message: string | undefined, fields?: RejectionFields): Error | undefined {
+  const limit = usageLimitFromError(Object.assign(new Error(message), fields), true) ?? chatUsageLimit("codex", fields?.data)?.usageLimit;
+  return limit ? Object.assign(new Error("Account text rate limit"), { data: limit }) : undefined;
 }
 
 /** The provider ruled a usage limit out, as opposed to saying nothing

@@ -43,6 +43,7 @@ export const SPAWNED_PROXIES = {
   connectors: resolveProxy("connector-proxy"),
   phone: resolveProxy("drivers/phone-proxy"),
   terminal: resolveProxy("drivers/terminal-proxy"),
+  antigravityAuth: resolveProxy("drivers/antigravity-auth-cli"),
 } as const;
 
 /** Non-code files read from beside the server dir: docs/ is a sibling of

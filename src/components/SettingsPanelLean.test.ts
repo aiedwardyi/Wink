@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import type { Window as HappyWindow } from "happy-dom";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -89,6 +90,26 @@ const claudeBot = {
   modelSelection: { instanceId: "claude", model: "claude-3-5-sonnet", mode: "automatic" },
   messages: [],
 } as Bot;
+
+beforeEach(({ onTestFinished }) => {
+  const fetchSettings = (window as typeof window & Pick<HappyWindow, "happyDOM">).happyDOM.settings.fetch;
+  const previous = fetchSettings.interceptor;
+  const unexpected: string[] = [];
+  fetchSettings.interceptor = {
+    beforeAsyncRequest: async ({ request, window }) => {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path === `/api/bots/${claudeBot.id}/memory`) {
+        return window.Response.json({ text: "", truncated: false, topics: [] });
+      }
+      unexpected.push(`${request.method} ${path}`);
+      throw new Error("Mock this request in the SettingsPanel test.");
+    },
+  };
+  onTestFinished(() => {
+    fetchSettings.interceptor = previous;
+    expect(unexpected, "Mock these requests in the SettingsPanel test.").toEqual([]);
+  });
+});
 
 const memoryRow = (host: HTMLElement) =>
   Array.from(host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find((button) => button.textContent?.includes("Memory File"))!;
@@ -214,6 +235,23 @@ describe("SettingsPanel approval pill", () => {
     await act(async () => option("Auto").click());
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(host.querySelector("[data-local-warning]")).not.toBeNull();
+  });
+});
+
+describe("SettingsPanel sticky row header", () => {
+  it("sits flush under the tabs: the scrollers have no top padding for text to show in", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot }))));
+    const scrollers = Array.from(host.querySelectorAll<HTMLElement>(".absolute.inset-0.overflow-y-auto"));
+    expect(scrollers).toHaveLength(2);
+    for (const scroller of scrollers) expect(scroller.className).not.toMatch(/(?:^|\s)(?:[a-z-]+:)?pt-(?!0(?:\s|$))\S/);
+    const header = host.querySelector(".sticky");
+    expect(header?.className).toContain("top-0");
+    expect(header?.className).toContain("bg-card");
+    root.unmount();
+    host.remove();
   });
 });
 

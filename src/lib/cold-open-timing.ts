@@ -1,3 +1,4 @@
+import { PHONE_SEEN_PATH, phoneSeenOn } from "./phone-seen";
 import { trackOpen } from "./usage-stats";
 
 // Where a phone page's open spends its time, from a notification tap or a plain launch.
@@ -7,7 +8,7 @@ export const COLD_OPEN_HEADER = "x-cold-open";
 export const COLD_OPEN_QUERY = "coldOpen";
 const USER_AGENT_MAX = 512;
 
-export type ColdOpenLabel = "notification" | "open" | "warm" | "resume";
+export type ColdOpenLabel = "notification" | "open" | "warm" | "resume" | "terminal";
 export type ColdOpenMark = "mount" | "sseOpen" | "hello";
 
 const NAV_FIELDS = [
@@ -32,6 +33,8 @@ export interface ColdOpenRequest {
 }
 
 export interface ColdOpenBots extends ColdOpenRequest {
+  connectStart: number;
+  connectEnd: number;
   requestStart: number;
   responseStart: number;
   decodedBodySize: number;
@@ -45,6 +48,16 @@ export interface ColdOpenSse {
   open?: number;
   errors: number;
   lastError?: number;
+}
+
+/** A terminal opened on the page: marks count from page load, like the resource times in `read`. */
+export interface ColdOpenTerminal {
+  tap: number;
+  fetchStart?: number;
+  read?: ColdOpenBots;
+  paint?: number;
+  /** How long before the tap the page came back from hidden, when it did. */
+  sinceResume?: number;
 }
 
 export interface ColdOpenRecord {
@@ -61,8 +74,13 @@ export interface ColdOpenRecord {
   hello?: number;
   sse?: ColdOpenSse;
   bots?: ColdOpenBots;
+  /** A resumed page's check-in, the first request it makes on return, so it carries the reconnect. */
+  ping?: ColdOpenBots;
+  /** "none": this page never checks in; "cut": the check-in had not answered by the 30 s cut. */
+  pingMissing?: "none" | "cut";
   taskSwitch?: ColdOpenRequest;
   cache?: { hit: boolean; paint?: number };
+  terminal?: ColdOpenTerminal;
   chatPaint?: number;
   jsCached?: boolean;
   cssCached?: boolean;
@@ -77,7 +95,7 @@ type Navigation = Pick<PerformanceNavigationTiming, NavField | "type">;
 type Paint = Pick<PerformanceEntry, "name" | "startTime">;
 type Resource = Pick<
   PerformanceResourceTiming,
-  "name" | "startTime" | "responseEnd" | "transferSize" | "encodedBodySize" | "requestStart" | "responseStart" | "decodedBodySize" | "nextHopProtocol"
+  "name" | "startTime" | "responseEnd" | "transferSize" | "encodedBodySize" | "connectStart" | "connectEnd" | "requestStart" | "responseStart" | "decodedBodySize" | "nextHopProtocol"
 >;
 
 export interface ColdOpenPage {
@@ -89,6 +107,10 @@ export interface ColdOpenPage {
   navigation: () => Navigation | undefined;
   paints: () => readonly Paint[];
   resources: () => readonly Resource[];
+  /** Every resource entry as it lands, including those a full timing buffer no longer keeps. */
+  observeResources: (seen: (entry: Resource) => void) => void;
+  /** The page checks in on every return (src/lib/phone-seen.ts). */
+  checksIn: boolean;
   replaceUrl: (url: string) => void;
   standalone: () => boolean;
   visibility: () => string;
@@ -115,10 +137,13 @@ interface Pending {
   cachePainting: boolean;
   marks: Partial<Record<ColdOpenMark, number>>;
   painting: boolean;
+  chatPaint?: number;
+  ping?: Resource;
   timer: ReturnType<typeof setTimeout>;
 }
 
 const BOTS = /\/api\/bots\?messages=/;
+const TERMINAL_READ = /\/api\/bots\/[^/]+\/terminal$/;
 const TASK_SWITCH = /\/api\/(?:bots|groups)\/[^/]+\/tasks\/[^/?]+$/;
 const ENTRY_JS = /\/assets\/index-[\w-]+\.js$/;
 const ENTRY_CSS = /\/assets\/index-[\w-]+\.css$/;
@@ -135,23 +160,27 @@ function clickTime(at: number): number | undefined {
   return Number.isFinite(at) && at > 0 ? at : undefined;
 }
 
-function request(entry: Resource | undefined): ColdOpenRequest | undefined {
+function request(entry: Resource | undefined, since = 0): ColdOpenRequest | undefined {
   if (!entry) return undefined;
   return {
-    start: Math.round(entry.startTime),
-    end: Math.round(entry.responseEnd),
+    start: Math.round(entry.startTime - since),
+    end: Math.round(entry.responseEnd - since),
     transferSize: entry.transferSize,
     encodedBodySize: entry.encodedBodySize,
   };
 }
 
-function botsRequest(entry: Resource | undefined): ColdOpenBots | undefined {
-  const base = request(entry);
+/** Times count from `since`; a field the browser hides stays 0. */
+function botsRequest(entry: Resource | undefined, since = 0): ColdOpenBots | undefined {
+  const base = request(entry, since);
   if (!entry || !base) return undefined;
+  const at = (ms: number) => (ms ? Math.round(ms - since) : 0);
   return {
     ...base,
-    requestStart: Math.round(entry.requestStart),
-    responseStart: Math.round(entry.responseStart),
+    connectStart: at(entry.connectStart),
+    connectEnd: at(entry.connectEnd),
+    requestStart: at(entry.requestStart),
+    responseStart: at(entry.responseStart),
     decodedBodySize: entry.decodedBodySize,
     nextHopProtocol: entry.nextHopProtocol,
   };
@@ -161,9 +190,22 @@ function cached(entry: Resource | undefined): boolean | undefined {
   return entry ? entry.transferSize === 0 : undefined;
 }
 
+interface TerminalOpen {
+  tap: number;
+  /** The worker's session id the tap asked for, null for Main, undefined when it named none. */
+  pane?: string | null;
+  sinceResume?: number;
+  hiddenMs?: number;
+  fetchStart?: number;
+  painting: boolean;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 export function createColdOpenTiming(page: ColdOpenPage) {
   let pending: Pending | null = null;
+  let terminal: TerminalOpen | null = null;
   let hiddenAt: number | undefined;
+  let resumed: { at: number; hiddenMs: number } | undefined;
   const navigation = page.navigation();
 
   const begin = (label: ColdOpenLabel, t0: number | undefined, threadId: string | undefined, resumed?: { since: number; hiddenMs: number }) => {
@@ -172,19 +214,24 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     pending = { label, t0, since: resumed?.since ?? 0, hiddenMs: resumed?.hiddenMs, threadId, visibility: page.visibility(), id, botsSent: false, sse: { errors: 0 }, cachePainting: false, marks: {}, painting: false, timer };
   };
 
+  const metaFor = (visibility: string) => ({
+    ...(page.desktop ? { desktop: true as const } : {}),
+    displayMode: page.standalone() ? ("standalone" as const) : ("browser" as const),
+    visibility,
+    build: page.build(),
+    userAgent: page.userAgent.slice(0, USER_AGENT_MAX),
+  });
+
   const record = (open: Pending, chatPaint: number | undefined): ColdOpenRecord => {
-    const meta = {
-      ...(page.desktop ? { desktop: true as const } : {}),
-      displayMode: page.standalone() ? ("standalone" as const) : ("browser" as const),
-      visibility: open.visibility,
-      build: page.build(),
-      userAgent: page.userAgent.slice(0, USER_AGENT_MAX),
-    };
+    const meta = metaFor(open.visibility);
     const t0 = open.t0 === undefined ? undefined : Math.round(open.t0 - page.timeOrigin);
     if (open.label === "warm") return { label: "warm", t0, chatPaint, ...meta };
     const { created, ...sse } = open.sse;
     const link = created === undefined ? undefined : { created, ...sse };
-    if (open.label === "resume") return { openId: open.id, label: "resume", hiddenMs: open.hiddenMs, ...open.marks, sse: link, chatPaint, ...meta };
+    if (open.label === "resume") {
+      const pingMissing = open.ping ? undefined : page.checksIn ? ("cut" as const) : ("none" as const);
+      return { openId: open.id, label: "resume", hiddenMs: open.hiddenMs, ...open.marks, sse: link, ping: botsRequest(open.ping, open.since), pingMissing, chatPaint, ...meta };
+    }
     const paint = (name: string) => {
       const at = page.paints().find((entry) => entry.name === name)?.startTime;
       return at === undefined ? undefined : Math.round(at);
@@ -220,13 +267,49 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     pending = null;
     clearTimeout(open.timer);
     try {
-      const sent = record(open, chatPaint);
+      const sent = record(open, chatPaint ?? open.chatPaint);
       page.send(JSON.stringify(sent));
       trackOpen(sent);
     } catch {
       // Timing is best effort; it never surfaces.
     }
   };
+
+  /** `target` is the session id the read asked for, undefined for the default pane, which is `main` once the roster names it. */
+  const terminalWants = (open: TerminalOpen, target: string | undefined, main: string | undefined) =>
+    open.pane === undefined || (open.pane === null ? target === undefined : (target ?? main) === open.pane);
+
+  const finishTerminal = (paint?: number) => {
+    const open = terminal;
+    if (!open) return;
+    terminal = null;
+    clearTimeout(open.timer);
+    try {
+      const { fetchStart } = open;
+      const read = fetchStart === undefined ? undefined : page.resources().find((entry) => entry.startTime >= fetchStart - 1 && readsPane(entry.name, open.pane));
+      const sent: ColdOpenRecord = {
+        label: "terminal",
+        hiddenMs: open.hiddenMs,
+        terminal: { tap: open.tap, fetchStart, read: botsRequest(read), paint, sinceResume: open.sinceResume },
+        ...metaFor(page.visibility()),
+      };
+      page.send(JSON.stringify(sent));
+    } catch {
+      // Timing is best effort; it never surfaces.
+    }
+  };
+
+  const readsPane = (name: string, pane: string | null | undefined) => {
+    const url = new URL(name, page.href);
+    return TERMINAL_READ.test(url.pathname) && (pane === undefined || url.searchParams.get("sessionId") === pane);
+  };
+
+  page.observeResources((entry) => {
+    const open = pending;
+    if (open?.label !== "resume" || open.ping || entry.startTime < open.since || new URL(entry.name, page.href).pathname !== PHONE_SEEN_PATH) return;
+    open.ping = entry;
+    if (open.chatPaint !== undefined) finish();
+  });
 
   const search = new URL(page.href).searchParams;
   const t0 = clickTime(Number(search.get("t0")));
@@ -247,7 +330,10 @@ export function createColdOpenTiming(page: ColdOpenPage) {
       if (open?.label !== "resume" || open.painting) return;
       open.painting = true;
       page.afterPaint(() => {
-        if (pending === open) finish(Math.round(page.now() - open.since));
+        if (pending !== open) return;
+        open.chatPaint = Math.round(page.now() - open.since);
+        // A check-in that answers after this paint still carries the reconnect, so the record waits for it.
+        if (open.ping || !page.checksIn) finish();
       });
     },
     visibility(hidden: boolean) {
@@ -259,6 +345,7 @@ export function createColdOpenTiming(page: ColdOpenPage) {
       if (hiddenAt === undefined) return;
       const hiddenMs = Math.round(page.clock() - hiddenAt);
       hiddenAt = undefined;
+      resumed = { at: page.now(), hiddenMs };
       // A first open still measuring keeps its own record.
       if (!pending) begin("resume", undefined, undefined, { since: page.now(), hiddenMs });
     },
@@ -307,6 +394,32 @@ export function createColdOpenTiming(page: ColdOpenPage) {
         if (pending === open) finish(Math.round(page.now()));
       });
     },
+    /** The tap that opens the terminal; `pane` is the worker it asked for, null for Main. */
+    terminalOpened(pane?: string | null) {
+      finishTerminal();
+      const tap = page.now();
+      terminal = {
+        tap: Math.round(tap),
+        pane,
+        sinceResume: resumed && Math.round(tap - resumed.at),
+        hiddenMs: resumed?.hiddenMs,
+        painting: false,
+        timer: setTimeout(() => finishTerminal(), COLD_OPEN_TIMEOUT_MS),
+      };
+    },
+    /** The terminal view is about to read `target` (undefined for Main); only the first read of the opened pane counts. */
+    terminalFetching(target?: string, main?: string) {
+      if (terminal && terminalWants(terminal, target, main)) terminal.fetchStart ??= Math.round(page.now());
+    },
+    /** The terminal view applied a read of `target`. */
+    terminalShown(target?: string, main?: string) {
+      const open = terminal;
+      if (!open || open.painting || open.fetchStart === undefined || !terminalWants(open, target, main)) return;
+      open.painting = true;
+      page.afterPaint(() => {
+        if (terminal === open) finishTerminal(Math.round(page.now()));
+      });
+    },
     warm(t0: number, threadId: string) {
       const at = clickTime(t0);
       if (at === undefined) return;
@@ -331,6 +444,14 @@ function browserPage(): ColdOpenPage {
     navigation: () => performance.getEntriesByType("navigation").find((entry) => entry instanceof PerformanceNavigationTiming),
     paints: () => performance.getEntriesByType("paint"),
     resources: () => performance.getEntriesByType("resource").filter((entry) => entry instanceof PerformanceResourceTiming),
+    observeResources: (seen) => {
+      try {
+        new PerformanceObserver((list) => list.getEntries().forEach((entry) => entry instanceof PerformanceResourceTiming && seen(entry))).observe({ type: "resource" });
+      } catch {
+        // Timing is best effort; it never surfaces.
+      }
+    },
+    checksIn: phoneSeenOn(),
     replaceUrl: (url) => window.history.replaceState(window.history.state, "", url),
     standalone: () => window.matchMedia?.("(display-mode: standalone)").matches ?? false,
     visibility: () => document.visibilityState,
@@ -385,6 +506,18 @@ export function firstStreamId() {
 /** Header for the page's first bots request; empty for every later one. */
 export function firstBotsHeader() {
   return active?.botsHeader() ?? {};
+}
+
+export function noteTerminalOpened(pane?: string | null) {
+  active?.terminalOpened(pane);
+}
+
+export function noteTerminalFetching(target?: string, main?: string) {
+  active?.terminalFetching(target, main);
+}
+
+export function noteTerminalShown(target?: string, main?: string) {
+  active?.terminalShown(target, main);
 }
 
 export function startWarmOpenTiming(t0: number, threadId: string) {

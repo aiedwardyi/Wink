@@ -95,7 +95,20 @@ function redactMessage(message: Message): Message {
 
 const redactMessages = (messages: Message[]) => messages.map(redactMessage);
 
+let dropped = false;
+
+/** Signed out: forgets the snapshot and refuses every later write from this page (pagehide, timers). */
+export function dropSnapshotCache(explicit?: Storage): void {
+  dropped = true;
+  try {
+    store(explicit)?.removeItem(SNAPSHOT_CACHE_KEY);
+  } catch {
+    /* blocked site data holds nothing to forget */
+  }
+}
+
 export function writeSnapshotCache(snapshot: CachedSnapshot, explicit?: Storage): void {
+  if (dropped) return;
   try {
     const redacted: CachedSnapshot = {
       ...snapshot,

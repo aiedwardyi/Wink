@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider, formatTime, openNotificationTarget, useStore, type Bot, type Group, type Message } from "@/state/store";
 import type { TurnStreamState } from "@/lib/turn-stage";
 import { applyLocale } from "@/lib/i18n";
+import { REVEALED_EVENT, STOP_FOLLOW_EVENT } from "@/lib/bottom-follow";
 import { applySkin } from "@/lib/skins";
 import { landOnSearchHit } from "@/lib/focus-message";
 
@@ -17,7 +18,7 @@ import { ShowPane } from "./ShowPane";
 const live = vi.hoisted(() => ({ current: { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} } as TurnStreamState }));
 vi.mock("@/state/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/state/store")>();
-  return { ...actual, formatTime: vi.fn(actual.formatTime), useStreaming: () => live.current };
+  return { ...actual, formatTime: vi.fn(actual.formatTime), useStreamSelect: <T>(select: (stream: TurnStreamState) => T) => select(live.current) };
 });
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 // These scenarios page from a tail one whole window long; the short switch tail has its own suite.
@@ -474,6 +475,25 @@ describe("paged transcripts", () => {
     await reachTop();
     await vi.waitFor(() => expect(host.textContent).toContain("row 380;"));
     expect(calls.some((call) => call.includes("before=m400"))).toBe(true);
+  });
+
+  it.each(["chat", "room"] as const)("holds older %s rows while a box opening in a row scrolls into view, then loads them", async (view) => {
+    const reachTop = topObservers();
+    const thread = rows(0, 500);
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const calls = pagedServer(threadId, thread, view === "chat" ? { bots: [bot(thread.slice(-100), true)], groups: [] } : { bots: [], groups: [room(thread.slice(-100), true)] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.textContent).toContain("row 499;"));
+    nearTop(host);
+    const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+    await act(async () => { scroller.querySelector("[data-mid]")!.dispatchEvent(new Event(STOP_FOLLOW_EVENT, { bubbles: true })); });
+    await reachTop();
+    await act(async () => { await Promise.resolve(); });
+    expect(calls.some((call) => call.includes("before="))).toBe(false);
+    expect(host.textContent).not.toContain("row 380;");
+    await act(async () => { scroller.dispatchEvent(new Event(REVEALED_EVENT)); });
+    await reachTop();
+    await vi.waitFor(() => expect(host.textContent).toContain("row 380;"));
   });
 
   it.each(["chat", "room"] as const)("keeps mounted %s rows under the cap while reading back to the first row", async (view) => {
@@ -1259,6 +1279,83 @@ describe("open window and jump pill", () => {
     };
     expect(await flashClasses("b1")).toEqual(expect.arrayContaining(["box-content", "px-3", "-mx-3"]));
     expect(await flashClasses("m2")).not.toContain("px-3");
+  });
+
+  it.each(["chat", "room"] as const)("lands a tap on the %s question card on the bot's text after the window slid back to old history, flashing it", async (view) => {
+    const tool = (i: number): Message => ({ id: `m${i}`, at: 1, role: "bot", kind: "activity", tool: { name: "Read", ok: true } });
+    const thread: Message[] = [
+      ...rows(0, 596),
+      { id: "m596", at: 1, role: "bot", kind: "text", text: "REASON_FOR_ASKING;" },
+      tool(597),
+      tool(598),
+      { id: "m599", at: 1, role: "bot", kind: "options", card: { title: "Question", subtitle: "Ship it?", options: ["Yes", "No"], askUser: true, replyId: "m596" } },
+    ];
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const loaded = thread.slice(-200);
+    pagedServer(threadId, thread, { bots: view === "chat" ? [bot(loaded, true)] : [], groups: view === "room" ? [room(loaded, true)] : [] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.querySelector("[data-question-body]")).not.toBeNull());
+    await act(async () => store.dispatch({ type: "focusMessage", threadId, messageId: "m5" }));
+    await vi.waitFor(() => expect(host.querySelector('[data-mid="m5"]')).not.toBeNull());
+    expect(host.querySelector('[data-mid="m596"]')).toBeNull();
+    await act(async () => host.querySelector<HTMLElement>("[data-question-body]")!.click());
+    await vi.waitFor(() => expect(flashed(host, "m596")).toBe(true));
+    expect(host.querySelector('[data-mid="m596"]')!.textContent).toContain("REASON_FOR_ASKING;");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1900); });
+    expect(flashed(host, "m596")).toBe(false);
+  });
+
+  it.each(["chat", "room"] as const)("pages in the %s question's text from before the loaded tail, then flashes it", async (view) => {
+    const thread: Message[] = [
+      ...rows(0, 300),
+      { id: "m300", at: 1, role: "bot", kind: "text", text: "OLD_REASON_FOR_ASKING;" },
+      ...Array.from({ length: 298 }, (_, i): Message => ({ id: `m${301 + i}`, at: 1, role: "bot", kind: "activity", tool: { name: "Read", ok: true } })),
+      { id: "m599", at: 1, role: "bot", kind: "options", card: { title: "Question", subtitle: "Ship it?", options: ["Yes", "No"], askUser: true, staysOpen: true, replyId: "m300" } },
+    ];
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const loaded = thread.slice(-200);
+    pagedServer(threadId, thread, { bots: view === "chat" ? [bot(loaded, true)] : [], groups: view === "room" ? [room(loaded, true)] : [] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.querySelector("[data-question-body]")).not.toBeNull());
+    await act(async () => host.querySelector<HTMLElement>("[data-question-body]")!.click());
+    await vi.waitFor(() => expect(flashed(host, "m300")).toBe(true));
+    expect(host.querySelector('[data-mid="m300"]')!.textContent).toContain("OLD_REASON_FOR_ASKING;");
+  });
+
+  it.each(["chat", "room"] as const)("does nothing on a tap of the %s question asked by a woken turn with no text", async (view) => {
+    const ada = view === "room" ? { from: { botId: "ada", name: "Ada", color: "blue" as const } } : {};
+    const between: Message = view === "room"
+      ? { id: "wake", at: 1, role: "bot", kind: "text", text: "MAX_BRINGS_ADA_BACK;", from: { botId: "max", name: "Max", color: "blue" } }
+      : { id: "wake", at: 1, role: "bot", kind: "note", text: "[pane aaaaaaaa] DONE JOB" };
+    const thread: Message[] = [
+      ...rows(0, 500),
+      { id: "prev", at: 1, role: "bot", kind: "text", text: "EARLIER_TURN_REPLY;", ...ada },
+      between,
+      ...Array.from({ length: 90 }, (_, i): Message => ({ id: `t${i}`, at: 1, role: "bot", kind: "activity", tool: { name: "Read", ok: true }, ...ada })),
+      { id: "ask", at: 1, role: "bot", kind: "options", card: { title: "Question", subtitle: "Revert the deploy?", options: ["Yes", "No"], askUser: true, staysOpen: true }, ...ada },
+    ];
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const loaded = thread.slice(-200);
+    pagedServer(threadId, thread, { bots: view === "chat" ? [bot(loaded, true)] : [], groups: view === "room" ? [room(loaded, true)] : [] });
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.querySelector("[data-question-body]")).not.toBeNull());
+    const body = host.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.className).not.toContain("cursor-pointer");
+    await act(async () => body.click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(store.state.focusMessage).toBeNull();
+    expect(flashed(host, "prev")).toBe(false);
+  });
+
+  it.each(["chat", "room"] as const)("does nothing on a tap of the %s question card that came with no text", async (view) => {
+    const thread = toolThread(400, { 0: ["user", "start;"] });
+    thread[399] = { ...thread[399]!, role: "bot", kind: "options", text: undefined,
+      card: { title: "Question", subtitle: "Ship it?", options: ["Yes", "No"], askUser: true } };
+    serveReplyThread(view, thread);
+    const host = await mount(view);
+    await vi.waitFor(() => expect(host.querySelector("[data-question-body]")).not.toBeNull());
+    await act(async () => host.querySelector<HTMLElement>("[data-question-body]")!.click());
+    expect(store.state.focusMessage).toBeNull();
   });
 
   it.each([

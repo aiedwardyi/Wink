@@ -9,29 +9,31 @@ import * as mail from "./mail.ts";
 import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { roomEchoesSinceLastUserTurn } from "./one-mind.ts";
+import { GuestSessions } from "./rooms/guest-sessions.ts";
 import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { Store } from "./store.ts";
 import { asksNudge } from "./task-asks.ts";
-import { removeTempDir } from "./testing/cleanup.ts";
 import * as turns from "./turn-context.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 // Run the production turn-text preparation without booting the server.
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const start = source.indexOf("  let transcript = prepared.transcript;");
 const end = source.indexOf("\n  const persona = [", start);
 if (start < 0 || end < start) throw new Error("Missing turn preparation section");
-const javascript = ts.transpileModule(`function run(scope) { with (scope) {
+const compile = (result: string) => new Function(`${ts.transpileModule(`function run(scope) { with (scope) {
   ${source.slice(start, end)}
-  return { turnText, resume };
-} }`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None } }).outputText;
-const prepareTurn = new Function(`${javascript}\nreturn run;`)();
+  return ${result};
+} }`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None } }).outputText}\nreturn run;`)();
+const prepareTurn = compile("{ turnText, resume }");
+const prepareInputs = compile("{ turnText, resumeFallback, recycled: systemRecycleText() }");
 
 const RECORD = "[Wink task record]\nGoal: ship the trim";
 
 beforeEach(async () => {
   closeMessageDb();
-  await removeTempDir(DATA_DIR);
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   vi.spyOn(console, "info").mockImplementation(() => {});
 });
@@ -58,7 +60,7 @@ function summarizedChat() {
   store.markResumeSeeded(bot.id, threadId, { instanceId, cursor: "session-1", compactionId: summary.id });
   const instance = { driverKind: "fake", adapter: { capabilities: { sessionModelSwitch: "in-session" } } };
 
-  const send = async (text: string, landed = false, nativeAt: number | null = landed ? 1 : null) => {
+  const send = async (text: string, landed = false, nativeAt: number | null = landed ? 1 : null, prepare = prepareTurn) => {
     const userMessage = store.appendMessage(threadId, { role: "user", kind: "text", text });
     const activeMessages = store.activePath(threadId);
     const skipTranscript = new Set([userMessage.id]);
@@ -67,15 +69,16 @@ function summarizedChat() {
     expect(ready.compacted).toBe(true);
     expect(ready.compaction).toBeUndefined();
     const prepared = landed ? { ...ready, compaction: store.activePath(threadId).find((row) => row.id === summary.id)!.compaction } : ready;
-    const turn = prepareTurn({
-      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge,
+    const turn = prepare({
+      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge, notOwnerChats: () => new Set(), stampShownAsks: () => {},
       store, bot, threadId, task: store.taskByThread(bot.id, threadId)!, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, prepared,
       latestCompactionId: ready.compactionId ?? null, sessionPrompt: undefined, nativeAt,
       currentTurnEpoch: () => 0, epoch: 1,
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,
-      opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null }) }, modelContextWindow: 200_000,
-      taskRecord: undefined, durableTaskRecordText: RECORD, commsDepth: 0,
+      opts: {}, cfg: {}, reactions: {}, guestSessions: new GuestSessions(), threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null }) }, modelContextWindow: 200_000,
+      taskRecord: undefined, durableTaskRecordText: RECORD, commsDepth: 0, codexHistory: false,
+      closes: { notes: () => [] },
     });
     store.appendMessage(threadId, { role: "bot", kind: "text", text: "ok" });
     return turn;
@@ -109,6 +112,23 @@ it("sends the task record once after a background summary lands on a live sessio
     compactionId: turns.turnSeedCompactionId({ replayed: false, instanceId, cursor: "session-1", seed, sessionCompactionId: built.id, supersededIds: context.supersededCompactionIds(store.activePath(threadId), built.id) }),
   });
   expect(await send("and the bird?", false, 1)).toEqual({ turnText: "and the bird?", resume: true });
+});
+
+it("keeps the other chats' asks beside the task record on every input that carries it", async () => {
+  const { store, bot, threadId, send } = summarizedChat();
+  const other = store.createTask(bot.id, "Other chat")!;
+  store.writeTaskPacket({
+    v: 1, threadId: other.threadId, botId: bot.id, goal: "Ship", plan: [], completed: [], evidence: [], artifacts: [], blockers: [], nextAction: "",
+    updatedAt: 100, updatedBy: "harness", flushReason: "progress", turnsAtWrite: 0,
+    asks: [{ id: "A1", ask: "make the header smaller on phone", status: "open", at: 100, changedAt: 100 }], lastAskId: 1,
+  });
+  store.clearResumeCursors(bot.id, threadId);
+  const inputs = await send("what's left?", false, null, prepareInputs);
+  for (const input of [inputs.turnText, inputs.resumeFallback, inputs.recycled]) {
+    expect(input).toContain(RECORD);
+    expect(input).toContain("[Wink asks from the user's other chats with you - 1; update them in that chat.]");
+    expect(input).toContain("make the header smaller on phone");
+  }
 });
 
 it("carries a call's spoken lines into a resumed session's next turn once", async () => {

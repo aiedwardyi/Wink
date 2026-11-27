@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, useStore, type Bot, type Group, type InstanceInfo, type Message } from "@/state/store";
 
+import { REVEALED_EVENT, STOP_FOLLOW_EVENT } from "@/lib/bottom-follow";
 import { setFindCurrent } from "@/lib/chat-find";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 
@@ -20,7 +21,7 @@ import type { TurnStreamState } from "@/lib/turn-stage";
 const live = vi.hoisted(() => ({ current: { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} } as TurnStreamState }));
 vi.mock("@/state/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/store")>(),
-  useStreaming: () => live.current,
+  useStreamSelect: <T>(select: (stream: TurnStreamState) => T) => select(live.current),
 }));
 vi.mock("shiki", () => ({ codeToHtml: async (code: string) => `<pre><code>${code}</code></pre>` }));
 // These scenarios page from a tail one whole window long; the short switch tail has its own suite.
@@ -927,6 +928,105 @@ describe("ChatView transcript window", () => {
   });
 });
 
+describe("a box opening in a row", () => {
+  it.each(["chat", "room"] as const)("stops the %s following its newest row, so what grows under it no longer pins the bottom", async (kind) => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    const observed: { resize: ResizeObserverCallback; targets: Element[] }[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      targets: Element[] = [];
+      constructor(resize: ResizeObserverCallback) { observed.push({ resize, targets: this.targets }); }
+      observe(target: Element) { this.targets.push(target); }
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const group: Group = { id: "g", threadId: "thread-g", name: "Room", memberIds: ["a", "b"], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 1, setupCompletedAt: 1, hasMore: false, messages: [userMsg("ug", "hello room")] };
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, kind === "chat" ? createElement(ChatView, { bot: botB }) : createElement(GroupView, { group }))));
+      const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+      let height = TRANSCRIPT_PX;
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => VIEWPORT_PX });
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => height });
+      scroller.scrollTo = ((opts?: ScrollToOptions) => {
+        scroller.scrollTop = Math.max(0, Math.min(opts?.top ?? 0, height - VIEWPORT_PX));
+      }) as typeof scroller.scrollTo;
+      const grow = () => act(async () => {
+        height += 500;
+        for (const { resize, targets } of observed) if (targets.includes(scroller.firstElementChild!)) resize([], {} as ResizeObserver);
+      });
+      await grow();
+      expect(scroller.scrollTop).toBe(height - VIEWPORT_PX);
+      const top = scroller.scrollTop;
+      await act(async () => { scroller.querySelector("[data-mid]")!.dispatchEvent(new Event(STOP_FOLLOW_EVENT, { bubbles: true })); });
+      await grow();
+      expect(scroller.scrollTop).toBe(top);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+  it.each(["chat", "room"] as const)("keeps the %s off its newest row when the box lands at the bottom, until the reader scrolls there", async (kind) => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    const observed: { resize: ResizeObserverCallback; targets: Element[] }[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      targets: Element[] = [];
+      constructor(resize: ResizeObserverCallback) { observed.push({ resize, targets: this.targets }); }
+      observe(target: Element) { this.targets.push(target); }
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const group: Group = { id: "g", threadId: "thread-g", name: "Room", memberIds: ["a", "b"], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 1, setupCompletedAt: 1, hasMore: false, messages: [userMsg("ug", "hello room")] };
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, kind === "chat" ? createElement(ChatView, { bot: botB }) : createElement(GroupView, { group }))));
+      const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+      let height = TRANSCRIPT_PX;
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => VIEWPORT_PX });
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => height });
+      scroller.scrollTo = ((opts?: ScrollToOptions) => {
+        scroller.scrollTop = Math.max(0, Math.min(opts?.top ?? 0, height - VIEWPORT_PX));
+      }) as typeof scroller.scrollTo;
+      const grow = () => act(async () => {
+        height += 500;
+        for (const { resize, targets } of observed) if (targets.includes(scroller.firstElementChild!)) resize([], {} as ResizeObserver);
+      });
+      const scrollTo = (top: number) => act(async () => {
+        scroller.scrollTop = top;
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      await grow();
+      await act(async () => { scroller.querySelector("[data-mid]")!.dispatchEvent(new Event(STOP_FOLLOW_EVENT, { bubbles: true })); });
+      await grow();
+      await scrollTo(height - VIEWPORT_PX);
+      const landed = scroller.scrollTop;
+      await act(async () => {
+        const row = scroller.querySelector("[data-mid]")!;
+        for (const [type, clientY] of [["touchstart", 330], ["touchmove", 200], ["touchend", 200]] as const) {
+          row.dispatchEvent(Object.defineProperty(new Event(type, { bubbles: true }), "touches", { value: [{ clientX: 130, clientY }] }));
+        }
+        row.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, bubbles: true }));
+      });
+      await grow();
+      expect(scroller.scrollTop).toBe(landed);
+      await act(async () => { scroller.dispatchEvent(new Event(REVEALED_EVENT)); });
+      await grow();
+      expect(scroller.scrollTop).toBe(landed);
+      await scrollTo(height - VIEWPORT_PX);
+      await grow();
+      expect(scroller.scrollTop).toBe(height - VIEWPORT_PX);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+});
+
 describe("ChatView transcript click focus", () => {
   const mount = async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
@@ -1364,7 +1464,7 @@ describe("ChatView queued sends", () => {
     send = dispatch;
     useEffect(() => {
       dispatch({ type: "instances", instances: [instance(queueing)] });
-      dispatch({ type: "pendingQueued", threadId: "thread-a", queueId: "q1", text: "waiting B", at: 2 });
+      dispatch({ type: "pendingQueued", threadId: "thread-a", queueId: "q1", text: "waiting B", at: 2, waited: true });
     }, [dispatch, queueing]);
     return createElement(ChatView, { bot });
   }
@@ -1430,7 +1530,7 @@ describe("ChatView queued sends", () => {
     }
   });
 
-  it("puts a send a steering engine queued below the thinking row", async () => {
+  it("puts a send that waits for a steering engine's turn below the thinking row", async () => {
     const { host, root, order, row } = await mount(true);
     try {
       expect(order()).toEqual(["ua", "thinking", "q1"]);

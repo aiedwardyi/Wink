@@ -24,7 +24,7 @@ export function classifyChatError(line: string): ChatError {
   if (/^connected apps are unavailable/.test(reason)) return { kind: "known", key: "errors.apps" };
   if (reason === "This account is signed out. Sign in again, then send your message.") return { kind: "known", key: "errors.signedOut" };
   if (reason === "This account's sign-in isn't confirmed yet.") return { kind: "known", key: "errors.signInUnconfirmed" };
-  const missing = /^(Claude|Codex) isn't installed or isn't answering on this PC\.$/.exec(reason);
+  const missing = /^(.+?) isn't installed or isn't answering on this PC\.$/.exec(reason);
   if (missing) return { kind: "known", key: "errors.cliMissing", vars: { engine: missing[1] } };
   if (reason === "Gemini is still busy after 3 tries. Try another model.") return { kind: "known", key: "chat.busyGaveUp" };
   const selfStopped = /^(.+?) stopped this reply on its own(?: \((.+)\))?$/.exec(reason);

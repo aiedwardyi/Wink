@@ -24,7 +24,7 @@ describe("Recent saves", () => {
     const messages = [
       { id: "a", role: "bot", at: 30, kind: "activity", tool: { name: "memory.save", spoken: "Bot", lines: ["- Bot", "- Gone"] } },
       { id: "b", role: "bot", at: 40, kind: "activity", tool: { name: "memory.save", spoken: "Bot..." } },
-      { id: "c", role: "bot", at: 50, kind: "activity", tool: { name: "memory.save", tidy: { runId: "r" }, lines: ["- Ignore"] } },
+      { id: "c", role: "bot", at: 50, kind: "activity", tool: { name: "memory.save", tidy: { runId: "r", count: 1 }, lines: ["- Ignore"] } },
     ] as import("@/state/store").Message[];
     expect(recentLines("- Bot  \n- Bot newest\n- Ignore", messages).map((row) => row.line)).toEqual(["- Bot newest", "- Bot"]);
   });

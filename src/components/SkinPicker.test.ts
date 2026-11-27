@@ -36,7 +36,7 @@ vi.mock("./ChatScene", async (original) => ({ ...(await original<typeof import("
 const { SkinPicker } = await import("./SkinPicker");
 
 let root: Root;
-const featured = ["Samurai Ink", "Night Rain", "Warp", "Circuit", "Neon Grid", "Lagoon", "Lagoon Night", "Snow", "Snow Night", "Bronze", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Dim Sand", "Wink Day", "Notebook"];
+const featured = ["Samurai Ink", "Night Rain", "Warp", "Circuit", "Neon Grid", "Lagoon", "Lagoon Night", "Snow", "Snow Night", "Bronze", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Dim Sand", "Wink Day", "Notebook", "Messenger"];
 const lightStart = 17;
 const koScene: Record<string, string> = { "Lagoon Night": "라군 나이트", "Snow Night": "스노우 나이트", "Neon Grid": "네온 그리드", "Samurai Ink": "사무라이 잉크", "Night Rain": "나이트 레인", Warp: "워프", Circuit: "서킷", Lagoon: "라군", Snow: "스노우" };
 const scene = ["Lagoon Night", "Snow Night", "Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Lagoon", "Snow"];
@@ -83,7 +83,7 @@ afterEach(async () => {
 });
 
 describe("featured themes", () => {
-  it.each(["en", "ko"] as const)("starts folded with twenty featured themes in %s and reveals every offered theme", async (locale) => {
+  it.each(["en", "ko"] as const)("starts folded with twenty-one featured themes in %s and reveals every offered theme", async (locale) => {
     await mount("precision", locale);
     const shown = locale === "en" ? featured : featured.map((name) => koScene[name] ?? name);
     expect(names()).toEqual(shown);
@@ -208,6 +208,42 @@ describe("Reveal", () => {
     await reveal(null);
     expect(scrolled).toHaveBeenCalledTimes(1);
     scrolled.mockRestore();
+  });
+});
+
+describe("More themes", () => {
+  const more = () => document.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+  const landed = () => act(async () => {
+    const end = new Event("animationend", { bubbles: true });
+    Object.defineProperty(end, "animationName", { value: "fold-open" });
+    document.querySelector("[data-fold]")!.dispatchEvent(end);
+  });
+
+  it("brings its first new row into view once it has opened, never while closing", async () => {
+    await mount();
+    const scrolled = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {});
+    await act(async () => more().click());
+    expect(scrolled).not.toHaveBeenCalled();
+    await landed();
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.contexts[0]).toBe(document.querySelector("[data-fold] [data-skin-tile]"));
+    expect(scrolled.mock.contexts[0]).toBe(tiles()[featured.length]);
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+    await act(async () => more().click());
+    await folded();
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    scrolled.mockRestore();
+  });
+
+  it("scrolls at once under reduced motion", async () => {
+    await mount();
+    const media = window.matchMedia.bind(window);
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => Object.defineProperty(media(query), "matches", { value: query.includes("reduce") }));
+    const scrolled = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {});
+    await act(async () => more().click());
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "instant" });
+    vi.restoreAllMocks();
   });
 });
 

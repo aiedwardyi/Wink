@@ -26,6 +26,7 @@ import { baseAccount } from "../../worker-resume.ts";
 import { describeSpawnFailure, execCli, killCliTree, setCliPriority, spawnCli } from "../../procs.ts";
 import { captureToolDetail } from "../../tool-detail.ts";
 import { decodeInjectId, LOCAL_HOSTS } from "../local-inject.ts";
+import { experimentalAgents } from "../tool-catalog.ts";
 import type { CliText, CliTextContext } from "../cli-text.ts";
 import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } from "../../wsl-gate.ts";
 import { inputDigest } from "../../repeat-detector.ts";
@@ -122,7 +123,7 @@ import type {
   PrepareTurn,
   ProviderErrorCode,
 } from "../../contracts.ts";
-import { newEventId, newId } from "../../contracts.ts";
+import { cliNotFound, newEventId, newId } from "../../contracts.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
 import { augmentedPath, toWslPath } from "../../env-path.ts";
 
@@ -532,7 +533,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const servers: AcpMcpServer[] = [];
         const acpEnv = (env: Record<string, string>) =>
           Object.entries(env).map(([name, value]) => ({ name, value: String(value) }));
-        const agents = turn.integrations?.agents;
+        // Off by default: Grok already searches MCP tools itself; ORBIT_WINK_TOOL_CATALOG=1 opts in
+        const agents = turn.integrations?.agents && experimentalAgents(turn.integrations.agents);
         if (agents) {
           servers.push({ name: "agents", command: agents.command, args: agents.args, env: acpEnv(agents.env) });
         }
@@ -1491,7 +1493,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           const gated = support.wslProbeWrapper !== undefined && !wslProbeAllowed();
           const probed = await resolveCli(env);
           if (!probed && gated) return lastSnapshot ?? { state: "unavailable", reason: wslBlockedReason(support.displayName) };
-          if (!probed) return { state: "unavailable", reason: `\`${effectiveCli()}\` CLI not found` };
+          if (!probed) return cliNotFound(effectiveCli());
           const authenticated = await support.isAuthenticated(env, config);
           lastCapture = authenticated ? capture() : null;
           if (input.account) admitted = authenticated === true;

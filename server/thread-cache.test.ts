@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
@@ -6,6 +5,7 @@ import { readThread, replaceThread } from "./message-db.ts";
 import { bootPaneWakes } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 import type { SyncChange } from "./thread-sync-v2.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = () => ({ instanceId: "claude", model: "opus" });
 const size = (threadId: string) => readThread(threadId, "").chars;
@@ -21,7 +21,48 @@ function chats(count: number, rows: number, text = (index: number) => `row ${ind
 }
 
 describe("thread cache", () => {
-  beforeEach(() => rmSync(DATA_DIR, { recursive: true, force: true }));
+  beforeEach(() => removeTestData(DATA_DIR));
+
+  it("refreshes the projection after appends, forks, head changes and sync imports", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({}, { seedMessages: false });
+    const { threadId } = bot;
+    const first = store.appendMessage(threadId, { role: "user", kind: "text", text: "first" });
+    const original = store.activePath(threadId);
+    expect(store.activePath(threadId)).toBe(original);
+
+    const reply = store.appendMessage(threadId, { role: "bot", kind: "text", text: "reply" });
+    expect(original).toEqual([first]);
+    expect(store.activePath(threadId)).toEqual([first, reply]);
+    const fork = store.branchMessage(threadId, first.id, "fork")!;
+    expect(store.activePath(threadId)).toEqual([fork]);
+    store.setActiveLeaf(threadId, first.id);
+    expect(store.activePath(threadId)).toEqual([first, reply]);
+
+    const imported = { ...first, text: "imported" };
+    store.applySyncChanges(bot.id, threadId, [{ cursor: 1, kind: "row", rowId: first.id, value: imported, conflict: false }]);
+    expect(store.activePath(threadId)).toEqual([imported, reply]);
+    store.applySyncChanges(bot.id, threadId, [{ cursor: 2, kind: "head", rowId: "head", value: fork.id, conflict: false }]);
+    expect(store.activePath(threadId)).toEqual([fork]);
+
+    const replacement = { ...fork, text: "replaced by snapshot" };
+    store.adoptSyncedTask(bot.id, { threadId, title: "Imported", createdAt: 1 }, [replacement], fork.id);
+    expect(store.activePath(threadId)).toEqual([replacement]);
+  });
+
+  it("finds a synced ancestor that lands after its child's path was read", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({}, { seedMessages: false });
+    const { threadId } = bot;
+    const first = store.appendMessage(threadId, { role: "user", kind: "text", text: "first" });
+    const parent: Message = { id: "synced-parent", parentId: first.id, at: first.at + 1, role: "bot", kind: "text", text: "parent" };
+    const child: Message = { id: "synced-child", parentId: parent.id, at: first.at + 2, role: "user", kind: "text", text: "child" };
+    const row = (message: Message): SyncChange => ({ cursor: 0, kind: "row", rowId: message.id, value: message, conflict: false });
+    store.applySyncChanges(bot.id, threadId, [row(child), { cursor: 0, kind: "head", rowId: "head", value: child.id, conflict: false }]);
+    expect(store.activePath(threadId)).toEqual([child]);
+    store.applySyncChanges(bot.id, threadId, [row(parent)]);
+    expect(store.activePath(threadId)).toEqual([first, parent, child]);
+  });
 
   it("drops the least recently used chats once their size passes the budget", () => {
     const [a, b, c, d] = chats(4, 4);

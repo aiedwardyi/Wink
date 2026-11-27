@@ -14,6 +14,15 @@
 .model-cross-header .picker-style-button[aria-expanded="true"] { background: #ffffff14; color: #f2f3f5; }
 @media (hover: hover) { .model-cross-header .picker-style-button:hover { color: #f2f3f5; } }
 
+.picker-style-host {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.picker-style-host .picker-style-strip { pointer-events: auto; }
+
 .picker-style-strip {
   --pss-ground: #121318;
   --pss-edge: #ffffff1c;
@@ -130,7 +139,7 @@
   .pss-name { font-size: 11px; }
 }
 
-@scope (.model-cross-backdrop[data-light]) {
+@scope (.model-cross-backdrop[data-light], .picker-style-host[data-light]) {
   .model-cross-header .picker-style-button { border-color: color-mix(in srgb, var(--color-ink) 14%, transparent); }
   .model-cross-header .picker-style-button[aria-expanded="true"] { background: color-mix(in srgb, var(--color-ink) 8%, transparent); color: var(--color-ink); }
   @media (hover: hover) { .model-cross-header .picker-style-button:hover { color: var(--color-ink); } }

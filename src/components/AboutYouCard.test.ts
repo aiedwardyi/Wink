@@ -85,12 +85,12 @@ describe("About You card", () => {
     expect(prompt.className).toContain("focus-visible:ring-2 focus-visible:ring-accent/50");
   });
 
-  it("keeps the whole prompt in a capped box that scrolls, on a distinct surface", async () => {
+  it("keeps the whole prompt in a capped box with no scrollbar, on a distinct surface", async () => {
     await render();
     const prompt = host.querySelector<HTMLElement>("[tabindex='0']")!;
     expect(prompt.textContent).toBe(en["aboutYou.prompt"]);
     expect(prompt.className).toMatch(/(^|\s)max-h-\[\d+px\]/);
-    expect(prompt.classList.contains("overflow-y-auto")).toBe(true);
+    expect(prompt.classList.contains("overflow-hidden")).toBe(true);
     expect(prompt.parentElement!.className).toContain("bg-raised");
     expect(host.querySelector("textarea")!.className).toContain("bg-inset");
   });

@@ -6,30 +6,36 @@ import type { Translate } from "@/lib/i18n";
 import type { UsageBoardAccount } from "@/lib/usage-board";
 import { Fold } from "./Fold";
 
+// Slots plus the ids they held: a collapsed reorder permutes those ids within the slots, while an order that brings other rows into them picks again.
 function pickRows(accounts: UsageBoardAccount[], checked: string | null) {
-  const picked = accounts.slice(0, 3);
-  const main = accounts.find((each) => each.id === checked);
-  if (main && !picked.includes(main)) picked[2] = main;
-  return picked.map((each) => each.id);
+  const main = accounts.findIndex((each) => each.id === checked);
+  const slots = [0, 1, main > 2 ? main : 2];
+  return { slots, ids: slots.map((slot) => accounts[slot]?.id) };
 }
 
-export function useCappedAccounts({ accounts, checked, t, row, loadOpen, saveOpen }: {
-  accounts: UsageBoardAccount[]; checked: string | null; t: Translate; row: (account: UsageBoardAccount) => ReactNode;
+export function useCappedAccounts({ accounts, checked, pending, t, row, loadOpen, saveOpen }: {
+  accounts: UsageBoardAccount[]; checked: string | null; pending: string | undefined; t: Translate; row: (account: UsageBoardAccount) => ReactNode;
   loadOpen: () => boolean; saveOpen: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(loadOpen);
   const [picked, setPicked] = useState(() => pickRows(accounts, checked));
-  if (!open && checked && accounts.some((account) => account.id === checked) && !picked.includes(checked)) setPicked(pickRows(accounts, checked));
+  // Only the save the board accepted keeps the old Main shown when it lands; a Main the board moves on its own picks again.
+  const [main, setMain] = useState({ checked, pending });
+  if (main.checked !== checked || main.pending !== pending) setMain({ checked, pending });
+  const moved = main.checked !== checked && checked !== main.pending;
+  const at = accounts.findIndex((account) => account.id === checked);
+  const reordered = picked.slots.some((slot) => !picked.ids.includes(accounts[slot]?.id));
+  if (!open && (moved || reordered || (at >= 0 && !picked.slots.includes(at)))) setPicked(pickRows(accounts, checked));
   const id = useId();
   if (accounts.length <= 3) return accounts.map(row);
   const groups: { kept: boolean; accounts: UsageBoardAccount[] }[] = [];
-  for (const account of accounts) {
-    const kept = picked.includes(account.id);
+  for (const [index, account] of accounts.entries()) {
+    const kept = picked.slots.includes(index);
     const last = groups.at(-1);
     if (last?.kept === kept) last.accounts.push(account);
     else groups.push({ kept, accounts: [account] });
   }
-  const hidden = accounts.filter((each) => !picked.includes(each.id)).length;
+  const hidden = accounts.filter((_, index) => !picked.slots.includes(index)).length;
   const moving = groups.findIndex((each) => !each.kept);
   const toggle = () => afterFold(`${id}-${moving}`, () => {
     if (open) setPicked(pickRows(accounts, checked));

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { PICKER_MODEL_IDS, pickerModels, movePicker, pickerRows, pickerEfforts, selectPickerModel, withPickerEffort } from "./cross-model-picker";
 import type { InstanceInfo } from "@/state/store";
 import { STATIC_CLAUDE_MODELS } from "../../server/drivers/claude.ts";
+import { STATIC_ANTIGRAVITY_MODELS } from "../../server/drivers/antigravity.ts";
 import { catalogModelLabel } from "./model-chip";
 
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
@@ -92,6 +93,27 @@ describe("picker catalogs", () => {
     expect(row.cells.find((cell) => cell.offList)).toEqual({ label: "Claude Fable 5", options: [{ id: "claude-fable-5", label: "Claude Fable 5", contextWindow: 1_000_000 }], offList: true });
     expect(selectPickerModel(instance, "claude-fable-5", saved)).toBe(saved);
     expect(catalogModelLabel(instance, "claude-fable-5")).toBe("Claude Fable 5");
+  });
+
+  it("never offers Gemini 4 Argon", () => {
+    const instance: InstanceInfo = {
+      instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", snapshot: { state: "available" }, models: STATIC_ANTIGRAVITY_MODELS,
+    };
+    const row = pickerRows([instance], { instanceId: "antigravity", model: "gemini-4-carbon-high", mode: "pinned" })[0]!;
+    expect(row.cells.flatMap((cell) => cell.options.map((option) => option.id)).filter((id) => id.includes("argon"))).toEqual([]);
+    expect(PICKER_MODEL_IDS).not.toContain("gemini-4-argon");
+  });
+
+  it("keeps a bot saved on Argon running as one off-list cell with its tiers", () => {
+    const instance: InstanceInfo = {
+      instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", snapshot: { state: "available" }, models: STATIC_ANTIGRAVITY_MODELS,
+    };
+    const saved = { instanceId: "antigravity", model: "gemini-4-argon-low", mode: "pinned" as const };
+    const row = pickerRows([instance], saved)[0]!;
+    const offList = row.cells.filter((cell) => cell.offList);
+    expect(offList.map((cell) => cell.options.map((option) => option.id))).toEqual([["gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low"]]);
+    expect(selectPickerModel(instance, "gemini-4-argon-low", saved)).toBe(saved);
+    expect(catalogModelLabel(instance, "gemini-4-argon-low")).toBe("Gemini 4 Argon (Low)");
   });
 
   it("defaults a Haiku 5.5 pick to high effort and keeps Haiku 4.5 off the grid", () => {
@@ -388,30 +410,33 @@ describe("picker catalogs", () => {
     });
   });
 
-  it("shows Gemini 4 Carbon, Argon and Hydrogen cells first, then 3.8 Flash", () => {
+  it("shows Gemini 4 Carbon, Neon and Hydrogen cells first, then 3.8 Flash", () => {
     const instance: InstanceInfo = {
       instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", snapshot: { state: "available" },
       models: {
         default: "gemini-3.1-pro-high",
         options: [
           "gemini-4-carbon-high", "gemini-4-carbon-medium", "gemini-4-carbon-low",
-          "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low",
+          "gemini-4-neon-high", "gemini-4-neon-medium", "gemini-4-neon-low", "gemini-4-neon-xhigh",
           "gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low",
+          "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low",
           "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
           "gemini-3.1-pro-high",
         ].map((id) => ({ id, label: id })),
       },
     };
-    const row = pickerRows([instance], { instanceId: "antigravity", model: "gemini-4-argon-low" })[0]!;
+    const row = pickerRows([instance], { instanceId: "antigravity", model: "gemini-4-carbon-low" })[0]!;
     expect(row.cells.filter((cell) => !cell.offList).map((cell) => cell.label)).toEqual([
-      "Gemini 4 Carbon", "Gemini 4 Argon", "Gemini 4 Hydrogen", "Gemini 3.8 Flash",
+      "Gemini 4 Carbon", "Gemini 4 Neon", "Gemini 4 Hydrogen", "Gemini 3.8 Flash",
     ]);
     expect(row.cells[0]!.options.map((option) => option.id)).toEqual(["gemini-4-carbon-high", "gemini-4-carbon-medium", "gemini-4-carbon-low"]);
+    expect(row.cells[1]!.options.map((option) => option.id)).toEqual(["gemini-4-neon-high", "gemini-4-neon-medium", "gemini-4-neon-low", "gemini-4-neon-xhigh"]);
+    expect(pickerEfforts(row, row.cells[1]!).map((effort) => effort.model)).toEqual(["gemini-4-neon-low", "gemini-4-neon-medium", "gemini-4-neon-high", "gemini-4-neon-xhigh"]);
     expect(row.cells[2]!.options.map((option) => option.id)).toEqual(["gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low"]);
     expect(row.cells.some((cell) => cell.offList)).toBe(false);
-    expect(PICKER_MODEL_IDS).toContain("gemini-4-argon");
     expect(PICKER_MODEL_IDS).toContain("gemini-4-hydrogen");
     expect(PICKER_MODEL_IDS).toContain("gemini-4-carbon");
+    expect(PICKER_MODEL_IDS).toContain("gemini-4-neon");
   });
 
   it("keeps a 3.1 Pro pin working as one off-list cell with its tiers", () => {
@@ -438,20 +463,20 @@ describe("picker catalogs", () => {
     ]);
   });
 
-  it("tiers the Argon cell low to high with no effort field", () => {
+  it("tiers the Hydrogen cell low to high with no effort field", () => {
     const instance: InstanceInfo = {
       instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", snapshot: { state: "available" },
       models: {
-        default: "gemini-4-argon-high",
-        options: ["gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low"].map((id) => ({ id, label: id })),
+        default: "gemini-4-hydrogen-high",
+        options: ["gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low"].map((id) => ({ id, label: id })),
       },
     };
-    const row = pickerRows([instance], { instanceId: "antigravity", model: "gemini-4-argon-low" })[0]!;
+    const row = pickerRows([instance], { instanceId: "antigravity", model: "gemini-4-hydrogen-low" })[0]!;
     expect(row.cells).toHaveLength(1);
-    expect(row.cells[0]).toMatchObject({ label: "Gemini 4 Argon" });
+    expect(row.cells[0]).toMatchObject({ label: "Gemini 4 Hydrogen" });
     expect(row.cells[0]!.offList).toBeUndefined();
     expect(pickerEfforts(row, row.cells[0]!).map((option) => option.model)).toEqual([
-      "gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high",
+      "gemini-4-hydrogen-low", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-high",
     ]);
   });
 

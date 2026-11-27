@@ -214,4 +214,11 @@ describe("chatTranscriptRows", () => {
     ]);
     expect(result.map((row) => row.visible)).toEqual([true, true, true, false, true, true]);
   });
+
+  it("leaves a wake's day divider out with the wake", () => {
+    const wake: Message = { id: "w1", at: at(2, 0), role: "bot", kind: "routine.run", text: "", routineRun: { runId: "r", routineId: "x", routineName: "Wake", status: "completed", wake: true } };
+    const result = rows([say("Late.", at(1, 23)), wake, say("Early.", at(2, 1))]);
+    expect(result.map((row) => row.visible)).toEqual([true, false, true]);
+    expect(result.map((row) => row.newDay)).toEqual([true, false, true]);
+  });
 });
