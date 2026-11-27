@@ -72,6 +72,14 @@ describe("bench lock", () => {
     expect(git("worktree", "list").split("\n")).toHaveLength(1);
   });
 
+  it("refuses a pre-registration a newer one superseded", () => {
+    const { dir, base, arm } = repo();
+    writeFileSync(join(dir, "ledger.json"), JSON.stringify({ bench: { prereg: [{ id: "v1" }, { id: "v2", supersedes: "v1" }] } }));
+    const out = run(dir, { name: "t", base, prereg: "v1", arms: [{ name: "sham", sham: true, sha: base }, { name: "fair", sha: arm("server/memory-lookup.ts") }] });
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("pre-registration v1 is superseded by v2");
+  });
+
   it("lets a server-only arm past the lock, to the pre-registration check", () => {
     const { dir, base, arm } = repo();
     const out = run(dir, { name: "t", base, prereg: "p", arms: [{ name: "sham", sham: true, sha: base }, { name: "fair", sha: arm("server/memory-lookup.ts") }] });

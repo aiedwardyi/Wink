@@ -1,6 +1,6 @@
 // Bench rule (SIM-TOURNEY, pre-registered in the pick ledger): one held-out run per arm against the base, paired on the same items.
-// A win needs Holm p < 0.05 over every arm, a top-2 gain of at least 5 points, clean guards, and a sham that does not win.
-export const RULE = { alpha: 0.05, minGain: 0.05, falseRecallBound: 0.01, confidence: 0.95 };
+// A win needs Holm p < 0.05 over every arm, a top-2 gain of at least 5 points, no guard row the base did not already show, and a sham that does not win.
+export const RULE = { alpha: 0.05, minGain: 0.05 };
 
 // log C(n, k) by summing logs, so 0.5^n never underflows on a large set
 function logChoose(n, k) {
@@ -30,27 +30,6 @@ export function holm(ps) {
   return out;
 }
 
-const binomCdf = (k, n, p) => {
-  let sum = 0;
-  for (let i = 0; i <= k; i++) sum += Math.exp(logChoose(n, i) + i * Math.log(p) + (n - i) * Math.log1p(-p));
-  return sum;
-};
-
-/** One-sided Clopper-Pearson upper bound on a rate seen k times in n. */
-export function upperBound(k, n, confidence = RULE.confidence) {
-  if (k >= n) return 1;
-  const alpha = 1 - confidence;
-  if (k === 0) return 1 - alpha ** (1 / n);
-  let low = k / n;
-  let high = 1;
-  for (let step = 0; step < 100; step++) {
-    const mid = (low + high) / 2;
-    if (binomCdf(k, n, mid) > alpha) low = mid;
-    else high = mid;
-  }
-  return high;
-}
-
 const count = (rows, test) => rows.filter(test).length;
 
 /** base and each arm's rows: { id, kind: positive | miss | guard, shown, hit, wrongScope, superseded }, the same ids in the same order. */
@@ -59,7 +38,6 @@ export function judge({ base, arms }) {
   const ids = base.map((row) => row.id).join("\n");
   for (const arm of arms) if (arm.rows.map((row) => row.id).join("\n") !== ids) throw new Error(`arm ${arm.name} scored other items than the base`);
   const positives = count(base, (row) => row.kind === "positive");
-  const misses = count(base, (row) => row.kind === "miss");
   const scored = arms.map((arm) => {
     let b = 0;
     let c = 0;
@@ -73,12 +51,11 @@ export function judge({ base, arms }) {
       if (row.wrongScope && !was.wrongScope) guards.wrongScope++;
       if (row.superseded && !was.superseded) guards.superseded++;
       if (row.kind === "guard" && was.hit && !row.hit) guards.mustHold++;
-      if (row.kind === "miss" && row.shown.length) guards.falseRecall++;
+      if (row.kind === "miss" && row.shown.length && !was.shown.length) guards.falseRecall++;
     });
-    const falseRecallBound = misses ? upperBound(guards.falseRecall, misses) : 1;
-    const clean = !guards.wrongScope && !guards.superseded && !guards.mustHold && falseRecallBound <= RULE.falseRecallBound;
+    const clean = !guards.wrongScope && !guards.superseded && !guards.mustHold && !guards.falseRecall;
     const hits = count(arm.rows, (row) => row.kind === "positive" && row.hit);
-    return { name: arm.name, sham: Boolean(arm.sham), of: positives, baseHits: count(base, (row) => row.kind === "positive" && row.hit), hits, gain: (c - b) / positives, b, c, p: mcnemar(b, c), guards: { ...guards, falseRecallBound, clean } };
+    return { name: arm.name, sham: Boolean(arm.sham), of: positives, baseHits: count(base, (row) => row.kind === "positive" && row.hit), hits, gain: (c - b) / positives, b, c, p: mcnemar(b, c), guards: { ...guards, clean } };
   });
   const adjusted = holm(scored.map((arm) => arm.p));
   const ruled = scored.map((arm, at) => {

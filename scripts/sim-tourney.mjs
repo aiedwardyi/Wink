@@ -72,8 +72,11 @@ export function tourney({ spec, on = "held-out", sets, ledger, out = join(sets, 
 
   const ledgerJson = join(dirname(resolve(ledger)), "ledger.json");
   const ruleHash = fileHash(join(BENCH, "scripts", "sim-rule.mjs"));
-  const prereg = existsSync(ledgerJson) ? JSON.parse(readFileSync(ledgerJson, "utf8")).bench?.prereg?.find((entry) => entry.id === spec.prereg) : undefined;
+  const filed = existsSync(ledgerJson) ? (JSON.parse(readFileSync(ledgerJson, "utf8")).bench?.prereg ?? []) : [];
+  const prereg = filed.find((entry) => entry.id === spec.prereg);
   if (!prereg) refuse(`no pre-registration ${spec.prereg} in ${ledgerJson}: file the rule first with node ledger.mjs prereg <file.json>`);
+  const newer = filed.find((entry) => entry.supersedes === spec.prereg);
+  if (newer) refuse(`pre-registration ${spec.prereg} is superseded by ${newer.id}: name ${newer.id} in the spec`);
   if (prereg.files?.ruleHash !== ruleHash) refuse(`pre-registration ${spec.prereg} names rule sha256 ${prereg.files?.ruleHash}, but scripts/sim-rule.mjs is ${ruleHash}: a changed rule needs a new pre-registration`);
 
   const manifest = JSON.parse(readFileSync(join(BENCH, "scripts", "recall-sets.json"), "utf8"));
@@ -142,7 +145,7 @@ export function tourney({ spec, on = "held-out", sets, ledger, out = join(sets, 
 
 const line = (result) => [
   `${result.run} on ${result.on} ${result.set.hash.slice(0, 12)}${result.set.use ? ` (use ${result.set.use}/${result.set.of})` : ""}, base ${result.base.sha.slice(0, 9)} ${result.base.totals.hits}/${result.base.totals.positives}, parity ${result.base.parity.checked - result.base.parity.mismatches}/${result.base.parity.checked}${result.void ? ", VOID: the sham won" : ""}`,
-  ...result.arms.map((arm) => `  ${arm.name}${arm.sham ? " (sham)" : ""} ${arm.sha.slice(0, 9)}: ${arm.hits}/${arm.of} (b ${arm.b}, c ${arm.c}, gain ${(arm.gain * 100).toFixed(1)} pts, p ${arm.p.toPrecision(3)}, Holm ${arm.pHolm.toPrecision(3)}), guards: wrong-scope ${arm.guards.wrongScope}, superseded ${arm.guards.superseded}, must-hold ${arm.guards.mustHold}, false recall ${arm.guards.falseRecall}/${arm.totals.misses} -> ${arm.verdict}`),
+  ...result.arms.map((arm) => `  ${arm.name}${arm.sham ? " (sham)" : ""} ${arm.sha.slice(0, 9)}: ${arm.hits}/${arm.of} (b ${arm.b}, c ${arm.c}, gain ${(arm.gain * 100).toFixed(1)} pts, p ${arm.p.toPrecision(3)}, Holm ${arm.pHolm.toPrecision(3)}), guards: wrong-scope ${arm.guards.wrongScope}, superseded ${arm.guards.superseded}, must-hold ${arm.guards.mustHold}, new false recall ${arm.guards.falseRecall} (shown on ${arm.totals.falseRecall}/${arm.totals.misses}) -> ${arm.verdict}`),
 ].join("\n");
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

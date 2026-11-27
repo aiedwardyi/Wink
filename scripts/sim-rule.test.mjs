@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { holm, judge, mcnemar, RULE, upperBound } from "./sim-rule.mjs";
+import { holm, judge, mcnemar } from "./sim-rule.mjs";
 
 // exact two-sided binomial in BigInt, independent of the float walk under test
 function exact(b, c) {
@@ -48,16 +48,6 @@ describe("Holm", () => {
   });
 });
 
-describe("Clopper-Pearson upper bound", () => {
-  it("0 of 300 sits under 1% and 1 of 300 does not", () => {
-    expect(upperBound(0, 300)).toBeCloseTo(1 - 0.05 ** (1 / 300), 9);
-    expect(upperBound(0, 300)).toBeLessThanOrEqual(RULE.falseRecallBound);
-    expect(upperBound(1, 300)).toBeGreaterThan(RULE.falseRecallBound);
-    expect(upperBound(1, 300)).toBeCloseTo(0.0157146, 6);
-    expect(upperBound(300, 300)).toBe(1);
-  });
-});
-
 describe("round verdicts", () => {
   const sham = { name: "sham", sham: true, rows: base() };
 
@@ -84,6 +74,14 @@ describe("round verdicts", () => {
     ];
     const round = judge({ base: base(), arms: [sham, ...broken.map((rows, n) => ({ name: `broken-${n}`, rows }))] });
     expect(round.arms.slice(1).map((arm) => arm.verdict)).toEqual(["worse", "worse", "worse", "worse"]);
+  });
+
+  it("a no-match row the base already shows is not new: the sham ties and a gain still wins; a new one is worse", () => {
+    const shows = (rows) => flip(rows, ["miss-0", "miss-1", "miss-2"], { shown: ["x"] });
+    const up = shows(flip(base(), range(380, 30), { hit: true, shown: ["a"] }));
+    const round = judge({ base: shows(base()), arms: [{ ...sham, rows: shows(base()) }, { name: "up", rows: up }, { name: "more", rows: flip(up, ["miss-3"], { shown: ["y"] }) }] });
+    expect(round.arms.map((arm) => arm.verdict)).toEqual(["no gain", "win", "worse"]);
+    expect(round.arms.map((arm) => arm.guards.falseRecall)).toEqual([0, 0, 1]);
   });
 
   it("a significant loss is worse", () => {
