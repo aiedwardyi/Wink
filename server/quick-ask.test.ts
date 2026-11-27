@@ -1306,6 +1306,13 @@ describe("a nudge while the person's question waits", () => {
     expect(h.steer.mock.calls[0]![1]).toContain(nudge);
   });
 
+  it("takes no earlier nudge for the waiting question", async () => {
+    const h = waiting({ consumed: true }, "fix the build");
+    mainAcks(h);
+    for (const nudge of ["hello?", "answer me??", "you there?", "sidekick answer me"]) expect((await h.send({ text: nudge })).data.quick).toBeUndefined();
+    expect(h.ask).not.toHaveBeenCalled();
+  });
+
   it.each(["sidekick answer me", "hello?"])("starts no second helper for a nudge while one answers the waiting question: %s", async (second) => {
     const h = waiting({ consumed: true, result: { route: "answer", text: "It's the second address.", ms: 1 } }, "whats the address again?");
     mainAcks(h);

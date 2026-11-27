@@ -81,7 +81,7 @@ export function claimWaitingQuestion(gate: QuickGate): Waiting | undefined {
   for (let at = path.length - 1; at >= 0; at--) {
     const row = path[at]!;
     if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && row.text?.trim()) break;
-    if (row.role !== "user" || row.kind !== "text" || row.quick) continue;
+    if (row.role !== "user" || row.kind !== "text" || row.quick || isNudge(row.text ?? "")) continue;
     const question = questionPart(row.text ?? "");
     if (!question) continue;
     asked.unshift(question);
