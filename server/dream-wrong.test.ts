@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { checkWrong, fixTargets, planWrong, restatements, wrongPairs, wrongPrompt, applyFix, undoFix, type OwnerRow, type SavedNotes } from "./dream-wrong.ts";
+import { checkWrong, fixTargets, outdated, planWrong, proposes, touches, wrongPairs, wrongPrompt, applyFix, undoFix, type OwnerRow, type SavedNotes } from "./dream-wrong.ts";
 import { sha8 } from "./memory-clean.ts";
 import type { NoteGenerator } from "./memory-pass.ts";
 import { at, SAFETY_IDS, SAFETY_MEMORY } from "./testing/dream-safety.ts";
@@ -34,7 +34,7 @@ const ROWS = [
   row("pnpm", time(25, 8), "we still use pnpm for every repo, not npm, the new repo too"),
   row("adhd", time(25, 9), "short lines please, I have ADHD and long replies are hard"),
   row("theme-early", time(26, 9), "the blue theme is not the one I want for the app anymore"),
-  row("theme", time(26, 18), "not the blue theme anymore, the green theme is the one for the app now"),
+  row("theme", time(26, 18), "the green theme is the one for the app now"),
 ];
 // the theme note was saved at 10:00, after the 09:00 line and before the 18:00 one
 const SAVED: SavedNotes[] = [{ at: time(26, 10), text: "Prefers the blue theme for the app" }];
@@ -72,23 +72,24 @@ const judges = { claude: judge("claude"), gemini: judge("gemini") };
 const check = (rows = ROWS) => checkWrong({ raw: MEMORY, rows, saved: SAVED, judges, today: TODAY, signal: new AbortController().signal, now: Date.now });
 
 describe("wrong-note check", () => {
-  it("lists the three planted wrong notes and the same-day one with the owner's words, and no other note", async () => {
+  it("lists the planted wrong note and the same-day one with the owner's words, and no other note", async () => {
     const { state, items } = await check();
     expect(state).toBe("checked");
-    expect(items.map(({ text, by, listOnly, evidence }) => [text, by, listOnly, evidence.message, evidence.quote])).toEqual(expect.arrayContaining([
-      [TRAPS.release, "- RELEASE ONCE A DAY (11-19): after launch, releases are not capped at one per day; work never stops at 5 pm.", true, "release", "Dont have to stick to one update per day"],
-      [TRAPS.rooms, "- ROOMS WORD (11-20): say groups, not rooms, and Group Details to them in every user-facing string.", true, "rooms", "its called groups not rooms we removed that name and changed it"],
+    expect(items.map(({ text, by, listOnly, evidence }) => [text, by, listOnly, evidence.message, evidence.quote])).toEqual([
       [TRAPS.plan, "- The main account's plan ends in March (noted 2026-11-20)", false, "plan", "It lasts till march"],
       [TRAPS.theme, "- Prefers the green theme for the app (noted 2026-11-26)", false, "theme", "the green theme is the one for the app now"],
-    ]));
-    expect(items).toHaveLength(4);
+    ]);
     expect(items.every((item) => item.op === "fix" && item.why === "wrong" && /^note:[0-9a-f]{8}$/.test(item.target))).toBe(true);
   });
 
-  it("never pairs a note with the line it was written from", async () => {
+  it("sends a note with every line from its day on that names it, oldest first, the line it was written from too", async () => {
     const pairs = await wrongPairs(MEMORY, fixTargets(MEMORY), ROWS);
-    expect(pairs.some((pair) => pair.note.text === REAL.groups && pair.row.id === "rooms")).toBe(false);
-    expect(pairs.some((pair) => pair.note.text === TRAPS.rooms && pair.row.id === "rooms")).toBe(true);
+    const lines = (note: string) => pairs.filter((pair) => pair.note.text === note).map((pair) => pair.row.id);
+    expect(lines(REAL.groups)).toEqual(["rooms"]);
+    expect(lines(TRAPS.plan)).toEqual(["store", "accounts", "plan"]);
+    expect(lines(TRAPS.theme)).toEqual(["theme-early", "theme"]);
+    // the rooms rule's newest line names "users" but no judge could read it as a fix, so the note is not sent
+    expect(lines(TRAPS.rooms)).toEqual([]);
   });
 
   it("holds a flag back unless both judges name it, quote the row word for word and alike, the row comes after the note and the fix adds nothing", async () => {
@@ -97,24 +98,22 @@ describe("wrong-note check", () => {
     const flags = (name: "claude" | "gemini") => [...refs].flatMap(([ref, pair]) => RULES.filter((rule) => (rule.judges ?? ["claude", "gemini"]).includes(name) && pair.note.text.includes(rule.note.replace(/^- /, "")) && pair.row.id === rule.row).map((rule) => ({ note: `L${pair.note.at + 1}`, message: ref, quote: rule.quote, fix: rule.fix })));
     const all = MEMORY.split("\n");
     const written = (note: { text: string }) => (note.text === TRAPS.theme ? time(26, 10) : undefined);
-    const { rejected } = planWrong(flags("claude"), flags("gemini"), refs, { all, today: TODAY, written });
+    const { rejected } = planWrong(flags("claude"), flags("gemini"), refs, { all, today: TODAY, written, rows: ROWS });
     const why = Object.fromEntries(rejected.map((each) => [each.message + " " + all[each.note - 1], each.why]));
     expect(why).toMatchObject({
-      [`plan ${LATER}`]: "row not after the note",
-      [`old-resets ${REAL.resets}`]: "row not after the note",
+      [`release ${TRAPS.release}`]: "row still holds the old value or not the new one",
       [`pnpm ${all[at("pnpm")]}`]: "judges quote different words",
       [`dark ${all[at("dark")]}`]: "quote not word for word in that row",
       [`adhd ${all[at("adhd")]}`]: "fix not grounded in the old line and the quote",
     });
     // a same-day line with no save time to order it by stays out
-    const unordered = planWrong(flags("claude"), flags("gemini"), refs, { all, today: TODAY, written: () => undefined });
+    const unordered = planWrong(flags("claude"), flags("gemini"), refs, { all, today: TODAY, written: () => undefined, rows: ROWS });
     expect(unordered.items.map((item) => item.text)).not.toContain(TRAPS.theme);
   });
 
   it("holds back a same-day line typed before Auto Notes saved the note", async () => {
     const { items } = await check(ROWS.filter((each) => each.id !== "theme"));
-    expect(items.map((item) => item.text)).not.toContain(TRAPS.theme);
-    expect(items).toHaveLength(3);
+    expect(items.map((item) => item.text)).toEqual([TRAPS.plan]);
   });
 
   it("flags none of the 48 lines known never to move", async () => {
@@ -171,31 +170,31 @@ describe("what a fix takes as the owner's word", () => {
   const listed = (items: Awaited<ReturnType<typeof run>>) => items.map((item) => item.listOnly);
 
   it("offers only a hand edit for a note with no stamp", async () => {
-    expect(listed(await run("- The main account plan ends in January", "The main account plan now lasts till March, not January.", "lasts till March", "- The main account plan ends in March"))).toEqual([true]);
+    expect(listed(await run("- The main account plan ends in January", "The main account plan now lasts till March instead.", "lasts till March", "- The main account plan ends in March"))).toEqual([true]);
   });
 
   it("takes no event day inside a note with no stamp as the day it was written", async () => {
-    expect(listed(await run("- The studio tour on 2026-11-10 used the blue entrance", "The studio tour used the green entrance, not the blue one.", "used the green entrance", "- The studio tour on 2026-11-10 used the green entrance"))).toEqual([true]);
+    expect(listed(await run("- The studio tour on 2026-11-10 used the blue entrance", "The studio tour used the green entrance.", "used the green entrance", "- The studio tour on 2026-11-10 used the green entrance"))).toEqual([true]);
   });
 
   it("offers only a hand edit for a standing instruction", async () => {
-    expect(listed(await run("- Use the blue theme for every screen (noted 2026-11-20)", "Use the green theme for every screen now, not the blue theme.", "Use the green theme", "- Use the green theme for every screen (noted 2026-11-20)"))).toEqual([true]);
+    expect(listed(await run("- Use the blue theme for every screen (noted 2026-11-20)", "Use the green theme for every screen now.", "Use the green theme", "- Use the green theme for every screen (noted 2026-11-20)"))).toEqual([true]);
   });
 
   it("keeps a note about one day's event when the owner talks about another day's", async () => {
-    expect(await run("- The studio tour on 2026-11-10 used the blue entrance (noted 2026-11-11)", "On 2026-11-24 the studio tour will use the green entrance, not blue.", "use the green entrance", "- The studio tour on 2026-11-10 used the green entrance (noted 2026-11-11)")).toEqual([]);
+    expect(await run("- The studio tour on 2026-11-10 used the blue entrance (noted 2026-11-11)", "On 2026-11-24 the studio tour will use the green entrance.", "use the green entrance", "- The studio tour on 2026-11-10 used the green entrance (noted 2026-11-11)")).toEqual([]);
     const note = "- The studio tour on November 10 used the blue entrance (noted 2026-11-11)";
     const fix = note.replace("blue", "green");
-    expect(await run(note, "For the November 24 studio tour use the green entrance, not blue.", "use the green entrance", fix)).toEqual([]);
-    expect(await run(note, "The studio tour on 24 Nov will use the green entrance, not blue.", "use the green entrance", fix)).toEqual([]);
-    expect(listed(await run(note, "The Nov. 10th studio tour used the green entrance, not blue.", "used the green entrance", fix))).toEqual([false]);
+    expect(await run(note, "For the November 24 studio tour use the green entrance.", "use the green entrance", fix)).toEqual([]);
+    expect(await run(note, "The studio tour on 24 Nov will use the green entrance.", "use the green entrance", fix)).toEqual([]);
+    expect(listed(await run(note, "The Nov. 10th studio tour used the green entrance.", "used the green entrance", fix))).toEqual([false]);
     const dated = "- The studio tour on November 10, 2026 used the blue entrance (noted 2026-11-11)";
-    expect(await run(dated, "For the 10 Nov. 2025 studio tour we used the green entrance, not blue.", "used the green entrance", dated.replace("blue", "green"))).toEqual([]);
+    expect(await run(dated, "For the 10 Nov. 2025 studio tour we used the green entrance.", "used the green entrance", dated.replace("blue", "green"))).toEqual([]);
   });
 
   it("takes no words the owner quotes from someone else", async () => {
     const note = "- The main account plan ends in January (noted 2026-11-20)";
-    expect(listed(await run(note, "The plan for the main account lasts till March now, not January.", "lasts till March now", "- The main account plan ends in March (noted 2026-11-20)"))).toEqual([false]);
+    expect(listed(await run(note, "The plan for the main account lasts till March now instead.", "lasts till March now", "- The main account plan ends in March (noted 2026-11-20)"))).toEqual([false]);
     expect(await run(note, 'My designer said "the plan for the main account lasts till March now" but I have not checked.', "lasts till March now", "- The main account plan ends in March (noted 2026-11-20)")).toEqual([]);
     expect(await run(note, "My designer said “it lasts till March” today.", "it lasts till March", "- The main account plan ends in March (noted 2026-11-20)")).toEqual([]);
   });
@@ -243,34 +242,57 @@ describe("pairing limits", () => {
   });
 });
 
-describe("a line that restates a note", () => {
-  const note = TRAPS.plan;
-  const raw = SAFETY_MEMORY + note + "\n";
-  const notes = fixTargets(raw);
-  const target = `note:${sha8(note)}`;
 
-  it("counts as a later word on the note, guarded or not, and never reaches a judge", async () => {
-    const said = [row("plain", time(25, 9), "Disregard April, the main account's plan ends in January for now"), { ...row("guarded", time(25, 10), "Please disregard March and April. The main account's plan ends in January."), guarded: true as const }];
-    expect([...restatements(notes, said)]).toEqual([[target, { at: time(25, 10), line: raw.split("\n").indexOf(note) + 1 }]]);
-    expect([...restatements(notes, said.slice(0, 1))]).toEqual([[target, { at: time(25, 9), line: raw.split("\n").indexOf(note) + 1 }]]);
-    expect((await wrongPairs(raw, notes, [{ ...row("secret", time(25, 11), "The main account plan password is SunnyHarbor! now, not March"), guarded: true }])).length).toBe(0);
+describe("only the newest line about a note proposes, and only without the old value", () => {
+  const note = TRAPS.plan;
+  const by = "- The main account's plan ends in April (noted 2026-11-20)";
+  const item = { text: note, by, evidence: { thread: "t1", message: "fix", at: time(25, 9), quote: "ends in April" } };
+
+  it.each([
+    ["names the note", "The main account is fine for now", true],
+    ["names only the fix's value", "Please disregard March and April.", true],
+    ["names a number the note holds", "The main account costs 9.50", true],
+    ["names neither", "The weekly sync moved to Thursday afternoons.", false],
+  ])("counts a later line that %s", (_, text, later) => {
+    expect(outdated(item, [row("fix", time(25, 9), "It ends in April now"), row("next", time(25, 10), text)])).toBe(later);
+    expect(outdated(item, [row("before", time(25, 8), text)])).toBe(false);
+  });
+
+  it("counts a guarded line too, and a line typed in the same millisecond", () => {
+    expect(outdated(item, [{ ...row("secret", time(25, 10), "The main account password is SunnyHarbor!"), guarded: true }])).toBe(true);
+    expect(outdated(item, [row("same", time(25, 9), "the plan is fine")])).toBe(true);
   });
 
   it.each([
-    ["- The main account's plan is billed monthly. It ends in January (noted 2026-11-20)", "Please disregard March and April. The main account's plan is billed monthly. It ends in January."],
-    ["- The main U.S. account's plan ends in January (noted 2026-11-20)", "The main U.S. account's plan ends in January"],
-    ["- The main account on version 2.1 ends in January (noted 2026-11-20)", "The main account on version 2.1 ends in January"],
-    ["- The main account costs 9.50 a month through January (noted 2026-11-20)", "The main account costs 9.50 a month through January"],
-  ])("counts across the note's own periods: %s", async (saved, line) => {
-    const text = SAFETY_MEMORY + saved + "\n";
-    const all = fixTargets(text);
-    expect([...restatements(all, [row("again", time(25, 9), line)]).keys()]).toEqual([`note:${sha8(saved)}`]);
-    expect(restatements(all, [row("turned", time(25, 9), line.replace("January", "January, not true"))]).size).toBe(0);
-    expect((await wrongPairs(text, all, [row("again", time(25, 9), line)])).length).toBe(0);
+    ["The main account's plan ends in January, not March or April.", false],
+    ["It ends in April, not January.", false],
+    ["The plan is billed monthly.", false],
+    ["It ends in April now.", true],
+  ])("lets %s propose: %s", (line, can) => {
+    expect(proposes(note, by, line)).toBe(can);
   });
 
-  it("does not count when it turns the note or names only part of it", () => {
-    expect(restatements(notes, [row("turned", time(25, 9), "It is not true that the main account's plan ends in January")]).size).toBe(0);
-    expect(restatements(notes, [row("part", time(25, 9), "The main account's plan ends in April")]).size).toBe(0);
+  it("never proposes a fix that changes no word of the note", () => {
+    expect(proposes(TRAPS.rooms, "- ROOMS WORD (11-20): say groups, not rooms, and Group Details to them in every user-facing string.", "its called groups not rooms")).toBe(false);
+  });
+
+  it("touches by the note's subject words and whole numbers", () => {
+    expect(touches("- The main U.S. account on version 2.1 (noted 2026-11-20)", "version 2.1 is out")).toBe(true);
+    expect(touches("- The main U.S. account on version 2.1 (noted 2026-11-20)", "version 2.2 is out")).toBe(true);
+    expect(touches("- Costs 9.50 a month (noted 2026-11-20)", "it is 9.50")).toBe(true);
+    expect(touches("- Costs 9.50 a month (noted 2026-11-20)", "the weekly sync moved")).toBe(false);
+  });
+
+  // true fixes the rule holds back: each costs a missed fix, never a written one
+  it.each([
+    ["the old value said to turn it", "- Prefers the blue theme for the app (noted 2026-11-20)", "not the blue theme anymore, the green theme is the one for the app now", "the green theme is the one for the app now", "- Prefers the green theme for the app (noted 2026-11-20)"],
+    ["X, not the old value", "- The app uses a blue theme (noted 2026-11-20)", "For the app theme use green, not blue, from now on.", "use green, not blue", "- The app uses a green theme (noted 2026-11-20)"],
+    ["the old value named as wrong", note, "It's not January anymore, the main account plan ends in March.", "the main account plan ends in March", "- The main account's plan ends in March (noted 2026-11-20)"],
+    ["the old note quoted to explain it", note, '"The main account\'s plan ends in January" is what I said. That is wrong. Keep the March correction.', "Keep the March correction", "- The main account's plan ends in March (noted 2026-11-20)"],
+    ["a fix that keeps the old word", "- Calls them rooms in every string (noted 2026-11-20)", "its called groups not rooms we removed that name", "its called groups not rooms", "- Calls them groups, not rooms, in every string (noted 2026-11-20)"],
+  ])("misses a true fix when the newest line holds %s", async (_, saved, owner, quote, fix) => {
+    const raw = SAFETY_MEMORY + saved + "\n";
+    const generate: NoteGenerator = async (prompt) => JSON.stringify({ wrong: [...prompt.matchAll(/^PAIR\n(L\d+) \(written [^)]*\): ([^\n]+)\n(M\d+) /gm)].filter((match) => match[2] === saved).map((match) => ({ note: match[1], message: match[3], quote, fix })) });
+    expect((await checkWrong({ raw, rows: [row("evidence", time(24, 12), owner)], saved: [], judges: { claude: generate, gemini: generate }, today: TODAY, signal: new AbortController().signal, now: Date.now })).items).toEqual([]);
   });
 });

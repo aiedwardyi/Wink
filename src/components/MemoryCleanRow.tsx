@@ -18,6 +18,7 @@ function FixLine({ item, quote, day, onFix }: { item: DreamFix; quote: (text: st
   const said = t("bot.dreamFix", { text: quote(item.text), date: day(item.evidence.at), quote: `"${item.evidence.quote}"`, by: quote(item.by) });
   if (item.done && item.done.undoneAt === undefined) return <>{said} {t("bot.dreamFixed", { file: DREAMED_FILE })}{onFix && <> <MemoryCleanUndo onUndo={() => onFix(item.target, true)} /></>}</>;
   if (item.done) return <>{said} {t("bot.dreamFixUndone")}</>;
+  if (item.outdated !== undefined) return <>{said} {t("bot.dreamFixOutdated")}</>;
   if (item.listOnly) return <>{said} {t("bot.dreamFixByHand")}</>;
   return <>{said}{onFix && <> <span className="whitespace-nowrap"><span aria-hidden="true">·</span> <button type="button" className="font-medium text-accent-text" onClick={() => onFix(item.target, false)}>{t("bot.dreamFixOk")}</button></span></>}</>;
 }
@@ -52,7 +53,7 @@ function DreamRow({ run, onFix, className }: { run: MemoryCleanRun & { dream: Dr
   const moves = dream.notes.items.length;
   // a fix the user OK'd changed MEMORY.md, so the row says so the way an applied cleanup does
   const applied = dream.fixes?.items.flatMap((item) => (item.done && item.done.undoneAt === undefined ? [item.done.at] : [])) ?? [];
-  const fixes = dream.fixes?.items.filter((item) => !item.done).length ?? 0;
+  const fixes = dream.fixes?.items.filter((item) => !item.done && item.outdated === undefined).length ?? 0;
   const closes = dream.asks.items.filter((item) => item.op === "close").length;
   const count = (n: number, one: "bot.dreamNote" | "bot.dreamTodo", many: "bot.dreamNotes" | "bot.dreamTodos") => t(n === 1 ? one : many, { count: n });
   const notes = dream.notes.state === "off-here" ? t("bot.dreamNotesOffHere") : ["checked", "unchanged"].includes(dream.notes.state) ? "" : t("bot.dreamNotesNotChecked");

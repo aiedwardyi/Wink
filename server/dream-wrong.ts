@@ -15,7 +15,6 @@ import type { Message } from "./store.ts";
 export const WRONG_PAIRS_MAX = 30;
 export const WRONG_PROMPT_MAX = 32 * 1024;
 const EXCERPT_MAX = 480;
-const ROWS_PER_NOTE = 2;
 const NEAR_HITS = 8;
 const YIELD_EVERY = 25;
 const FLAGS_MAX = 60;
@@ -28,7 +27,7 @@ const SPOKEN = /"[^"\n]+"|“[^”\n]+”|「[^」\n]+」|«[^»\n]+»/g;
 // an instruction that holds from now on, not a fact a newer line can turn
 const STANDING = /^(?:use|reply|answer|write|keep|call|ask|send|show|put|add|avoid|prefer|check|run|make|give|start|stop|treat)\b|\b(?:every|each time|whenever|from now on|by default)\b/i;
 
-/** guarded: the line may hold a login or code, so no judge reads it; it only counts when it restates a note. */
+/** guarded: the line may hold a login or code, so no judge reads it; it still counts as a later word on a note. */
 export type OwnerRow = { thread: string; id: string; at: number; text: string; guarded?: true };
 /** When Auto Notes saved a batch of notes, and what its receipt says it saved. */
 export type SavedNotes = { at: number; text: string };
@@ -37,6 +36,8 @@ export type FixItem = {
   evidence: { thread: string; message: string; at: number; quote: string };
   /** set once the user OKs it: where the new line went, which copy of it, the heading above it and the old line's ending, so Undo puts the old bytes back on that line only */
   done?: FixDone;
+  /** when an OK found a newer owner line about the note, or its own line no longer stating the new value alone; it never takes an OK again */
+  outdated?: number;
 };
 export type FixDone = { at: number; line: number; cr: boolean; nth: number; count: number; heading: string; id: string; undoneAt?: number };
 export type JudgeLog = { input: number; output: number; ms: number };
@@ -57,10 +58,12 @@ const lowWords = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) 
 export function ownerRows(thread: string, messages: readonly Message[], since: number): OwnerRow[] {
   return messages.flatMap((message) => {
     if (message.at <= since || !eligibleRow(message)) return [];
-    const text = userTyping(message.text);
+    // a message cut whole as sensitive still counts as a later word on a note, read here only
+    const safe = userTyping(message.text);
+    const text = safe.trim() ? safe : userTyping(message.text, false);
     if (!text.trim()) return [];
     const row: OwnerRow = { thread, id: message.id, at: message.at, text };
-    if (cleanerSkip(text)) row.guarded = true;
+    if (text !== safe || cleanerSkip(text)) row.guarded = true;
     return [row];
   });
 }
@@ -80,49 +83,30 @@ export function fixTargets(raw: string): Map<number, NoteLine> {
 
 const stem = (word: string) => (word.length > 4 ? word.replace(/(?:ing|ed|es|s)$/, "") : word).slice(0, 6);
 const content = (text: string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter((word) => !recallSkipped(word) && !/^\d+$/.test(word)).map(stem));
-// where need sits word for word in have, from `from` on; words drop punctuation, so "U.S.", "2.1" and a note's own periods match
-const wordsAt = (have: readonly string[], need: readonly string[], from = 0) => {
-  for (let at = from; at + need.length <= have.length; at++) if (need.every((word, index) => have[at + index] === word)) return at;
-  return -1;
-};
-// a note that already holds 6 words in a row of the line was written from it
-const writtenFrom = (note: string, line: string) => {
-  const have = lowWords(note);
-  const said = lowWords(line);
-  for (let at = 0; at + 6 <= said.length; at++) if (wordsAt(have, said.slice(at, at + 6)) >= 0) return true;
-  return false;
-};
+const NUMBER = /\d+(?:[.,:/-]\d+)*/g;
+// a line's subject words, as the pairing weighs them, and its numbers whole, so 9.50 and 2.1 count
+const wordsOf = (text: string) => new Set([...content(text), ...(text.match(NUMBER) ?? [])]);
+const shares = (a: ReadonlySet<string>, b: ReadonlySet<string>) => [...a].some((word) => b.has(word));
 
-// a line that holds the note's whole body, across sentences, and adds no turning word in the sentences it spans: the owner standing by the note
-const SENTENCE = /[.!?\n]+/;
-export type Restated = { at: number; line: number };
-
-/** The newest owner line that restates each note, by target; it reads as a later word on the note, never as a fix. */
-export function restatements(notes: ReadonlyMap<number, NoteLine>, rows: readonly OwnerRow[]): Map<string, Restated> {
-  const said = rows.map((row) => {
-    const words = row.text.split(SENTENCE).flatMap((part, sentence) => lowWords(part).map((word) => ({ word, sentence })));
-    return { at: row.at, words, plain: words.map(({ word }) => word) };
-  });
-  const found = new Map<string, Restated>();
-  for (const note of notes.values()) {
-    const need: string[] = lowWords(body(note.text));
-    if (!need.length) continue;
-    const target = `note:${sha8(note.text)}`;
-    for (const { at, words, plain } of said) {
-      if (at <= (found.get(target)?.at ?? -Infinity)) continue;
-      for (let start = wordsAt(plain, need); start >= 0; start = wordsAt(plain, need, start + 1)) {
-        const [first, last] = [words[start]!.sentence, words[start + need.length - 1]!.sentence];
-        const added = words.filter(({ word, sentence }) => sentence >= first && sentence <= last && !need.includes(word));
-        if (added.some(({ word }) => negates(word))) continue;
-        found.set(target, { at, line: note.at + 1 });
-        break;
-      }
-    }
-  }
-  return found;
+/** The line names a word of the note's subject: it is a later word on that note, whatever it says. */
+export function touches(note: string, line: string): boolean {
+  return shares(wordsOf(body(note)), wordsOf(line));
 }
 
-/** Owner lines paired with notes they may be about, best first: each note's best line before any note's second. */
+/** A line can propose the fix only when it holds a word only the fix has and none only the old note has: "January, not March" keeps January. */
+export function proposes(note: string, by: string, line: string): boolean {
+  const [old, next, words] = [wordsOf(body(note)), wordsOf(body(by)), wordsOf(line)];
+  const gone = [...old].filter((word) => !next.has(word));
+  const added = [...next].filter((word) => !old.has(word));
+  return gone.length > 0 && !gone.some((word) => words.has(word)) && added.some((word) => words.has(word));
+}
+
+/** An owner line after the fix's own line names the note or the fix, so the fix waits for a pass that reads it. */
+export function outdated(item: Pick<FixItem, "text" | "by" | "evidence">, rows: readonly OwnerRow[]): boolean {
+  return rows.some((row) => row.id !== item.evidence.message && row.at >= item.evidence.at && (touches(item.text, row.text) || touches(item.by, row.text)));
+}
+
+/** Each note a line may show wrong, best first, paired with every owner line that names it, oldest first. */
 export async function wrongPairs(raw: string, notes: ReadonlyMap<number, NoteLine>, all: readonly OwnerRow[], signal?: AbortSignal): Promise<Pair[]> {
   const rows = all.filter((row) => !row.guarded);
   if (!rows.length || !notes.size) return [];
@@ -160,7 +144,7 @@ export async function wrongPairs(raw: string, notes: ReadonlyMap<number, NoteLin
         // recall's gate finds the notes that repeat a line; a wrong note says the same subject in other words, so a turning clause also pairs with its top hits
         for (const hit of new Set([...index.gate(terms, hits), ...(turns ? hits.slice(0, NEAR_HITS) : [])])) {
           const note = notes.get(Number(hit.ref.split(":").at(-1)) - 1);
-          if (!note || writtenFrom(note.text, row.text)) continue;
+          if (!note) continue;
           const key = `${note.at}\0${row.id}`;
           const turning = turns ? 2 : turnsRow ? 1 : 0;
           const score = overlap(sentence, note, terms.groups);
@@ -173,16 +157,15 @@ export async function wrongPairs(raw: string, notes: ReadonlyMap<number, NoteLin
     index.close();
   }
   const weighed = (pair: Pair) => pair.score * TURN_WEIGHT[pair.turning]!;
-  const sorted = [...found.values()].sort((a, b) => weighed(b) - weighed(a) || b.row.at - a.row.at);
-  const rounds: Pair[][] = Array.from({ length: ROWS_PER_NOTE }, () => []);
-  const perNote = new Map<number, number>();
-  for (const pair of sorted) {
-    const seen = perNote.get(pair.note.at) ?? 0;
-    if (seen >= ROWS_PER_NOTE) continue;
-    perNote.set(pair.note.at, seen + 1);
-    rounds[seen]!.push(pair);
-  }
-  return rounds.flat();
+  const said = [...all].sort((a, b) => a.at - b.at).map((row) => ({ row, words: wordsOf(row.text) }));
+  // each note with every line from its day on that names it, oldest first; only the newest can propose, so a note goes only when that line is a match
+  const groups = [...new Set([...found.values()].map((pair) => pair.note))].flatMap((note) => {
+    const subject = wordsOf(body(note.text));
+    const lines = said.filter(({ row, words }) => (!note.date || day(row.at) >= note.date) && (found.has(`${note.at}\0${row.id}`) || shares(subject, words))).map(({ row }) => row);
+    const newest = found.get(`${note.at}\0${lines.at(-1)?.id}`);
+    return newest ? [{ newest, pairs: lines.map((row) => found.get(`${note.at}\0${row.id}`) ?? { note, row, sentence: row.text, turning: 0, score: 0 }) }] : [];
+  });
+  return groups.sort((a, b) => weighed(b.newest) - weighed(a.newest) || b.newest.row.at - a.newest.row.at).flatMap((group) => group.pairs);
 }
 
 const excerpt = (pair: Pair) => {
@@ -193,11 +176,12 @@ const excerpt = (pair: Pair) => {
 };
 const clean = (text: string) => text.replace(PROMPT_TAGS, " ");
 
-/** Up to WRONG_PAIRS_MAX pairs inside WRONG_PROMPT_MAX bytes; refs names each sent pair by its M ref. */
+/** Up to WRONG_PAIRS_MAX pairs inside WRONG_PROMPT_MAX bytes, each note with all its lines or none; refs names each sent pair by its M ref. */
 export function wrongPrompt(pairs: readonly Pair[], today: string) {
   const head = [
     `Today is ${today}. You check a bot's notes against lines its owner typed later. Only the owner's lines are evidence.`,
     "Each PAIR is one note (L<n>, with the day it was written when known) and one owner line (M<n>, with its time) that may be about it.",
+    "The pairs for one note come oldest line first. Only the newest line about a note can show it wrong: when it restates the note, takes a change back or says nothing new, the note stands.",
     "Flag a note only when the owner line clearly states that the note is wrong now: same subject, and the two cannot both be true. A line that asks, guesses, jokes, agrees, adds a detail, narrows the scope or talks about something else is not evidence. No evidence is not wrong. When unsure, leave it out.",
     "For each flag: note (L<n>), message (M<n>), quote (3 to 25 words copied exactly from that owner line, the part that shows the note is wrong), fix (the note rewritten as one line that agrees with the quote and keeps the rest of the note).",
     'Reply with JSON only: {"wrong": [{"note": "L9", "message": "M3", "quote": "...", "fix": "..."}]}, or {"wrong": []} when nothing qualifies.',
@@ -207,14 +191,21 @@ export function wrongPrompt(pairs: readonly Pair[], today: string) {
   const body: string[] = [];
   const refs = new Map<string, Pair>();
   let size = Buffer.byteLength(head.join("\n")) + 20;
-  for (const pair of pairs) {
-    if (refs.size >= WRONG_PAIRS_MAX) break;
-    const ref = `M${refs.size + 1}`;
-    const block = `PAIR\nL${pair.note.at + 1} (written ${noted(pair.note, today) ?? "unknown"}): ${clean(pair.note.text)}\n${ref} (${pickStamp(pair.row.at).slice(0, 16)}): ${clean(excerpt(pair))}\n`;
-    if (size + Buffer.byteLength(block) + 1 > WRONG_PROMPT_MAX) continue;
-    size += Buffer.byteLength(block) + 1;
-    body.push(block);
-    refs.set(ref, pair);
+  const groups = new Map<number, Pair[]>();
+  for (const pair of pairs) groups.set(pair.note.at, [...(groups.get(pair.note.at) ?? []), pair]);
+  for (const group of groups.values()) {
+    if (refs.size + group.length > WRONG_PAIRS_MAX) continue;
+    const blocks = group.map((pair, index) => {
+      const ref = `M${refs.size + index + 1}`;
+      return { ref, pair, text: `PAIR\nL${pair.note.at + 1} (written ${noted(pair.note, today) ?? "unknown"}): ${clean(pair.note.text)}\n${ref} (${pickStamp(pair.row.at).slice(0, 16)}): ${clean(excerpt(pair))}\n` };
+    });
+    const bytes = blocks.reduce((sum, block) => sum + Buffer.byteLength(block.text) + 1, 0);
+    if (size + bytes > WRONG_PROMPT_MAX) continue;
+    size += bytes;
+    for (const block of blocks) {
+      body.push(block.text);
+      refs.set(block.ref, block.pair);
+    }
   }
   return { prompt: [...head, ...body, "</pairs>"].join("\n"), refs };
 }
@@ -262,18 +253,16 @@ function typedSpan(text: string, quote: string): string | null {
 }
 
 export type Rejected = { note: number; message: string; why: string };
-export type WrongContext = { all: readonly string[]; today: string; written(note: NoteLine): number | undefined; restated?: ReadonlyMap<string, Restated> };
+/** rows: every owner line the pass read, guarded ones too. */
+export type WrongContext = { all: readonly string[]; today: string; written(note: NoteLine): number | undefined; rows: readonly OwnerRow[] };
 
 /** Flags both judges agree on that pass the code gates, as items; nothing is applied. */
 export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: ReadonlyMap<string, Pair>, context: WrongContext) {
   const items: FixItem[] = [];
   const rejected: Rejected[] = [];
-  // the newest owner line both judges read about each note, or that restates it
-  const lastRead = new Map<string, Restated>(context.restated);
-  for (const pair of refs.values()) {
-    const key = `note:${sha8(pair.note.text)}`;
-    if (pair.row.at > (lastRead.get(key)?.at ?? -Infinity)) lastRead.set(key, { at: pair.row.at, line: pair.note.at + 1 });
-  }
+  // the lines sent with each note, a recall match that names none of its words included
+  const sent = new Map<number, OwnerRow[]>();
+  for (const pair of refs.values()) sent.set(pair.note.at, [...(sent.get(pair.note.at) ?? []), pair.row]);
   for (const one of a) {
     const pair = refs.get(one.message);
     // a flag names the note it was paired with, never one from another pair
@@ -324,17 +313,19 @@ export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: Readon
       op: "fix", target, text: note.text, by, why: "wrong", listOnly: handOnly(note, context.all),
       evidence: { thread: row.thread, message: row.id, at: row.at, quote },
     };
+    // only the newest line about the note or the fix may propose, and only one that drops the old value
+    if (outdated(item, context.rows) || sent.get(note.at)!.some((each) => each.id !== row.id && each.at >= row.at)) {
+      no("a later row is about it");
+      continue;
+    }
+    if (!proposes(note.text, by, row.text)) {
+      no("row still holds the old value or not the new one");
+      continue;
+    }
     if (held >= 0) items[held] = item;
     else items.push(item);
   }
-  // a later line about the note that no agreed flag backs takes the fix back, as it would in a newer pass
-  const backed = items.filter((item) => {
-    const last = lastRead.get(item.target)!;
-    if (item.evidence.at >= last.at) return true;
-    rejected.push({ note: last.line, message: item.evidence.message, why: "a later row takes it back" });
-    return false;
-  });
-  return { items: backed, rejected };
+  return { items, rejected };
 }
 
 /** When Auto Notes saved this note: the first receipt on its stamp day that names it. */
@@ -345,17 +336,17 @@ export function writtenAt(saved: readonly SavedNotes[]) {
   };
 }
 
-/** judged: the notes both judges read against a newer owner line this pass, fixed or not, and the notes a newer owner line restates. */
+/** judged: the notes both judges read against a newer owner line this pass, fixed or not. */
 export type WrongCheck = { state: "checked" | "no-model"; items: FixItem[]; judged: string[]; pairs: number; bytes: number; logs: Partial<Record<keyof DreamJudges, JudgeLog>>; reason?: string };
 
 /** One pass: pair, ask both judges once, keep what both agree on and the gates pass. */
 export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]; saved: readonly SavedNotes[]; judges: DreamJudges; today: string; signal: AbortSignal; now(): number }): Promise<WrongCheck> {
   const logs: WrongCheck["logs"] = {};
   const notes = fixTargets(input.raw);
-  const restated = restatements(notes, input.rows);
   const { prompt, refs } = wrongPrompt(await wrongPairs(input.raw, notes, input.rows, input.signal), input.today);
   const none: FixItem[] = [];
-  const base = { items: none, judged: [...restated.keys()], pairs: refs.size, bytes: refs.size ? Buffer.byteLength(prompt) : 0, logs };
+  const judged: string[] = [];
+  const base = { items: none, judged, pairs: refs.size, bytes: refs.size ? Buffer.byteLength(prompt) : 0, logs };
   if (!refs.size) return { state: "checked", ...base };
   const { claude, gemini } = input.judges;
   if (!claude || !gemini) return { state: "no-model", ...base, reason: `${[!claude && "claude", !gemini && "gemini"].filter(Boolean).join(" and ")} judge unavailable` };
@@ -379,8 +370,7 @@ export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]
     return { state: "no-model", ...base, reason: `${failed === a ? "claude" : "gemini"} judge ${failed.status === "rejected" ? "failed" : "reply unreadable"}` };
   }
   const all = input.raw.split("\n").map(plain);
-  const judged = [...new Set([...restated.keys(), ...[...refs.values()].map((pair) => `note:${sha8(pair.note.text)}`)])];
-  return { state: "checked", ...base, judged, items: planWrong(a.value, b.value, refs, { all, today: input.today, written: writtenAt(input.saved), restated }).items };
+  return { state: "checked", ...base, judged: [...new Set([...refs.values()].map((pair) => `note:${sha8(pair.note.text)}`))], items: planWrong(a.value, b.value, refs, { all, today: input.today, written: writtenAt(input.saved), rows: input.rows }).items };
 }
 
 // the lines that read as the fix, and the heading above one

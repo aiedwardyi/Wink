@@ -456,11 +456,11 @@ describe("dreaming, dry", () => {
       writeMemoryFile(bot, raw);
       typed.set("t1", [
         said("m1", NOW - DAY, "For the main account plan leave it. It lasts till march and thats my main account anyways."),
-        said("m2", NOW - DAY + 60_000, "its called groups not rooms we removed that name and changed it"),
+        said("m2", NOW - DAY + 60_000, "say groups instead in every user-facing string, we removed that name"),
       ]);
       generator = flags([
         { note: line(OLD), quote: "It lasts till march", fix: NEW },
-        { note: line(RULE), quote: "its called groups not rooms", fix: "- ROOMS WORD (11-20): say groups, not rooms, and Group Details to them in every user-facing string." },
+        { note: line(RULE), quote: "say groups instead in every user-facing string", fix: "- GROUPS WORD (11-20): say groups and Group Details to them in every user-facing string." },
       ]);
     });
 
@@ -741,6 +741,97 @@ describe("dreaming, dry", () => {
       expect(history()).toBe("");
     });
 
+    const TWO = "- The main account's plan is billed monthly. It ends in January (noted 2026-11-20)";
+    // every withdrawal, restatement, punctuation, quote and "not X" wording the reviews found
+    const WITHDRAWALS: [string, string][] = [
+      [OLD, "The main account plan ends in January after all, not March. January was right."],
+      [OLD, "The main account plan ends in January after all, please disregard April and March."],
+      [OLD, "Please disregard March and April. The main account's plan ends in January."],
+      [OLD, "Disregard March and April, the main account's plan ends in January for now"],
+      [OLD, "The main account's plan ends in January, not March or April."],
+      [OLD, "The main account's plan ends in January, not March"],
+      [OLD, "Please disregard March and April. 'The main account's plan ends in January.'"],
+      [OLD, "'The main account's plan ends in January.'"],
+      [OLD, "“The main account's plan ends in January.” Not March, not April."],
+      [OLD, "Please disregard March and April."],
+      [OLD, "Not March or April, it's January."],
+      [TWO, "Please disregard March and April. The main account's plan is billed monthly. It ends in January."],
+      [TWO, "March and April are both wrong. The main account's plan is billed monthly. It ends in January."],
+      [TWO, "March and April are both wrong: The main account's plan is billed monthly. It ends in January."],
+      [TWO, "The main account's plan is billed monthly. It ends in January, not March or April."],
+      ["- The main U.S. account's plan ends in January (noted 2026-11-20)", "The main U.S. account's plan ends in January, not March or April."],
+      ["- The main account on version 2.1 ends in January (noted 2026-11-20)", "The main account on version 2.1 ends in January"],
+      ["- The main account costs 9.50 a month through January (noted 2026-11-20)", "The main account costs 9.50 a month through January, not March."],
+      [TWO, "The main account's plan is billed monthly. It ends in January"],
+      [TWO, "March is wrong: The main account's plan is billed monthly. It ends in January."],
+      [TWO, "Please disregard March and April. Keep the original: 'The main account's plan is billed monthly. It ends in January'."],
+      [TWO, 'Please disregard March and April. Keep the original: "The main account\'s plan is billed monthly. It ends in January".'],
+      [OLD, "No, disregard March and April, The main account's plan ends in January."],
+      [OLD, "Please disregard March and April, The main account's plan ends in January."],
+      ["- The main U.S. account's plan ends in January (noted 2026-11-20)", "The main U.S. account's plan ends in January"],
+      ["- The main U.S. account on version 2.1 costs 9.50 a month through January (noted 2026-11-20)", "Please disregard March and April. The main U.S. account on version 2.1 costs 9.50 a month through January."],
+      ["- The main U.S. account on version 2.1 costs 9.50 a month through January (noted 2026-11-20)", "Please disregard March and April.\r\nThe main U.S. account on version 2.1 costs 9.50 a month through January."],
+    ];
+    // judges that read every line about the note as a fix to the last month it names
+    const eager = (note: string): NoteGenerator => async (prompt) => JSON.stringify({
+      wrong: [...prompt.matchAll(/^PAIR\n(L\d+) \(written [^)]*\): ([^\n]+)\n(M\d+) \([^)]*\): ([^\n]+)/gm)].flatMap(([, ref, old, message, row]) => {
+        const month = /april/i.test(row!) ? "April" : /march/i.test(row!) ? "March" : null;
+        return old === note && month ? [{ note: ref, message, quote: row!.trim(), fix: note.replace("January", month) }] : [];
+      }),
+    });
+    it.each(WITHDRAWALS.flatMap(([note, withdraw]) => (["waiting", "waiting, then April", "same pass"] as const).map((when) => [when, withdraw, note] as const)))("writes no withdrawn value, %s: %s", async (when, withdraw, note) => {
+      const text = raw.replace(OLD, note);
+      writeMemoryFile(bot, text);
+      mkdirSync(join(dreamedPath(bot), ".."), { recursive: true });
+      const archive = "# Dreamed\n\n## 2026-11-01 (run 0badc0de)\n- An older moved note\n";
+      writeFileSync(dreamedPath(bot), archive);
+      const april = "The main account plan ends in April now, instead of March.";
+      const lines = [said("m1", NOW - DAY, "For the main account plan leave it. It lasts till march and thats my main account anyways.")];
+      if (when === "same pass") lines.push(said("withdraw", NOW - DAY + 120_000, withdraw));
+      typed.set("t1", lines);
+      generator = eager(note);
+      await quiet();
+      if (when !== "same pass") {
+        expect(plans()[0]!.fixes!.items.find((item) => item.text === note)?.by).toBe(note.replace("January", "March"));
+        typed.set("t1", [...(when === "waiting, then April" ? [said("april", Date.now() + 90_000, april)] : []), said("withdraw", Date.now() + 180_000, withdraw)]);
+        sleep.onSettled(bot);
+        await quiet(SLEEP_GAP_MS);
+      }
+      for (const plan of plans()) for (const item of plan.fixes?.items ?? []) start().dream.fix(bot, plan.runId, item.target, false);
+      expect(memoryFileRaw(bot)).toBe(text);
+      expect(readFileSync(dreamedPath(bot), "utf8")).toBe(archive);
+    });
+
+    it("refuses an OK once a newer line names the note or the fix, and keeps the item out of date", async () => {
+      await quiet();
+      typed.get("t1")!.push(said("later", Date.now() + 1000, "Please disregard March."));
+      expect(approve(false)).toEqual({ ok: false, error: "outdated" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+      expect(history()).toBe("");
+      expect(start().dream.latest(bot)!.dream.fixes!.items.find((item) => item.text === OLD)!.outdated).toBe(Date.now());
+      typed.get("t1")!.pop();
+      expect(approve(false)).toEqual({ ok: false, error: "outdated" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+    });
+
+    it.each([
+      ["a line about the note cut whole as sensitive", said("later", NOW + SLEEP_IDLE_MS + 1000, "The main account password is SunnyHarbor! now")],
+      ["its own line edited to hold the old value", said("m1", NOW - DAY, "For the main account plan leave it. It lasts till march or January.")],
+    ])("refuses an OK after %s", async (_, change) => {
+      await quiet();
+      const rows = typed.get("t1")!.filter((each) => each.id !== change.id);
+      typed.set("t1", [...rows, change].sort((a, b) => a.at - b.at));
+      expect(approve(false)).toEqual({ ok: false, error: "outdated" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+    });
+
+    it("takes an OK past a newer line about something else", async () => {
+      await quiet();
+      typed.get("t1")!.push(said("other", Date.now() + 1000, "The weekly sync moved to Thursday afternoons."));
+      expect(approve(false).ok).toBe(true);
+      expect(memoryFileRaw(bot)).toBe(raw.replace(OLD, NEW));
+    });
+
     it("keeps a waiting fix through a pass that checked nothing about its note", async () => {
       await quiet();
       typed.set("t1", [said("other", Date.now() + 1000, "The weekly sync moved to Thursday afternoons.")]);
@@ -781,10 +872,10 @@ describe("dreaming, dry", () => {
       const second = "- The app uses a blue theme (noted 2026-11-20)";
       const two = `${raw}${second}\r\n`;
       writeMemoryFile(bot, two);
-      typed.get("t1")!.push(said("m3", NOW - DAY + 120_000, "For the app theme use green, not blue, from now on."));
+      typed.get("t1")!.push(said("m3", NOW - DAY + 120_000, "For the app theme use green from now on."));
       generator = flags([
         { note: line(OLD), quote: "It lasts till march", fix: NEW },
-        { note: `L${two.split("\r\n").indexOf(second) + 1}`, quote: "use green, not blue", fix: second.replace("blue", "green") },
+        { note: `L${two.split("\r\n").indexOf(second) + 1}`, quote: "use green from now on", fix: second.replace("blue", "green") },
       ]);
       await quiet();
       expect(plans()[0]!.fixes!.items.filter((item) => !item.listOnly).map((item) => item.text).sort()).toEqual([OLD, second].sort());

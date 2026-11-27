@@ -68,6 +68,15 @@ describe("cleanup copy", () => {
     await act(async () => buttons[1]!.click());
     expect(onFix.mock.calls).toEqual([["note:a", false], ["note:c", true]]);
   });
+  it("says a fix an OK found out of date changed nothing, with no OK on it", async () => {
+    const fix = { op: "fix" as const, target: "note:a", text: "- Plan ends in January (noted 2026-11-20)", by: "- Plan ends in March (noted 2026-11-20)", why: "wrong" as const, listOnly: false, evidence: { thread: "t", message: "m", at: new Date(2026, 10, 24).getTime(), quote: "It lasts till march" }, outdated: 1 };
+    const dream = { mode: "dry" as const, notes: { state: "checked" as const, items: [] }, asks: { threads: 1, skipped: 0, unchecked: 0, items: [] }, fixes: { state: "checked" as const, through: run.at, items: [fix] }, runUntil: run.at, dropUntil: run.at };
+    await mount(createElement(MemoryCleanRow, { run: { ...run, dream }, onUndo: vi.fn(), onFix: vi.fn() }));
+    expect(host.textContent).toContain("Would move 0 notes and close 0 to-dos.");
+    await act(async () => host.querySelector("button")!.click());
+    expect(host.querySelector("li")!.textContent).toContain("Out of date: you wrote about this note since, so nothing changed.");
+    expect(host.querySelectorAll("li button")).toHaveLength(0);
+  });
   it.each(["en", "ko"] as const)("says an OK'd fix tidied the notes in %s, and a dry run with none changed nothing", async (locale) => {
     applyLocale(locale);
     const fix = { op: "fix" as const, target: "note:a", text: "- Plan ends in January (noted 2026-11-20)", by: "- Plan ends in March (noted 2026-11-20)", why: "wrong" as const, listOnly: false, evidence: { thread: "t", message: "m", at: new Date(2026, 10, 24).getTime(), quote: "It lasts till march" } };
