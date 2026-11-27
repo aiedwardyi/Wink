@@ -22,10 +22,12 @@ import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { composeUserTurnPrompt, inertMentions, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { _resetSteerQueue, foldQueuedSends, queueMark } from "./steer-queue.ts";
 import { Store } from "./store.ts";
-import { asksNudge } from "./task-asks.ts";
+import { asksNudge, isStatusTurn } from "./task-asks.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { recordEvents } from "./testing/events.ts";
 import { removeTestData } from "./testing/test-home.ts";
+import { isRecoveringPacket, lastUserInstruction, unsettledRequest } from "./task-recovery-flush.ts";
+import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket } from "./task-state-fold.ts";
 import * as turns from "./turn-context.ts";
 import { currentTurnTrace, tracePart } from "./turn-timing.ts";
 
@@ -58,6 +60,15 @@ const rowJavascript = ts.transpileModule(`function row(scope) { with (scope) {
   return { opts, userMessage };
 } }`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None } }).outputText;
 const joinedRow = new Function(`${rowJavascript}\nreturn row;`)();
+// The task record and the unfinished request
+const recorded = section("  const priorTaskPacket = taskPacketForWrite(threadId);", "\n  // the model context below reads the whole chat");
+const record = section("  let storedTaskRecord = taskPacketForWrite(threadId);", "\n  const catalogWindow =");
+const recordJavascript = ts.transpileModule(`function rec(scope) { with (scope) {
+  ${recorded}
+  ${record}
+  return { taskRecord, durableTaskRecordText, unsettled, recovering, recoveryLatestUserText };
+} }`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None } }).outputText;
+const taskRecordOf = new Function(`${recordJavascript}\nreturn rec;`)();
 
 const fakeCli = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-acp-cli.ts");
 const CANARY = "host-only file: canary GJR-7731";
@@ -106,15 +117,29 @@ const rig = async () => {
   const bot = store.createBot({}, { seedMessages: false });
   const threadId = bot.threadId;
   const ref = { sessions: new GuestSessions() };
-  const send = async (who: "owner" | "guest", typed: string) => {
+  const packets = new Map<string, Parameters<typeof recordTaskCompletion>[0]>();
+  const settle = (cursor: string) => {
+    store.markTaskDispatched(bot.id, threadId, instanceId, model);
+    store.setResumeCursor(bot.id, instanceId, cursor, threadId);
+    store.markResumeSeeded(bot.id, threadId, { instanceId, cursor, compactionId: null });
+  };
+  const answer = () => store.appendMessage(threadId, { role: "bot", kind: "text", text: "Answer.", from: { botId: bot.id, name: "Pete", color: bot.color } });
+  const send = async (who: "owner" | "guest", typed: string, ended: "ok" | "interrupted" | "failed" = "ok") => {
     const prompt = who === "guest" ? `"Mina" asked you: ${inertMentions(typed)}` : `"Peter" asked you: ${typed}`;
     const { opts, userMessage } = joinedRow({
       store, bot, threadId, text: prompt, typed, readOnly: who === "guest", guest: who === "guest", randomUUID,
       joinedRoomThreads: new Set(), joinedGuestThreads: new Set(), startTurn: (_botId: string, _text: string, startOpts: unknown) => startOpts,
     });
-    const activeMessages = store.activePath(threadId);
+    const task = store.taskByThread(bot.id, threadId)!;
     const skipTranscript = new Set([userMessage.id]);
-    const prepared = await context.prepareModelContext({ messages: activeMessages, contextWindow: 200_000, taskRecordText: "", excludeIds: skipTranscript, userName: "Peter", referenceMessages: store.messagesFor(threadId) });
+    const rec = taskRecordOf({
+      store, opts, text: prompt, userMessage, task, bot, threadId, skipTranscript, commsDepth: 0, modelContextWindow: 200_000,
+      taskPacketForWrite: (id: string) => packets.get(id) ?? null, persistTaskPacket: (packet: Parameters<typeof recordTaskCompletion>[0]) => (packets.set(threadId, packet), packet),
+      isRecoveringPacket, recordTaskInstruction, seedTaskResumePacket, lastUserInstruction, unsettledRequest, isStatusTurn, taskRecordBlock: turns.taskRecordBlock,
+      closeMergedAsks: () => ({ shown: (packet: unknown) => packet }), messagesBeforeSummary: store.activePath(threadId),
+    });
+    const activeMessages = store.activePath(threadId);
+    const prepared = await context.prepareModelContext({ messages: activeMessages, contextWindow: 200_000, taskRecordText: rec.durableTaskRecordText, excludeIds: skipTranscript, userName: "Peter", referenceMessages: store.messagesFor(threadId) });
     if (prepared.status !== "ready") throw new Error(prepared.status);
     rmSync(out, { force: true });
     const recorder = recordEvents(instance.adapter);
@@ -125,9 +150,9 @@ const rig = async () => {
       compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined, nativeAt: null,
       currentTurnEpoch: () => 1, epoch: 1, claimMark: queueMark(), isSendCancelled: () => false,
       clearUnattended: () => {}, resumePaneWakes: () => {},
-      rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: prompt,
+      rewound: false, recovering: rec.recovering, unsettled: rec.unsettled, recoveryLatestUserText: rec.recoveryLatestUserText,
       opts, cfg: {}, reactions: {}, guestSessions: ref.sessions, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, modelContextWindow: 200_000, closes: { notes: () => [] },
-      taskRecord: undefined, durableTaskRecordText: "",
+      taskRecord: rec.taskRecord ?? undefined, durableTaskRecordText: rec.durableTaskRecordText,
       providerReload: { started: () => instance }, aboutYouPrompt: () => "", roomTaskThreads: () => new Set([threadId]), notOwnerChats: () => new Set(), privateWorkspace: false, opensHostFiles: () => false,
       accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
       paneNoteTurnThreads: new Set(), routineTurnThreads: new Set(),
@@ -144,12 +169,11 @@ const rig = async () => {
     });
     expect(await recorder.until((e) => e.type === "turn.completed" && e.threadId === threadId)).toMatchObject({ ok: true });
     const sent = sendTurn.mock.calls.at(-1)![0] as SendTurnInput;
-    const cursor = (sent.resumeCursor as string | undefined) ?? `${who}-session-${sendTurn.mock.calls.length}`;
-    store.markTaskDispatched(bot.id, threadId, instanceId, model);
-    store.setResumeCursor(bot.id, instanceId, cursor, threadId);
-    store.markResumeSeeded(bot.id, threadId, { instanceId, cursor, compactionId: null });
-    store.appendMessage(threadId, { role: "bot", kind: "text", text: `Answer ${sendTurn.mock.calls.length}.`, from: { botId: bot.id, name: "Pete", color: bot.color } });
-    return { read: existsSync(out) ? readFileSync(out, "utf8") : null, sent };
+    settle((sent.resumeCursor as string | undefined) ?? `${who}-session-${sendTurn.mock.calls.length}`);
+    // a Stop, an engine error or a quit leaves the turn unsettled, as index.ts records it
+    const reply = ended === "ok" ? answer() : undefined;
+    packets.set(threadId, recordTaskCompletion(packets.get(threadId)!, { ok: ended !== "failed", ...(ended === "interrupted" && { interrupted: true }), reply: reply?.text ?? "", messageId: reply?.id, now: Date.now(), turnsAtWrite: 0 }));
+    return { read: existsSync(out) ? readFileSync(out, "utf8") : null, sent, unsettled: rec.unsettled as string };
   };
   return { send, restart: () => { ref.sessions = new GuestSessions(); }, ask: `@Pete-Coder what does @notes.txt say? and @${elsewhere}` };
 };
@@ -172,11 +196,31 @@ it.each([["@Pete-Coder thanks", 0], ["@Pete-Coder what does @notes.txt say?", 1]
   expect((await r.send("guest", r.ask)).read).toBeNull();
   setEnv("FAKE_ACP_LOAD_FAILS", "1");
   const owner = await r.send("owner", typed);
-  // the owner's tools read notes.txt once on their own; each live @notes.txt inlines one more copy
-  expect(owner.read?.split(CANARY).length).toBe(2 + own);
+  // the owner's tools read notes.txt once on their own; a live @notes.txt, in the text or the task record, inlines more
+  expect((owner.read?.split(CANARY).length ?? 0) > 2).toBe(own === 1);
   expect(owner.read).not.toContain("outside canary");
   expect([owner.sent.text, owner.sent.resumeFallback?.text, ...(owner.sent.transcript ?? []).map((line) => line.text)].some((text) => text?.includes(inertMentions(r.ask)))).toBe(true);
   expect(owner.sent.text).toContain(typed);
+}, 30_000);
+
+// GATE-REVIEW-2245A must-fix 1: a guest turn that never settles rides the owner's next turn as its unfinished request
+it.each(["interrupted", "failed"] as const)("an owner turn after a guest turn that %s carries the guest's words with no live @", async (ended) => {
+  const r = await rig();
+  expect((await r.send("guest", r.ask, ended)).read).toBeNull();
+  const owner = await r.send("owner", "@Pete-Coder thanks");
+  expect(owner.sent.resumeCursor).toBeDefined();
+  expect(owner.unsettled).toBe(inertMentions(r.ask));
+  expect(owner.sent.text).toContain(`Unfinished request: ${inertMentions(r.ask)}`);
+  expect(owner.read?.split(CANARY).length).toBe(2);
+  expect(owner.read).not.toContain("outside canary");
+}, 30_000);
+
+it("an owner's own unfinished request still carries as typed", async () => {
+  const r = await rig();
+  await r.send("owner", r.ask, "interrupted");
+  const owner = await r.send("owner", "@Pete-Coder go on");
+  expect(owner.unsettled).toBe(r.ask);
+  expect(owner.read).toContain("outside canary");
 }, 30_000);
 
 it("hands every engine send and steer in index.ts through guestTurnInput", () => {
