@@ -252,6 +252,19 @@ describe("sends while a chat catches up", () => {
     expect(syncHold.incoming("bot", [])).toBe(false);
   });
 
+  it("drops a deleted peer head from incoming on the next successful listing", async () => {
+    const h = await googlePC();
+    const { syncHold } = await import("./sync-hold.ts");
+    const { drivePathHash, encodeDrivePath } = await import("./drive-mirror.ts");
+    h.drive.onDownload = async () => { throw new Error("download dropped"); };
+    const file = h.drive.add(encodeDrivePath(h.headPath), { ph: drivePathHash(h.headPath) }, Buffer.from(h.head), [h.drive.root().id]);
+    await h.google.kick();
+    expect(syncHold.incoming("bot", [])).toBe(true);
+    h.drive.trash(file.id);
+    await h.google.kick();
+    expect(syncHold.incoming("bot", [])).toBe(false);
+  });
+
   it("releases a listed Google head on stop when the data folder uses a junction", async () => {
     const early = await boot(true);
     const dataDir = join(root, "linked-data");

@@ -136,7 +136,10 @@ export const syncHold = {
     for (const head of heads) {
       // A listed head this pull refused waits again, unless an earlier pull applied these bytes.
       if (head.refused) {
-        if (hashes.get(head.path) !== head.hash && peers.get(scope.threadId)?.get(`${key}/${head.path}`)?.feed === head.hash) pending.get(key)?.set(head.path, head.hash);
+        if (hashes.get(head.path) !== head.hash && peers.get(scope.threadId)?.get(`${key}/${head.path}`)?.feed === head.hash) {
+          pending.get(key)?.set(head.path, head.hash);
+          outstanding.get(key)?.set(head.path, head.hash);
+        }
         continue;
       }
       notePeer(scope.threadId, `${key}/${head.path}`, "pull", head.hash);
@@ -169,7 +172,7 @@ export const syncHold = {
   /** Whether Drive listed a peer update to this bot's chats, a chat new here included, that the store has not taken in. */
   incoming(botSyncId: string, threadIds: readonly string[]): boolean {
     if (!enabled()) return false;
-    for (const heads of [...pending.values(), ...outstanding.values()]) {
+    for (const heads of outstanding.values()) {
       if ([...heads.keys()].some((path) => botFor(path) === botSyncId)) return true;
     }
     return threadIds.some((threadId) => behind(threadId) === true);
