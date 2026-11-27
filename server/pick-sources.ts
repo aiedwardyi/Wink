@@ -304,7 +304,7 @@ const sourcesOf = (entry: PickEntry) => new Set([
   ...entry.files,
 ]);
 
-/** Picks on different questions that claim one answer or screenshot, less the one pick bound to it by its own message id and action time, when only one is. */
+/** Picks on different questions that claim one answer or screenshot, less the picks bound to it by its own message id and action time: one, or one reply's picks on distinct cards. */
 export function sharedSources(entries: readonly PickEntry[]): Set<PickEntry> {
   const claims = new Map<string, PickEntry[]>();
   for (const entry of entries) {
@@ -315,7 +315,9 @@ export function sharedSources(entries: readonly PickEntry[]): Set<PickEntry> {
   for (const claimants of claims.values()) {
     if (new Set(claimants.map(({ key }) => pickKey(key))).size < 2) continue;
     const exact = claimants.filter((entry) => entry.binding === "verified" && entry.messageId && entry.at !== undefined);
-    for (const entry of claimants) if (exact.length !== 1 || entry !== exact[0]) shared.add(entry);
+    const oneReply = exact.every((entry) => entry.questionId && entry.messageId === exact[0]!.messageId)
+      && new Set(exact.map(({ questionId }) => questionId)).size === exact.length;
+    for (const entry of claimants) if (!(exact.length === 1 || oneReply) || !exact.includes(entry)) shared.add(entry);
   }
   return shared;
 }

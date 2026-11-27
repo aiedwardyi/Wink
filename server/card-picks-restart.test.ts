@@ -674,4 +674,19 @@ describe("every way to answer a card files it under that card", () => {
     expect(picks.map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", card.id]]);
     expect(prompt).not.toContain("SQLite");
   });
+  it("keeps both cards one reply with a screenshot answered, so a later revision replaces its own card", () => {
+    const at = Date.now() - 5 * MINUTE;
+    const bound = (questionId: string, messageId: string, when: number) => ({ at: when, messageId, questionId, thread: "t", files: ["attachments/shot.png"], overPictures: [], named: true });
+    const said = "Postgres for billing, Staging for the preview";
+    // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+    const both = applyPicks("", [
+      { kind: "pick", at, key: "Billing database", picked: said, said, typed: true, binding: bound("db", "both", at) as never },
+      { kind: "pick", at, key: "Preview environment", picked: said, said, typed: true, binding: bound("env", "both", at) as never },
+    ])!.text;
+    expect(currentPicks(both).map(({ questionId, files }) => [questionId, files])).toEqual([["db", ["attachments/shot.png"]], ["env", ["attachments/shot.png"]]]);
+    const later = at + MINUTE;
+    // SAFETY: as above.
+    const revised = applyPicks(both, [{ kind: "pick", at: later, key: "Billing DB", picked: "MySQL", said: "MySQL", typed: true, binding: { ...bound("db", "later", later), files: [] } as never }])!.text;
+    expect(currentPicks(revised).map(({ picked, questionId }) => [picked, questionId])).toEqual([[said, "env"], ["MySQL", "db"]]);
+  });
 });
