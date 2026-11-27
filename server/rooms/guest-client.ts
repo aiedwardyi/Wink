@@ -33,6 +33,7 @@ import {
   myRoomBots,
   saveMyRoomBot,
   markJoinedFilesDeleted,
+  moveJoined,
   readJoined,
   resetJoined,
   removeJoined,
@@ -172,6 +173,13 @@ export interface GuestClientDeps {
 export function roomCodeHost(code: string, bases: ReadonlyArray<string | null>): string | null {
   const host = CODE.exec(code)?.[1];
   return host && bases.some((base) => base && labelFromHost(host, base) !== null) ? host : null;
+}
+
+/** `host`'s label under each other base: where the same PC answers once its relay name moves. */
+export function movedHosts(host: string, bases: ReadonlyArray<string | null>): string[] {
+  const label = host.split(".", 1)[0]!;
+  if (!LABEL_RE.test(label)) return [];
+  return [...new Set(bases.flatMap((base) => (base && labelFromHost(host, base) === null ? [hostFor(label, base)] : [])))];
 }
 
 const failed = (status: number, error: string): { ok: false; status: number; error: string } => ({ ok: false, status, error });
@@ -439,7 +447,8 @@ export class GuestClient {
     if (suppliedCode !== undefined && typeof suppliedCode !== "string") return failed(400, "bad-code");
     const code = typeof suppliedCode === "string" ? suppliedCode : joinedCode(roomId);
     if (!code) return failed(409, "no-saved-code");
-    if (roomCodeHost(code.trim(), this.deps.bases()) !== room.relayHost) return failed(400, "bad-code");
+    const host = roomCodeHost(code.trim(), this.deps.bases());
+    if (!host || (host !== room.relayHost && !movedHosts(room.relayHost, this.deps.bases()).includes(host))) return failed(400, "bad-code");
     this.changing.add(roomId);
     try {
       return await this.joinNow(code, roomId);
@@ -735,6 +744,12 @@ export class GuestClient {
     sync.timer.unref();
   }
 
+  /** The saved host, and after each failed try the same PC under the next current base. */
+  private dialed(saved: string, sync: Sync): string {
+    const hosts = [saved, ...movedHosts(saved, this.deps.bases())];
+    return hosts[sync.tries % hosts.length]!;
+  }
+
   /** One request at a time per room. False when the room ended or the snapshot could not be had. */
   private snapshot(roomId: string, sync: Sync): Promise<boolean> {
     sync.snapshotting ??= this.loadSnapshot(roomId, sync).finally(() => {
@@ -746,11 +761,16 @@ export class GuestClient {
   private async loadSnapshot(roomId: string, sync: Sync): Promise<boolean> {
     const creds = joinedKey(roomId);
     if (!creds || sync.stopped) return false;
-    const reply = await this.call(creds.relayHost, "GET", `/room/v1/rooms/${roomId}/snapshot?with=bots`, creds.key);
+    const host = this.dialed(creds.relayHost, sync);
+    const reply = await this.call(host, "GET", `/room/v1/rooms/${roomId}/snapshot?with=bots`, creds.key);
     if (sync.stopped) return false;
     if (!reply.ok && reply.status === 401) this.end(roomId, creds.key);
     const snapshot = reply.ok ? snapshotSchema.safeParse(reply.value) : null;
     if (!snapshot?.success) return false;
+    if (host !== creds.relayHost) {
+      moveJoined(roomId, creds.key, host);
+      sync.tries = 0;
+    }
     addJoinedEntries(roomId, snapshot.data.entries, snapshot.data.head);
     setJoinedState(roomId, snapshot.data.state);
     sync.needsSnapshot = false;
@@ -767,14 +787,15 @@ export class GuestClient {
     const head = joinedCursor(roomId);
     const { silenceMs = 45_000 } = this.deps.timing ?? {};
     const https = this.deps.https ?? {};
+    const host = this.dialed(creds.relayHost, sync);
     const req = request({
       method: "GET",
       protocol: "https:",
-      hostname: creds.relayHost,
-      servername: creds.relayHost,
+      hostname: host,
+      servername: host,
       port: https.port ?? 443,
       path: `/room/v1/rooms/${roomId}/stream?after=${head}&with=bots&deleted=${joinedDeletedCount(roomId)}`,
-      headers: { host: creds.relayHost, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-wink-device": this.deps.joiner().device, "x-orbit-room-files": "1", "x-orbit-room-media": "1" },
+      headers: { host, accept: "text/event-stream", authorization: `Bearer ${creds.key}`, "x-wink-device": this.deps.joiner().device, "x-orbit-room-files": "1", "x-orbit-room-media": "1" },
       ca: https.ca,
       lookup: https.lookup,
       agent: false,
@@ -796,6 +817,7 @@ export class GuestClient {
         else req.destroy();
         return;
       }
+      if (host !== creds.relayHost) moveJoined(roomId, creds.key, host);
       sync.tries = 0;
       this.setLink(roomId, sync, "live");
       if (!sync.stopped) void this.nameChanged(roomId);

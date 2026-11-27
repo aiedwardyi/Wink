@@ -1,14 +1,17 @@
-// The idle tidy ("sleep"): once a bot has been quiet a while, merge duplicate notes and move a note a newer one
-// replaced into a monthly history file. It only ever removes lines from MEMORY.md, so it cannot bring back what the user deleted.
+// The idle tidy ("sleep"): once a bot has been quiet a while, two judges of different makers flag repeats, replaced notes and
+// past one-offs, and a line both flag that passes the code gates moves into memory/dreamed.md, where recall still finds it.
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
 import { renameRetrying, writeFileAtomic } from "./atomic.ts";
+import { anchored, DREAMED_FILE, DREAMED_HEAD, dreamedEntry, dreamedKeys, dreamedPath, markUndone, putBack, type ArchivedMove } from "./dream-archive.ts";
+import { agreed, dreamPrompt, parseDream, planDream, type DreamJudges, type Flag } from "./dream-judge.ts";
 import { decisionSpan, type NoteGenerator } from "./memory-pass.ts";
+import type { DreamAsks, DryNotes } from "./dream-live.ts";
 import { pickStamp } from "./picks.ts";
-import { loadedMemory, memoryFileRaw, readMemoryFile, workspaceDir } from "./workspace.ts";
+import { loadedMemory, memoryFileRaw, rawRevision, readMemoryFile, saveMemoryFile, workspaceDir } from "./workspace.ts";
 
 export const SLEEP_IDLE_MS = 30 * 60_000;
 export const SLEEP_GAP_MS = 6 * 60 * 60_000;
@@ -16,23 +19,28 @@ export const SLEEP_TIMEOUT_MS = 120_000;
 const PROMPT_NOTES_MAX = 32_000;
 const MOVES_MAX = 20;
 const STATE_FILE = "memory-sleep.json";
-// beside memory/, so the history is never loaded, synced, listed or recalled
+// where older builds moved lines; its records still mark what someone put back
 const HISTORY_DIR = "memory-history";
-const HISTORY_HEAD =
-  "# Memory history\n\nLines the idle tidy moved out of MEMORY.md, oldest first. Nothing here loads into the prompt; copy a line back to MEMORY.md to restore it.\n";
 
 const refsSchema = z.array(z.string()).max(MOVES_MAX);
 const tidySchema = z.object({
   duplicates: z.array(z.object({ keep: z.string(), drop: refsSchema })).max(MOVES_MAX).nullish(),
   disagree: z.array(z.tuple([z.string(), z.string()])).max(MOVES_MAX).nullish(),
 });
-const botStateSchema = z.object({ digest: z.string().optional(), at: z.number().optional() });
+const movedSchema = z.object({ at: z.number(), text: z.string(), by: z.string(), why: z.enum(["duplicate", "replaced", "expired"]), after: z.string().nullable(), cr: z.boolean(), left: z.number() });
+const runSchema = z.object({ runId: z.string(), at: z.number(), beforeBytes: z.number(), afterBytes: z.number(), moves: z.array(movedSchema), undoneAt: z.number().optional() });
+const botStateSchema = z.object({ digest: z.string().optional(), at: z.number().optional(), run: runSchema.optional() });
 const stateSchema = z.object({ bots: z.record(z.string(), botStateSchema) });
 
 type BotState = z.infer<typeof botStateSchema>;
+type JudgeLog = { input: number; output: number; ms: number };
+export type UndoResult = { ok: true; revision: string; restored: number; skipped: number } | { ok: false; error: "no-run" | "not-newest" | "undone" | "busy" };
+export type MemoryCleanRun = {
+  runId: string; at: number; files: string[]; beforeBytes: number; afterBytes: number; merged: number; replaced: number; moved: number; undoneAt: number | null; undoable: boolean;
+};
 /** section: the index of the heading or label the note sits under, -1 for none; alone: no line under it belongs to it. */
 export type NoteLine = { at: number; text: string; date?: string; section: number; alone: boolean };
-export type Why = "duplicate" | "replaced";
+export type Why = "duplicate" | "replaced" | "expired";
 export type Move = { at: number; text: string; by: string; why: Why };
 
 interface SleepLog {
@@ -43,23 +51,43 @@ interface SleepLog {
   output?: number;
   moved?: number;
   ms: number;
-  result: "saved" | "none" | "conflict" | "error" | "timeout" | "cancelled";
+  judges?: Partial<Record<keyof DreamJudges, JudgeLog>>;
+  /** Why nothing moved: a judge missing, failed or unreadable. */
+  reason?: string;
+  result: "saved" | "none" | "conflict" | "error" | "timeout" | "cancelled" | "dry" | "unjudged";
+  mode?: "dry";
+  wouldMove?: number;
+  closes?: number;
+  asked?: number;
+  fellOut?: number;
+  threads?: number;
+  skipped?: number;
+  unchecked?: number;
 }
 
 export interface MemorySleepDeps {
   dataDir: string;
   /** Every bot at boot, so a tidy owed before a restart still runs. */
   bots(): string[];
-  generate(botId: string): NoteGenerator | null;
-  requiresGenerator?(botId: string): boolean;
+  /** Dreaming's mode, read again just before a move: only a bot set to live moves lines, every other bot dreams dry. */
+  live(botId: string): boolean;
+  /** Both must answer for anything to move; never one alone. */
+  judges(botId: string): DreamJudges;
   /** The bot's Auto notes switch, read live; false on a PC that does not tidy this bot. */
   enabled(botId: string): boolean;
   /** Any turn of the bot running. */
   busy(botId: string): boolean;
-  /** MEMORY.md changed on disk, so an open Memory page reloads it. */
+  /** MEMORY.md or its dry plan changed on disk, so an open Memory page reloads it. */
   changed(botId: string): void;
   /** The tidy saved MEMORY.md as `after`, `before` without some lines, for memory sync to rank. */
   tidied?(botId: string, before: string, after: string): void;
+  /** A live run archived `count` lines: the bot's morning line. */
+  archived?(botId: string, run: { runId: string; count: number }): void;
+  /** Dreaming (dream-live.ts): a dry bot's pass plans its asks and notes and writes nothing else. */
+  dream?: {
+    asks(botId: string, signal: AbortSignal): Promise<DreamAsks | null>;
+    plan(botId: string, at: number, notes: DryNotes, asks: DreamAsks): void;
+  };
   now?(): number;
 }
 
@@ -68,6 +96,10 @@ export interface MemorySleep {
   onSettled(botId: string): void;
   /** Call when any turn of the bot starts: a tidy still waiting on the model stops. */
   onTurn(botId: string): void;
+  /** The newest live run, as the Memory row and the morning line read it. */
+  latest(botId: string): MemoryCleanRun | null;
+  /** Puts every line of the newest run back; the archive keeps them, so they never move again. */
+  undo(botId: string, runId: string): UndoResult;
   idle(): Promise<void>;
   dispose(): void;
 }
@@ -90,13 +122,15 @@ const NOT_WORDS = new Set(
   ).split(" "),
 );
 const NOT_PARTS = /n['’]t$|않|없|아니|못|ない|ません|ず$|ぬ$|不|没|沒|别|別|無|无|非|未|勿|莫|ไม่|नहीं|मत|बिना/u;
+// a hedge or a scope word narrows a newer note rather than turning the older one, and a hedged note is not sure enough to retire a fact
+const HEDGES = new Set("maybe perhaps unsure but over than except unless".split(" "));
 
 const withoutStamp = (text: string) => text.replace(STAMP, " ");
 const body = (text: string) => withoutStamp(text).replace(/^\s*[-*+]\s+/, "").normalize("NFC");
 /** The same text but for spacing, a full stop that ends it and the Auto Notes stamp: symbols, digits, emoji, marks, case and a closing ! all count. */
-const twinKey = (text: string) => body(text).replace(/\s+/g, " ").trim().replace(/(?<=(?:^|\s)[^\s.]+)[.。]+$/u, "");
-const tokens = (text: string) => body(text).split(/\s+/).map((token) => token.replace(EDGE, "")).filter(Boolean);
-const negates = (token: string) => NOT_WORDS.has(token.toLowerCase()) || NOT_PARTS.test(token.toLowerCase());
+export const twinKey = (text: string) => body(text).replace(/\s+/g, " ").trim().replace(/(?<=(?:^|\s)[^\s.]+)[.。]+$/u, "");
+export const tokens = (text: string) => body(text).split(/\s+/).map((token) => token.replace(EDGE, "")).filter(Boolean);
+export const negates = (token: string) => NOT_WORDS.has(token.toLowerCase()) || NOT_PARTS.test(token.toLowerCase());
 const ref = (line: NoteLine) => `L${line.at + 1}`;
 const day = (now: number) => pickStamp(now).slice(0, 10);
 
@@ -138,11 +172,12 @@ export function holds(keep: string, drop: string): boolean {
 }
 
 /** newer replaced older: Auto Notes stamped both, newer is later, and it says every word of older again with a word that turns it. A swapped word (peanuts, shellfish) is two notes that can both hold. */
-function replaces(newer: NoteLine, older: NoteLine): boolean {
+export function replaces(newer: NoteLine, older: NoteLine): boolean {
   if (!newer.date || !older.date || newer.date <= older.date) return false;
   const words = (line: NoteLine) => tokens(line.text).map((token) => token.toLowerCase());
   const [before, after] = [words(older), words(newer)];
-  return before.length > 0 && before.every((word) => after.includes(word)) && after.some((word) => negates(word) && !before.includes(word));
+  const added = after.filter((word) => !before.includes(word));
+  return before.length > 0 && before.every((word) => after.includes(word)) && !added.some((word) => HEDGES.has(word)) && added.some(negates);
 }
 
 export function tidyPrompt(notes: NoteLine[]): string {
@@ -173,11 +208,20 @@ export function parseTidy(output: string): z.infer<typeof tidySchema> {
   }
 }
 
+/** The head and the newest lines load; only the cut middle does not. */
+export function loadWindow(raw: string) {
+  const view = loadedMemory(raw);
+  const head = view.text.split("\n").length;
+  const all = raw.split("\n");
+  const tail = view.newest === undefined ? Infinity : (all.at(-1) === "" ? all.length - 1 : all.length) - view.newest.split("\n").length;
+  return { head, loaded: (line: NoteLine) => line.at < head || line.at >= tail };
+}
+
 /** What to move: exact twins, then up to MOVES_MAX of the model's duplicates and disagreements a strict check agrees with. Anything unsure stays, and so does a line in `movedBefore`, the twin keys history records as moved out: someone put it back. */
 export function planTidy(raw: string, reply = "", movedBefore: ReadonlySet<string> = new Set()): Move[] {
   const lines = noteLines(raw);
   const notes = new Map(lines.map((line) => [ref(line), line] as const));
-  const loads = loadedMemory(raw).text.split("\n").length;
+  const { head, loaded } = loadWindow(raw);
   const moves: Move[] = [];
   const gone = new Set<NoteLine>();
   const kept = new Set<NoteLine>();
@@ -185,8 +229,8 @@ export function planTidy(raw: string, reply = "", movedBefore: ReadonlySet<strin
   // a twin merge is certain; a model's moves are capped per run
   const move = (line: NoteLine | undefined, by: NoteLine | undefined, why: Why, model = true) => {
     if (!line || !by || line === by || (model && guessed >= MOVES_MAX) || gone.has(line) || gone.has(by) || kept.has(line) || movedBefore.has(twinKey(line.text))) return;
-    // only whole notes, under the same heading, and never in favor of a line the prompt does not load
-    if (!line.alone || !by.alone || line.section !== by.section || (line.at < loads && by.at >= loads)) return;
+    // only whole notes, under the same heading, and never in favor of a line the prompt does not load; a head duplicate stays, since the newest lines roll out
+    if (!line.alone || !by.alone || line.section !== by.section || (loaded(line) && !loaded(by)) || (why === "duplicate" && line.at < head && by.at >= head)) return;
     moves.push({ at: line.at, text: line.text, by: by.text, why });
     if (model) guessed += 1;
     gone.add(line);
@@ -199,8 +243,9 @@ export function planTidy(raw: string, reply = "", movedBefore: ReadonlySet<strin
     if (text) twins.set(key, [...(twins.get(key) ?? []), line]);
   }
   for (const group of twins.values()) {
-    const loaded = group.filter((line) => line.at < loads);
-    const pool = loaded.length ? loaded : group;
+    const top = group.filter((line) => line.at < head);
+    const shown = top.length ? top : group.filter(loaded);
+    const pool = shown.length ? shown : group;
     // the newest: notes are appended, so the last copy, unless an earlier one carries a later stamp
     const keep = pool.reduce((best, line) => (best.date && line.date && best.date > line.date ? best : line));
     // an undated copy away from the others may mean something where it sits, like a step done twice or a note under a bullet used as a label
@@ -230,21 +275,12 @@ export function withoutLines(raw: string, at: readonly number[]): string {
   return raw.split("\n").filter((_, index) => !drop.has(index)).join("\n");
 }
 
-export const historyPath = (botId: string, now: number) => join(workspaceDir(botId), HISTORY_DIR, `${pickStamp(now).slice(0, 7)}.md`);
-
-const quoted = (line: string) => JSON.stringify(line.replace(/^\s*[-*+]\s+/, ""));
-
-export function historyEntry(moves: readonly Move[], now: number): string {
-  const date = day(now);
-  return [`## ${pickStamp(now)}`, ...moves.map(({ text, by, why }) => `- ${quoted(text)} replaced by ${quoted(by)}, ${date}${why === "duplicate" ? " (duplicate)" : ""}`)].join("\n");
-}
-
 // appended, never written over: a file that cannot be opened stops the tidy; the returned undo takes the entry back off the end
-function appendHistory(path: string, entry: string): () => void {
+function appendArchive(path: string, entry: string): () => void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   let undo: () => void;
   try {
-    writeFileSync(path, `${HISTORY_HEAD}\n${entry}\n`, { flag: "wx", mode: 0o600 });
+    writeFileSync(path, `${DREAMED_HEAD}\n${entry}\n`, { flag: "wx", mode: 0o600 });
     undo = () => rmSync(path, { force: true });
   } catch (error) {
     if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
@@ -263,8 +299,8 @@ function appendHistory(path: string, entry: string): () => void {
 
 const MOVED = /^- ("(?:[^"\\\n]|\\.)*") replaced by /gm;
 
-/** The twin key of every line the history records as moved out. */
-function historyKeys(botId: string): Set<string> {
+/** The twin key of every line the archive or an older build's history records as moved out. */
+function movedKeys(botId: string): Set<string> {
   const dir = join(workspaceDir(botId), HISTORY_DIR);
   const keys = new Set<string>();
   let names: string[] = [];
@@ -282,14 +318,15 @@ function historyKeys(botId: string): Set<string> {
       }
     }
   }
+  for (const key of dreamedKeys(botId)) keys.add(key);
   return keys;
 }
 
-/** History first, then MEMORY.md without the moved lines; false, with the record taken back, when another writer got to MEMORY.md first. */
-function moveOut(botId: string, raw: string, revision: string, moves: readonly Move[], now: number, tidied: MemorySleepDeps["tidied"]): boolean {
+/** The archive first, then MEMORY.md without the moved lines; false, with the record taken back, when another writer got to MEMORY.md first. */
+function moveOut(botId: string, raw: string, revision: string, runId: string, moves: readonly Move[], now: number, tidied: MemorySleepDeps["tidied"]): boolean {
   const path = join(workspaceDir(botId), "MEMORY.md");
   if (readMemoryFile(botId).revision !== revision) return false;
-  const undo = appendHistory(historyPath(botId, now), historyEntry(moves, now));
+  const undo = appendArchive(dreamedPath(botId), dreamedEntry(runId, moves, now));
   const text = withoutLines(raw, moves.map(({ at }) => at));
   // the file the save replaces: another program's save that landed first, in place or by a rename of its own, is in it
   const held = `${path}.${randomUUID()}.held`;
@@ -356,17 +393,102 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     timers.set(botId, timer);
   };
 
-  const digestOf = (raw: string, model: boolean) => createHash("sha256").update(JSON.stringify([raw, model])).digest("hex").slice(0, 16);
+  // the day counts: a one-off note expires without MEMORY.md changing
+  const digestOf = (raw: string, dry = false) => createHash("sha256").update(JSON.stringify(dry ? [raw, "pair", day(now()), "dry"] : [raw, "pair", day(now())])).digest("hex").slice(0, 16);
+
+  // both judges read the same notes at once; flags is null, with the reason, unless both answered with what was asked
+  const judge = async (botId: string, lines: NoteLine[], signal: AbortSignal) => {
+    let used = 0;
+    const shownNotes = lines.filter((line) => (used += Buffer.byteLength(line.text, "utf8") + 8) <= PROMPT_NOTES_MAX);
+    const judges = deps.judges(botId);
+    const logs: Partial<Record<keyof DreamJudges, JudgeLog>> = {};
+    const missing = (Object.keys(judges) as (keyof DreamJudges)[]).filter((name) => !judges[name]);
+    if (missing.length) return { shownNotes, logs, flags: null, reason: `${missing.join(" and ")} judge unavailable` };
+    if (shownNotes.length < 2) return { shownNotes, logs, flags: [] as Flag[] };
+    const today = day(now());
+    const prompt = dreamPrompt(shownNotes, today);
+    const ask = async (name: keyof DreamJudges, generate: NoteGenerator) => {
+      const spent: JudgeLog = { input: 0, output: 0, ms: 0 };
+      logs[name] = spent;
+      const started = now();
+      try {
+        return parseDream(await generate(prompt, signal, (usage) => {
+          spent.input += usage?.input ?? 0;
+          spent.output += usage?.output ?? 0;
+        }), shownNotes, today);
+      } finally {
+        spent.ms = now() - started;
+      }
+    };
+    const [claude, gemini] = await Promise.allSettled([ask("claude", judges.claude!), ask("gemini", judges.gemini!)]);
+    if (signal.aborted) throw signal.reason;
+    const failed = ([["claude", claude], ["gemini", gemini]] as const).find(([, result]) => result.status === "rejected" || result.value === null);
+    if (failed) return { shownNotes, logs, flags: null, reason: `${failed[0]} judge ${failed[1].status === "rejected" ? "failed" : "reply unreadable"}` };
+    return { shownNotes, logs, flags: agreed((claude as PromiseFulfilledResult<Flag[]>).value, (gemini as PromiseFulfilledResult<Flag[]>).value) };
+  };
+  const spent = (logs: Partial<Record<keyof DreamJudges, JudgeLog>>) => ({
+    input: Object.values(logs).reduce((sum, each) => sum + each.input, 0),
+    output: Object.values(logs).reduce((sum, each) => sum + each.output, 0),
+    judges: logs,
+  });
+  // only a plan that moves something reads the archive, for the lines someone put back
+  const planMoves = (botId: string, raw: string, flags: Flag[]) => {
+    const moves = planDream(raw, flags, day(now()));
+    return moves.length ? planDream(raw, flags, day(now()), movedKeys(botId)) : moves;
+  };
+
+  // dry: the moves Sleep would make, with MEMORY.md and the archive untouched
+  const dryNotes = async (botId: string, signal: AbortSignal, before: string | undefined): Promise<DryNotes & { digest?: string; fields?: Partial<SleepLog> }> => {
+    if (!deps.enabled(botId)) return { state: "off-here", moves: [] };
+    const raw = memoryFileRaw(botId);
+    const memory = readMemoryFile(botId);
+    const digest = digestOf(raw, true);
+    if (before === digest) return { state: "unchanged", moves: [] };
+    const lines = noteLines(raw);
+    let asked: Awaited<ReturnType<typeof judge>>;
+    try {
+      asked = await judge(botId, lines, signal);
+    } catch {
+      return { state: signal.aborted ? "stopped" : "error", moves: [] };
+    }
+    const fields = { notes: lines.length, sentNotes: asked.shownNotes.length, ...spent(asked.logs), ...(asked.reason ? { reason: asked.reason } : {}) };
+    if (!asked.flags) return { state: "no-model", moves: [], fields };
+    if (deps.busy(botId) || readMemoryFile(botId).revision !== memory.revision) return { state: "conflict", moves: [], fields };
+    return { state: "checked", moves: planMoves(botId, raw, asked.flags), digest, fields };
+  };
+
+  const dryRun = async (botId: string, signal: AbortSignal, dream: NonNullable<MemorySleepDeps["dream"]>) => {
+    if (deps.busy(botId)) return arm(botId);
+    const record = bots.get(botId) ?? {};
+    const waited = now() - (record.at ?? -Infinity);
+    if (waited >= 0 && waited < SLEEP_GAP_MS) return arm(botId, SLEEP_GAP_MS - waited);
+    const started = now();
+    bots.set(botId, { ...record, at: started });
+    save();
+    // asks first: they have no model step, so a turn that stops the notes part loses none of them
+    const asks = await dream.asks(botId, signal);
+    if (disposed) return;
+    if (!asks) return log({ botId, mode: "dry", ms: now() - started, result: signal.aborted ? stopped(signal) : "error" });
+    const notes = await dryNotes(botId, signal, record.digest);
+    if (disposed) return;
+    dream.plan(botId, started, { state: notes.state, moves: notes.moves }, asks);
+    deps.changed(botId);
+    if (notes.digest) {
+      bots.set(botId, { ...bots.get(botId), at: started, digest: notes.digest });
+      save();
+    }
+    const count = (op: string) => asks.items.filter((item) => item.op === op).length;
+    log({ botId, mode: "dry", ...notes.fields, wouldMove: notes.moves.length, closes: count("close"), asked: count("ask"), fellOut: count("fall-out"), threads: asks.threads, skipped: asks.skipped, unchecked: asks.unchecked, ms: now() - started, result: "dry" });
+  };
 
   const run = async (botId: string, signal: AbortSignal) => {
+    if (!deps.live(botId)) return deps.dream ? dryRun(botId, signal, deps.dream) : undefined;
     if (!deps.enabled(botId)) return;
     if (deps.busy(botId)) return arm(botId);
     const record = bots.get(botId) ?? {};
     const raw = memoryFileRaw(botId);
     const memory = readMemoryFile(botId);
-    const generate = deps.generate(botId);
-    if (!generate && deps.requiresGenerator?.(botId)) return;
-    const digest = digestOf(raw, Boolean(generate));
+    const digest = digestOf(raw);
     if (record.digest === digest) return;
     const waited = now() - (record.at ?? -Infinity);
     // a stamp ahead of the clock does not count: a wait past 2^31 ms fires at once, over and over
@@ -376,34 +498,30 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     bots.set(botId, { ...record, at: started });
     save();
     const lines = noteLines(raw);
-    let used = 0;
-    const shownNotes = lines.filter((line) => (used += Buffer.byteLength(line.text, "utf8") + 8) <= PROMPT_NOTES_MAX);
-    const usage = { input: 0, output: 0 };
-    let reply = "";
-    if (generate && shownNotes.length > 1) {
-      try {
-        reply = await generate(tidyPrompt(shownNotes), signal, (spent) => {
-          usage.input += (spent?.input ?? 0) + (spent?.cachedInput ?? 0) + (spent?.cacheCreation ?? 0);
-          usage.output += spent?.output ?? 0;
-        });
-      } catch {
-        if (!disposed) log({ botId, ms: now() - started, result: signal.aborted ? stopped(signal) : "error" });
-        return;
-      }
+    let asked: Awaited<ReturnType<typeof judge>>;
+    try {
+      asked = await judge(botId, lines, signal);
+    } catch {
+      if (!disposed) log({ botId, ms: now() - started, result: signal.aborted ? stopped(signal) : "error" });
+      return;
     }
     if (disposed || !deps.enabled(botId)) return;
-    const base = { botId, notes: lines.length, sentNotes: shownNotes.length, ms: 0, ...usage };
-    if (signal.aborted) return log({ ...base, ms: now() - started, result: stopped(signal) });
-    // a turn or an editor may have written while the model ran: theirs wins, the tidy waits for the next quiet spell
+    const base = { botId, notes: lines.length, sentNotes: asked.shownNotes.length, ms: 0, ...spent(asked.logs) };
+    // one judge alone never moves a line, so the night passes and the next quiet spell asks both again
+    if (!asked.flags) return log({ ...base, reason: asked.reason, ms: now() - started, result: "unjudged" });
+    // a turn or an editor may have written while the judges ran: theirs wins, the tidy waits for the next quiet spell
     if (deps.busy(botId) || readMemoryFile(botId).revision !== memory.revision) {
       log({ ...base, ms: now() - started, result: "conflict" });
       return arm(botId);
     }
-    let moves = planTidy(raw, reply);
+    if (!deps.live(botId)) return log({ ...base, ms: now() - started, result: "dry" });
+    let moves: Move[];
+    let runId = "";
     try {
-      // only a plan that moves something reads the history, for the lines someone put back
-      if (moves.length) moves = planTidy(raw, reply, historyKeys(botId));
-      if (moves.length && !moveOut(botId, raw, memory.revision, moves, now(), deps.tidied)) {
+      moves = planMoves(botId, raw, asked.flags);
+      // the same moves on the same day get the same id, so two PCs that make them write the same archive
+      runId = createHash("sha256").update(JSON.stringify([day(now()), moves.map(({ text }) => text)])).digest("hex").slice(0, 16);
+      if (moves.length && !moveOut(botId, raw, memory.revision, runId, moves, now(), deps.tidied)) {
         log({ ...base, ms: now() - started, result: "conflict" });
         return arm(botId);
       }
@@ -412,10 +530,54 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
       console.warn(`[memory-sleep] write failed (${error instanceof Error ? error.name : "error"})`);
       return;
     }
-    if (moves.length) deps.changed(botId);
-    bots.set(botId, { at: started, digest: digestOf(memoryFileRaw(botId), Boolean(generate)) });
+    const after = memoryFileRaw(botId);
+    const kept = moves.length
+      ? { runId, at: started, beforeBytes: Buffer.byteLength(raw), afterBytes: Buffer.byteLength(after), moves: anchored(raw, moves) }
+      : record.run;
+    bots.set(botId, { at: started, digest: digestOf(after), ...(kept ? { run: kept } : {}) });
     save();
+    if (moves.length) {
+      deps.changed(botId);
+      deps.archived?.(botId, { runId, count: moves.length });
+    }
     log({ ...base, moved: moves.length, ms: now() - started, result: moves.length ? "saved" : "none" });
+  };
+
+  const latest = (botId: string): MemoryCleanRun | null => {
+    const last = bots.get(botId)?.run;
+    if (!last) return null;
+    const count = (why: Move["why"]) => last.moves.filter((move) => move.why === why).length;
+    return {
+      runId: last.runId, at: last.at, files: ["MEMORY.md", DREAMED_FILE], beforeBytes: last.beforeBytes, afterBytes: last.afterBytes,
+      merged: count("duplicate"), replaced: count("replaced"), moved: last.moves.length, undoneAt: last.undoneAt ?? null, undoable: last.undoneAt === undefined,
+    };
+  };
+
+  const undo = (botId: string, runId: string): UndoResult => {
+    const record = bots.get(botId);
+    const last = record?.run;
+    if (!record || !last) return { ok: false, error: "no-run" };
+    if (last.runId !== runId) return { ok: false, error: "not-newest" };
+    if (last.undoneAt !== undefined) return { ok: false, error: "undone" };
+    if (running?.botId === botId || deps.busy(botId)) return { ok: false, error: "busy" };
+    const raw = memoryFileRaw(botId);
+    const back = putBack(raw, last.moves as ArchivedMove[]);
+    if (back.restored) {
+      const saved = saveMemoryFile(botId, back.text, rawRevision(raw));
+      if (saved.conflict) return { ok: false, error: "busy" };
+    }
+    try {
+      const path = dreamedPath(botId);
+      writeFileAtomic(path, markUndone(readFileSync(path, "utf8"), runId, now()), { mode: 0o600 });
+    } catch {
+      // the lines are back either way; the heading only says so
+    }
+    const at = now();
+    // the new text is this run's undo, not a change to judge again tonight
+    bots.set(botId, { ...record, digest: digestOf(memoryFileRaw(botId)), run: { ...last, undoneAt: at } });
+    save();
+    deps.changed(botId);
+    return { ok: true, revision: readMemoryFile(botId).revision, restored: back.restored, skipped: back.skipped };
   };
 
   const pump = () => {
@@ -441,6 +603,8 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
   all.forEach((botId, index) => arm(botId, SLEEP_IDLE_MS + Math.floor((index * SLEEP_GAP_MS) / all.length)));
 
   return {
+    latest,
+    undo,
     onSettled: (botId) => arm(botId),
     onTurn(botId) {
       if (running?.botId === botId) running.controller.abort("cancelled");

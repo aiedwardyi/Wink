@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 
+import { CHAT_SWITCH_PATH } from "@/lib/chat-switch-diag";
 import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { noteJoinedRoom } from "@/lib/joined-rooms";
 import { SIDEBAR_ORDER_KEY } from "@/lib/sidebar-preferences";
@@ -14,7 +15,7 @@ const joined = vi.hoisted(() => ({ needsCode: false, rooms: [{
   roomId: "r9", status: "joined", link: "live", me: { id: "me", name: "Mina" },
   state: { roomName: "함께 만드는 아주 긴 디자인 프로젝트 대화방", host: "Studio", people: [] },
 }] }));
-vi.mock("@/lib/joined-rooms", () => ({ useJoinedRooms: () => joined.rooms, useLoadedJoinedRooms: () => joined.rooms, noteJoinedRoom: vi.fn(), forgetJoinedRoom: vi.fn() }));
+vi.mock("@/lib/joined-rooms", () => ({ useJoinedRooms: () => joined.rooms, useLoadedJoinedRooms: () => joined.rooms, noteJoinedRoom: vi.fn(), forgetJoinedRoom: vi.fn(), noteJoinedFrame: vi.fn() }));
 vi.mock("@/lib/updater", () => ({ useUpdaterState: () => null, useManualCheck: () => ({ acknowledged: true, check: vi.fn() }) }));
 Object.defineProperty(globalThis, "localStorage", { configurable: true, value: window.localStorage });
 
@@ -274,6 +275,6 @@ it.each(["en", "ko"] as const)("replaces a rejected saved code in %s", async (lo
   const paste = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(paste, "clipboardData", { value: { getData: () => code } });
   await act(async () => dialog!.querySelector("input")!.dispatchEvent(paste));
-  expect(calls.at(-1)).toEqual({ path: "/api/joined/rooms/r9/rejoin", method: "POST", body: { code } });
+  expect(calls.filter((call) => call.path !== CHAT_SWITCH_PATH).at(-1)).toEqual({ path: "/api/joined/rooms/r9/rejoin", method: "POST", body: { code } });
   expect(document.querySelector('[role="dialog"]')).toBeNull();
 });

@@ -33,6 +33,38 @@ describe("board_post", () => {
   });
 });
 
+describe("board_search", () => {
+  const search = async (routes: ReturnType<typeof createBoardRoutes>, query: string) => {
+    let reply = "";
+    const res = { writeHead() {}, end(text: string) { reply = text; } } as unknown as ServerResponse;
+    const req = new EventEmitter() as IncomingMessage;
+    req.headers = { authorization: "Bearer tok" };
+    const pending = routes.search(req, res);
+    req.emit("data", JSON.stringify({ query }));
+    req.emit("end");
+    await pending;
+    return JSON.parse(reply) as { count: number; total: number; text: string };
+  };
+
+  it("names how many matches the top results left out", async () => {
+    const board = createBoard({ dir: join(temps.make(join(tmpdir(), "orbit-board-search-")), "board"), pcId: () => "home" });
+    const routes = createBoardRoutes({ board, caller: () => ({ botId: "astra", threadId: "ta" }), known: () => true, projectOf: () => "", roomTurn: () => null });
+    for (const n of [1, 2, 3, 4, 5]) board.post({ author_bot_id: "astra", kind: "tip", title: `Codex usage limit ${n}`, body: "Codex usage limit", source_ref: `tip:${n}` });
+    const five = await search(routes, "codex usage limit");
+    expect(five.count).toBe(5);
+    expect(five.total).toBe(5);
+    expect(five.text).not.toContain("more match");
+
+    for (const n of [6, 7]) board.post({ author_bot_id: "astra", kind: "tip", title: `Codex usage limit ${n}`, body: "Codex usage limit\n\nThen wait an hour", source_ref: `tip:${n}` });
+    const seven = await search(routes, "codex usage limit");
+    expect(seven.count).toBe(5);
+    expect(seven.total).toBe(7);
+    // one header per shown post, whatever blank lines a post body holds
+    expect(seven.text.match(/^\[[^\]\n]+\] tip, /gm)).toHaveLength(5);
+    expect(seven.text.endsWith("\n\n+2 more matches, search more specifically.")).toBe(true);
+  });
+});
+
 describe("board_post from a team room turn", () => {
   const post = async (routes: ReturnType<typeof createBoardRoutes>, body: unknown) => {
     let status = 0;

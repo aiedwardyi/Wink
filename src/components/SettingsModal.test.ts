@@ -161,10 +161,10 @@ describe("SettingsModal friends chrome", () => {
     const html = markup("themes");
     expect(html).not.toContain(">Skin<");
     expect(html).not.toContain("Applies instantly and is remembered");
-    for (const name of ["Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Lagoon Night", "Snow Night", "Dim Sand", "Lagoon", "Snow", "Wink Day", "Notebook"]) {
+    for (const name of ["Neon Grid", "Samurai Ink", "Night Rain", "Warp", "Circuit", "Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Merlot", "Bronze", "Lagoon Night", "Snow Night", "Dim Sand", "Lagoon", "Snow", "Wink Day", "Notebook", "Messenger"]) {
       expect(html).toContain(`>${name}<`);
     }
-    expect(html).toContain(`More themes (${SKINS.length - 20})`);
+    expect(html).toContain(`More themes (${SKINS.length - 21})`);
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain('data-skin="catppuccin-frappe"');
     expect(html).not.toContain('data-skin="servo-gray"');
@@ -411,8 +411,8 @@ describe("SettingsModal friends chrome", () => {
     const ids = (part: string) => [...part.matchAll(/data-skin="([a-z-]+)"/g)].map(([, id]) => id);
     expect(ids(html.slice(animated, dark))).toEqual(["samurai-ink", "night-rain", "warp", "circuit", "neon-grid", "lagoon", "lagoon-night", "snow", "snow-night"]);
     expect(ids(html.slice(dark, light))).toEqual(["bronze", "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot"]);
-    expect(ids(html.slice(light))).toEqual(["dim-sand", "wink-day", "notebook"]);
-    expect(ids(html)).toHaveLength(20);
+    expect(ids(html.slice(light))).toEqual(["dim-sand", "wink-day", "notebook", "messenger"]);
+    expect(ids(html)).toHaveLength(21);
   });
 
 

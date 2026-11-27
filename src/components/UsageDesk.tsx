@@ -202,7 +202,7 @@ function Ticker({ board, engineId, select, phone, terminal, clock, instances }: 
   );
 }
 
-const STATE_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "engines.notSignedIn", "cli-missing": "engines.notInstalled", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
+const STATE_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "engines.notSignedIn", "payment-due": "usage.chat.paymentDue", "cli-missing": "engines.notInstalled", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
 /** Main, Switch and Sign In share one box: same height, width floor, radius and right edge; a larger touch target sits outside it on phones. */
 const SPOT = "usage-control relative inline-flex h-[22px] min-w-12 shrink-0 items-center justify-center whitespace-nowrap border px-2 text-[11px] leading-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
 const BUTTON = "border-hairline bg-raised text-ink hover:bg-raised-hover";
@@ -400,7 +400,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
   const main = engine.accounts.find((each) => each.id === checked) ?? engine.accounts[0];
   const row = (account: UsageBoardAccount, slots?: RowSlots) => <AccountRow key={account.id} engine={engine} account={account} board={board} state={state}
     checked={account.id === checked} terminal={terminal} clock={clock} reloadInstances={reloadInstances} signIn={signIn} settings {...slots} />;
-  const capped = useCappedAccounts({ accounts: ordered(engine.accounts, accountOrder, (each) => each.id), checked, t, row,
+  const capped = useCappedAccounts({ accounts: ordered(engine.accounts, accountOrder, (each) => each.id), checked, pending: state.pending[engine.base]?.target, t, row,
     loadOpen: () => loadFolds(ACCOUNTS_KEY)[engine.base] ?? false, saveOpen: (open) => saveFold(engine.base, open, ACCOUNTS_KEY) });
   const head = (arrows?: ReactNode) => (
     <div data-engine-head="" {...(board.engines.filter((each) => each.accounts.length).length > 1 && reorderable(t("usage.desk.reorder", { name: label })))} className="usage-engine-head">
@@ -551,7 +551,7 @@ export function UsageDesk({ closing = false }: { closing?: boolean }) {
   if (!board.engines.some((each) => each.accounts.length)) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t("usage.limits.empty")}</EmptyState></div>;
   const engine = board.engines.find((each) => each.base === engineId) ?? board.engines[0]!;
   const account = engine.accounts.find((each) => each.id === viewed[engine.base]) ?? engine.accounts.find((each) => each.id === engine.mainId) ?? engine.accounts[0];
-  const folded = (each: UsageBoardEngine) => folds[each.base] ?? !each.accounts.some((account) => account.signIn === "ready");
+  const folded = (each: UsageBoardEngine) => folds[each.base] ?? false;
   const allFolded = board.engines.filter((each) => each.accounts.length).every(folded);
   const fold = (base: string, value: boolean) => {
     const head = desk.current?.querySelector<HTMLElement>(`[data-usage-base="${base}"] > [data-engine-head]`);

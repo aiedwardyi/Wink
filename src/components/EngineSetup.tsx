@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Copy, Download, ExternalLink, LogIn, TerminalSquare } from "lucide-react";
 import { api, useEngineLoginRefresh, type EngineInstall, type InstanceInfo } from "@/state/store";
-import { isPhone } from "@/lib/phone-swipe";
+import { engineSignInFlow, signsInElsewhere } from "@/lib/devices-setup";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
@@ -216,46 +216,62 @@ export function CommandRow({ command, actionLabel, signInInstanceId, installInst
 
 const DIDNT_FINISH: MessageKey = "engines.didntFinish";
 
+function loginFailure(instance: InstanceInfo): MessageKey {
+  return instance.loginError === "update_offline" ? "engines.updateOffline" : instance.loginError === "update_failed" ? "engines.updateFailed" : DIDNT_FINISH;
+}
+
 function refusal(error: unknown): MessageKey {
   const code = (error as { code?: unknown } | null)?.code;
   return code === "account-busy" ? "engines.signInBusy" : code === "login-busy" ? "engines.signInOther"
     : code === "host-unknown" ? "engines.signInHostUnknown" : DIDNT_FINISH;
 }
 
+type SignInCapture = { url?: string; code?: string; inputGeneration?: number };
+
+// A phone or another PC's window cannot finish a sign-in whose browser opened on the PC, so it offers Sign In instead.
+const joinable = (instance: InstanceInfo) => instance.loginState === "pending" && !(instance.loginOpensBrowser && signsInElsewhere());
+
 export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: InstanceInfo) => void) {
   const [current, setCurrent] = useState(instance);
-  const [waiting, setWaiting] = useState(instance.loginState === "pending");
-  const [failed, setFailed] = useState<MessageKey | false>(instance.loginState === "failed" && DIDNT_FINISH);
-  const [capture, setCapture] = useState(instance.loginCapture ?? {});
+  const [waiting, setWaiting] = useState(joinable(instance));
+  const [failed, setFailed] = useState<MessageKey | false>(instance.loginState === "failed" && loginFailure(instance));
+  const [capture, setCapture] = useState<SignInCapture>({});
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const cancelled = useRef(false);
   const [loginCode, setLoginCode] = useState("");
-  const phone = !window.ogb && isPhone();
-  const login = instance.install?.login;
-  const computerOnly = phone && !login?.deviceArgs;
-  // Same argv both ways is a device-only flow (Muse): nothing opens on desktop either.
-  const deviceFlow = phone || Boolean(login?.deviceArgs && login.deviceArgs.length === login.args.length && login.deviceArgs.every((arg, i) => arg === login.args[i]));
+  const { device, computerOnly, deviceFlow } = engineSignInFlow(instance.install?.login);
   const connected = accountReady(current);
   const path = `/api/instances/${encodeURIComponent(instance.instanceId)}/sign-in`;
+  // Shared rows never carry a sign-in's link, code or paste prompt: the server hands them only to the tab that started it.
+  const loadCapture = () => {
+    const request = generation.current;
+    void api(`/api/accounts/${encodeURIComponent(instance.instanceId)}/sign-in`).then(({ url, code, inputGeneration }: SignInCapture) => {
+      if (request === generation.current && !cancelled.current) setCapture({ url, code, inputGeneration });
+    }, () => {});
+  };
 
   useEffect(() => { setLoginCode(""); }, [capture.inputGeneration]);
 
   useEffect(() => {
-    setWaiting(instance.loginState === "pending");
-    setFailed(instance.loginState === "failed" && DIDNT_FINISH);
-    setCapture(instance.loginCapture ?? {});
+    setWaiting(joinable(instance));
+    setFailed(instance.loginState === "failed" && loginFailure(instance));
+    setCapture({});
     setBusy(false);
     cancelled.current = false;
+    if (joinable(instance)) loadCapture();
     return () => { generation.current += 1; };
   }, [instance.instanceId]);
   useEffect(() => {
     setCurrent(instance);
-    if (instance.loginState === "pending" && !cancelled.current) {
+    if (joinable(instance) && !cancelled.current && !waiting) {
       setWaiting(true);
-      setCapture(instance.loginCapture ?? {});
+      loadCapture();
     }
-    if (accountReady(instance)) setWaiting(false);
+    if (accountReady(instance) || (instance.loginState === "pending" && !joinable(instance))) {
+      setWaiting(false);
+      setCapture({});
+    }
   }, [instance]);
 
   useEngineLoginRefresh(waiting, (instances) => {
@@ -263,10 +279,11 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     const next = instances.find((row) => row.instanceId === instance.instanceId);
     if (!next) return;
     setCurrent(next);
-    setCapture(next.loginCapture ?? {});
+    if (joinable(next)) loadCapture();
+    else setCapture({});
     onUpdated?.(next);
     if (accountReady(next)) { setWaiting(false); setFailed(false); }
-    else if (next.loginState !== "pending") { setWaiting(false); setFailed(next.loginState !== "cancelled" && DIDNT_FINISH); }
+    else if (!joinable(next)) { setWaiting(false); setFailed(next.loginState !== "pending" && next.loginState !== "cancelled" && loginFailure(next)); }
   });
 
   const start = async () => {
@@ -280,7 +297,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     setCapture({});
     let started = false;
     try {
-      const result = await api(path, { method: "POST", body: JSON.stringify({ device: phone }) });
+      const result = await api(path, { method: "POST", body: JSON.stringify({ device }) });
       started = true;
       if (request !== generation.current) return;
       setCapture(result);
@@ -305,7 +322,10 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
       if (request !== generation.current) return;
       setWaiting(false);
       setCapture({});
-    } catch { if (request === generation.current) setFailed(DIDNT_FINISH); }
+    } catch (error) {
+      // Another device's or tab's sign-in: this one can't answer it, but its own Sign In replaces it.
+      if (request === generation.current && !(error instanceof Error && "code" in error && error.code === "sign-in-elsewhere")) setFailed(DIDNT_FINISH);
+    }
     finally { if (request === generation.current) setBusy(false); }
   };
   const submitCode = async () => {
@@ -318,7 +338,16 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
         method: "POST", body: JSON.stringify({ code: loginCode, generation: capture.inputGeneration }),
       });
       if (request === generation.current) setLoginCode("");
-    } catch { if (request === generation.current) setFailed(DIDNT_FINISH); }
+    } catch (error) {
+      if (request !== generation.current) return;
+      if (!(error instanceof Error && "code" in error && error.code === "sign-in-elsewhere")) setFailed(DIDNT_FINISH);
+      else {
+        cancelled.current = true;
+        setWaiting(false);
+        setCapture({});
+        setLoginCode("");
+      }
+    }
     finally { if (request === generation.current) setBusy(false); }
   };
   const loading = !waiting && current.snapshot.authenticated === undefined && !current.snapshot.authChecked && !current.loginState;

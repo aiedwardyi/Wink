@@ -228,6 +228,12 @@ describe("ProviderRegistry", () => {
     } finally { await registry.disposeAll(); }
   });
 
+  it.each(["darwin", "linux"] as const)("installs every built-in engine on a fresh %s without Node", (platform) => {
+    for (const driver of BUILT_IN_DRIVERS) {
+      expect(driver.install?.command?.[platform] ?? "", `${driver.driverKind}: a fresh Mac has no Node; use the engine's native installer`).not.toMatch(/(?:^|[\s;&|(])(?:npm|npx|node|pnpm|yarn)(?:\s|$)/);
+    }
+  });
+
   it("has no install when the platform has no driver command", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([{ ...fake.driver, install: { command: {} } }]);
@@ -248,7 +254,6 @@ describe("ProviderRegistry", () => {
       vi.spyOn(registry.logins, "state").mockReturnValue("complete");
       expect(await registry.signOut("a")).toBe(false);
       expect(registry.describeSaved()[0].snapshot.authenticated).toBe(true);
-      expect(registry.logins.needsRefresh("a")).toBe(false);
     } finally {
       vi.restoreAllMocks();
       await registry.disposeAll();
@@ -264,7 +269,7 @@ describe("ProviderRegistry", () => {
     try {
       await registry.load({ a: { driver: kind, config: { cli: "missing-review-cli" }, environment: { ...credentials, CLAUDE_CONFIG_DIR: testHome(), CODEX_HOME: testHome() } } });
       const start = vi.spyOn(registry.logins, "start").mockResolvedValue({});
-      await registry.startSignIn("a");
+      await registry.startSignIn("a", false, "pc:");
       const env = start.mock.calls[0][3]!;
       expect(Object.fromEntries(Object.keys(credentials).filter((key) => env[key] !== undefined).map((key) => [key, env[key]])))
         .toEqual(Object.fromEntries(Object.entries(credentials).filter(([key]) => allowed.includes(key))));
@@ -293,15 +298,15 @@ describe("ProviderRegistry", () => {
         a: { driver: "claudeAgent", environment: { CLAUDE_CONFIG_DIR: first } },
         b: { driver: "claudeAgent", environment: { CLAUDE_CONFIG_DIR: second } },
       });
-      await registry.startSignIn("a");
-      await expect(registry.startSignIn("b")).rejects.toThrow("Another sign-in");
-      expect([existsSync(first), existsSync(second)]).toEqual([true, false]);
-      await registry.cancelSignIn("a");
-      await registry.startSignIn("b");
+      await registry.startSignIn("a", false, "pc:");
+      await registry.startSignIn("b", false, "pc:");
+      expect([existsSync(first), existsSync(second)]).toEqual([true, true]);
       const rows = await registry.describe();
       expect(rows.find((row) => row.instanceId === "a")?.loginState).toBe("cancelled");
       expect(rows.find((row) => row.instanceId === "b")?.loginState).toBe("pending");
-      expect(rows.find((row) => row.instanceId === "b")?.loginCapture).toEqual({ url: "https://auth.example/device", code: "ABCD-EFGH" });
+      expect(rows.find((row) => row.instanceId === "b")).not.toHaveProperty("loginCapture");
+      expect(registry.signInCapture("b", "pc:")).toEqual({ url: "https://auth.example/device", code: "ABCD-EFGH" });
+      expect(registry.signInCapture("b", "phone:p1:")).toEqual({});
     } finally {
       await registry.disposeAll();
       removeTestData(dir);
@@ -330,7 +335,7 @@ describe("ProviderRegistry", () => {
     };
     try {
       await registry.load({ a: { driver: "fake", config: { cli: cli(first) } } });
-      await registry.startSignIn("a");
+      await registry.startSignIn("a", false, "pc:");
       const pids: number[] = JSON.parse(readFileSync(first, "utf8"));
       const stopped = registry.logins.wait("a");
       expect(pids.map(alive)).toEqual([true, true]);
@@ -341,7 +346,7 @@ describe("ProviderRegistry", () => {
       expect(registry.logins.state("a")).toBeUndefined();
       expect(registry.logins.capture("a")).toEqual({});
       if (action === "remove") await registry.load({ a: { driver: "fake", config: { cli: cli(second) } } });
-      await registry.startSignIn("a");
+      await registry.startSignIn("a", false, "pc:");
       expect(existsSync(second)).toBe(true);
       expect(registry.logins.state("a")).toBe("pending");
       expect(JSON.parse(readFileSync(second, "utf8"))[0]).not.toBe(pids[0]);
@@ -362,7 +367,7 @@ describe("ProviderRegistry", () => {
       expect((await registry.get("muse")!.snapshot({ rescan: true })).state).toBe("available");
       const start = vi.spyOn(registry.logins, "start").mockResolvedValue({});
       vi.spyOn(registry.logins, "state").mockReturnValue("complete");
-      await registry.startSignIn("muse");
+      await registry.startSignIn("muse", false, "pc:");
       await registry.signOut("muse");
       expect(start.mock.calls.map((call) => [call[1], call[2]])).toEqual([
         ["wsl muse", ["login"]], ["wsl muse", ["logout"]],
@@ -467,10 +472,11 @@ describe("ProviderRegistry", () => {
       vi.spyOn(registry.logins, "cancel").mockImplementation(() => new Promise((resolve) => { release = resolve; }));
       vi.spyOn(registry.logins, "start").mockResolvedValue({});
       const logout = registry.signOut("a");
-      const capture = registry.describeSaved()[0].loginCapture;
+      const row = registry.describeSaved()[0];
       release();
       await logout;
-      expect(capture).toEqual({});
+      expect(row).not.toHaveProperty("loginCapture");
+      expect(registry.signInCapture("a", "pc:")).toEqual({});
     } finally {
       vi.restoreAllMocks();
       await registry.disposeAll();
@@ -503,7 +509,9 @@ describe("ProviderRegistry", () => {
       await registry.load({ a: { driver: "fake" } });
       registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: existsSync(marker) });
       await registry.describe();
-      expect(await registry.startSignIn("a", true)).toEqual({ url: "https://auth.example/device", code: "ABCD-EFGH" });
+      expect(await registry.startSignIn("a", true, "pc:")).toEqual({ url: "https://auth.example/device", code: "ABCD-EFGH" });
+      await registry.logins.wait("a");
+      await registry.settleSignIn("a", registry.logins.generation("a"));
       expect((await registry.describeCached())[0].snapshot.authenticated).toBe(true);
       const persisted = readFileSync(join(dir, "provider-probes.json"), "utf8");
       expect(persisted).not.toContain("auth.example");
@@ -546,8 +554,8 @@ describe("ProviderRegistry", () => {
     const registry = new ProviderRegistry([{ ...makeFakeDriver({ kind }).driver, install: driver.install, defaultConfig: () => ({ cli: "fake-cli" }) }]);
     await registry.load({ engine: { driver: kind } });
     const start = vi.spyOn(registry.logins, "start").mockResolvedValue({ url: "https://example.com/login", inputGeneration: 1 });
-    await registry.startSignIn("engine");
-    await registry.startSignIn("engine", true);
+    await registry.startSignIn("engine", false, "pc:");
+    await registry.startSignIn("engine", true, "pc:");
     const [desktop, phone] = start.mock.calls;
     expect([desktop[2], desktop[3]?.[key] === value, desktop[5]?.paste]).toEqual([args, false, false]);
     expect([phone[2], phone[3]?.[key], phone[5]?.paste]).toEqual([deviceArgs, value, true]);
@@ -561,17 +569,17 @@ describe("ProviderRegistry", () => {
     }, defaultConfig: () => ({ cli: "default-cli" }) }]);
     await registry.load({ a: { driver: "fake", config: { cli: "custom-cli", login: { args: ["untrusted"] } }, environment: { TEST_ENV: "yes" } } });
     const start = vi.spyOn(registry.logins, "start").mockResolvedValue({ url: "https://example.com/login" });
-    await registry.startSignIn("a", true);
+    await registry.startSignIn("a", true, "pc:");
     expect(start).toHaveBeenCalledTimes(1);
     const [id, cli, args, env, hosts, options] = start.mock.calls[0];
-    expect([id, cli, args, hosts, options]).toEqual(["a", "custom-cli", ["device"], ["auth.example"], { scope: "fake", account: undefined, logExit: true, paste: true }]);
+    expect([id, cli, args, hosts, options]).toEqual(["a", "custom-cli", ["device"], ["auth.example"], { scope: "fake", account: undefined, logExit: true, paste: true, mode: "code", owner: "pc:" }]);
     expect(env?.TEST_ENV).toBe("yes");
     expect(env?.MUSE_LOGIN).toBe("0");
-    expect(await registry.startSignIn("missing")).toBeNull();
+    expect(await registry.startSignIn("missing", false, "pc:")).toBeNull();
     await registry.disposeAll();
   });
 
-  it("refreshes auth without refreshing models while an external login waits", async () => {
+  it("checks auth once when a sign-in ends, never on reads while it waits, and refreshes no models", async () => {
     const fake = countingDriver();
     const registry = new ProviderRegistry([fake.driver]);
     await registry.load({ a: { driver: "fake" } });
@@ -579,12 +587,28 @@ describe("ProviderRegistry", () => {
     const refreshes = fake.counts.refreshes;
     registry.get("a")!.snapshot = vi.fn(async () => ({ state: "available" as const, authenticated: true }));
     registry.logins.waitExternal("a");
-    expect((await registry.describeCached())[0].snapshot.authenticated).toBe(true);
-    expect(registry.logins.state("a")).toBe("complete");
-    await registry.describeCached();
+    for (let poll = 0; poll < 10; poll++) {
+      await registry.describeCached();
+      await registry.describeKnown();
+    }
+    expect(registry.get("a")!.snapshot).not.toHaveBeenCalled();
+    await registry.settleSignIn("a", registry.logins.generation("a")!);
     expect(registry.get("a")!.snapshot).toHaveBeenCalledTimes(1);
+    expect((await registry.describeCached())[0].snapshot.authenticated).toBe(true);
     expect(fake.counts.refreshes).toBe(refreshes);
     await registry.disposeAll();
+  });
+
+  it("starts a desktop Muse sign-in as the code flow it is, so another device can answer it", async () => {
+    const muse = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === "museAgent")!;
+    const fake = makeFakeDriver({ kind: "museAgent" });
+    const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }), install: muse.install }]);
+    try {
+      await registry.load({ muse: { driver: "museAgent" } });
+      const start = vi.spyOn(registry.logins, "start").mockResolvedValue({ url: "https://auth.example/muse", code: "ABCD-EFGH" });
+      await registry.startSignIn("muse", false, "pc:");
+      expect(start.mock.calls[0][5]).toMatchObject({ mode: "code" });
+    } finally { await registry.disposeAll(); vi.restoreAllMocks(); }
   });
 
   it("never relays a Claude paste-back code", async () => {
@@ -592,12 +616,12 @@ describe("ProviderRegistry", () => {
     const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }), install: { login: { args: ["auth", "login"] } } }]);
     await registry.load({ a: { driver: "fake" } });
     vi.spyOn(registry.logins, "start").mockResolvedValue({ url: "https://example.com/login", code: "ABCD-EFGH" });
-    expect(await registry.startSignIn("a")).toEqual({ url: "https://example.com/login" });
-    expect(await registry.startSignIn("a", true)).toBeNull();
+    expect(await registry.startSignIn("a", false, "pc:")).toEqual({ url: "https://example.com/login" });
+    expect(await registry.startSignIn("a", true, "pc:")).toBeNull();
     await registry.disposeAll();
   });
 
-  it("retains managed Claude paste-back input for start and pushed rows", async () => {
+  it("retains managed Claude paste-back input for start and its starter's read", async () => {
     const fake = makeFakeDriver({ kind: "claudeAgent" });
     const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }),
       install: { login: { args: ["auth", "login"] } },
@@ -607,9 +631,10 @@ describe("ProviderRegistry", () => {
       await registry.load({ added: { driver: "claudeAgent", account: { id: "added", of: "claude", home: testHome(), generation: 1 } } });
       const capture = { url: "https://claude.com/cai/oauth/authorize?code=true", inputGeneration: 7 };
       vi.spyOn(registry.logins, "start").mockResolvedValue({ ...capture, code: "ABCD-EFGH" });
-      vi.spyOn(registry.logins, "capture").mockReturnValue({ ...capture, code: "ABCD-EFGH" });
-      expect(await registry.startSignIn("added")).toEqual(capture);
-      expect((await registry.describeCached())[0].loginCapture).toEqual(capture);
+      vi.spyOn(registry.logins, "captureFor").mockReturnValue({ ...capture, code: "ABCD-EFGH" });
+      expect(await registry.startSignIn("added", false, "pc:")).toEqual(capture);
+      expect(registry.signInCapture("added", "pc:")).toEqual(capture);
+      expect((await registry.describeCached())[0]).not.toHaveProperty("loginCapture");
     } finally { await registry.disposeAll(); vi.restoreAllMocks(); }
   });
 
@@ -622,7 +647,7 @@ describe("ProviderRegistry", () => {
     registry.logins.waitExternal("a");
     let release!: () => void;
     registry.get("a")!.snapshot = () => new Promise((resolve) => { release = () => resolve({ state: "available", authenticated: true }); });
-    const refresh = registry.refreshLogins();
+    const refresh = registry.settleSignIn("a", registry.logins.generation("a")!);
     await registry.logins.cancel("a");
     registry.logins.waitExternal("a");
     release();
@@ -645,11 +670,14 @@ describe("ProviderRegistry", () => {
     const logout = registry.signOut("a");
     await Promise.resolve();
     expect(cancel).toHaveBeenCalledWith("a");
-    expect(start).toHaveBeenCalledWith("a", "fake-cli", ["logout"], expect.any(Object), [], { scope: "fake", account: undefined });
-    expect(await registry.startSignIn("a")).toBeNull();
-    expect(await registry.signOut("a")).toBe(false);
+    expect(start).toHaveBeenCalledWith("a", "fake-cli", ["logout"], expect.any(Object), [], { scope: "fake", account: undefined, mode: "sign-out" });
+    expect(await registry.startSignIn("a", false, "pc:")).toBeNull();
+    // A second press while the first runs (another client, a reload, a retry) waits for it and gets its answer.
+    const again = registry.signOut("a");
     finish();
     expect(await logout).toBe(true);
+    expect(await again).toBe(true);
+    expect(start).toHaveBeenCalledTimes(1);
     expect((await registry.describeCached())[0].snapshot.authenticated).toBe(false);
     expect(await registry.signOut("missing")).toBeNull();
     await registry.disposeAll();
@@ -1194,12 +1222,12 @@ describe("ProviderRegistry", () => {
     }
   });
 
-  it("startSignIn and refreshLogins raise the barrier", async () => {
+  it("startSignIn and settleSignIn raise the barrier", async () => {
     const { pool, registry } = await warmRegistry();
     try {
       const barrier = vi.spyOn(pool, "barrier");
       const start = vi.spyOn(registry.logins, "start").mockResolvedValue({});
-      await registry.startSignIn("a");
+      await registry.startSignIn("a", false, "pc:");
       expect(barrier).toHaveBeenCalledWith({ instanceId: "a" }, "sign-in");
       expect(barrier.mock.invocationCallOrder[0]).toBeLessThan(start.mock.invocationCallOrder[0]);
       expect(canReserve(pool, "t1")).toBe(false);
@@ -1207,12 +1235,12 @@ describe("ProviderRegistry", () => {
       barrier.mockClear();
       registry.logins.waitExternal("a");
       registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: true });
-      await registry.refreshLogins();
+      await registry.logins.cancel("a");
+      await registry.settleSignIn("a", registry.logins.generation("a")!);
       expect(barrier.mock.calls).toEqual([
         [{ instanceId: "a" }, "refresh"],
         [{ instanceId: "a" }, "sign-in complete"],
       ]);
-      expect(registry.logins.state("a")).toBe("complete");
       expect(canReserve(pool, "t1")).toBe(true);
     } finally {
       vi.restoreAllMocks();
@@ -1252,12 +1280,12 @@ describe("ProviderRegistry", () => {
       let probed: (() => void) | undefined;
       registry.logins.waitExternal("a");
       registry.get("a")!.snapshot = () => new Promise((resolve) => { probed = () => resolve({ state: "available", authenticated: true }); });
-      const refreshed = registry.refreshLogins();
+      await registry.logins.cancel("a");
+      const refreshed = registry.settleSignIn("a", registry.logins.generation("a")!);
       await vi.waitFor(() => expect(probed).toBeDefined());
       registry.invalidateAccount("a");
       probed!();
       await refreshed;
-      expect(registry.logins.state("a")).toBe("complete");
       expect(canReserve(pool, "t1")).toBe(false);
       registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: true });
       await registry.describe();
@@ -1287,6 +1315,46 @@ describe("ProviderRegistry", () => {
     } finally {
       vi.restoreAllMocks();
       await registry.disposeAll();
+    }
+  });
+});
+
+describe("sign-in from a device that cannot see the PC's browser", () => {
+  it("marks a browser-mode sign-in and lets a code-flow start replace it", async () => {
+    const dir = mkdtempSync(join(testHome(), "login-replace-"));
+    const script = join(dir, "cli.cjs");
+    writeFileSync(script, `
+      require('node:fs').appendFileSync(process.env.CLAUDE_CONFIG_DIR, process.argv[2]);
+      process.stdout.write('https://auth.example/device\\nCode: ABCD-EFGH\\n');
+      setInterval(() => {}, 1000);
+    `);
+    const fake = makeFakeDriver({ kind: "claudeAgent" });
+    const registry = new ProviderRegistry([{ ...fake.driver,
+      defaultConfig: () => ({ cli: `"${process.execPath}" "${script}"` }),
+      install: { login: { args: ["b"], deviceArgs: ["c"] } },
+    }]);
+    const first = join(dir, "first");
+    const second = join(dir, "second");
+    try {
+      await registry.load({
+        a: { driver: "claudeAgent", environment: { CLAUDE_CONFIG_DIR: first } },
+        b: { driver: "claudeAgent", environment: { CLAUDE_CONFIG_DIR: second } },
+      });
+      await registry.startSignIn("a", false, "pc:");
+      expect((await registry.describe()).find((row) => row.instanceId === "a")?.loginOpensBrowser).toBe(true);
+      await registry.startSignIn("a", true, "pc:");
+      expect(readFileSync(first, "utf8")).toBe("bc");
+      expect((await registry.describe()).find((row) => row.instanceId === "a")?.loginOpensBrowser).toBeUndefined();
+      await registry.cancelSignIn("a");
+      await registry.startSignIn("a", false, "pc:");
+      await registry.startSignIn("b", true, "pc:");
+      const rows = await registry.describe();
+      expect(rows.find((row) => row.instanceId === "a")?.loginState).toBe("cancelled");
+      expect(rows.find((row) => row.instanceId === "b")?.loginState).toBe("pending");
+      expect(readFileSync(second, "utf8")).toBe("c");
+    } finally {
+      await registry.disposeAll();
+      removeTestData(dir);
     }
   });
 });

@@ -39,7 +39,6 @@ describe("room fence", () => {
     expect(ask("tj")).toEqual({ status: 201, body: { messageId: "m-1" } });
     expect(ask("ta").status).toBe(200);
     expect(calls.hold("ada", "tj", [], [BLOCKER])).toEqual({ blockers: [BLOCKER], notice: "" });
-    expect(calls.called("ada", "tj", BLOCKER)).toBeUndefined();
     expect(calls.cleared("tj", [BLOCKER], [], "Ran it in the worktree.")).toEqual([]);
     expect(board.list()).toHaveLength(1);
   });

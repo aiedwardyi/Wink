@@ -58,6 +58,8 @@ const bot = (messages: Message[]): Bot => ({
   modelSelection: { instanceId: "claude", model: "claude" },
 });
 
+const screen = (phone: boolean) => vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: phone && query.includes("max-width"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+
 let focused: ReturnType<typeof useStore>["state"]["focusMessage"] = null;
 function Probe() {
   focused = useStore().state.focusMessage;
@@ -143,7 +145,7 @@ const attach = (file: File) => act(async () => {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 });
 // the chat view hands the composer its bot again as messages land
-const rerender = (props: Parameters<typeof Composer>[0]) => act(async () => root!.render(createElement(StoreProvider, null, createElement(Composer, props))));
+const rerender = (props: Parameters<typeof Composer>[0]) => act(async () => root!.render(createElement(StoreProvider, null, createElement(Probe), createElement(Composer, props))));
 const expand = async () => {
   await act(async () => row()!.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
   await settle();
@@ -235,6 +237,62 @@ describe("pinned ask_user question", () => {
     resized();
     expect(card()!.style.maxHeight).toBe("106px");
     expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["22px", "auto"]);
+  });
+
+  it("lifts the tray's own cap, so a phone keeps three lines of the question with every choice in sight", async () => {
+    vi.stubGlobal("ResizeObserver", class { constructor() {} observe() {} disconnect() {} });
+    screen(true);
+    const sheet = document.head.appendChild(document.createElement("style"));
+    sheet.textContent = "[data-composer-tray] { overflow-y: auto; }";
+    const isPane = (el: Element) => el.matches("[data-composer-tray]");
+    const tall = 170;
+    const need = tall + 128;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-term-choices]") ? tall : this.matches("[data-pending-question]") ? need : 0; });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 88 : isPane(this) ? need : 0; });
+    // a phone's 30dvh tray cap at 844 is 253px, below the card's 298px
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) { return isPane(this) ? (this.style.maxHeight === "none" ? need : 253) : 0; });
+    await mount({ bot: bot([question]) });
+    const tray = host!.querySelector<HTMLElement>("[data-composer-tray]")!;
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    const choices = card()!.querySelector<HTMLElement>("[data-term-choices]")!;
+    expect(body.style.minHeight).toBe("66px");
+    expect([choices.style.maxHeight, choices.style.overflowY]).toEqual(["", ""]);
+    expect(tray.style.maxHeight).toBe("none");
+    await act(async () => root!.unmount());
+    root = null;
+    expect(tray.style.maxHeight).toBe("");
+    sheet.remove();
+  });
+
+  it("ends a cut question on a whole line, never half of one", async () => {
+    vi.stubGlobal("ResizeObserver", class { constructor() {} observe() {} disconnect() {} });
+    screen(true);
+    let shown = 113;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 0, this.matches("[data-question-body]") ? shown : 0); });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 132 : 0; });
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.style.maxHeight).toBe("110px");
+    shown = 110;
+    window.dispatchEvent(new Event("resize"));
+    expect(body.style.maxHeight).toBe("");
+    shown = 120;
+    window.dispatchEvent(new Event("resize"));
+    expect(body.style.maxHeight).toBe("110px");
+    shown = 132;
+    window.dispatchEvent(new Event("resize"));
+    expect(body.style.maxHeight).toBe("");
+  });
+
+  it("keeps a desktop card's window and the tray's cap as they were", async () => {
+    vi.stubGlobal("ResizeObserver", class { constructor() {} observe() {} disconnect() {} });
+    screen(false);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 0, this.matches("[data-question-body]") ? 174 : 0); });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches("[data-question-body]") ? 1078 : 0; });
+    await mount({ bot: bot([ask({ options: ["Prod", "Staging", "Both"] })]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    expect(body.style.maxHeight).toBe("");
+    expect(host!.querySelector<HTMLElement>("[data-composer-tray]")!.style.maxHeight).toBe("");
   });
 
   it("fades a cut question at its foot until it is scrolled to its end", async () => {
@@ -409,6 +467,105 @@ describe("pinned ask_user question", () => {
     await rerender({ bot: bot([{ ...first, card: { ...first.card!, answered: "Seoul" } }, second]) });
     expect(row()!.textContent).toContain("Which plan?");
     expect(row()!.querySelector('[aria-label="Previous question"]')).toBeNull();
+  });
+
+  it("steps between open questions from the open card, staying open", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    expect(card()!.textContent).toContain("2/2");
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("1/2");
+    expect(card()!.textContent).toContain("Which region?");
+    await act(async () => pinButton("Next question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which plan?");
+  });
+
+  it("steps from a card opened over a draft to the next question open, and from a row to a row", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await type("thinking");
+    await settle();
+    expect(card()).toBeNull();
+    await expand();
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+    await act(async () => pinButton("Fold question").click());
+    await settle();
+    await act(async () => rowButton("Next question").click());
+    await settle();
+    expect(card()).toBeNull();
+    expect(row()!.textContent).toContain("Which plan?");
+    await type("");
+  });
+
+  it("keeps the open card being read when a new question arrives, and moves on once it is answered", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    const third = ask({ subtitle: "Which color?", options: ["Red", "Blue"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    await rerender({ bot: bot([first, second, third]) });
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+    expect(card()!.textContent).toContain("1/3");
+    await rerender({ bot: bot([{ ...first, card: { ...first.card!, answered: "Seoul" } }, second, third]) });
+    await settle();
+    expect(card()!.textContent).toContain("Which color?");
+    expect(card()!.textContent).toContain("2/2");
+  });
+
+  it("keeps the card being read over a draft, open or folded, when a new question arrives", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    const third = ask({ subtitle: "Which color?", options: ["Red", "Blue"], staysOpen: true });
+    const fourth = ask({ subtitle: "Which size?", options: ["S", "L"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await type("thinking");
+    await settle();
+    await expand();
+    await act(async () => pinButton("Previous question").click());
+    await settle();
+    await rerender({ bot: bot([first, second, third]) });
+    await settle();
+    expect(row()).toBeNull();
+    expect(card()!.textContent).toContain("Which region?");
+    expect(card()!.textContent).toContain("1/3");
+    await act(async () => pinButton("Fold question").click());
+    await settle();
+    await rerender({ bot: bot([first, second, third, fourth]) });
+    await settle();
+    expect(card()).toBeNull();
+    expect(row()!.textContent).toContain("Which region?");
+    expect(row()!.textContent).toContain("1/4");
+    expect(textarea()!.value).toBe("thinking");
+    await type("");
+  });
+
+  it("shows a new question after the stepped-to row was swiped away", async () => {
+    const first = ask({ subtitle: "Which region?", options: ["Seoul", "Tokyo"], staysOpen: true });
+    const second = ask({ subtitle: "Which plan?", options: ["Pro", "Team"], staysOpen: true });
+    const third = ask({ subtitle: "Which color?", options: ["Red", "Blue"], staysOpen: true });
+    await mount({ bot: bot([first, second]) });
+    await shrink();
+    await act(async () => rowButton("Previous question").click());
+    expect(row()!.textContent).toContain("Which region?");
+    await swipe(row()!, 200);
+    expect(pin()).toBeNull();
+    expect(dot()?.textContent).toBe("2");
+    await rerender({ bot: bot([first, second, third]) });
+    await settle();
+    expect(pin()!.textContent).toContain("Which color?");
+    expect(pin()!.textContent).toContain("3/3");
   });
 
   it("outlines the choices in secondary ink with a 44px touch target", async () => {

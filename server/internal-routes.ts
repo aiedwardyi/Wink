@@ -38,7 +38,7 @@ import type { RoutineManager, RoutineRun } from "./routines.ts";
 import { cancelWake, setWake } from "./self-wake.ts";
 import { agentRoster, sectionKey, type BotRecord, type GroupDefaultResponder, type GroupRecord, type Store } from "./store.ts";
 import { isRecoveryFlushReason } from "./task-recovery-flush.ts";
-import { mergeTaskAsks } from "./task-asks.ts";
+import { mergeTaskAsks, type TaskAsk } from "./task-asks.ts";
 import { foldCompletedNextAction } from "./task-state-fold.ts";
 import { assignTaskNextAction, groundTaskArtifacts, taskStateNotice, taskStateUpdateError, taskStateUpdateSchema, type TaskResumePacket } from "./task-state.ts";
 import { workspaceDir } from "./workspace.ts";
@@ -50,7 +50,7 @@ type InternalRouteDeps = {
   MAX_COMMS_DEPTH: number;
   MAX_WORKSPACE_BOTS: number;
   computerControl: ComputerControl;
-  askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation }) => Promise<AskReply>;
+  askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation; reader?: boolean }) => Promise<AskReply>;
   runDelegatedTurn?: Parameters<typeof drainDelegations>[3];
   resolveCommsCaller?: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
@@ -61,7 +61,7 @@ type InternalRouteDeps = {
   wireBot: (bot: BotRecord) => Record<string, unknown>;
   broadcast: (payload: Record<string, unknown>) => void;
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
-  persistTaskPacket: (packet: TaskResumePacket) => TaskResumePacket | null;
+  persistTaskPacket: (packet: TaskResumePacket, opts?: { staged?: boolean }, seen?: readonly TaskAsk[]) => TaskResumePacket | null;
   readOnlyTurn: (botId: string, threadId: string) => boolean;
   /** The user line a running room turn was dispatched to answer. */
   answeredLine: (threadId: string) => string | undefined;
@@ -69,7 +69,7 @@ type InternalRouteDeps = {
   turnText?: (botId: string, threadId: string) => string | undefined;
   notify: (notification: Notification | null, turnMs?: number, routineRun?: RoutineRun | null) => void;
   botCalls?: Pick<BotCalls, "blockers">;
-  boardCalls?: Pick<BoardCalls, "hold" | "cleared" | "ask">;
+  boardCalls?: Pick<BoardCalls, "hold" | "cleared" | "ask" | "ownStuck">;
   routines: RoutineManager;
   delegationWatch: Map<string, DelegatedTurn & { endTakeover?: () => void }>;
   askHold: ReturnType<typeof watchAskHold>;
@@ -85,6 +85,7 @@ type InternalRouteDeps = {
   routineProposalPersistence: (botId: string, threadId: string) => { ok: false; status: number; error: string } | { ok: true };
   maybeResumeConnectors: (botId: string, threadId: string, resumeKey: string) => boolean;
   captureRoomPicture?: (bot: BotRecord, threadId: string) => RoomPicture | null;
+  planHint?: { room: (threadId: string) => boolean; workerReady: () => boolean; livePanes: (botId: string) => Promise<number | null> };
 };
 
 type RoomPicture = (path: string, name: string, caption: string) => Promise<
@@ -95,6 +96,9 @@ type RoomPicture = (path: string, name: string, caption: string) => Promise<
 const tokenMismatch = (claimed: { botId: string; threadId: string } | undefined, botId: string, threadId: string) =>
   Boolean(claimed && (claimed.botId !== botId || claimed.threadId !== threadId));
 
+export const PLAN_HINT = "This plan is big: write a card and hand it to a helper (terminal_playbook) before the first edit.";
+
+const readOnlyRefusal = (tool: string) => `${tool} is unavailable: the host has to turn on "Can make bots work" for whoever asked.`;
 const roomRefusal = (e: unknown) => ({ status: (e as { status?: number }).status ?? 500, error: `the room refused it: ${(e as Error).message}` });
 
 async function publishRoomPicture(picture: RoomPicture, path: string, name: string, caption: string) {
@@ -145,6 +149,15 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     routineProposalPersistence,
     maybeResumeConnectors,
   } = deps;
+  const hinted = new Map<string, string>();
+  const planHint = async (botId: string, threadId: string, plan: ReadonlyArray<{ status: string }>) => {
+    const turn = turnRegistry.current(threadId);
+    if (!deps.planHint || !turn?.helperHint || turn.botId !== botId || hinted.get(threadId) === turn.turnId) return "";
+    if (plan.filter((step) => step.status === "pending" || step.status === "active").length < 3) return "";
+    if (deps.planHint.room(threadId) || !deps.planHint.workerReady()) return "";
+    hinted.set(threadId, turn.turnId);
+    return (await deps.planHint.livePanes(botId).catch(() => null)) === 0 ? PLAN_HINT : "";
+  };
   const routineRequestSourceSchema = {
     fromBotId: z.string().min(1).max(128),
     fromThreadId: z.string().min(1).max(128),
@@ -230,7 +243,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       next.updatedBy = "bot";
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
-      const saved = persistTaskPacket(next);
+      const saved = persistTaskPacket(next, {}, asks?.trimmed);
       if (saved && body.blockers !== undefined) {
         deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
         try {
@@ -243,8 +256,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         store.patchBot(bot.id, { paneWakePaused: true });
         keepGoing.pause(bot.id, "bot-paused");
       }
+      const hint = saved && body.plan ? await planHint(bot.id, body.fromThreadId, body.plan) : "";
       return saved
-        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note, board?.notice].filter(Boolean).join(" ") })
+        ? json(res, 200, { ok: true, updatedAt: saved.updatedAt, nextAction: saved.nextAction, automaticWakesPaused: bot.paneWakePaused === true, notice: [taskStateNotice(clipped, dropped, folder), asks?.note, board?.notice, deps.boardCalls?.ownStuck(bot.id, body.fromThreadId), hint].filter(Boolean).join(" ") })
         : json(res, 409, { error: "task record could not be saved" });
     },
     agents: async (res: ServerResponse, url: URL) => {
@@ -339,7 +353,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const fromBotId = source.botId;
       const toBotId = String(body.toBotId ?? "");
       const message = String(body.message ?? "").trim();
+      const reader = body.reader === true;
       const depth = snapshot?.depth ?? 0;
+      if (deps.readOnlyTurn(fromBotId, source.threadId)) return json(res, 403, { error: readOnlyRefusal("ask_bot") });
       if (!toBotId || !message) return json(res, 400, { error: "toBotId and message required" });
       if (toBotId === fromBotId) return json(res, 400, { error: "a bot cannot message itself" });
       if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
@@ -373,6 +389,11 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       let currentFrom = from;
       let currentTarget = target;
       const queueAsk = (approved = false) => {
+        // A queued ask runs later as a normal turn, so web_read's reader is never queued.
+        if (reader) {
+          release(reservation);
+          return json(res, 200, { busy: true });
+        }
         const queued = queueDelegation(commsBus, currentFrom, { toBotId, message, depth, root: snapshot.rootId ?? undefined }, MAX_COMMS_DEPTH, fromThreadId, { kind: "ask", ready: true, approved, turnId: snapshot.turnId, id: taskId, reservation });
         if (!queued.id) return refuse(200, "no such bot");
         if (deps.runDelegatedTurn) drainWaitingOn(commsBus, approvalBus, deps.runDelegatedTurn);
@@ -424,6 +445,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         taskId,
         commsRoot: snapshot.rootId,
         reservation,
+        ...(reader ? { reader: true } : {}),
       });
       // the peer's real reply reaches the channel and this thread when its turn ends
       if (reply.taskId) {
@@ -433,7 +455,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       }
       const shown = finishDelegatedTurn(commsBus, { toBotId, taskId, sourceThreadId: fromThreadId, sourceBotId: currentFrom.id, channelId: channel.id, ask: true, inline: true, engine: reply.engine }, reply.replied, reply.text, reply.text);
       if (reply.replied) handReply(currentFrom.id, fromThreadId, taskId, requestingTurn);
-      return json(res, 200, { botName: currentTarget.name, text: reply.text, shown });
+      return json(res, 200, { botName: currentTarget.name, text: reply.text, replied: reply.replied, shown });
     },
     react: async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
@@ -463,6 +485,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!source || !from) return json(res, 403, { error: "unknown sender" });
       const fromThreadId = source.threadId;
       if (!connectorThread(from.id, fromThreadId)) return json(res, 403, { error: "source conversation does not belong to sender" });
+      if (deps.readOnlyTurn(from.id, fromThreadId)) return json(res, 403, { error: readOnlyRefusal("wake_me") });
       if (typeof body.cancel === "string") {
         return cancelWake(routines, from.id, body.cancel)
           ? json(res, 200, { ok: true })
@@ -563,6 +586,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
       if (tokenMismatch(deps.resolveCommsCaller?.(req.headers?.authorization), from.id, fromThreadId)) return json(res, 403, { error: "source thread does not belong to sender" });
+      if (deps.readOnlyTurn(from.id, fromThreadId)) return json(res, 403, { error: readOnlyRefusal("generate_image") });
       const parsed = generateImageRequestSchema.safeParse(body);
       if (!parsed.success) {
         return json(res, 400, { error: "needs a prompt and a supported size and quality" });
@@ -612,9 +636,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const fromThreadId = source.threadId;
       const owner = connectorThread(from.id, fromThreadId);
       if (!owner) return json(res, 403, { error: "source thread does not belong to sender" });
-      if (deps.readOnlyTurn(from.id, fromThreadId)) {
-        return json(res, 403, { error: 'call_api is unavailable: the host has to turn on "Can make bots work" for whoever asked.' });
-      }
+      if (deps.readOnlyTurn(from.id, fromThreadId)) return json(res, 403, { error: readOnlyRefusal("call_api") });
       const parsed = callApiRequestSchema.safeParse(body);
       if (!parsed.success) return json(res, 400, { error: "needs credential_id, method, and url; headers must be strings" });
       try {
@@ -680,6 +702,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!connectorThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
+      if (deps.readOnlyTurn(from.id, fromThreadId)) return json(res, 403, { error: readOnlyRefusal("delegate_bot") });
       if (!snapshot || !turnRegistry.get(snapshot.turnId)) return json(res, 200, { error: "This turn has ended, so it can't message teammates." });
       if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
       const credit = reserve(snapshot.rootId, "delegation");

@@ -748,7 +748,7 @@ describe("GroupWizard members", () => {
     }
   });
 
-  it("offers Carbon, Neon, Hydrogen and Argon beside 3.8 tiers for an antigravity row and never blanks the model", async () => {
+  it("offers Carbon, Neon and Hydrogen beside 3.8 tiers for an antigravity row, never Argon, and never blanks the model", async () => {
     apiImpl = () => Promise.resolve({ bot: { id: `nb${++botSeq}`, name: "New bot" } });
     instances = [
       antigravity(
@@ -779,8 +779,6 @@ describe("GroupWizard members", () => {
         "Gemini 4 Carbon Low",
         "Gemini 4 Neon XHigh",
         "Gemini 4 Hydrogen Medium",
-        "Gemini 4 Argon High",
-        "Gemini 4 Argon Low",
         "Gemini 3.8 Flash High",
         "Gemini 3.8 Flash Medium",
       ]);

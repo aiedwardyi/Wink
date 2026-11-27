@@ -18,6 +18,7 @@ import {
   SIDEBAR_SIDE_EVENT,
   SIDEBAR_SIDE_KEY,
   SIDEBAR_WIDTH_KEY,
+  saveSidebarSide,
 } from "@/lib/sidebar-preferences";
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
 import { usePhoneSwipe } from "@/lib/use-phone-swipe";
@@ -669,6 +670,93 @@ describe("Sidebar layout controls with phone collapse restored", () => {
     }
   });
 
+  it("glides the chat over once when the list swaps sides, leaving the ghost on the side it left", async () => {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "0");
+    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, "360");
+    // SAFETY: Sidebar reads only .matches.
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: !query.includes("reduced-motion") } as MediaQueryList));
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1440);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "not in this test" }), { status: 404 })));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const animate = vi.spyOn(HTMLElement.prototype, "animate").mockImplementation(() => new Animation());
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const motion = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
+    const calls = () => animate.mock.calls.map(([keyframes, options], i) => ({ el: animate.mock.contexts[i], keyframes, options }));
+    try {
+      await act(async () => root.render(createElement(
+        StoreProvider,
+        null,
+        createElement(Sidebar, { open: false, onClose: () => {} }),
+        createElement("main"),
+      )));
+      const aside = host.querySelector("aside")!;
+      const view = host.querySelector("main")!;
+      const ghost = aside.querySelector<HTMLElement>('[aria-hidden][class*="left-full"]')!;
+      animate.mockClear();
+
+      await act(async () => saveSidebarSide("right"));
+      expect(calls()).toEqual([
+        { el: ghost, keyframes: [{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], options: { ...motion, fill: "forwards" } },
+        { el: view, keyframes: [{ transform: "translateX(360px)" }, { transform: "none" }], options: motion },
+      ]);
+      expect([ghost.style.left, ghost.style.width, ghost.style.transformOrigin]).toEqual(["-1080px", "360px", "left"]);
+      // order-last paints the list above the chat unless the chat is raised while it slides over it
+      expect([view.style.zIndex, aside.style.isolation]).toEqual(["11", "isolate"]);
+
+      animate.mockClear();
+      await act(async () => saveSidebarSide("left"));
+      expect(calls()).toEqual([
+        { el: ghost, keyframes: [{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], options: { ...motion, fill: "forwards" } },
+        { el: view, keyframes: [{ transform: "translateX(-360px)" }, { transform: "none" }], options: motion },
+      ]);
+      expect([ghost.style.left, ghost.style.width, ghost.style.transformOrigin]).toEqual(["1080px", "360px", "right"]);
+
+      animate.mockClear();
+      // SAFETY: Sidebar reads only .matches.
+      vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("reduced-motion") } as MediaQueryList));
+      await act(async () => saveSidebarSide("right"));
+      expect(animate).not.toHaveBeenCalled();
+      expect([view.style.zIndex, aside.style.isolation, ghost.style.width]).toEqual(["", "", ""]);
+    } finally {
+      window.localStorage.removeItem(SIDEBAR_COLLAPSED_KEY);
+      window.localStorage.removeItem(SIDEBAR_WIDTH_KEY);
+      window.localStorage.removeItem(SIDEBAR_SIDE_KEY);
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("jumps the closed phone drawer to its new edge instead of sliding it across the chat", async () => {
+    // SAFETY: Sidebar reads only .matches.
+    vi.spyOn(window, "matchMedia").mockImplementation(() => ({ matches: false } as MediaQueryList));
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "not in this test" }), { status: 404 })));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const slide = new Animation();
+    const finish = vi.spyOn(slide, "finish").mockImplementation(() => {});
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(
+        StoreProvider,
+        null,
+        createElement(Sidebar, { open: false, onClose: () => {} }),
+        createElement("main"),
+      )));
+      const aside = host.querySelector("aside")!;
+      vi.spyOn(aside, "getAnimations").mockReturnValue([slide]);
+      await act(async () => saveSidebarSide("right"));
+      expect(aside.className).toContain("max-md:translate-x-full");
+      expect(finish).toHaveBeenCalledOnce();
+    } finally {
+      window.localStorage.removeItem(SIDEBAR_SIDE_KEY);
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
   it("mirrors the mobile arrows on the right, leaving the ghost past the drawer's right edge", async () => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "0");
     window.localStorage.setItem(SIDEBAR_WIDTH_KEY, "360");
@@ -958,7 +1046,7 @@ describe("Sidebar layout controls with phone collapse restored", () => {
   it("keeps the update control in the footer rail and uses the tighter labeled row geometry", () => {
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "Sidebar.tsx"), "utf8");
     const conversations = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "SidebarConversations.tsx"), "utf8");
-    const footer = source.slice(source.indexOf("{/* Footer */}"), source.indexOf("{profileMenuPresence.value &&"));
+    const footer = source.slice(source.indexOf("{/* Footer */}"), source.indexOf("{menuPresence.value &&"));
     expect(footer).toContain("data-sidebar-update");
     expect(footer).toContain("<UpdateButton />");
     const profileRow = footer.indexOf("data-sidebar-profile-row");

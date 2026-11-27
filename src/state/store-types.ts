@@ -4,7 +4,7 @@ import type { BotAvatarChoice, BotAvatarCrop } from "../../shared/bot-avatar";
 import type { RoutineRequestCardData } from "../../shared/routine-request";
 import type { RoutineRunCardData } from "../../shared/routine-run";
 import type { ToolDetail } from "../../shared/tool-detail";
-import type { CallPrefs, LiveVoice } from "../../shared/live-call";
+import type { CallAnswer, CallPrefs, LiveVoice } from "../../shared/live-call";
 import type { Routine, RoutineRun } from "@/lib/routines";
 import type { NotificationTarget, TerminalAttentionReason } from "@/lib/notify";
 import type { SidebarOrder } from "@/lib/sidebar-order";
@@ -89,7 +89,7 @@ export interface Message {
     ok?: boolean;
     spoken?: string;
     lines?: string[];
-    tidy?: { runId: string; undoneAt?: number };
+    tidy?: { runId: string; count?: number; undoneAt?: number };
     summary?: string;
     durationMs?: number;
     detail?: ToolDetail;
@@ -384,16 +384,21 @@ export interface TerminalAttention {
 
 export type TerminalAttentionMap = Record<string, TerminalAttention>;
 
+/** Lists by engine base, plus "engines" for the sections. seed: "browser" marks a browser's old local copy sent up once. */
+export type UsageOrderStatus = { orders: Record<string, string[]>; seed?: "browser"; rev?: number } | null;
+
 /** GET /api/config - configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
   xai?: { configured: boolean };
   gemini?: { configured: boolean; introSeen?: boolean };
-  liveCall?: { voice: LiveVoice };
+  liveCall?: { voice: LiveVoice; answer?: CallAnswer };
   openaiCompat?: { configured: boolean };
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   box: { configured: boolean };
   vps: { configured: boolean; sshAlias: string };
   rooms: { turnTimeoutMinutes: number };
+  /** The order dragged on Usage and Connections, kept by this Wink; null until one is saved. */
+  usageOrder?: UsageOrderStatus;
   localVm: { mode: "shared" | "per-bot"; maxInstances: number };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
    * a voice, which is what it takes to actually speak. The key itself is
@@ -412,7 +417,7 @@ export interface ConfigStatus {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "gemini" | "liveCall" | "openaiCompat" | "composio" | "box" | "vps" | "rooms" | "localVm" | "tts" | "imageGen" | "anthropic" | "vertex" | "customKeys" | "profile" | "features"
+  "xai" | "gemini" | "liveCall" | "openaiCompat" | "composio" | "box" | "vps" | "rooms" | "usageOrder" | "localVm" | "tts" | "imageGen" | "anthropic" | "vertex" | "customKeys" | "profile" | "features"
 >;
 
 /** How an engine gets installed - declared by its driver, mirrors
@@ -436,7 +441,9 @@ export interface RateLimitReport {
 /** One row of GET /api/instances - the model picker's data. */
 export interface InstanceInfo {
   loginState?: "pending" | "complete" | "failed" | "cancelled";
-  loginCapture?: { url?: string; code?: string; inputGeneration?: number };
+  /** The pending sign-in opened its browser on the PC. */
+  loginOpensBrowser?: boolean;
+  loginError?: string;
   instanceId: string;
   driverKind: string;
   accountOf?: string;
@@ -667,6 +674,8 @@ export type Action =
       sendSeq?: number;
       sentAfterId?: string | null;
       onError?: () => void;
+      /** The send will never run though nothing threw: Stop took it back (stopped), or its turn could not start. */
+      onRejected?: (stopped: boolean) => void;
     }
   | { type: "pendingQueued"; threadId: string; queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync"; waited?: boolean; sendSeq?: number; sentAfterId?: string | null }
   | { type: "sendQueuedNow"; botId: string; threadId: string; queueId: string }

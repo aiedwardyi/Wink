@@ -52,7 +52,7 @@ function request(askBotAndWait = vi.fn(async (..._args: unknown[]) => ({ replied
   req.headers = { authorization: `Bearer ${callers.token(from.id, from.threadId)}` };
   let body = "";
   const res = { writeHead() {}, getHeader() {}, setHeader() {}, end(value: string) { body = value; } } as unknown as ServerResponse;
-  const routes = createInternalRoutes({ store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
+  const routes = createInternalRoutes({ readOnlyTurn: () => false, store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
     connectorThread: (botId: string, threadId: string) => store.conversationForBot(botId, threadId),
     askBotAndWait, resolveCommsCaller: (header: string | string[] | undefined) => callers.resolve(header),
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
@@ -79,6 +79,14 @@ it("refuses a scoped ask after its caller turn settled", async () => {
   await pending;
   expect(output.body()).toEqual({ error: "This turn has ended, so it can't message teammates." });
   expect(ask).not.toHaveBeenCalled();
+});
+
+it.each([
+  [true, "answer"],
+  [false, "(couldn't start that bot: provider process exited before the reader turn could start)"],
+])("an inline ask says whether the peer really replied (%s)", async (replied, text) => {
+  start();
+  expect(await send(request(vi.fn(async () => ({ replied, text }))))).toMatchObject({ text, replied });
 });
 
 it("keeps a receipt root across save and load", () => {

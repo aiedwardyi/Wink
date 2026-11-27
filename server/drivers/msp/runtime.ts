@@ -5,7 +5,9 @@
 // approvals + userInput answers. Effort/model switching and account usage
 // windows build on the same channel. Never extend acp/core.ts.
 import { createHash } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import os, { homedir } from "node:os";
+import { join } from "node:path";
 
 import type {
   DriverCreateInput,
@@ -22,8 +24,8 @@ import type {
   RuntimeEventListener,
   SendTurnInput,
 } from "../../contracts.ts";
-import { newEventId, newId } from "../../contracts.ts";
-import { applyCredentialAllowlist } from "../../config.ts";
+import { cliNotFound, newEventId, newId } from "../../contracts.ts";
+import { applyCredentialAllowlist, DATA_DIR } from "../../config.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
 import { guardInput } from "../../auto-approve.ts";
 import { augmentedPath, toWslPath } from "../../env-path.ts";
@@ -39,7 +41,7 @@ import { museUsageReport } from "../rate-limits.ts";
 import { systemLedger } from "../system-ledger.ts";
 import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
 import { createMspChannel, uuidv7, type MspChannel } from "./protocol.ts";
-import { FREE_ACCESS, routedAccess } from "../turn-access.ts";
+import { FREE_ACCESS, guestText, routedAccess } from "../turn-access.ts";
 
 const INIT_TIMEOUT = 20_000;
 const SESSION_TIMEOUT = 30_000;
@@ -243,6 +245,13 @@ const isSettledApprovalError = (err: unknown): boolean =>
 /** Muse took the decision (intake passed) but failed to ack it durably. */
 const isDecideSettlementError = (err: unknown): boolean =>
   err instanceof Error && /approval decide settlement failed/.test(err.message);
+
+/** An empty folder of its own per chat, where a guest's read-only turn works. */
+const guestDesk = (threadId: string): string => {
+  const dir = join(DATA_DIR, "guest-desks", createHash("sha256").update(threadId).digest("hex").slice(0, 16));
+  mkdirSync(dir, { recursive: true });
+  return dir;
+};
 
 export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConfig> {
   const DRIVER_KIND = support.driverKind;
@@ -497,7 +506,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       const openSession = async (
         host: Host,
         request: Request,
-        shape: Pick<SendTurnInput, "resumeCursor" | "model">,
+        shape: Pick<SendTurnInput, "resumeCursor" | "model"> & Partial<Pick<SendTurnInput, "readOnly" | "ownerText">>,
         sessionRoot: string,
         sessionConfig: object,
       ) => {
@@ -507,11 +516,14 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           host.model = typeof result?.session?.modelId === "string" ? result.session.modelId : null;
           if (!host.sessionId) throw new Error("session/start returned no sessionId");
         };
-        if (typeof shape.resumeCursor === "string") {
+        // a resumed session keeps the root it started in, the host's project: someone else's words start over
+        if (typeof shape.resumeCursor === "string" && !guestText(shape)) {
           try {
+            // a guest's turn may have started this session in its empty folder: Muse 1.4.25+ moves it
+            // to this turn's root. A resume that can't move starts fresh below, never in the old root.
             const resumed: any = await request(
               "session/resume",
-              { commandId: uuidv7(), sessionId: shape.resumeCursor, ...sessionConfig },
+              { commandId: uuidv7(), sessionId: shape.resumeCursor, workspaceRoot: sessionRoot, ...sessionConfig },
               SESSION_TIMEOUT,
             );
             host.sessionId = typeof resumed?.session?.sessionId === "string" ? resumed.session.sessionId : shape.resumeCursor;
@@ -529,6 +541,8 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             { commandId: uuidv7(), workspaceRoot: sessionRoot, ...(model ? { modelId: model } : {}), ...sessionConfig },
             SESSION_TIMEOUT,
           ));
+          // the fallback text carries the history the skipped resume would have
+          if (typeof shape.resumeCursor === "string") host.fellBack = true;
         }
         if (model && model !== host.model) {
           // Mid-session switch (cursor.ts configureSession is the ACP
@@ -640,7 +654,9 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
     systemPromptChars: typeof turn.system === "string" ? turn.system.length : 0,
   });
   turnTimer.mark("dispatch");
-        const cwd = turn.cwd ?? config.workspace ?? homedir();
+        // --disable-write and --disable-shell leave the read tools, which reach the whole workspace:
+        // someone else's words work in an empty folder of their own, never the host's project
+        const cwd = guestText(turn) ? guestDesk(threadId) : turn.cwd ?? config.workspace ?? homedir();
         const env = childEnv();
         const asks = new Map<string, Ask>();
         // Stop can land before the real interrupt is installed below; a
@@ -1507,7 +1523,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             cliResolved = resolved ? Promise.resolve(true) : null;
             if (!resolved) {
               if (gated) return lastSnapshot ?? { state: "unavailable", reason: wslBlockedReason(support.displayName) };
-              return { state: "unavailable", reason: `\`${effectiveCli()}\` CLI not found` };
+              return cliNotFound(effectiveCli());
             }
             const version = await probe(effectiveCli(), env);
             const authenticated = await support.isAuthenticated(env, config);

@@ -43,6 +43,7 @@ interface FrameProps {
   inline?: boolean;
   /** inside the Show pane, whose header holds Maximize and Close */
   hosted?: { maximized: boolean };
+  kept?: boolean;
   onClose(): void;
 }
 
@@ -50,7 +51,7 @@ const TAG_FONT = `10px "Cascadia Mono", ui-monospace, monospace`;
 // measureText resolves the font on first use (several ms); the tag font is monospace.
 const TAG_CHAR = 6.1;
 
-export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false, inline = false, hosted, onClose }: FrameProps) {
+export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false, inline = false, hosted, kept, onClose }: FrameProps) {
   const { locale } = useI18n();
   const c = copy[locale];
   const phone = useIsPhone();
@@ -174,7 +175,11 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
     if (!canvas || !ctx) return;
     const tile = show.tile;
     const [w, h] = tileSize(show);
-    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const px = Math.max(w / Math.max(1, canvas.clientWidth || w), h / Math.max(1, canvas.clientHeight || h));
+    const k = Math.min(2, Math.max(1, Math.round((window.devicePixelRatio || 1) / px * 4) / 4)), cw = Math.round(w * k), ch = Math.round(h * k);
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    ctx.imageSmoothingQuality = "high";
     const stored = show.frame();
     if (stored && bitmap.current?.jpeg !== stored.jpeg) {
       const jpeg = stored.jpeg;
@@ -190,7 +195,6 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
     ctx.fillRect(0, 0, w, h);
     // The last picture stays up while the next one decodes, so a scroll stop never flashes black.
     if (bitmap.current?.tile === tile) ctx.drawImage(bitmap.current.image, 0, 0, w, h);
-    const px = Math.max(w / Math.max(1, canvas.clientWidth || w), h / Math.max(1, canvas.clientHeight || h));
     ctx.lineWidth = px;
     const reel = show.reelIssue();
     if (reel?.box) {
@@ -293,7 +297,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false
   };
 
   return (
-    <div ref={frameRef} className="verify-watch-frame" data-inline={inline || undefined} data-maximized={expanded || undefined}>
+    <div ref={frameRef} className="verify-watch-frame" data-inline={inline || undefined} data-maximized={expanded || undefined} data-kept={kept}>
       <div className="verify-watch-bar">
         <span className="verify-watch-dots" aria-hidden="true"><i /><i /><i /></span>
         <div role="tablist" className="verify-watch-tabs">

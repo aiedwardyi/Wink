@@ -30,6 +30,7 @@ import { ProviderRegistry } from "../../harness/registry.ts";
 import * as procs from "../../procs.ts";
 import { createWarmPool, type WarmPool } from "../warm-pool.ts";
 import { acpConnection } from "./connection.ts";
+import { AGENTS_IDENTITY, AGENTS_PROXY, CATALOG_ONLY, listAgentsTools, schemaChars } from "../../testing/agents-tools.ts";
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -1501,6 +1502,28 @@ describe("ACP turns (fake CLI)", () => {
     expect(JSON.parse(readFileSync(`${dump}.cwd.json`, "utf8"))).toBe(scratch);
     const servers = JSON.parse(readFileSync(`${dump}.mcp.json`, "utf8"));
     expect(servers).toContainEqual(expect.objectContaining({ name: "agents", command: "C:\\tools\\agent-server.exe" }));
+  });
+
+  // Grok already reaches MCP tools through its own search_tool and use_tool
+  // (test/fixtures/recorded/grok/agents-allow-rule.json), so the catalog stays
+  // an opt-in here: ORBIT_WINK_TOOL_CATALOG=1 for the eval arm.
+  it.each(["", "0", "1"])("leaves Grok's agents tools to Grok's own tool search with catalog flag %s", async (flag) => {
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", flag);
+    await create(GrokAgentDriver);
+    const dump = join(scratch, "grok-catalog.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-grok-catalog", text: "hi", model: "grok-4.5", cwd: scratch, integrations: { agents: { command: process.execPath, args: [AGENTS_PROXY], env: AGENTS_IDENTITY } } });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    // SAFETY: the fake ACP CLI dumps session/new mcpServers as acp/core.ts built them
+    const servers = JSON.parse(readFileSync(`${dump}.mcp.json`, "utf8")) as { name: string; env: { name: string; value: string }[] }[];
+    const env = Object.fromEntries(servers.find((server) => server.name === "agents")!.env.map(({ name, value }) => [name, value]));
+    expect(env.OMB_WINK_TOOL_CATALOG).toBe(flag === "1" ? "1" : undefined);
+    if (flag === "") {
+      const tools = await listAgentsTools(env);
+      expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(CATALOG_ONLY));
+      expect(schemaChars(tools), "Wink's agents tool schemas Grok can search grew; measure before raising").toBeLessThanOrEqual(25_800);
+    }
+    vi.unstubAllEnvs();
   });
 
   it("emits each assistant text block before the tool that follows it", async () => {

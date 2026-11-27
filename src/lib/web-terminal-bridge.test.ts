@@ -97,7 +97,7 @@ describe("createWebTerminalBridge", () => {
     bridge.onData((event) => seen.push(event));
     bridge.onExit((event) => exits.push(event.exitCode));
     const opened = await attach(bridge, { modes: [2004], resetModes: [25] });
-    expect(lives[0].url).toBe("/api/bots/bot-1/terminal/live");
+    expect(lives[0].url).toBe("/api/bots/bot-1/terminal/live?main=1");
     expect(opened).toMatchObject({ id: "s1", output: "prompt> ", seq: 5, cols: 100, rows: 30, exitCode: null, modes: [2004], resetModes: [25] });
     lives[0].push({ kind: "output", seq: 5, data: "old" });
     lives[0].push({ kind: "output", seq: 6, data: "a" });
@@ -127,7 +127,7 @@ describe("createWebTerminalBridge", () => {
     opened.catch(() => {});
     await flush();
     expect(posts.map((post) => post.path)).toEqual(["/api/bots/bot-1/terminal/start"]);
-    expect(lives.map((live) => live.url)).toEqual(["/api/bots/bot-1/terminal/live"]);
+    expect(lives.map((live) => live.url)).toEqual(["/api/bots/bot-1/terminal/live?main=1"]);
     lives[0].push(snapshot());
     await expect(opened).resolves.toMatchObject({ id: "s1" });
   });
@@ -332,6 +332,26 @@ describe("createWebTerminalBridge", () => {
     vi.advanceTimersByTime(2_000);
     await flush();
     expect(closed).toEqual([]);
+  });
+
+  // Chromium queues a cached GET behind an identical one still waiting on headers.
+  it("opens Main while the workspace's roster read of the same URL waits on headers", async () => {
+    const request = vi.mocked(fetch);
+    const original = request.getMockImplementation()!;
+    let release!: () => void;
+    const answered = new Promise<void>((done) => { release = done; });
+    request.mockImplementation(async (url, init) => {
+      if (String(url).endsWith("?panes=1") && init?.cache !== "no-store") await answered;
+      return original(url, init);
+    });
+    const bridge = make();
+    const workspace = bridge.readBot?.("bot-1", { panesOnly: true });
+    const opened = bridge.open({ botId: "bot-1", cols: 80, rows: 24 });
+    opened.catch(() => {});
+    await flush();
+    expect(lives.map((live) => live.url)).toEqual(["/api/bots/bot-1/terminal/live?main=1"]);
+    release();
+    await workspace;
   });
 
   it("keeps one roster refresh in flight and aborts it on cancel", async () => {

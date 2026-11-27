@@ -6,6 +6,7 @@ import type { PreviewImage } from "@/lib/media-viewer";
 import { saveFile } from "@/lib/open-file";
 import { reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING } from "@/lib/phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { holdVideoKeys } from "@/lib/video-keys";
 import {
   atFit, fitView, imageFrame, KEY_STEP, panBy, resizeView, toggleZoomAt,
   wheelZoomFactor, zoomAround, zoomKeyAction, type ZoomFrame, type ZoomKeyAction, type ZoomView,
@@ -52,7 +53,9 @@ export function MediaViewer({ image, closing = false, onClose, previous, next, o
   // a removed video keeps its decoder and connection until collected, so let go of both now
   const play = useCallback((video: HTMLVideoElement) => {
     video.setAttribute("src", src);
+    const release = holdVideoKeys(video);
     return () => {
+      release();
       video.pause();
       video.removeAttribute("src");
       video.load();

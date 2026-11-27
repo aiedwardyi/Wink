@@ -10,7 +10,8 @@ export function checkedRoomName(value: unknown, taken: readonly string[]): { ok:
   if (typeof value !== "string") return { ok: false, error: "name must be text" };
   const name = value.normalize("NFC").trim();
   if (!name || [...name].length > NAME_MAX) return { ok: false, error: `name must be 1-${NAME_MAX} characters` };
-  if (/[@\r\n]/.test(name)) return { ok: false, error: "name can't contain @ or a line break" };
+  // < keeps a tag such as <attached-image path=...> out of the room lines bots read
+  if (/[@<\r\n]/.test(name)) return { ok: false, error: "name can't contain @, < or a line break" };
   const key = nameKey(name);
   if (key === "everyone") return { ok: false, error: "that name is reserved" };
   if (taken.some((other) => nameKey(other) === key)) return { ok: false, error: "someone in this room already has that name" };
@@ -19,7 +20,7 @@ export function checkedRoomName(value: unknown, taken: readonly string[]): { ok:
 
 /** Someone joining by the room code never types a name: theirs, made to fit, numbered once taken. */
 export function joinerName(value: unknown, taken: readonly string[]): string {
-  const own = typeof value === "string" ? [...value.normalize("NFC").replace(/[@\r\n]/g, "").trim()].slice(0, NAME_MAX - 4).join("").trim() : "";
+  const own = typeof value === "string" ? [...value.normalize("NFC").replace(/[@<\r\n]/g, "").trim()].slice(0, NAME_MAX - 4).join("").trim() : "";
   const base = own || "Guest";
   for (let n = 1; ; n++) {
     const checked = checkedRoomName(n === 1 ? base : `${base} ${n}`, taken);

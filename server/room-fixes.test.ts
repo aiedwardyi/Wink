@@ -52,6 +52,19 @@ beforeEach(() => {
 });
 afterEach(closeRoomsDb);
 
+describe("post_to_group", () => {
+  it("links exactly one hosted room entry to the bot's message", () => {
+    const text = "Research links\n- One\n- Two";
+    expect(fixes().postToGroup(bot.id, { group: "team", text })).toEqual({ text: 'Posted in "Team".' });
+    const entries = recentRoomEntries(room.hosted.roomId, 20);
+    expect(entries).toEqual([expect.objectContaining({ text, author: { kind: "bot", id: bot.id, name: bot.name } })]);
+    expect(store.messagesFor(room.threadId)).toEqual([expect.objectContaining({
+      text, role: "bot", kind: "text", from: { botId: bot.id, name: bot.name, color: bot.color }, roomEntryId: entries[0]!.id,
+    })]);
+    expect(store.group(room.id)?.unread).toBe(true);
+  });
+});
+
 describe("room fixes", () => {
   it("stores the link when a bot links the pane it just launched", async () => {
     const linked = await fixes().link({ botId: bot.id, threadId: room.threadId, sessionId: "abcdef12", title: "Export button does nothing" });

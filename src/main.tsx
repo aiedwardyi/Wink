@@ -28,8 +28,19 @@ startPhoneSeen();
 startTeamActive();
 startUsageStats(statsUi, isPhone);
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+const root = createRoot(document.getElementById("root")!);
+if (window.location.pathname === "/glasses") {
+  void import("./glass/GlassApp").then(({ GlassApp }) =>
+    root.render(
+      <StrictMode>
+        <GlassApp />
+      </StrictMode>,
+    ),
+  );
+} else {
+  root.render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+}

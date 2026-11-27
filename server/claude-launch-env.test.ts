@@ -14,7 +14,8 @@ const SITES = {
   // Headless Claude: Code Mode only runs in the interactive terminal.
   "server/drivers/claude.ts": { launches: 2 },
   "server/drivers/claude-fork.ts": { launches: 1 },
-  "server/drivers/antigravity-auth-cli.ts": { launches: 2 },
+  "server/drivers/antigravity-auth-cli.ts": { launches: 1 },
+  "server/drivers/os-keyring.ts": { launches: 1 },
   // Control requests only, never a model turn.
   "server/claude-usage-probe.ts": { launches: 1 },
   "companion/src/listener.ts": { launches: 1 },
@@ -34,7 +35,7 @@ const SITES = {
   "server/device-sync.ts": { launches: 3 },
   "server/drivers/acp/core.ts": { launches: 2 },
   "server/drivers/acp/muse.ts": { launches: 1 },
-  "server/drivers/antigravity.ts": { launches: 3 },
+  "server/drivers/antigravity.ts": { launches: 4 },
   "server/drivers/cli-text.ts": { launches: 1 },
   "server/drivers/codex-account.ts": { launches: 1 },
   "server/drivers/codex-catalog.ts": { launches: 1 },

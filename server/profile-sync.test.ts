@@ -33,12 +33,14 @@ import {
   readSyncOperationsAsync,
   readSyncOperationsFor,
   resolveSyncAvatarPath,
+  restoreSyncedAvatar,
   saveProfileSyncSettings,
   serializeSyncOperation,
   syncAvatarMatches,
   syncOperationFileName,
   syncOperationsSignature,
   syncOperationsStatus,
+  syncValueHash,
   writeSyncAvatarAsset,
   writeSyncOperation,
   type ProfileSyncOperation,
@@ -477,6 +479,24 @@ describe("sync avatar assets", () => {
     expect(syncAvatarMatches(root, name, Buffer.from(bytes))).toBe(true);
     expect(syncAvatarMatches(root, name, Buffer.from([0x89, 0x50]))).toBe(false);
     expect(syncAvatarMatches(root, "assets/missing.png", bytes)).toBe(false);
+  });
+
+  it("restores a lost picture from the asset this PC last synced, never over a file", () => {
+    const root = mkdtempSync(join(tmpdir(), "orbit-profile-sync-avatar-restore-"));
+    roots.push(root);
+    const attachments = join(root, "attachments");
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x07]);
+    const asset = writeSyncAvatarAsset(root, bytes, "png");
+    writeSyncAvatarAsset(root, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x08]), "png");
+    const synced = { "bot:bot-1:avatarAsset": syncValueHash(asset) };
+    expect(restoreSyncedAvatar(root, {}, "bot-1", attachments, "lost.png")).toBe(false);
+    expect(restoreSyncedAvatar(root, synced, "bot-1", attachments, "lost.jpg")).toBe(false);
+    expect(restoreSyncedAvatar(root, synced, "bot-1", attachments, "../lost.png")).toBe(false);
+    expect(restoreSyncedAvatar(root, synced, "bot-1", attachments, "lost.png")).toBe(true);
+    expect(readFileSync(join(attachments, "lost.png")).equals(bytes)).toBe(true);
+    writeFileSync(join(attachments, "kept.png"), "kept");
+    expect(restoreSyncedAvatar(root, synced, "bot-1", attachments, "kept.png")).toBe(false);
+    expect(readFileSync(join(attachments, "kept.png"), "utf8")).toBe("kept");
   });
 });
 

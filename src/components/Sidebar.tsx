@@ -11,7 +11,6 @@ import {
   FolderMinus,
   FolderPlus,
   Loader2,
-  LogOut,
   Pencil,
   PanelLeftClose,
   PanelLeftOpen,
@@ -24,7 +23,6 @@ import {
   Search,
   Settings,
   Trash2,
-  UserRound,
   Users,
   X,
 } from "lucide-react";
@@ -64,9 +62,6 @@ import { SidebarGroupListItem as GroupListItem, useSidebarRooms } from "./Sideba
 import { confirmRoomDelete, TeamRoomDialogs, TeamRoomMenuItems, TeamRoomSidebarActions } from "./TeamRoomMenu";
 import { joinedRoomIdOf } from "@/lib/team-rooms";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { MENU_CLASS, menuKeyDown } from "./MessageMenu";
-import { relaySignInSite } from "@/lib/devices-setup";
-import { leaveSignedOut, sessionState, sessionStreamLive, signedOutLanding } from "@/lib/signed-out";
 import {
   displaySidebarWidth,
   dockedDetailsWidth,
@@ -128,8 +123,27 @@ import { trackFeature, trackScreen } from "@/lib/usage-stats";
 
 // Effect-level easing: getComputedTiming().progress is then the eased edge position.
 const SIDEBAR_MOTION = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
-/** The profile menu's w-52. */
-const PROFILE_MENU_WIDTH = 208;
+
+// The view and the open docked panels; a closing panel keeps its own exit. Picked
+// without reading style, which React's commit has just made dirty.
+function besideViews(aside: HTMLElement): HTMLElement[] {
+  const views: HTMLElement[] = [];
+  const view = aside.nextElementSibling;
+  for (let el = view; el; el = el.nextElementSibling) {
+    if (el instanceof HTMLElement && (el === view || el.matches("[data-side-panel]:not([data-closing])"))) views.push(el);
+  }
+  return views;
+}
+
+function slideBeside(aside: HTMLElement, shift: number): Animation[] {
+  const motions = besideViews(aside).map((el) => el.animate([{ transform: `translateX(${shift}px)` }, { transform: "none" }], SIDEBAR_MOTION));
+  const view = aside.nextElementSibling;
+  // A closing panel docked inside the view would ride its slide; translate leaves its own exit's transform alone.
+  for (const el of view?.querySelectorAll<HTMLElement>("[data-side-panel][data-closing]") ?? []) {
+    motions.push(el.animate([{ translate: `${-shift}px 0` }, { translate: "0 0" }], SIDEBAR_MOTION));
+  }
+  return motions;
+}
 
 export { compactSidebarModelLabel } from "./SidebarConversations";
 
@@ -595,8 +609,6 @@ export function Sidebar({
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useSidebarRooms();
-  const { reconnectLive } = useStore();
-  const signingOut = useRef(false);
   const profile = shownProfile(state);
   const { capabilities } = useDesktopCapabilities();
   const showPhone = showSidebarPhone() && phoneSettingsAvailable(capabilities.host);
@@ -620,12 +632,6 @@ export function Sidebar({
   const [roomSectionPicker, setRoomSectionPicker] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
   useEffect(() => { if (plusOpen) trackScreen("new-menu"); }, [plusOpen]);
-  const [signInSite] = useState(relaySignInSite);
-  const [profileMenu, setProfileMenu] = useState<{ left: number; bottom: number } | null>(null);
-  const profileMenuPresence = usePresence(profileMenu);
-  const profileMenuRef = useRef<HTMLDivElement>(null);
-  const closeProfileMenu = useCallback(() => setProfileMenu(null), []);
-  useListMenuDismiss("[data-profile-menu]", "[data-sidebar-list]", !profileMenu, closeProfileMenu);
   const [wizard, setWizard] = useState(false);
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
   useEffect(() => { if (teamLibraryOpen) trackScreen("teams-library"); }, [teamLibraryOpen]);
@@ -684,7 +690,7 @@ export function Sidebar({
   const density: SidebarDensity = sidebarCollapsed ? "icons" : "comfortable";
   const backOverlay = deleteTarget ? "delete" : sectionPicker ? "section" : roomSectionPicker ? "room-section"
     : menu ? "menu" : roomMenu ? "room-menu" : wizard ? "wizard" : archivedBotsOpen ? "archived"
-    : trashOpen ? "trash" : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : profileMenu ? "profile-menu" : null;
+    : trashOpen ? "trash" : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : null;
   useEffect(() => {
     onOverlayChange?.(backOverlay);
   }, [backOverlay, onOverlayChange]);
@@ -700,7 +706,6 @@ export function Sidebar({
       else if (trashOpen) setTrashOpen(false);
       else if (teamLibraryOpen) { setTeamLibraryOpen(false); setTeamInstallUrl(null); }
       else if (plusOpen) setPlusOpen(false);
-      else if (profileMenu) setProfileMenu(null);
     };
     window.addEventListener("orbit:close-sidebar-overlay", close);
     return () => window.removeEventListener("orbit:close-sidebar-overlay", close);
@@ -733,6 +738,8 @@ export function Sidebar({
   const asideRef = useRef<HTMLElement>(null);
   const sidebarGhostRef = useRef<HTMLDivElement>(null);
   const shownSidebarWidth = useRef(0);
+  const shownSidebarSide = useRef(sidebarSide);
+  const swapCarry = useRef(0);
   // Bot details docks beside the chat above the breakpoint and takes width from it.
   const dockedAsideWidth = dockedDetailsWidth(
     state.settingsOpen,
@@ -894,18 +901,8 @@ export function Sidebar({
       };
       motions.push(shrink);
     }
-    // The view and the open docked panels; a closing panel keeps its own exit. Picked
-    // without reading style, which React's commit has just made dirty.
+    motions.push(...slideBeside(aside, railShift));
     const view = aside.nextElementSibling;
-    for (let el = view; el; el = el.nextElementSibling) {
-      if (el instanceof HTMLElement && (el === view || el.matches("[data-side-panel]:not([data-closing])"))) {
-        motions.push(el.animate([{ transform: `translateX(${railShift}px)` }, { transform: "none" }], SIDEBAR_MOTION));
-      }
-    }
-    // A closing panel docked inside the view would ride its slide; translate leaves its own exit's transform alone.
-    for (const el of view?.querySelectorAll<HTMLElement>("[data-side-panel][data-closing]") ?? []) {
-      motions.push(el.animate([{ translate: `${-railShift}px 0` }, { translate: "0 0" }], SIDEBAR_MOTION));
-    }
     // the list's raised badges would show through the view sliding off it
     const raised = shift < 0 && view instanceof HTMLElement ? view : null;
     if (raised) {
@@ -923,6 +920,54 @@ export function Sidebar({
       if (raised) raised.style.zIndex = "";
     };
   }, [sidebarDisplayWidth]);
+
+  // A side swap snaps the layout once, like a fold: the views glide the list's width
+  // off its new place while the ghost holds its old one, so nothing crosses the screen.
+  useLayoutEffect(() => {
+    const from = shownSidebarSide.current;
+    shownSidebarSide.current = sidebarSide;
+    const aside = asideRef.current;
+    const ghost = sidebarGhostRef.current;
+    if (from === sidebarSide || !aside || !ghost) return;
+    // the closed drawer's translate flips edge to edge; it must not slide across the chat
+    for (const motion of aside.getAnimations()) motion.finish();
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!window.matchMedia(`(min-width: ${SIDEBAR_INLINE_BREAKPOINT}px)`).matches) return;
+    // an interrupted swap reverses from where the views are
+    const shift = (sidebarOnRight ? sidebarDisplayWidth : -sidebarDisplayWidth) + swapCarry.current;
+    swapCarry.current = 0;
+    if (!shift) return;
+    const across = (aside.parentElement?.clientWidth ?? 0) - sidebarDisplayWidth;
+    ghost.style.width = `${Math.abs(shift)}px`;
+    ghost.style.left = `${sidebarOnRight ? -across : across + sidebarDisplayWidth - Math.abs(shift)}px`;
+    ghost.style.transformOrigin = sidebarOnRight ? "left" : "right";
+    const shrink = ghost.animate([{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], { ...SIDEBAR_MOTION, fill: "forwards" });
+    const motions = [shrink, ...slideBeside(aside, shift)];
+    // md:order-last paints the list over the views sliding across it; its raised badges stay under them too
+    const raised = besideViews(aside).filter((el) => !el.style.zIndex);
+    aside.style.isolation = "isolate";
+    for (const el of raised) el.style.zIndex = "11";
+    const settle = () => {
+      ghost.style.width = "";
+      ghost.style.left = "";
+      ghost.style.transformOrigin = "";
+      aside.style.isolation = "";
+      for (const el of raised) el.style.zIndex = "";
+    };
+    shrink.onfinish = () => {
+      shrink.cancel();
+      settle();
+    };
+    return () => {
+      const progress = shrink.effect?.getComputedTiming().progress;
+      if (progress != null) swapCarry.current = shift * (1 - progress);
+      for (const motion of motions) {
+        motion.finished.catch(() => undefined);
+        motion.cancel();
+      }
+      settle();
+    };
+  }, [sidebarSide]);
 
   useEffect(() => {
     if (sidebarCollapsed || !focusSearchAfterExpand.current) return;
@@ -980,34 +1025,6 @@ export function Sidebar({
       refreshTrash();
     } catch (cause) {
       setTeamFeedback({ error: true, text: cause instanceof Error ? cause.message : String(cause) });
-    }
-  };
-
-  const signOut = async (site: string) => {
-    if (signingOut.current) return;
-    signingOut.current = true;
-    setTeamFeedback(null);
-    signedOutLanding(`${site}/?signedout=1`);
-    const confirmation = new AbortController();
-    try {
-      await api("/api/phone/sign-out", { method: "POST" });
-      return leaveSignedOut(true);
-    } catch {
-      const live = sessionStreamLive(confirmation.signal);
-      const probe = new AbortController();
-      const state = await Promise.race([sessionState(probe), live]);
-      probe.abort();
-      if (state === "gone") return leaveSignedOut();
-      if (state === "unknown") {
-        // The old stream can outlive a revoke or a gateway outage on new requests.
-        reconnectLive();
-        await live;
-      }
-      signedOutLanding();
-      setTeamFeedback({ error: true, text: t("chrome.signOutFailed") });
-    } finally {
-      confirmation.abort();
-      signingOut.current = false;
     }
   };
 
@@ -1922,14 +1939,7 @@ export function Sidebar({
         <CallWidgetSlot narrow={density === "icons"} className="mb-2 max-md:hidden" />
         <div className={cn("flex min-w-0 items-center", density === "icons" && "justify-center")} data-sidebar-profile-row>
           <button
-            onClick={(event) => {
-              if (!signInSite) return dispatch({ type: "toggleAppSettings", open: true, section: "account" });
-              const rect = event.currentTarget.getBoundingClientRect();
-              const left = Math.max(8, Math.min(rect.left, window.innerWidth - PROFILE_MENU_WIDTH - 8));
-              setProfileMenu(profileMenu ? null : { left, bottom: window.innerHeight - rect.top + 4 });
-            }}
-            aria-haspopup={signInSite ? "menu" : undefined}
-            aria-expanded={signInSite ? Boolean(profileMenu) : undefined}
+            onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "account" })}
             className={cn("flex min-w-0 items-center rounded-xl py-2 text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "flex-1 gap-3 px-3")}
             aria-label={density === "icons" ? t("settings.section.account") : undefined}
             title={density === "icons" ? t("settings.section.account") : undefined}
@@ -1965,50 +1975,6 @@ export function Sidebar({
         </div>
       </div>
 
-      {profileMenuPresence.value && signInSite && createPortal(
-        <>
-          {!profileMenuPresence.closing && <div className="fixed inset-0 z-50" onMouseDown={() => setProfileMenu(null)} />}
-          <div
-            ref={profileMenuRef}
-            role="menu"
-            aria-label={t("settings.section.account")}
-            data-profile-menu
-            data-closing={profileMenuPresence.closing || undefined}
-            inert={profileMenuPresence.closing}
-            style={profileMenuPresence.value}
-            onKeyDown={(event) => menuKeyDown(profileMenuRef, event)}
-            className={cn(MENU_CLASS, "z-50 w-52 overflow-hidden")}
-          >
-            <button
-              type="button"
-              role="menuitem"
-              autoFocus
-              onClick={() => {
-                setProfileMenu(null);
-                dispatch({ type: "toggleAppSettings", open: true, section: "account" });
-              }}
-              className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
-            >
-              <UserRound size={16} className="text-ink-secondary" />
-              {t("settings.section.account")}
-            </button>
-            <div className="mx-2 my-1 border-t border-hairline/40" />
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setProfileMenu(null);
-                void signOut(signInSite);
-              }}
-              className={cn("flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink", MENU_ITEM_HOVER)}
-            >
-              <LogOut size={16} className="text-ink-secondary" />
-              {t("chrome.signOut")}
-            </button>
-          </div>
-        </>,
-        document.body,
-      )}
       {menuPresence.value && (
         <BotContextMenu
           menu={menuPresence.value}

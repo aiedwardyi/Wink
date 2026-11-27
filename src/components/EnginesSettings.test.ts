@@ -317,6 +317,72 @@ it.each(["grokAgent", "museAgent", "antigravityAgent"])("signs %s out on one cli
   }
 });
 
+it.each(["grokAgent", "museAgent", "antigravityAgent"])("flips %s to Sign In once its sign-out answers, while a probe of every engine still runs", async (driverKind) => {
+  const connected = instance({ instanceId: driverKind, driverKind, install: { login: { args: ["login"] }, logout: ["logout"] },
+    snapshot: { state: "available", authenticated: true, account: "ed@example.com" } });
+  const signedOut = { ...connected, snapshot: { state: "available" as const, authenticated: false } };
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation((url, init) => init?.method === "POST" ? Promise.resolve(new Response("{}"))
+    : /[?&](refresh|rescan)=1/.test(String(url)) ? new Promise<Response>(() => {}) : Promise.resolve(new Response(JSON.stringify({ instances: [signedOut] }))));
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(EngineRow, { instance: connected }))));
+    await act(async () => host.querySelector("button")!.click());
+    const button = host.querySelector("button")!;
+    expect(button.textContent).toBe("Sign In");
+    expect(button.disabled).toBe(false);
+    expect(host.textContent).not.toContain("ed@example.com");
+  } finally {
+    await act(async () => root.unmount());
+    fetch.mockRestore();
+  }
+});
+
+it.each(["museAgent", "antigravityAgent"])("names the login %s showed on Sign Out, and redraws the one another client put there with no error", async (driverKind) => {
+  const shown = instance({ instanceId: driverKind, driverKind, install: { login: { args: ["login"] }, logout: ["logout"] },
+    snapshot: { state: "available", authenticated: true, account: "old@example.com" } });
+  const replaced = { ...shown, snapshot: { state: "available" as const, authenticated: true, account: "new@example.com" } };
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => init?.method === "POST"
+    ? Response.json({ error: "changed", code: "login-changed" }, { status: 409 }) : Response.json({ instances: [replaced] }));
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(EngineRow, { instance: shown }))));
+    await act(async () => host.querySelector("button")!.click());
+    expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body))).toEqual({ login: "old@example.com" });
+    expect(host.querySelector("[data-account-email]")?.textContent).toBe("new@example.com");
+    expect(host.querySelector("button")?.textContent).toBe("Sign Out");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    fetch.mockRestore();
+  }
+});
+
+it("shows the Gemini account once its browser sign-in finishes, with no reopen", async () => {
+  vi.useFakeTimers();
+  const signedOut = instance({ instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Gemini (Antigravity)", install: { login: { args: ["login"] }, logout: ["logout"] },
+    snapshot: { state: "available", authenticated: false } });
+  let row: InstanceInfo = { ...signedOut, loginState: "pending" };
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => init?.method === "POST"
+    ? new Response(JSON.stringify({ url: "https://accounts.google.com/o/oauth2/auth" })) : new Response(JSON.stringify({ instances: [row] })));
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(EngineRow, { instance: signedOut }))));
+    await act(async () => host.querySelector("button")!.click());
+    expect(host.textContent).toContain("Sign in with your browser");
+    row = { ...signedOut, snapshot: { state: "available", authenticated: true, account: "ed@example.com" } };
+    await act(async () => vi.advanceTimersByTime(2000));
+    expect(host.querySelector("[data-account-email]")?.textContent).toBe("ed@example.com");
+    expect(host.querySelector("button")?.textContent).toBe("Sign Out");
+  } finally {
+    await act(async () => root.unmount());
+    fetch.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
 it("shows the signed-in Gemini account beside Sign Out like Muse", async () => {
   const host = document.createElement("div");
   const root = createRoot(host);
@@ -334,17 +400,22 @@ it("shows the signed-in Gemini account beside Sign Out like Muse", async () => {
 
 it.each(["en", "ko"] as const)("shows a failed sign-out and allows retry in %s", async (locale) => {
   applyLocale(locale);
-  const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: "Sign-out failed" }), { status: 502 }));
+  const grok = instance({ instanceId: "grok", driverKind: "grokAgent", install: { logout: ["logout"] } });
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => init?.method === "POST"
+    ? new Response(JSON.stringify({ error: "Sign-out failed" }), { status: 502 })
+    : new Response(JSON.stringify({ instances: [grok] })));
+  const onUpdated = vi.fn();
   const host = document.createElement("div");
   const root = createRoot(host);
   try {
-    await act(async () => root.render(createElement(EngineRow, {
-      instance: instance({ instanceId: "grok", driverKind: "grokAgent", install: { logout: ["logout"] } }),
-    })));
+    await act(async () => root.render(createElement(EngineRow, { instance: grok, onUpdated })));
     await act(async () => host.querySelector("button")!.click());
     expect(host.querySelector('[role="alert"]')?.textContent).toBe(locale === "en" ? "Didn't finish. Try again." : "완료되지 않았어요. 다시 시도하세요.");
     expect(host.querySelector("button")!.disabled).toBe(false);
-    expect(fetch).toHaveBeenCalledTimes(1);
+    // The row is refreshed after the failure too, with no extra tap.
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(String(fetch.mock.calls[1][0])).toContain("/api/instances?refresh=1");
+    expect(onUpdated).toHaveBeenCalledExactlyOnceWith(grok);
   } finally {
     await act(async () => root.unmount());
     fetch.mockRestore();
@@ -352,10 +423,9 @@ it.each(["en", "ko"] as const)("shows a failed sign-out and allows retry in %s",
   }
 });
 
-it("shares signed-out instances with the model picker and onboarding", async () => {
-  const signedOut = instance({ snapshot: { state: "available", authenticated: false }, install: { logout: ["logout"] } });
+it("leaves sharing a done sign-out with the model picker and onboarding to the server push", async () => {
   const previous = globalThis.fetch;
-  globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ instances: [signedOut], candidates: [] }), { status: 200 }));
+  globalThis.fetch = vi.fn(async () => new Response("{}", { status: 200 }));
   dispatch.mockClear();
   const host = document.createElement("div");
   const root = createRoot(host);
@@ -364,7 +434,9 @@ it("shares signed-out instances with the model picker and onboarding", async () 
       instance: instance({ install: { logout: ["logout"] } }),
     }))));
     await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Sign Out"))!.click());
-    expect(dispatch).toHaveBeenCalledWith({ type: "instances", instances: [signedOut], preserveRateLimits: true });
+    expect(globalThis.fetch).toHaveBeenCalledOnce();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(host.querySelector("button")?.textContent).toBe("Sign In");
   } finally {
     await act(async () => root.unmount());
     globalThis.fetch = previous;

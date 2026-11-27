@@ -1,21 +1,22 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
-import { exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
+import { AGY_TEXT_MODEL, exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
 import { isSignOut } from "./drivers/signout.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
 import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { loadProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
-import { redactSecretsInText } from "./redact.ts";
+import { redactRoomMemory, redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
 import { chatSyncBotId } from "./thread-sync.ts";
 import { startTurnTrace, type UsageObserver } from "./turn-timing.ts";
 import {
+  appendLines,
   ensureWorkspace,
   MEMORY_MAX_BYTES,
   MEMORY_MAX_LINES,
@@ -40,6 +41,12 @@ const OPTIONS_MAX = 6;
 const SHORT_ANSWER = 6;
 const SUMMARY_MAX = 120;
 const STATE_FILE = "memory-pass.json";
+// A helper limit that named no reset holds notes for the shortest subscription
+// window: a spent window is back by then, and a throttle long over.
+const BARE_LIMIT_MS = 5 * 60 * 60_000;
+export const OVERFLOW_FILE = "auto-notes-overflow.md";
+const OVERFLOW_HEAD = "# Auto notes overflow\n\nAuto Notes saved here while MEMORY.md was full.\n\n";
+const OVERFLOW_POINTER = `memory/${OVERFLOW_FILE}: Auto Notes saved while this file was full; read it when a fact seems missing`;
 
 const listSchema = z.union([z.array(z.string()), z.string()]).nullish();
 const factsSchema = z
@@ -47,13 +54,24 @@ const factsSchema = z
     kind: z.string().nullish(), fact: z.string(), quote: z.string(), replaces: z.string().nullish(),
     key: z.string().nullish(), over: listSchema, picture: z.string().nullish(), over_pictures: listSchema,
     message_id: z.string().nullish(), question_id: z.string().nullish(),
-  }))
-  .max(20);
+  }));
 const droppedSchema = z.object({ dropped: z.number(), since: z.number() });
+// a row by its words and the day it was noted, so rows coming or going around it never move it; one written here also keeps the rows in its words above it
+const landedSchema = z.object({ line: z.string(), date: z.string(), copy: z.number().optional() });
 const stateSchema = z.object({
   host: z.string().optional(),
   threads: z.record(z.string(), z.array(z.string())),
+  // notes a full MEMORY.md turned away before the overflow file; they are gone, never reported as moved
   dropped: z.record(z.string(), droppedSchema).optional(),
+  overflow: z.record(z.string(), droppedSchema).optional(),
+  // a held batch as accepted and where its overflow rows are, so a restart lands it as it was and never adds them again
+  held: z.record(z.string(), z.object({
+    ids: z.array(z.string()),
+    notes: z.array(z.object({ line: z.string(), replaces: z.string().optional(), kind: z.enum(["decision", "tweak"]).optional(), quote: z.string().optional() })),
+    picked: z.boolean().optional(),
+    wrote: z.array(landedSchema).optional(),
+    seen: z.array(landedSchema).optional(),
+  })).optional().catch(undefined),
   // restored from another PC: left to it once this copy syncs the bot's chats
   foreign: z.record(z.string(), z.array(z.string())).optional(),
 });
@@ -63,7 +81,12 @@ export type Fact = z.infer<typeof factsSchema>[number];
 export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak"; pick?: PickChange };
 /** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
 export type UserLine = Partial<ReplyPictures> & { text: string; id?: string; files?: string[]; at?: number; tap?: boolean; thread?: string };
-export type DroppedNotes = z.infer<typeof droppedSchema>;
+type DroppedCount = z.infer<typeof droppedSchema>;
+type Landed = z.infer<typeof landedSchema>;
+// the user's words it came from, so a restart checks it against MEMORY.md as a retry does
+type HeldNote = Note & { quote?: string };
+/** Notes sent to the overflow file, and apart from them notes an older version turned away and lost. */
+export type DroppedNotes = DroppedCount & { lost?: DroppedCount };
 
 export interface MemoryPassDeps {
   store: Pick<Store, "onChange" | "messagesFor" | "groupByThread" | "botByThread" | "appendMessage"> & Partial<Pick<Store, "bot">>;
@@ -84,14 +107,14 @@ export interface MemoryPass {
   onTurn(botId: string): void;
   /** Call after a config change: bots switched off drop pending ids and any running pass. */
   onConfigChanged(): void;
-  /** Notes turned away because MEMORY.md was full, since the last save. */
+  /** Notes sent to the overflow file because MEMORY.md was full, since the last save. */
   droppedNotes(botId: string): DroppedNotes | undefined;
   /** Resolves once no pass is running. */
   idle(): Promise<void>;
   dispose(): void;
 }
 
-type NoteInstance = Pick<ProviderInstance, "driverKind" | "enabled" | "generateText"> & { instanceId?: string };
+type NoteInstance = Pick<ProviderInstance, "driverKind" | "enabled" | "generateText" | "textModel"> & { instanceId?: string };
 export type NoteLimits = { limits: RateLimitsMap; save(): void; signedOut?: Set<string> };
 
 export function noteGenerator(
@@ -106,7 +129,8 @@ export function noteGenerator(
   const id = helper.instanceId;
   const report = id && usage ? usage.limits.get(id) : undefined;
   const now = Date.now();
-  if (exhaustedWindow(report?.windows, now) || (report?.noteLimit && (report.noteLimit.resetsAt === null || report.noteLimit.resetsAt > now))) return null;
+  // a window spent in one pool while the helper's own pool still has room: the helper's own rejection decides
+  if (exhaustedWindow(report?.windows?.filter((w) => !w.otherPoolLeft || (helper.textModel ?? AGY_TEXT_MODEL) !== AGY_TEXT_MODEL), now) || (report?.noteLimit?.resetsAt ?? 0) > now) return null;
   if (id && usage?.signedOut?.has(id)) return null;
   const generate: NoteGenerator = async (prompt, signal, onUsage) => {
     try {
@@ -115,7 +139,7 @@ export function noteGenerator(
       const limit = !signal.aborted && error instanceof Error && usageLimitFromError(error, true);
       if (limit && id && usage) {
         const previous = usage.limits.get(id);
-        usage.limits.set(id, { windows: [], observedAt: new Date().toISOString(), ...previous, noteLimit: limit });
+        usage.limits.set(id, { windows: [], observedAt: new Date().toISOString(), ...previous, noteLimit: { resetsAt: limit.resetsAt ?? Date.now() + BARE_LIMIT_MS } });
         usage.save();
       } else if (id && !signal.aborted && error instanceof Error && (isSignOut(error.message) || UNAVAILABLE.test(error.message))) usage?.signedOut?.add(id);
       throw error;
@@ -133,12 +157,16 @@ export function eligibleRow(message: Message | undefined): message is Message & 
 }
 
 /** The user's own typing: pastes, attachments, code, quotes and long blocks cut; empty when it looks sensitive, unless the caller screens each line. */
-export function userTyping(text: string, dropSensitive = true, keepImages = false): string {
-  const typed = text
+/** The message without pasted blocks and fenced code: what the user did not type. */
+export function withoutBlocks(text: string): string {
+  return text
     .replace(/<pasted-text\b[^>]*>[\s\S]*?<\/pasted-text>/gi, "")
     .replace(/<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content>/gi, "")
-    .replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : "")
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
+}
+
+export function userTyping(text: string, dropSensitive = true, keepImages = false): string {
+  const typed = withoutBlocks(text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : ""));
   // the whole message: a label and its value can sit in different paragraphs
   if (dropSensitive && secretValue(typed)) return "";
   const unwrapped = typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
@@ -189,8 +217,9 @@ export function notePrompt(notes: string, lines: UserLine[], picks = ""): string
     "- Keep facts that stay true: who they are, their age, languages, tools they use, likes and dislikes, how they want things done.",
     "- Skip one-off requests that are not tweaks, questions, task details, and anything CURRENT NOTES already says.",
     "- A decision is a choice the user made between options, or a direction they set for how something should look or work. Keep it only if it will still matter next time that thing comes up.",
+    "- goal: something the user wants built or reached, with its spec, like \"Glasses v1: person brief, top 3 competitors, 1 news line\". Never task details.",
     "- CONTEXT and PICTURES clarify short answers. Quote the user's choice, never the bot's suggestion.",
-    `- kind: "decision", "tweak" or "fact". One decision per thing.`,
+    `- kind: "decision", "tweak", "goal" or "fact". One decision per thing.`,
     `- decision: key is the thing decided, never the option, in 2-6 chat words, copied exactly if CURRENT PICKS has it. fact is the pick, ${DECISION_MAX} characters max, with its letter or number, like "C - Reddit cards"; over: the options it beat; picture, over_pictures: copy paths from PICTURES, a continued <prior> or CURRENT PICKS.`,
     "- \"actually c\" moving a CURRENT PICKS pick to an option it beat is a new decision, same key, even with tweaks after it.",
     "- tweak: a change the user asked for on a pick, like \"make the header smaller\"; key: that pick's key. Never a new pick.",
@@ -237,24 +266,60 @@ const SECRET_WORDS =
 // No \b here: it never fires between Hangul syllables.
 const SECRET_WORDS_KO =
   /비밀\s*(?:번호|키)|비번|암호(?!화|학)|패스워드|패스코드|인증\s*(?:번호|코드)|보안\s*코드|일회용\s*(?:코드|번호)|(?:api|에이피아이)\s*키|토큰|개인\s*키(?!보드)|계좌\s*번호|카드\s*번호|주민\s*(?:등록\s*)?번호|핀\s*번호|시크릿/i;
-const TOKEN_PATTERNS = [
-  /«redacted/i,
+const VALUE_PATTERNS = [
   /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/,
   /\b(?:ghp|gho|ghu|ghs|ghr|github_pat|xox[abposr])[_-][A-Za-z0-9_-]{8,}/,
   /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/,
   /\b(?=[A-Za-z0-9_+/=-]*\d)(?=[A-Za-z0-9_+/=-]*[A-Za-z])[A-Za-z0-9_+/=-]{24,}/,
 ];
+const TOKEN_PATTERNS = [/«redacted/i, ...VALUE_PATTERNS];
+// The last VALUE_PATTERN also matches paths, links, model ids, uuids and shas: words of one case or digits, not a key.
+// The part alternatives must not overlap ([A-Z][a-z]+, not [A-Z]?[a-z]+): overlap backtracks exponentially on a long run.
+const PLAIN_RUN = /^[/_-]*(?:[a-z0-9]+|[A-Z][a-z]+|[A-Z]+)(?:[/_-]+(?:[a-z0-9]+|[A-Z][a-z]+|[A-Z]+))*[/_-]*$/;
+const KEY_WORD_BEFORE = /(?:\b(?:keys?|tokens?|secrets?|passwords?|passcodes?|credentials?)|키|토큰|비밀\s*번호|비번|암호)\W{0,3}$/i;
+
+// A sha or uuid is plain; the same lowercase shape is a key after a key word, behind a short prefix (key-, dop_v1_), when not hex, or alone.
+function plainValue(value: string, before: string, all: string): boolean {
+  if (!PLAIN_RUN.test(value) || KEY_WORD_BEFORE.test(before)) return false;
+  const parts = value.split(/[/_-]+/).filter(Boolean);
+  const last = parts.at(-1) ?? "";
+  if (!/^(?=[a-z0-9]*\d)(?=[a-z0-9]*[a-z])[a-z0-9]{20,}$/.test(last)) return true;
+  const prefixed = parts.length > 1 && parts.length <= 3 && parts.slice(0, -1).every((part) => part.length <= 6);
+  return /^[0-9a-f]+$/.test(last) && !prefixed && all.trim() !== value;
+}
 
 export function secretLike(text: string): boolean {
   return redactSecretsInText(text) !== text || SECRET_WORDS.test(text) || SECRET_WORDS_KO.test(text) || TOKEN_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-function secretValue(text: string): boolean {
+/** The key values secretLike flags, masked in place; words like "password" or "tokens" and plain names stay, so a goal keeps its sense. */
+export function maskSecretValues(text: string): string {
+  return VALUE_PATTERNS.reduce((out, pattern, i) => out.replace(new RegExp(pattern.source, "g"), (value: string, at: number, all: string) =>
+    i === VALUE_PATTERNS.length - 1 && plainValue(value, all.slice(Math.max(0, at - 40), at), all) ? value : `«redacted ${value.length} chars»`), redactRoomMemory(text));
+}
+
+const valueWord = (word: string) => word.length >= 6 && /\p{L}/u.test(word) &&
+  (/\d/.test(word) || /\p{Lu}\p{Ll}+(?:-\p{Lu}\p{Ll}+){2,}/u.test(word) || (/\p{L}[!@#$%^&*=~|<>{}]+\p{L}/u.test(word) && !/:\/\/|^\W*[\w.+-]+@[\w-]+\.[\w.-]+\W*$/.test(word)));
+// Tr0ub4dor&3xQ, Tr@ub!dor&xQ, Blue-Horse-Staple, card or account digits, or a value spelled out letter by letter
+export const holdsValue = (paragraph: string) => paragraph.split(/\s+/).some(valueWord) || /\d(?:[ -]?\d){9,}/.test(paragraph) || /(?<!\S)(?:\S[ \t]+){5,}\S(?!\S)/u.test(paragraph);
+// LLM token talk, only after a plain word or sentence punctuation: "the hf token" and "(github) token" name a credential
+const TOKEN_TALK = [
+  /(?<=(?:^|\n|\(|[,;.!?][ \t]|\b(?:the|my|our|your|their|its|this|that|these|those|a|an|of|per|in|on|at|for|and|or|but|so|to|with|by|from|about|watch|check|track|cut|lower|reduce|total|daily|weekly|monthly|high|higher|low|big|huge|llm|model|prompt|output|input|claude|gpt|opus|sonnet|haiku|ai|is|was|are|were)\b)[ \t]*)\btokens?\s+(?:costs?|usage|counts?(?!\s+down)|budgets?|limits?|spend(?:ing)?|bills?|totals?|intensive|heavy)\b/gi,
+  /(?<![\d.,])\b\d[\d.,]*[ \t]?(?:[kmb]|million|billion|thousand)\s+tokens?\b/gi,
+];
+// login, lock and key-name words; the nightly cleaner (memory-clean.ts) skips a note holding one
+export const LABEL_WORDS = /\b(?:pw|pwd|pass|passphrase|passkey|p\/w|log[- ]?in|sign[- ]?in|user ?name|admin|wi-?fi|router|modem|nas|door|gate|lock|unlock|safe|vault|alarm|garage|locker|combo|ssh|ftp|sftp)\b|\b(?:license|product|encryption|recovery|backup|secret|access|security|auth)\s+(?:keys?|codes?|phrase|answer|word)\b|\b[A-Z][A-Z0-9]*_(?:PASS|PWD|KEY|SECRET|TOKEN)\w*|로그인|아이디|와이파이|공유기|도어락|현관|금고|비밀/i;
+// token talk clears a message base drops only when no login word, value handed over on its line or bare code sits in it
+const VALUE_HINT = new RegExp(`${LABEL_WORDS.source}|\\b(?:below|next line|last line|coming|incoming|here(?:'s| is| are))\\b|:[ \\t]*\\S|(?<![\\w#$.,:/-])(?<!\\bPR )\\d{4,9}(?![\\w%.,:/-])`, "i");
+
+export function secretValue(text: string): boolean {
   const plain = text
     .replace(/\b(?:(?:under|fewer than|up to|at most)\s+\d+|fewer|more|\d+)\s+tokens?\b/gi, "")
     .replace(/\bpin\s+(?:it|this|that|the\s+\w+)\s+(?:to|at|on)\b/gi, "")
     .replace(/\bsecret\s+(?:menu|theme|level|door|room)\b/gi, "");
-  return secretLike(plain);
+  if (!secretLike(plain)) return false;
+  const rest = TOKEN_TALK.reduce((left, talk) => left.replace(talk, ""), plain);
+  return rest === plain || secretLike(rest) || VALUE_HINT.test(text) || holdsValue(text);
 }
 
 const STOP_WORDS = new Set(["the", "and", "but", "for", "with", "are", "was", "that", "this", "you", "your", "can", "can't", "cant", "don't", "dont", "just", "have", "has", "not", "i'm", "it's", "its", "really"]);
@@ -268,6 +333,7 @@ function quoteWords(quote: string): string[] {
 const squash = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
 const words = (text: string): string[] => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
 const sameLine = (line: string, target: string) => line.replace(/\r$/, "") === target;
+const factLine = (fact: string) => fact.replace(/^[-*]\s+/, "").replace(/\s+/g, " ").trim();
 
 /** A line only the note-taker wrote, found exactly once and claimed by one fact. */
 function replaceable(target: string | null | undefined, lines: string[], claims: Map<string, number>): target is string {
@@ -279,6 +345,36 @@ function replaceable(target: string | null | undefined, lines: string[], claims:
 
 const HEADING = /^#{1,6}\s/;
 const NOTED = /^\s*[-*+]\s+(.*?)\s*\(noted (\d{4}-\d{2}-\d{2})\)\s*$/;
+function liveRows(text: string): { rows: string[]; dates: string[]; close: string } {
+  const rows: string[] = [];
+  const dates: string[] = [];
+  let block: { close: string; end: RegExp } | undefined;
+  for (const row of text.split("\n")) {
+    if (block) {
+      if (block.end.test(row)) block = undefined;
+      continue;
+    }
+    // an info string with a backtick is inline code, not a fence
+    const marks = /^ {0,3}(`{3,}(?!.*`)|~{3,})/.exec(row)?.[1];
+    if (marks) {
+      block = { close: marks, end: new RegExp(`^ {0,3}${marks[0]}{${marks.length},}\\s*$`) };
+      continue;
+    }
+    const opener = /^ {0,3}(?:<!--|<(pre|details)\b[^>]*>)/i.exec(row);
+    if (opener) {
+      const close = opener[1] ? `</${opener[1]}>` : "-->";
+      const end = new RegExp(close, "i");
+      if (!end.test(row.slice(opener[0].length))) block = { close, end };
+      continue;
+    }
+    const bullet = /^ {0,3}[-*+][ \t]+([^\r\n]+)/.exec(row)?.[1];
+    if (!bullet) continue;
+    const noted = NOTED.exec(row);
+    rows.push(noted?.[1] ?? bullet.trim());
+    dates.push(noted?.[2] ?? "");
+  }
+  return { rows, dates, close: block ? `${block.close}\n` : "" };
+}
 
 /** Match an explicit key anywhere; unstructured prose needs an Auto Notes stamp. */
 function legacyLine(key: string, lines: string[], taken: Set<string>): string | undefined {
@@ -435,6 +531,11 @@ function confirmed(sources: UserLine[], said: string, picked: string, before: Pi
 
 /** Facts that quote one non-sensitive user paragraph verbatim, carry no secret, and are not already noted. Decisions first, each picked in the user's own words; a tweak only on a current pick. A fact on a decision's quote yields to it. */
 export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes: string, archived = ""): Note[] {
+  return acceptQuoted(facts, userText, notes, archived).map(({ quote: _quote, ...note }) => note);
+}
+
+// a fact keeps the quote it passed on, so a held batch rechecks that one and never a turned-away twin
+function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: string, archived = ""): HeldNote[] {
   const sources = Array.isArray(userText) ? userText : [{ text: userText }];
   const paragraphs = sources.map(({ text }) => text).join("\n\n").split(/\n\s*\n/).filter((paragraph) => !secretValue(paragraph));
   const lines = notes.split("\n");
@@ -450,11 +551,13 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
   const seen = new Set<string>();
   const decided = new Set<string>();
   const taken = new Set<string>();
-  const accept = (fact: Fact): Note | null => {
+  const accept = (fact: Fact): HeldNote | null => {
     const { kind, quote, replaces } = fact;
     const decision = kind === "decision";
     const tweak = kind === "tweak";
-    const line = fact.fact.replace(/^[-*]\s+/, "").replace(/\s+/g, " ").trim();
+    const goal = kind === "goal";
+    const stated = factLine(fact.fact);
+    const line = goal && stated ? `Goal: ${stated}` : stated;
     const key = fact.key?.replace(/\s+/g, " ").trim() ?? "";
     // switching to an option the current pick beat is grounded in that pick's record
     const before = decision ? current.get(pickKey(key || line)) : undefined;
@@ -463,8 +566,9 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
     if (before && !paragraphs.some((paragraph) => quotes(paragraph, said))) said = confirmed(sources, said, line, before) ?? said;
     if (!line || line.length > (decision || tweak ? DECISION_MAX : FACT_MAX) || !said || said.length > QUOTE_MAX) return null;
     if (!paragraphs.some((paragraph) => quotes(paragraph, said))) return null;
-    const sensitive = decision || tweak ? secretValue : secretLike;
-    if (sensitive(line) || sensitive(said)) return null;
+    const sensitive = decision || tweak || goal ? secretValue : secretLike;
+    // the "Goal:" label's colon reads as a value handed over
+    if (sensitive(stated) || sensitive(said)) return null;
     const quoting = sources.filter(({ text }) => quotes(text, said));
     const identified = decision && fact.message_id != null ? quoting.filter(({ id }) => id === fact.message_id) : quoting;
     const own = identified.length ? identified : quoting;
@@ -525,7 +629,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
     const known = words(line).join(" ") || squash(line);
     if (seen.has(known) || noted.some((note) => ` ${note.join(" ")} `.includes(` ${known} `))) return null;
     seen.add(known);
-    const note: Note = { line };
+    const note: HeldNote = { line, quote: said };
     if (target) note.replaces = target;
     return note;
   };
@@ -597,8 +701,14 @@ interface Batch {
   ids: string[];
   facts: Fact[];
   source: UserLine[];
+  // accepted before a restart, since asking the note-taker again can word them another way
+  notes?: HeldNote[];
   // its picks are in the timeline, held only for MEMORY.md
   picked?: boolean;
+  // its lines an earlier try put in the overflow file, written again only once gone from there
+  wrote?: Landed[];
+  // its lines an earlier try left out as already the newest row, so a row landing after them never makes a retry add them
+  seen?: Landed[];
 }
 
 /** Notes passing facts from new user lines into MEMORY.md once a 1:1 chat goes quiet. Never on the reply path. */
@@ -606,10 +716,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   const now = deps.now ?? Date.now;
   const statePath = join(deps.dataDir, STATE_FILE);
   const pending = new Map<string, string[]>();
-  const dropped = new Map<string, DroppedNotes>();
+  // notes sent to the overflow file, and apart from them notes an older version turned away and lost
+  const overflowed = new Map<string, DroppedCount>();
+  const lost = new Map<string, DroppedCount>();
   const foreign = new Map<string, string[]>();
   // generated but unsaved, so a busy turn or a moved revision never pays for the same batch twice
   const held = new Map<string, Batch>();
+  const replays = new Map<string, Pick<Batch, "ids" | "picked" | "wrote" | "seen"> & { notes: HeldNote[] }>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const queue: Array<{ botId: string; threadId: string }> = [];
   const running = new Map<string, { botId: string; done: Promise<void>; controller: AbortController }>();
@@ -642,7 +755,12 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       const theirs = restored ? ids : state.foreign?.[threadId];
       if (theirs?.length) foreign.set(threadId, [...theirs]);
     }
-    for (const [botId, record] of Object.entries(state.dropped ?? {})) dropped.set(botId, record);
+    for (const [botId, record] of Object.entries(state.dropped ?? {})) lost.set(botId, record);
+    for (const [botId, record] of Object.entries(state.overflow ?? {})) overflowed.set(botId, record);
+    for (const [threadId, batch] of Object.entries(state.held ?? {})) {
+      replays.set(threadId, batch);
+      held.set(threadId, { ...batch, facts: [], source: [] });
+    }
     claim = Boolean(deps.host && state.host !== deps.host);
   } catch {
     // first run or unreadable: start empty
@@ -653,7 +771,9 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     saveTimer = undefined;
     try {
       const state: z.infer<typeof stateSchema> = { host: deps.host, threads: Object.fromEntries(pending) };
-      if (dropped.size) state.dropped = Object.fromEntries(dropped);
+      if (lost.size) state.dropped = Object.fromEntries(lost);
+      if (overflowed.size) state.overflow = Object.fromEntries(overflowed);
+      if (replays.size) state.held = Object.fromEntries(replays);
       if (foreign.size) state.foreign = Object.fromEntries(foreign);
       writeFileAtomic(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 });
     } catch (error) {
@@ -708,7 +828,15 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
 
   const done = (threadId: string, ids: string[]) => {
     held.delete(threadId);
+    replays.delete(threadId);
     drop(threadId, ids);
+  };
+
+  const hold = (threadId: string, batch: Batch, notes: HeldNote[]) => {
+    held.set(threadId, batch);
+    if (!batch.wrote?.length && !batch.seen?.length) return;
+    replays.set(threadId, { ids: batch.ids, notes: notes.map((note) => ({ line: note.line, replaces: note.replaces, kind: note.kind, quote: note.quote })), picked: batch.picked, wrote: batch.wrote, seen: batch.seen });
+    save();
   };
 
   const land = (botId: string, threadId: string, batch: Batch, memory: { text: string; revision: string }, raw: string, ms: number) => {
@@ -721,8 +849,12 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       console.warn(`[memory-pass] ${PICKS_FILE} read failed (${error instanceof Error ? error.name : "error"})`);
       return arm(botId, threadId);
     }
-    const accepted = acceptFacts(batch.facts, batch.source, memory.text, timeline);
-    if (!accepted.length) {
+    const checked = batch.notes?.map((note) => note.kind || note.quote === undefined ? [note] :
+      acceptQuoted([{ fact: note.line, quote: note.quote, replaces: note.replaces }], note.quote, memory.text, timeline));
+    const accepted = checked?.flat() ?? acceptQuoted(batch.facts, batch.source, memory.text, timeline);
+    // MEMORY.md may have taken a note in before the restart; the overflow row this batch wrote for it still earns its receipt
+    const owed = batch.notes?.filter((note, index) => !checked?.[index]?.length && batch.wrote?.some(({ line }) => line === note.line)) ?? [];
+    if (!accepted.length && !owed.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
       return done(threadId, batch.ids);
     }
@@ -736,18 +868,14 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     const moved = accepted.filter((note) => note.kind === "decision" && note.replaces);
     const text = facts.length || moved.length ? appendNotes(raw, [...facts, ...moved], now()) : null;
     const full = text === null && (facts.length > 0 || moved.length > 0);
-    // a full MEMORY.md turns facts away; a pick still lands in the timeline, its old line left in place
+    // a full MEMORY.md sends facts to the overflow file; a pick still lands in the timeline, its old line left in place
     const changes = accepted.flatMap(({ pick }) => {
       if (!pick) return [];
       const change = { ...pick, at: pick.kind === "pick" && pick.binding && pick.binding !== "unbound" ? pick.binding.at : pick.at || now() };
       if (full && change.kind === "pick") delete change.legacy;
       return [change];
     });
-    if (full && facts.length) {
-      const last = dropped.get(botId);
-      dropped.set(botId, { dropped: (last?.dropped ?? 0) + facts.length, since: last?.since ?? now() });
-    }
-    if (full && !changes.length) {
+    if (full && !changes.length && !facts.length) {
       log({ botId, threadId, facts: facts.length, ms, result: "too-large" });
       return done(threadId, batch.ids);
     }
@@ -764,12 +892,108 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       }
     }
     const picked = Boolean(landed) || Boolean(batch.picked);
-    if (text !== null && saveMemoryFile(botId, text, memory.revision).conflict) {
-      held.set(threadId, { ...batch, picked });
+    // at the limit a correction still swaps in place, or else its old line comes out, so MEMORY.md never asserts the old value
+    const rows = raw.split("\n");
+    const stamp = day(now());
+    const swaps = full
+      ? facts.filter(({ replaces }) => replaces !== undefined && rows.filter((row) => sameLine(row, replaces)).length === 1 && facts.filter((other) => other.replaces === replaces).length === 1)
+      : [];
+    const swapFor = new Map(swaps.map(({ replaces, line }) => [replaces, line]));
+    // in place, so the line count never grows and only the byte budget can refuse it
+    const edited = rows.map((row) => {
+      const line = swapFor.get(row.replace(/\r$/, ""));
+      return line === undefined ? row : `- ${line} (noted ${stamp})${row.endsWith("\r") ? "\r" : ""}`;
+    }).join("\n");
+    const swapped = swaps.length && Buffer.byteLength(edited, "utf8") <= MEMORY_MAX_BYTES ? edited : null;
+    const corrected = swapped ?? (swaps.length ? rows.filter((row) => !swapFor.has(row.replace(/\r$/, ""))).join("\n") : null);
+    const overflow = full ? facts.filter((note) => swapped === null || !swaps.includes(note)) : [];
+    const noted = text !== null ? facts : swapped !== null ? swaps : [];
+    const base = text ?? corrected ?? raw;
+    // with no spare line the pointer goes last with no line break, and only where the prompt still reads it
+    const ending = `${base}- ${OVERFLOW_POINTER} (noted ${stamp})`;
+    const pointer = overflow.length && !base.includes(OVERFLOW_FILE)
+      ? appendNotes(base, [{ line: OVERFLOW_POINTER }], now()) ??
+        (base.endsWith("\n") && ending.split("\n").length <= MEMORY_MAX_LINES && Buffer.byteLength(ending, "utf8") <= MEMORY_MAX_BYTES ? ending : null)
+      : null;
+    const saved = pointer ?? text ?? corrected;
+    // before MEMORY.md drops a corrected line, so a failed write never loses the new value; a retry finds it written
+    let wrote = batch.wrote ?? [];
+    let seen = batch.seen ?? [];
+    if (overflow.length) {
+      const path = join(ensureWorkspace(botId), "memory", OVERFLOW_FILE);
+      try {
+        // a locked file must hold the batch, never be rewritten from the header
+        const current = existsSync(path) ? readFileSync(path, "utf8") : "";
+        const { rows, dates, close } = liveRows(current);
+        // a row in its words noted before its day is an older copy when every row below is older too, or, if it went under an older copy, a row below falls between the two days, so a hand-edited date alone never hides it
+        const older = (index: number, date: string, copy?: number) => {
+          const noted = dates[index]!;
+          const below = dates.slice(index + 1).filter(Boolean);
+          return Boolean(noted) && noted < date && (below.every((day) => day < date) || (copy !== 0 && below.some((day) => day > noted && day < date)));
+        };
+        // recall keeps a label's newest-dated rows, so a row it hides is there only when a copy as new as its write was outdated by a later row
+        const modified = current ? day(statSync(path).mtimeMs) : stamp;
+        const label = (row: string) => (/^([^:]{2,60}):\s/.exec(row)?.[1] ?? row).toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join(" ");
+        const shown = ({ line, date }: Landed) => {
+          const own = rows.reduce((max, row, index) => (row === line && (dates[index] || modified) > max ? dates[index] || modified : max), "");
+          return own >= date || rows.every((row, index) => (dates[index] || modified) <= own || label(row) !== label(line));
+        };
+        const stays = (landed: Landed) => shown(landed) && rows.some((row, index) => row === landed.line && !older(index, landed.date, landed.copy));
+        wrote = wrote.filter(stays);
+        seen = seen.filter(stays);
+        // from its first row gone on, so a later line of the batch still lands after an earlier one written again
+        const gone = overflow.findIndex(({ line }) => ![...wrote, ...seen].some((row) => row.line === line));
+        const due = gone < 0 ? [] : overflow.slice(gone);
+        // written again on the day it was first noted, so it never outranks a row said after it
+        const first = (line: string) => batch.wrote?.find((row) => row.line === line)?.date ?? stamp;
+        // a row in its words counts as there only when it is as new as the note or no later-dated row of its label outdates it
+        const present = (line: string | undefined) => line !== undefined && shown({ line, date: first(line) });
+        // a restart can replay a batch whose notes already landed in order
+        let ends = due.length;
+        while (ends && due.slice(0, ends).some(({ line }, index) => rows.at(index - ends) !== line || !present(line))) ends -= 1;
+        // a line said again lands unless it is already the newest row, so the newest row is what was said last
+        let newest = present(rows.at(-1)) ? rows.at(-1) : undefined;
+        const fresh = due.slice(ends).filter(({ line }) => {
+          if (line === newest) return false;
+          newest = line;
+          return true;
+        });
+        seen = [...seen, ...due.filter((note) => !fresh.includes(note)).map(({ line }) => ({ line, date: dates[rows.lastIndexOf(line)] ?? "" }))];
+        if (fresh.length) {
+          const added = fresh.map(({ line }) => `- ${line} (noted ${first(line)})\n`).join("");
+          appendLines(path, `${current ? close : OVERFLOW_HEAD}${added}`);
+          const prior = overflowed.get(botId);
+          overflowed.set(botId, { dropped: (prior?.dropped ?? 0) + fresh.filter(({ line }) => !batch.wrote?.some((row) => row.line === line)).length, since: prior?.since ?? now() });
+          const placed = fresh.map(({ line }) => ({ line, date: first(line), copy: rows.filter((row) => row === line).length }));
+          wrote = [...wrote.filter(({ line }) => !fresh.some((note) => note.line === line)), ...placed];
+        }
+      } catch (error) {
+        hold(threadId, { ...batch, picked, wrote, seen }, accepted);
+        log({ botId, threadId, facts: accepted.length, ms, result: "error" });
+        console.warn(`[memory-pass] ${OVERFLOW_FILE} write failed (${error instanceof Error ? error.name : "error"})`);
+        return arm(botId, threadId);
+      }
+    }
+    // a pointer alone is appended, so a line another writer lands after the revision check stays
+    const tail = pointer !== null && base === raw ? pointer.slice(raw.length) : null;
+    let conflict: boolean;
+    try {
+      conflict = tail !== null ? readMemoryFile(botId).revision !== memory.revision : saved !== null && saveMemoryFile(botId, saved, memory.revision).conflict;
+      if (tail !== null && !conflict) appendLines(join(ensureWorkspace(botId), "MEMORY.md"), tail);
+    } catch (error) {
+      // the overflow notes are on disk; a retry finds them there, then finishes MEMORY.md and the receipt
+      hold(threadId, { ...batch, picked, wrote, seen }, accepted);
+      log({ botId, threadId, facts: accepted.length, ms, result: "error" });
+      console.warn(`[memory-pass] MEMORY.md write failed (${error instanceof Error ? error.name : "error"})`);
+      return arm(botId, threadId);
+    }
+    if (conflict) {
+      hold(threadId, { ...batch, picked, wrote, seen }, accepted);
       log({ botId, threadId, facts: accepted.length, ms, result: "conflict" });
       return arm(botId, threadId);
     }
-    const kept = accepted.filter((note) => (note.pick ? picked : !note.kind && text !== null));
+    // a repeat left out of the overflow file was not written, so it gets no receipt; one an earlier try wrote does
+    const kept = [...accepted.filter((note) => (note.kind ? picked : !overflow.includes(note) || [...wrote, ...batch.wrote ?? []].some(({ line }) => line === note.line))), ...owed];
     if (!kept.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
       return done(threadId, batch.ids);
@@ -777,13 +1001,16 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     deps.store.appendMessage(sourceThread(threadId), {
       role: "bot",
       kind: "activity",
-      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: noteSummary(kept.map((note) => note.line)), memoryBotId: botId },
+      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: `${noteSummary(kept.map((note) => note.line))}${kept.some((note) => overflow.includes(note)) ? ` (MEMORY.md is full, saved in memory/${OVERFLOW_FILE})` : ""}`, memoryBotId: botId },
     });
     log({
-      botId, threadId, lines: batch.source.length, facts: text === null ? 0 : facts.length, decisions: landed?.picks ?? 0, tweaks: landed?.tweaks ?? 0,
-      replaced: (landed?.replaced ?? 0) + (text === null ? 0 : facts.filter((note) => note.replaces).length), ms, result: full ? "too-large" : "saved",
+      botId, threadId, lines: batch.source.length, facts: noted.length, decisions: landed?.picks ?? 0, tweaks: landed?.tweaks ?? 0,
+      replaced: (landed?.replaced ?? 0) + noted.filter((note) => note.replaces).length, ms, result: full ? "too-large" : "saved",
     });
-    if (!full) dropped.delete(botId);
+    if (!full) {
+      overflowed.delete(botId);
+      lost.delete(botId);
+    }
     done(threadId, batch.ids);
   };
 
@@ -927,6 +1154,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     for (let i = queue.length - 1; i >= 0; i -= 1) if (off(queue[i]!.threadId)) queue.splice(i, 1);
     for (const [threadId, pass] of running) if (off(threadId)) pass.controller.abort();
     for (const threadId of held.keys()) if (off(threadId)) held.delete(threadId);
+    for (const threadId of replays.keys()) if (off(threadId)) replays.delete(threadId);
     const before = pending.size;
     for (const threadId of pending.keys()) if (off(threadId)) pending.delete(threadId);
     for (const threadId of foreign.keys()) if (!pending.has(threadId)) foreign.delete(threadId);
@@ -956,7 +1184,14 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     onConfigChanged() {
       if (!disposed) stop();
     },
-    droppedNotes: (botId) => dropped.get(botId),
+    droppedNotes: (botId) => {
+      const sent = overflowed.get(botId);
+      const gone = lost.get(botId);
+      if (!gone) return sent;
+      const notes: DroppedNotes = { ...(sent ?? { dropped: 0, since: gone.since }) };
+      notes.lost = gone;
+      return notes;
+    },
     async idle() {
       while (running.size) await Promise.all([...running.values()].map((pass) => pass.done));
     },
