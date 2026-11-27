@@ -162,7 +162,21 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
     expect(block).toContain(`- A1 ${status} 11-12`);
     expect(asksNudge([fresh], NOW, "thanks")).toBe("");
     expect(listed(asksNudge([fresh, due], NOW, "thanks"))).toEqual([`- A2 ${status} needs verdict 11-12: ask number 2`]);
-    expect(asksNudge([ask(3, { status, ref: "PR #3", changedAt: 0 })], NOW, "thanks")).toBe("");
+  });
+
+  it("flags a waiting-for-user ask with a ref and no change for 3 days, to check whether the user already did their part", () => {
+    const waiting = ask(1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY });
+    expect(listed(asksNudge([waiting], NOW, "thanks"))).toEqual(["- A1 waiting-for-user needs verdict 11-12: ask number 1 (VM ready)"]);
+    expect(asksBlock([waiting], NOW)).toContain("1 needs a verdict: no ref and no change in 3+ days, or waiting on the user that long, so check whether the user already did their part, then build, park or close it yourself");
+  });
+
+  it("never flags a fresh waiting ask, an open or building ask with a ref, or a parked one", () => {
+    for (const quiet of [
+      ask(1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 2 * DAY }),
+      ask(2, { status: "building", ref: "PR #3", changedAt: 0 }),
+      ask(3, { ref: "PR #4", changedAt: 0 }),
+      ask(4, { ref: "VM ready", until: NOW + DAY, changedAt: 0 }),
+    ]) expect(asksNudge([quiet], NOW, "thanks"), quiet.id).toBe("");
   });
 
   it("keeps the verdict nudge on an engine's own ask worded as a question, and spares only a filed leftover", () => {

@@ -66,8 +66,9 @@ const CHECK = "check the transcript, files and running processes first, then clo
 const QUESTION_MARK = /[?？]$/;
 const isParked = (ask: TaskAsk, now: number) => isOpenAsk(ask) && ask.until !== undefined && ask.until > now;
 // a skipped question waits for a natural pause, so it never nags an ordinary turn
+// a ref spares only work that runs: an ask waiting on the user goes stale with one once they did their part
 const needsVerdict = (ask: TaskAsk, now: number) =>
-  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !isPromise(ask) && ask.key === undefined && !ask.ref && now - Math.max(ask.changedAt, ask.until ?? 0) >= ASK_VERDICT_MS;
+  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !isPromise(ask) && ask.key === undefined && (!ask.ref || ask.status === "waiting-for-user") && now - Math.max(ask.changedAt, ask.until ?? 0) >= ASK_VERDICT_MS;
 const words = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -243,7 +244,7 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, sta
   if (!ordered.length && !parked.length) return "";
   const shown = verdictOnly ? listed(due, now).shown : listShown;
   const them = due.length === 1 ? "it" : "them";
-  const flagged = due.length ? `, ${due.length} need${due.length === 1 ? "s" : ""} a verdict: no ref and no change in 3+ days, so build, park or close ${them} yourself, and ask the user about at most 3 at a time` : "";
+  const flagged = due.length ? `, ${due.length} need${due.length === 1 ? "s" : ""} a verdict: no ref and no change in 3+ days${due.some((ask) => ask.status === "waiting-for-user") ? ", or waiting on the user that long, so check whether the user already did their part, then" : ", so"} build, park or close ${them} yourself, and ask the user about at most 3 at a time` : "";
   const waiting = ordered.length + parked.length - shown.length;
   const rotated = !waiting ? "" : verdictOnly ? ` ${waiting} more show on a status question.` : ` ${waiting} more wait for the next turn, least recently shown first.`;
   const questions = shown.some(isQuestion) ? " A question is your own card still unanswered on the user's screen: never re-ask it; close moot or answered ones." : "";
