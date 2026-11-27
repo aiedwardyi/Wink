@@ -115,6 +115,7 @@ import {
   roomTurnTimeoutMinutes,
   saveConfig,
   showToolCallsEnabled,
+  forumRecallEnabled,
   detailedRepliesEnabled,
   memoryNotesEnabled,
   sweepLegacyOpencodeKey,
@@ -135,6 +136,7 @@ import { BotAccounts } from "./bot-accounts.ts";
 import { createBotCalls } from "./bot-call.ts";
 import { BOARD_DIR, createBoard, projectIdOf } from "./board.ts";
 import { createBoardCalls, FORUM_HOLDS_FILE } from "./board-calls.ts";
+import { createBoardRecall, withBoardRecall } from "./board-recall.ts";
 import { BOARD_ROUTES, createBoardRoutes } from "./board-routes.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
@@ -3305,11 +3307,24 @@ startupTiming.afterPaint("unlanded", async () => {
   for (const bot of store.bots) await unlandedWork.refresh(bot.id, bot.threadId, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
   for (const bot of store.bots) await knownRepos.cite(bot.id, store.loaded(bot.threadId) ? undefined : boot.get(bot.threadId));
 });
-const memoryLookup = createMemoryLookup({
+const boardCalls = createBoardCalls({
+  board,
+  projectOf: boardProject,
+  room: sharedTurn(store, joinedRoomThreads),
+  held: (hold) => {
+    try {
+      appendRotatingLog(join(DATA_DIR, FORUM_HOLDS_FILE), `${JSON.stringify({ at: Date.now(), ...hold })}\n`);
+    } catch (cause) {
+      console.warn(`forum holds: ${cause}`);
+    }
+  },
+});
+
+const memoryLookup = withBoardRecall(createMemoryLookup({
   dataDir: DATA_DIR,
   notesPath: (botId) => store.bot(botId)?.projectNotes,
   asks: (botId) => botAsks(store.bot(botId), (threadId) => store.taskPacket(threadId), notOwnerChats()),
-});
+}), createBoardRecall({ on: () => forumRecallEnabled(cfg), board, projectOf: boardProject, room: sharedTurn(store, joinedRoomThreads), calls: boardCalls }));
 for (const bot of store.bots) void memoryLookup.refresh(bot.id, true);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
 void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
@@ -3453,19 +3468,6 @@ function boardProject(threadId: string): string {
   const pinned = store.taskByThread(bot.id, threadId)?.cwd;
   return projectIdOf(pinned === undefined ? bot.cwd : pinned);
 }
-
-const boardCalls = createBoardCalls({
-  board,
-  projectOf: boardProject,
-  room: sharedTurn(store, joinedRoomThreads),
-  held: (hold) => {
-    try {
-      appendRotatingLog(join(DATA_DIR, FORUM_HOLDS_FILE), `${JSON.stringify({ at: Date.now(), ...hold })}\n`);
-    } catch (cause) {
-      console.warn(`forum holds: ${cause}`);
-    }
-  },
-});
 
 const botCalls = createBotCalls({
   send: (payload) => void sendWebPushToDevices(DATA_DIR, payload, webPushSubject(), phoneSignedIn).catch((cause) => console.warn(`web-push: ${cause}`)),
