@@ -927,7 +927,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // transport and is what blew Windows CreateProcess (~32k) with long
       // pastes / injected continuity. Continuity stays in system/text.
       const resumeCursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
-      const system = systemHeld.prompt(resumeCursor, turn.system, turn.systemQuiet);
+      const system = systemHeld.prompt(resumeCursor, turn.system);
       if (system && resumeCursor) systemHeld.forget(resumeCursor);
       else if (resumeCursor) systemHeld.begin(resumeCursor);
       const prompt = composeAntigravityPrompt(system, turn.text);

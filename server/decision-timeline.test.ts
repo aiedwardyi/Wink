@@ -448,36 +448,6 @@ describe("decision timeline", () => {
       expect(timeline()).toBe("");
     });
 
-    it("retires a card pick once the PR its answer names merged after the tap", async () => {
-      const merged = vi.fn(() => [{ number: 2194, mergedAt: Date.now() }]);
-      pass.dispose();
-      pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged });
-      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Merge", subtitle: "Merge PR 2194 once CI is green?", options: ["Yes, merge PR 2194", "No"], askUser: true } });
-      answer(card, "Yes, merge PR 2194");
-      reply();
-      await settle();
-      expect(merged).toHaveBeenCalledWith(BOT, "t1", expect.stringContaining("PR 2194"), true);
-      expect(picks()).toEqual([["Merge PR 2194 once CI is green?", "Yes, merge PR 2194", card.id]]);
-      expect(timeline()).toMatch(/^- Retired: \d{4}-\d{2}-\d{2}$/m);
-      expect(picksBlock(timeline())).toBe("");
-    });
-
-    it("keeps a pick live when the user adds to it after its PR merged", async () => {
-      const mergedAt = Date.now() + MINUTE;
-      pass.dispose();
-      pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged: () => [{ number: 2194, mergedAt }] });
-      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Merge", subtitle: "Merge PR 2194 once CI is green?", options: ["Yes, merge PR 2194", "No"], askUser: true } });
-      answer(card, "Yes, merge PR 2194");
-      reply();
-      await settle();
-      expect(picksBlock(timeline())).toBe("");
-      await vi.advanceTimersByTimeAsync(10 * MINUTE);
-      say("also deploy it to staging");
-      reply({ kind: "tweak", key: "Merge PR 2194 once CI is green?", fact: "Also deploy it to staging", quote: "also deploy it to staging" });
-      await settle();
-      expect(picksBlock(timeline())).toContain("also deploy it to staging");
-    });
-
     it("lands a qualification on a card answer filed in the same pass", async () => {
       const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Theme", subtitle: "Which theme?", options: ["Dark", "Light"], askUser: true } });
       answer(card, "Dark");
@@ -518,22 +488,6 @@ describe("decision timeline", () => {
       reply();
       await settle();
       expect(picks().map(([, picked, question]) => [picked, question])).toEqual([["Postgres", billing.id], ["SQLite", analytics.id]]);
-    });
-
-    it("shows a fresh card's answer when an older card asked the same and retired", async () => {
-      const checks = () => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Checks", subtitle: "When should the checks run?", options: ["Tonight", "Next week"], askUser: true } });
-      const old = checks();
-      answer(old, "Tonight");
-      reply();
-      await settle();
-      vi.setSystemTime(NOW + 2 * 24 * 60 * MINUTE);
-      const fresh = checks();
-      answer(fresh, "Tonight");
-      reply();
-      await settle();
-      expect(currentPicks(timeline()).map(({ questionId }) => questionId)).toEqual([fresh.id]);
-      expect(parseTimeline(timeline()).entries.find(({ questionId }) => questionId === old.id)).toMatchObject({ retired: expect.any(String), replacedBy: expect.any(String) });
-      expect(picksBlock(timeline())).toContain("When should the checks run? (");
     });
 
     it("keeps a live answer when another card asks the same question", async () => {
@@ -624,31 +578,18 @@ describe("decision timeline", () => {
       expect(picksBlock(timeline())).toContain("Cloud signing");
     });
 
-    it("keeps a standing rule a merge starts, and a dated pick whose PR is open", async () => {
-      pass.dispose();
-      pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged: (_bot, _thread, ref) => (ref.includes("42") ? null : [{ number: 41, mergedAt: Date.now() }]) });
+    it("keeps every card answer in the prompt after its day and after a PR it names", async () => {
       const ask = (subtitle: string, options: string[]) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Release", subtitle, options, askUser: true } });
-      answer(ask("Which release rule takes effect after PR #41 merges?", ["Always require approval", "No approval"]), "Always require approval");
-      answer(ask("Deploy after PR #42 merges?", ["Deploy tonight once PR #42 merges", "Next week"]), "Deploy tonight once PR #42 merges");
+      answer(ask("When should we archive the demo?", ["Tonight", "Next week"]), "Tonight");
+      answer(ask("Which change should we merge?", ["Merge PR #41", "Leave it"]), "Merge PR #41");
       reply();
       await settle();
       vi.setSystemTime(NOW + 2 * 24 * 60 * MINUTE);
       answer(ask("Which label color?", ["Mint", "Orange"]), "Mint");
       reply();
       await settle();
-      expect(currentPicks(timeline()).map(({ picked, retired }) => [picked, Boolean(retired)])).toEqual([["Always require approval", false], ["Deploy tonight once PR #42 merges", false], ["Mint", false]]);
-    });
-
-    it("keeps a card pick live while any PR it names is unread or open", async () => {
-      const merged = vi.fn((_bot: string, _thread: string, ref: string) => [41, 42, 43].filter((n) => ref.includes(String(n)) && n !== 42).map((number) => ({ number, mergedAt: Date.now() })));
-      pass.dispose();
-      pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged });
-      const ask = (subtitle: string, choice: string) => answer(store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Close", subtitle, options: [choice, "No"], askUser: true } }), choice);
-      ask("When should packing close?", "Merge PR #41 and #42");
-      ask("When should delivery close?", "Merge PR 41 and PR 43");
-      reply();
-      await settle();
-      expect(currentPicks(timeline()).map(({ key, retired }) => [key, Boolean(retired)])).toEqual([["When should packing close?", false], ["When should delivery close?", true]]);
+      expect(timeline()).not.toContain("- Retired:");
+      for (const choice of ["Tonight", "Merge PR #41", "Mint"]) expect(picksBlock(timeline())).toContain(choice);
     });
 
     it("replaces a tapped answer with a revision that only adds words to it", async () => {
@@ -703,42 +644,6 @@ describe("decision timeline", () => {
       expect(picksBlock(timeline())).toContain("Cloud signing");
     });
 
-    it("keeps an answer that waits for approval or never ends live after its day", async () => {
-      const ask = (subtitle: string, options: string[]) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Release", subtitle, options, askUser: true } });
-      answer(ask("Should we publish the announcement?", ["Not now, wait for my approval", "Publish"]), "Not now, wait for my approval");
-      answer(ask("Which notification policy should I use?", ["Never page me after 18:00", "Page me anytime"]), "Never page me after 18:00");
-      answer(ask("When should we archive the demo?", ["Tonight", "Next week"]), "Tonight");
-      reply();
-      await settle();
-      vi.setSystemTime(NOW + 2 * 24 * 60 * MINUTE);
-      answer(ask("Which label color?", ["Mint", "Orange"]), "Mint");
-      reply();
-      await settle();
-      expect(currentPicks(timeline()).map(({ picked, retired }) => [picked, Boolean(retired)])).toEqual([["Not now, wait for my approval", false], ["Never page me after 18:00", false], ["Tonight", true], ["Mint", false]]);
-    });
-
-    it("never retires a pick by a PR only its question or a rejected option names", async () => {
-      pass.dispose();
-      pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged: () => [{ number: 41, mergedAt: Date.now() }] });
-      const ask = (subtitle: string, options: string[]) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Release", subtitle, options, askUser: true } });
-      answer(ask("Ship with PR #41 or wait for confirmation?", ["Ship with PR #41", "Hold until I confirm"]), "Hold until I confirm");
-      answer(ask("What is the release policy after PR #41 merges?", ["Wait for a manual release", "Release on merge"]), "Wait for a manual release");
-      answer(ask("Close the audit after PR #41 merges?", ["Yes", "No"]), "Yes");
-      answer(ask("When should the packing close?", ["Close it once PR #41 merges", "Keep it open"]), "Close it once PR #41 merges");
-      answer(ask("When should we merge?", ["Merge PR #41 after review", "Leave it"]), "Merge PR #41 after review");
-      reply();
-      await settle();
-      expect(currentPicks(timeline()).map(({ picked, retired }) => [picked, Boolean(retired)])).toEqual([["Hold until I confirm", false], ["Wait for a manual release", false], ["Yes", false], ["Close it once PR #41 merges", false], ["Merge PR #41 after review", true]]);
-    });
-
-    it("keeps a merge pick whose PR merged before the user chose it", async () => {
-      pass.dispose();
-      pass = createMemoryPass({ store, dataDir, generate: () => generate, enabled: () => true, busy: () => false, merged: () => [{ number: 41, mergedAt: Date.now() - 24 * 60 * MINUTE }] });
-      answer(store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Merge", subtitle: "Merge PR #41?", options: ["Merge PR #41", "No"], askUser: true } }), "Merge PR #41");
-      reply();
-      await settle();
-      expect(currentPicks(timeline()).map(({ picked, retired }) => [picked, Boolean(retired)])).toEqual([["Merge PR #41", false]]);
-    });
   });
 
   describe("one pick per source", () => {

@@ -178,6 +178,35 @@ describe("applyPicks", () => {
   });
 });
 
+describe("card answers", () => {
+  // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+  const tap = (questionId: string, messageId: string, key: string, picked: string, when: number) =>
+    pick(key, picked, picked, when, { tapped: true, binding: { at: when, messageId, questionId, thread: "t1", files: [], overPictures: [], named: true } as never });
+
+  it("lands a tweak keyed like a revised card answer on the card's pick", () => {
+    const first = applyPicks("", [tap("q1", "a1", "Which theme?", "Dark", at(26, 11))])!.text;
+    const revised = pick("Theme", "Light", "Light", at(26, 12), { binding: { at: at(26, 12), messageId: "a2", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never });
+    const out = applyPicks(first, [revised, tweak("Theme", "Keep the header small", at(26, 12))])!;
+    expect(out.tweaks).toBe(1);
+    expect(picksBlock(out.text)).toContain("Keep the header small");
+  });
+
+  it("numbers a second card's colliding key within the key limit, so a tweak by that key finds it", () => {
+    const key = "For the upcoming release, which signing service should we use for the beta builds?";
+    const two = applyPicks("", [tap("q1", "a1", key, "Local signing", at(26, 12)), tap("q2", "a2", key, "Cloud signing", at(26, 12, 1))])!.text;
+    const second = currentPicks(two).find(({ picked }) => picked === "Cloud signing")!;
+    expect(second.key.length).toBeLessThanOrEqual(60);
+    const tweaked = applyPicks(two, [tweak(second.key, "use the EV certificate", at(26, 12, 2))])!.text;
+    expect(currentPicks(tweaked).map(({ picked, tweaks }) => [picked, tweaks.map(({ said }) => said)])).toEqual([["Local signing", []], ["Cloud signing", ["use the EV certificate"]]]);
+  });
+
+  it("shows a pick an older build marked retired, and keeps the line on file", () => {
+    const text = "# Decision timeline\n\n## 2026-11-18 17:32 | memory audit fix timing | current\n- Picked: Fix tonight\n- Retired: 2026-11-19\n";
+    expect(picksBlock(text)).toContain("memory audit fix timing (11-18): Fix tonight");
+    expect(applyPicks(text, [pick("theme", "Dark", "dark", at(26, 10))])!.text).toContain("- Picked: Fix tonight\n- Retired: 2026-11-19\n");
+  });
+});
+
 describe("card answers across PCs", () => {
   // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
   const tap = (questionId: string, messageId: string, key: string, picked: string, when: number) =>

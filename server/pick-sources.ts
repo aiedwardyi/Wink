@@ -34,8 +34,6 @@ export type PickBinding = {
   picture?: Picture; overPictures: Picture[]; files: string[];
   /** the question's own asking sentences name the whole key */
   named: boolean;
-  /** the answered card's whole question */
-  question?: string;
 };
 
 const sentByPerson = (message: Message) => message.role === "user" && message.kind === "text" && !message.from;
@@ -210,13 +208,11 @@ export function validatePickBinding(claim: PickClaim, source: PickSource | undef
   }
   const paths = new Set(source.files ?? []);
   const files = (claim.files ?? source.files ?? []).filter((path) => paths.has(path));
-  const binding: PickBinding = {
+  return {
     [verifiedBinding]: true,
     at: source.at, messageId: source.id, questionId, thread: source.thread, picture,
     overPictures: [...overPictures.values()].filter((value): value is Picture => value !== null), files, named: phrase === 1,
   };
-  if (source.question) binding.question = source.question;
-  return binding;
 }
 
 const sourcesOf = (entry: PickEntry) => new Set([

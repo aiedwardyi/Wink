@@ -470,14 +470,12 @@ export function withSystemChanges(
   delivered: string | undefined,
   system: string,
   maxChars = SYSTEM_REMINDER_MAX_CHARS,
-  /** what starts lines that may leave unannounced: a retired pick is done, not void, in whichever version the session got */
-  quiet: readonly string[] = [],
 ): string | null {
   if (delivered === undefined || delivered === system) return text;
   const before = systemLines(delivered);
   const after = systemLines(system);
   const reordered = retainedLinesReordered(before, after);
-  const removed = (reordered ? before : linesOnlyIn(before, after)).filter((line) => !quiet.some((head) => line === head || line.startsWith(`${head} (`) || line.startsWith(`${head} + tweaks: `)));
+  const removed = reordered ? before : linesOnlyIn(before, after);
   const added = reordered ? after : linesOnlyIn(after, before);
   if (!removed.length && !added.length) return text;
   if ([...removed, ...added].reduce((sum, line) => sum + line.length, 0) > maxChars) return null;
