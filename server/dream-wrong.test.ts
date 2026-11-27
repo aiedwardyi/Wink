@@ -256,6 +256,19 @@ describe("a line that restates a note", () => {
     expect((await wrongPairs(raw, notes, [{ ...row("secret", time(25, 11), "The main account plan password is SunnyHarbor! now, not March"), guarded: true }])).length).toBe(0);
   });
 
+  it.each([
+    ["- The main account's plan is billed monthly. It ends in January (noted 2026-11-20)", "Please disregard March and April. The main account's plan is billed monthly. It ends in January."],
+    ["- The main U.S. account's plan ends in January (noted 2026-11-20)", "The main U.S. account's plan ends in January"],
+    ["- The main account on version 2.1 ends in January (noted 2026-11-20)", "The main account on version 2.1 ends in January"],
+    ["- The main account costs 9.50 a month through January (noted 2026-11-20)", "The main account costs 9.50 a month through January"],
+  ])("counts across the note's own periods: %s", async (saved, line) => {
+    const text = SAFETY_MEMORY + saved + "\n";
+    const all = fixTargets(text);
+    expect([...restatements(all, [row("again", time(25, 9), line)]).keys()]).toEqual([`note:${sha8(saved)}`]);
+    expect(restatements(all, [row("turned", time(25, 9), line.replace("January", "January, not true"))]).size).toBe(0);
+    expect((await wrongPairs(text, all, [row("again", time(25, 9), line)])).length).toBe(0);
+  });
+
   it("does not count when it turns the note or names only part of it", () => {
     expect(restatements(notes, [row("turned", time(25, 9), "It is not true that the main account's plan ends in January")]).size).toBe(0);
     expect(restatements(notes, [row("part", time(25, 9), "The main account's plan ends in April")]).size).toBe(0);

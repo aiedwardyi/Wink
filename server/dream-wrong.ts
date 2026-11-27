@@ -80,29 +80,43 @@ export function fixTargets(raw: string): Map<number, NoteLine> {
 
 const stem = (word: string) => (word.length > 4 ? word.replace(/(?:ing|ed|es|s)$/, "") : word).slice(0, 6);
 const content = (text: string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter((word) => !recallSkipped(word) && !/^\d+$/.test(word)).map(stem));
+// where need sits word for word in have, from `from` on; words drop punctuation, so "U.S.", "2.1" and a note's own periods match
+const wordsAt = (have: readonly string[], need: readonly string[], from = 0) => {
+  for (let at = from; at + need.length <= have.length; at++) if (need.every((word, index) => have[at + index] === word)) return at;
+  return -1;
+};
 // a note that already holds 6 words in a row of the line was written from it
 const writtenFrom = (note: string, line: string) => {
-  const have = ` ${lowWords(note).join(" ")} `;
+  const have = lowWords(note);
   const said = lowWords(line);
-  for (let at = 0; at + 6 <= said.length; at++) if (have.includes(` ${said.slice(at, at + 6).join(" ")} `)) return true;
+  for (let at = 0; at + 6 <= said.length; at++) if (wordsAt(have, said.slice(at, at + 6)) >= 0) return true;
   return false;
 };
 
-// a sentence that holds the note's whole body and adds no turning word: the owner standing by the note
+// a line that holds the note's whole body, across sentences, and adds no turning word in the sentences it spans: the owner standing by the note
 const SENTENCE = /[.!?\n]+/;
 export type Restated = { at: number; line: number };
 
 /** The newest owner line that restates each note, by target; it reads as a later word on the note, never as a fix. */
 export function restatements(notes: ReadonlyMap<number, NoteLine>, rows: readonly OwnerRow[]): Map<string, Restated> {
-  const said = rows.map((row) => ({ at: row.at, sentences: row.text.split(SENTENCE).map(lowWords).filter((words) => words.length) }));
+  const said = rows.map((row) => {
+    const words = row.text.split(SENTENCE).flatMap((part, sentence) => lowWords(part).map((word) => ({ word, sentence })));
+    return { at: row.at, words, plain: words.map(({ word }) => word) };
+  });
   const found = new Map<string, Restated>();
   for (const note of notes.values()) {
     const need: string[] = lowWords(body(note.text));
     if (!need.length) continue;
     const target = `note:${sha8(note.text)}`;
-    for (const { at, sentences } of said) {
+    for (const { at, words, plain } of said) {
       if (at <= (found.get(target)?.at ?? -Infinity)) continue;
-      if (sentences.some((words) => ` ${words.join(" ")} `.includes(` ${need.join(" ")} `) && !words.filter((word) => !need.includes(word)).some(negates))) found.set(target, { at, line: note.at + 1 });
+      for (let start = wordsAt(plain, need); start >= 0; start = wordsAt(plain, need, start + 1)) {
+        const [first, last] = [words[start]!.sentence, words[start + need.length - 1]!.sentence];
+        const added = words.filter(({ word, sentence }) => sentence >= first && sentence <= last && !need.includes(word));
+        if (added.some(({ word }) => negates(word))) continue;
+        found.set(target, { at, line: note.at + 1 });
+        break;
+      }
     }
   }
   return found;

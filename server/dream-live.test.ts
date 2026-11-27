@@ -714,6 +714,33 @@ describe("dreaming, dry", () => {
       expect(memoryFileRaw(bot)).toBe(raw);
     });
 
+    it.each([
+      ["across two sentences after a newer correction", true, "- The main account's plan is billed monthly. It ends in January (noted 2026-11-20)", "Please disregard March and April. The main account's plan is billed monthly. It ends in January."],
+      ["across two sentences", false, "- The main account's plan is billed monthly. It ends in January (noted 2026-11-20)", "The main account's plan is billed monthly. It ends in January"],
+      ["with an abbreviation", false, "- The main U.S. account's plan ends in January (noted 2026-11-20)", "The main U.S. account's plan ends in January"],
+      ["with a version number", false, "- The main account on version 2.1 ends in January (noted 2026-11-20)", "The main account on version 2.1 ends in January"],
+      ["with a price", false, "- The main account costs 9.50 a month through January (noted 2026-11-20)", "The main account costs 9.50 a month through January"],
+    ])("drops a waiting fix when the owner restates a saved note %s", async (_, newer, note, withdraw) => {
+      const text = raw.replace(OLD, note);
+      const march = note.replace("January", "March");
+      writeMemoryFile(bot, text);
+      generator = flags([{ note: line(OLD), quote: "It lasts till march", fix: march }]);
+      await quiet();
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === note)?.by).toBe(march);
+      const april = "The main account plan ends in April now, instead of March.";
+      typed.set("t1", [...(newer ? [said("april", Date.now() + 90_000, april)] : []), said("withdraw", Date.now() + 180_000, withdraw)]);
+      generator = async (prompt) => {
+        const pairs = [...prompt.matchAll(/^PAIR\n(L\d+) \(written [^)]*\): ([^\n]+)\n(M\d+) \([^)]*\): ([^\n]+)/gm)];
+        return JSON.stringify({ wrong: pairs.flatMap(([, ref, old, message, row]) => (old === note && row === april ? [{ note: ref, message, quote: "ends in April now", fix: note.replace("January", "April") }] : [])) });
+      };
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === note)).toBeUndefined();
+      expect(start().dream.fix(bot, plans()[0]!.runId, `note:${sha8(note)}`, false)).toEqual({ ok: false, error: "no-item" });
+      expect(memoryFileRaw(bot)).toBe(text);
+      expect(history()).toBe("");
+    });
+
     it("keeps a waiting fix through a pass that checked nothing about its note", async () => {
       await quiet();
       typed.set("t1", [said("other", Date.now() + 1000, "The weekly sync moved to Thursday afternoons.")]);
