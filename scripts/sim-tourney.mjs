@@ -1,6 +1,7 @@
 // Offline recall tourney: spec -> one worktree per arm at a frozen sha -> scripts/recall-bench.ts -> scripts/sim-rule.mjs ->
 // result.json, and on held-out a pick-ledger entry. The scorer, sets and rule run from this checkout; an arm may only change app code.
-// node scripts/sim-tourney.mjs <spec.json> --sets <dir> --ledger <ledger.mjs> [--on held-out|tuning] [--out <dir>] [--repo <dir>] [--keep]
+// node scripts/sim-tourney.mjs <spec.json> --sets <dir> --ledger <ledger.mjs> [--on tuning|held-out] [--out <dir>] [--repo <dir>] [--keep]
+// Each set sits alone in its own folder; arm seats get only the tuning folder, and a held-out run must say --on held-out.
 // spec: { name, base, prereg, arms: [{ name, sha } | { name, patch }, ...] }, exactly one arm with sham: true
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -19,7 +20,8 @@ const PARITY = 100;
 export const lockedIn = (paths) => paths.filter((path) => LOCKED.some((prefix) => path.startsWith(prefix)));
 const git = (repo, ...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 const lines = (text) => text.split("\n").map((line) => line.trim()).filter(Boolean);
-export const armDiff = (repo, base, sha) => lines(git(repo, "diff", "--name-only", base, sha));
+// --no-renames lists a renamed file under its old name too, so moving a locked file away is a touch
+export const armDiff = (repo, base, sha) => lines(git(repo, "diff", "--name-only", "--no-renames", base, sha));
 // CRLF checkouts hash the same as the committed file
 export const fileHash = (path) => createHash("sha256").update(readFileSync(path, "utf8").replace(/\r\n/g, "\n")).digest("hex");
 
@@ -51,8 +53,10 @@ function score(root, on, sets, out, parity) {
   return JSON.parse(readFileSync(out, "utf8"));
 }
 
-export function tourney({ spec, on = "held-out", sets, ledger, out = join(sets, "..", "runs"), repo = BENCH, keep = false, today = new Date().toLocaleDateString("sv-SE") }) {
-  if (!["held-out", "tuning"].includes(on)) refuse(`--on is held-out or tuning, not ${on}`);
+export function tourney({ spec, on = "tuning", sets, ledger, out = join(sets, "..", "runs"), repo = BENCH, keep = false, today = new Date().toLocaleDateString("sv-SE") }) {
+  if (!["held-out", "tuning"].includes(on)) refuse(`--on is tuning or held-out, not ${on}`);
+  const stray = ["held-out", "tuning"].find((other) => other !== on && existsSync(join(sets, `${other}.json`)));
+  if (stray) refuse(`${join(sets, `${stray}.json`)} sits in the ${on} folder: each set needs its own folder, and arm seats get only the tuning one`);
   if (!spec.name || !spec.base || !spec.prereg || !Array.isArray(spec.arms) || !spec.arms.length) refuse("spec needs name, base, prereg and arms");
   if (spec.arms.filter((arm) => arm.sham).length !== 1) refuse("spec needs exactly one sham arm");
   if (new Set(spec.arms.map((arm) => arm.name)).size !== spec.arms.length || spec.arms.some((arm) => !/^[\w-]+$/.test(arm.name ?? "") || arm.name === "base")) refuse("arm names must be unique words, not base");
@@ -77,9 +81,14 @@ export function tourney({ spec, on = "held-out", sets, ledger, out = join(sets, 
   if (!prereg) refuse(`no pre-registration ${spec.prereg} in ${ledgerJson}: file the rule first with node ledger.mjs prereg <file.json>`);
   const newer = filed.find((entry) => entry.supersedes === spec.prereg);
   if (newer) refuse(`pre-registration ${spec.prereg} is superseded by ${newer.id}: name ${newer.id} in the spec`);
-  if (prereg.files?.ruleHash !== ruleHash) refuse(`pre-registration ${spec.prereg} names rule sha256 ${prereg.files?.ruleHash}, but scripts/sim-rule.mjs is ${ruleHash}: a changed rule needs a new pre-registration`);
-
   const manifest = JSON.parse(readFileSync(join(BENCH, "scripts", "recall-sets.json"), "utf8"));
+  const pins = { ruleHash, scorerHash: fileHash(join(BENCH, "scripts", "recall-bench.ts")), generatorHash: fileHash(join(BENCH, "scripts", "recall-sets.ts")), tuning: manifest.tuning?.hash, heldOut: manifest["held-out"]?.hash };
+  for (const [key, now] of Object.entries(pins)) if (prereg.files?.[key] !== now) refuse(`pre-registration ${spec.prereg} names files.${key} ${prereg.files?.[key]}, but the bench has ${now}: a changed scorer, set generator, set or rule needs a new pre-registration`);
+  const filedAt = spawnSync("git", ["-C", BENCH, "rev-parse", "--verify", "--quiet", `${prereg.files.bench}^{commit}`], { encoding: "utf8" }).stdout.trim();
+  if (!filedAt) refuse(`pre-registration ${spec.prereg} names bench ${prereg.files.bench}, which is not a commit here: file a new pre-registration at this bench`);
+  const drift = lockedIn(armDiff(BENCH, filedAt, "HEAD"));
+  if (drift.length) refuse(`pre-registration ${spec.prereg} was filed at bench ${filedAt.slice(0, 9)}; ${drift.join(", ")} changed since: file a new pre-registration`);
+
   const hash = manifest[on]?.hash;
   const usesFile = join(sets, "uses.json");
   const uses = existsSync(usesFile) ? JSON.parse(readFileSync(usesFile, "utf8")) : {};
@@ -149,9 +158,9 @@ const line = (result) => [
 ].join("\n");
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { values: opt, positionals: [specFile] } = parseArgs({ allowPositionals: true, options: { on: { type: "string", default: "held-out" }, sets: { type: "string" }, ledger: { type: "string" }, out: { type: "string" }, repo: { type: "string" }, keep: { type: "boolean", default: false } } });
+  const { values: opt, positionals: [specFile] } = parseArgs({ allowPositionals: true, options: { on: { type: "string", default: "tuning" }, sets: { type: "string" }, ledger: { type: "string" }, out: { type: "string" }, repo: { type: "string" }, keep: { type: "boolean", default: false } } });
   try {
-    if (!specFile) refuse("usage: node scripts/sim-tourney.mjs <spec.json> --sets <dir> --ledger <ledger.mjs> [--on held-out|tuning] [--out <dir>] [--repo <dir>] [--keep]");
+    if (!specFile) refuse("usage: node scripts/sim-tourney.mjs <spec.json> --sets <dir> --ledger <ledger.mjs> [--on tuning|held-out] [--out <dir>] [--repo <dir>] [--keep]");
     const spec = JSON.parse(readFileSync(specFile, "utf8"));
     // a spec's patch paths are relative to the spec
     for (const arm of spec.arms ?? []) if (arm.patch) arm.patch = resolve(dirname(specFile), arm.patch);

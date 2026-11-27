@@ -1,6 +1,6 @@
-// Recall bench scorer (from scripts/recall-rank-sweep.ts): every case of a frozen set through one checkout's real lookup, top-2
-// rows read from its lookup log and judged against the known answer. --parity N also replays the first N cases through the
-// index, gate and the review-base pick, and counts where the real lookup differs. Writes only to a temp HOME and data dir.
+// Recall bench scorer (from scripts/recall-rank-sweep.ts): every case of a frozen set through one checkout's real lookup, the
+// top 2 rows read from its lookup log, checked against the text take() gave the bot, and judged against the known answer.
+// --parity N also replays the first N cases through the index, gate and the review-base pick, and counts where the real lookup differs. Writes only to a temp HOME and data dir.
 // node --experimental-strip-types scripts/recall-bench.ts --root <checkout> --sets <dir> --set <name> --out <json> [--parity N]
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -99,12 +99,23 @@ try {
     const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => notes, now: () => noon });
     await lookup.refresh(item.bot);
     const started = performance.now();
-    lookup.take(item.bot, "t", undefined, item.ask);
+    const given = lookup.take(item.bot, "t", undefined, item.ask);
     ms.push(performance.now() - started);
     await settle();
     // SAFETY: the lookup writes one JSON row per take, and the data dir is new for each case
     const entry = JSON.parse(readFileSync(join(DATA_DIR, "lookup-log.jsonl"), "utf8").trim().split("\n")[0]!) as { fired: boolean; rows: Array<{ row: string }> };
-    const shown = entry.fired ? entry.rows.map((row) => row.row) : [];
+    // the bot reads two rows at most, so a row logged past them or missing from take()'s text never counts
+    const shown = entry.fired ? entry.rows.slice(0, MAX_ROWS).map((row) => row.row) : [];
+    const carried = given.join("\n").split("\n").filter((line) => line.startsWith("- ")).slice(0, MAX_ROWS);
+    const lineOf = (ref: string) => {
+      const [, source, at] = /^(.*):(\d+)$/.exec(ref) ?? [];
+      return { source, text: source === undefined ? undefined : (item.files[source] ?? item.otherFiles[source])?.split("\n")[Number(at) - 1] };
+    };
+    const faithful = carried.length === shown.length && shown.every((ref, at) => {
+      const { source, text } = lineOf(ref);
+      return text !== undefined && carried[at]!.startsWith(`- ${source}, `) && carried[at]!.endsWith(`: ${text}`);
+    });
+    if (!faithful) throw new Error(`${item.id}: the lookup logged ${JSON.stringify(shown)} but take() gave the bot ${JSON.stringify(carried)}: the scorer judges only rows the bot gets`);
     if (at < parity && JSON.stringify(await replay(item, workspace, notes)) !== JSON.stringify(shown)) mismatched.push(item.id);
     rows.push({ id: item.id, kind: item.kind, family: item.family, shown, ...judgeCase(item, shown) });
     if ((at + 1) % 250 === 0) console.error(`${opt.set}: ${at + 1}/${set.cases.length}`);

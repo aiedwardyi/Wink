@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -12,7 +12,11 @@ const BENCH = fileURLToPath(new URL("./recall-bench.ts", import.meta.url));
 const TINY = { ...TUNING, name: "tiny", seed: 5, positives: 8, misses: 4, guards: 3 };
 const temps = [];
 afterEach(() => {
-  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of temps.splice(0)) {
+    // unlink the shared node_modules first, so the cleanup never walks into it
+    if (existsSync(join(dir, "node_modules"))) unlinkSync(join(dir, "node_modules"));
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 function kit() {
@@ -23,9 +27,9 @@ function kit() {
   writeFileSync(join(dir, "manifest.json"), JSON.stringify({ tiny: { hash: sha256(text) } }));
   return dir;
 }
-const bench = (dir, extra = []) => {
+const bench = (dir, extra = [], root = ROOT) => {
   const { VITEST: _vitest, ...env } = process.env;
-  return spawnSync(process.execPath, ["--experimental-strip-types", BENCH, "--root", ROOT, "--sets", dir, "--set", "tiny", "--manifest", join(dir, "manifest.json"), "--out", join(dir, "out.json"), ...extra], { encoding: "utf8", env: { ...env, TMP: dir, TEMP: dir, TMPDIR: dir } });
+  return spawnSync(process.execPath, ["--experimental-strip-types", BENCH, "--root", root, "--sets", dir, "--set", "tiny", "--manifest", join(dir, "manifest.json"), "--out", join(dir, "out.json"), ...extra], { encoding: "utf8", env: { ...env, TMP: dir, TEMP: dir, TMPDIR: dir } });
 };
 
 describe("case judge", () => {
@@ -70,4 +74,51 @@ describe("scorer", () => {
     expect(run.status).not.toBe(0);
     expect(run.stderr).toMatch(/hash/);
   });
+});
+
+// an arm checkout: the files the scorer loads from this repo, with one edit to the lookup, as a patch arm would make it
+function arm(from, to) {
+  const dir = mkdtempSync(join(tmpdir(), "recall-bench-arm-"));
+  temps.push(dir);
+  const todo = ["server/memory-lookup.ts", "server/memory-pass.ts", "server/config.ts", "package.json"].map((path) => join(ROOT, path));
+  for (const seen = new Set(); todo.length; ) {
+    const path = todo.pop();
+    if (seen.has(path)) continue;
+    seen.add(path);
+    mkdirSync(dirname(join(dir, relative(ROOT, path))), { recursive: true });
+    cpSync(path, join(dir, relative(ROOT, path)));
+    if (path.endsWith(".ts")) for (const [, spec] of readFileSync(path, "utf8").matchAll(/(?:from|import)\s*\(?\s*"(\.{1,2}\/[^"]+)"/g)) todo.push(resolve(dirname(path), spec));
+  }
+  symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "junction");
+  const lookup = join(dir, "server", "memory-lookup.ts");
+  const text = readFileSync(lookup, "utf8");
+  expect(text).toContain(from);
+  writeFileSync(lookup, text.replace(from, to));
+  return dir;
+}
+const scored = (dir, root) => {
+  const run = bench(dir, [], root);
+  expect(run.status, run.stderr).toBe(0);
+  return new Map(JSON.parse(readFileSync(join(dir, "out.json"), "utf8")).rows.map((row) => [row.id, row.shown]));
+};
+
+describe("scorer reads only what the bot gets", () => {
+  it("judges the top 2 rows: an arm that shows or logs more rows scores the same as the base", () => {
+    const dir = kit();
+    const base = scored(dir, ROOT);
+    for (const [from, to] of [["const MAX_ROWS = 2;", "const MAX_ROWS = 5;"], ["entry.rows = logged(picked);", "entry.rows = logged(unseen);"]]) {
+      const rows = scored(dir, arm(from, to));
+      for (const [id, shown] of rows) {
+        expect(shown.length).toBeLessThanOrEqual(2);
+        expect(shown, `${to} ${id}`).toEqual(base.get(id));
+      }
+    }
+  }, 120_000);
+
+  it("fails an arm whose take() text does not carry the rows it logged", () => {
+    const dir = kit();
+    const run = bench(dir, [], arm("...picked.map((hit) =>", "...picked.slice(1).map((hit) =>"));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/take\(\) gave the bot/);
+  }, 60_000);
 });
