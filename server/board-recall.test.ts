@@ -52,6 +52,14 @@ describe("forum recall", () => {
     expect(line).toContain("ssh ‹user›@host, see https://x.dev/a?b=1");
   });
 
+  it("keeps the fix in the line when a long multibyte title would fill it", () => {
+    const { recall, solved } = setup();
+    solved(FIX, { title: `${TITLE} ${"修".repeat(150)}` });
+    const [line] = recall.take("ada", "t1", TYPED);
+    expect(line).toContain(`… Fix: ${FIX}`);
+    expect(Buffer.byteLength(line!, "utf8")).toBeLessThanOrEqual(RECALL_BYTES);
+  });
+
   it("gives at most one fix when several match", () => {
     const { recall, solved } = setup();
     solved();
@@ -97,6 +105,30 @@ describe("forum recall", () => {
     expect(calls.hold("ada", "t1", [], [BLOCKER])).toEqual({ blockers: [BLOCKER], notice: "" });
     calls.turnEnded("t1", true);
     expect(holds.map((hold) => [hold.kind, hold.postIds])).toEqual([["recall", [post.id]], ["missed", [post.id]]]);
+  });
+
+  it("logs missed when a matching blocker the turn started with is written again", () => {
+    const { calls, recall, holds, solved } = setup();
+    const post = solved();
+    recall.take("ada", "t1", TYPED);
+    recall.accepted("ada", "t1");
+    expect(calls.hold("ada", "t1", [BLOCKER], [BLOCKER])).toEqual({ blockers: [BLOCKER], notice: "" });
+    calls.turnEnded("t1", true);
+    expect(holds.map((hold) => [hold.kind, hold.postIds])).toEqual([["recall", [post.id]], ["missed", [post.id]]]);
+  });
+
+  it("shows each fix once per provider session, and keeps only the current session's marks", () => {
+    const { recall, solved } = setup();
+    const lookup = withBoardRecall({ refresh: async () => {}, ready: () => undefined, take: () => [], accepted() {}, release() {}, settled: async () => {} }, recall);
+    solved();
+    expect(lookup.take("ada", "t1", undefined, TYPED)).toHaveLength(1);
+    lookup.accepted("ada", "t1");
+    void lookup.settled("ada", "t1", "s1");
+    expect(lookup.take("ada", "t1", "s1", TYPED)).toEqual([]);
+    expect(lookup.take("ada", "t1", "s2", TYPED)).toHaveLength(1);
+    lookup.accepted("ada", "t1");
+    expect(lookup.take("ada", "t1", "s2", TYPED)).toEqual([]);
+    expect(lookup.take("ada", "t1", "s1", TYPED)).toHaveLength(1);
   });
 
   it("logs nothing for a take that never reached the provider, and shows each fix once per chat", () => {

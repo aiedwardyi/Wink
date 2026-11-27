@@ -15,7 +15,15 @@ import type { MemoryLookup } from "../server/memory-lookup.ts";
 
 const [dir, tasksPath] = process.argv.slice(2);
 if (!dir || !tasksPath) throw new Error("usage: node scripts/forum-recall-replay.ts <orbit copy> <tasks.json>");
-if (realpathSync(dir).toLowerCase() === realpathSync(join(homedir(), ".orbit")).toLowerCase()) throw new Error(`${dir} is the live ~/.orbit; copy it first`);
+const live = (() => {
+  try {
+    return realpathSync(join(homedir(), ".orbit")).toLowerCase();
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return "";
+    throw error;
+  }
+})();
+if (live && realpathSync(dir).toLowerCase() === live) throw new Error(`${dir} is the live ~/.orbit; copy it first`);
 type Task = { postId: string; task: string; error: string; remedy: string };
 // SAFETY: the tasks file is written by hand for this replay
 const tasks = JSON.parse(readFileSync(tasksPath, "utf8")) as Task[];

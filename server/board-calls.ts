@@ -75,11 +75,12 @@ export function createBoardCalls(deps: BoardCallDeps) {
       const found: BoardPost[] = [];
       for (const blocker of after) {
         const key = keyOf(blocker);
-        if (blocker.kind !== "engine" || had.has(key)) {
+        const old = had.has(key);
+        if (blocker.kind !== "engine" || (old && !offered.some((offer) => offer.botId === botId && !offer.key))) {
           kept.push(blocker);
           continue;
         }
-        const tried = offered.findIndex((offer) => offer.botId === botId && offer.key === key);
+        const tried = old ? -1 : offered.findIndex((offer) => offer.botId === botId && offer.key === key);
         if (tried >= 0) {
           const [miss] = offered.splice(tried, 1);
           deps.held?.({ kind: "missed", botId, threadId, postIds: miss!.postIds });
@@ -87,11 +88,15 @@ export function createBoardCalls(deps: BoardCallDeps) {
           continue;
         }
         const matches = search(threadId, blocker.note);
-        // a fix recall showed before the turn already had its try
+        // a fix recall showed before the turn already had its try, also on a blocker the turn started with
         const recalled = offered.findIndex((offer) => offer.botId === botId && !offer.key && matches.some((post) => offer.postIds.includes(post.id)));
         if (recalled >= 0) {
           const [miss] = offered.splice(recalled, 1);
           deps.held?.({ kind: "missed", botId, threadId, postIds: miss!.postIds });
+          kept.push(blocker);
+          continue;
+        }
+        if (old) {
           kept.push(blocker);
           continue;
         }
