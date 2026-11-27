@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAskPrs } from "./ask-prs.ts";
+import { sha8 } from "./memory-clean.ts";
+import type { Message } from "./store.ts";
+import { SAFETY_MEMORY } from "./testing/dream-safety.ts";
 import { createDreamLive, landings, type DreamPlan } from "./dream-live.ts";
 import type { NoteGenerator } from "./memory-pass.ts";
 import { createMemorySleep, planTidy, SLEEP_GAP_MS, SLEEP_IDLE_MS, type MemorySleep } from "./memory-sleep.ts";
@@ -124,6 +127,7 @@ describe("dreaming, dry", () => {
   let packets: Map<string, TaskResumePacket>;
   let pending: Map<string, TaskResumePacket>;
   let gh: Record<string, GhView>;
+  let typed: Map<string, Message[]>;
   let reverts: Set<number>;
   let enabled: boolean;
   let busy: Set<string>;
@@ -145,7 +149,8 @@ describe("dreaming, dry", () => {
     const dream = createDreamLive({
       dataDir,
       pc: () => "pc-1",
-      threads: () => [...new Set([...packets.keys(), ...pending.keys()])],
+      threads: () => [...new Set([...packets.keys(), ...pending.keys(), ...typed.keys()])],
+      rows: (threadId, since) => (typed.get(threadId) ?? []).filter((message) => message.at >= since),
       packet: (threadId) => pending.get(threadId) ?? packets.get(threadId) ?? null,
       busy: (_botId, threadId) => busy.has(threadId),
       cite: async () => {},
@@ -188,6 +193,7 @@ describe("dreaming, dry", () => {
     packets = new Map();
     pending = new Map();
     gh = {};
+    typed = new Map();
     reverts = new Set();
     enabled = true;
     busy = new Set();
@@ -406,6 +412,88 @@ describe("dreaming, dry", () => {
     expect(JSON.stringify(packets.get("t1"))).toBe(before);
     expect(readFileSync(ledger, "utf8")).toBe("# SIM ledger\n- try 2: 0.71\n");
     expect(statSync(ledger).mtimeMs).toBe(ledgerAt);
+  });
+
+  describe("a note the owner's later words show wrong", () => {
+    const OLD = "- The main account's plan ends in January (noted 2026-11-20)";
+    const NEW = "- The main account's plan ends in March (noted 2026-11-20)";
+    const RULE = '- ROOMS WORD (11-20): say rooms and Room Details to them in every user-facing string.';
+    const raw = `${SAFETY_MEMORY}${OLD}\n${RULE}\n`.replace(/\n/g, "\r\n");
+    const line = (text: string) => `L${raw.split("\r\n").indexOf(text) + 1}`;
+    // SAFETY: the check reads only id, at, role, kind and text of a user row.
+    const said = (id: string, at: number, text: string) => ({ id, at, role: "user", kind: "text", text }) as Message;
+    const flags = (wrong: { note: string; quote: string; fix: string }[]): NoteGenerator => async (prompt) => {
+      if (!prompt.includes("<pairs>")) return "{}";
+      const refs = [...prompt.matchAll(/^PAIR\nL(\d+) [^\n]*\n(M\d+) /gm)].map(([, at, ref]) => [`L${at}`, ref!] as const);
+      return JSON.stringify({ wrong: wrong.flatMap((flag) => refs.filter(([note]) => note === flag.note).map(([, message]) => ({ ...flag, message }))) });
+    };
+    beforeEach(() => {
+      writeMemoryFile(bot, raw);
+      typed.set("t1", [
+        said("m1", NOW - DAY, "For the main account plan leave it. It lasts till march and thats my main account anyways."),
+        said("m2", NOW - DAY + 60_000, "its called groups not rooms we removed that name and changed it"),
+      ]);
+      generator = flags([
+        { note: line(OLD), quote: "It lasts till march", fix: NEW },
+        { note: line(RULE), quote: "its called groups not rooms", fix: "- ROOMS WORD (11-20): say groups, not rooms, and Group Details to them in every user-facing string." },
+      ]);
+    });
+
+    it("lists the fix with the owner's quote and changes nothing until that item's OK", async () => {
+      await quiet();
+      expect(memoryFileRaw(bot)).toBe(raw);
+      expect(history()).toBe("");
+      const plan = plans()[0]!;
+      expect(plan.fixes).toMatchObject({ state: "checked", through: NOW + SLEEP_IDLE_MS });
+      expect(plan.fixes!.items).toEqual([
+        { op: "fix", target: `note:${sha8(OLD)}`, text: OLD, by: NEW, why: "wrong", listOnly: false, evidence: { thread: "t1", message: "m1", at: NOW - DAY, quote: "It lasts till march" } },
+        expect.objectContaining({ text: RULE, listOnly: true, evidence: expect.objectContaining({ message: "m2" }) }),
+      ]);
+      expect(start().dream.latest(bot)!.dream.fixes).toEqual(plan.fixes);
+      // the next pass reads only lines typed since, and keeps the list
+      const calls = generate.mock.calls.length;
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(generate.mock.calls.length).toBe(calls);
+      expect(plans()[0]!.fixes!.items).toEqual(plan.fixes!.items);
+      expect(memoryFileRaw(bot)).toBe(raw);
+    });
+
+    it("swaps the line on OK with the old one archived, and Undo puts the exact bytes back", async () => {
+      await quiet();
+      const dream = start().dream;
+      const { runId } = plans()[0]!;
+      const target = `note:${sha8(OLD)}`;
+      expect(dream.fix(bot, runId, `note:${sha8(RULE)}`, false)).toEqual({ ok: false, error: "list-only" });
+      expect(dream.fix(bot, runId, target, true)).toEqual({ ok: false, error: "undone" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+      expect(dream.fix(bot, runId, target, false)).toMatchObject({ ok: true });
+      expect(memoryFileRaw(bot)).toBe(raw.replace(OLD, NEW));
+      expect(history()).toContain(`${OLD}\n  - from MEMORY.md:${line(OLD).slice(1)} on 2026-11-25: the user wrote on 2026-11-24: "It lasts till march"`);
+      expect(dream.fix(bot, runId, target, false)).toEqual({ ok: false, error: "done" });
+      expect(plans()[0]!.fixes!.items[0]!.done).toMatchObject({ cr: true });
+      expect(dream.fix(bot, runId, target, true)).toMatchObject({ ok: true });
+      expect(Buffer.compare(Buffer.from(memoryFileRaw(bot)), Buffer.from(raw))).toBe(0);
+      expect(history()).toMatch(/\(run [0-9a-f]{8}\), undone 2026-11-25\n/);
+      expect(plans()[0]!.fixes!.items[0]!.done!.undoneAt).toBeDefined();
+    });
+
+    it("refuses an OK once the note changed, and on any plan but the newest", async () => {
+      await quiet();
+      const dream = start().dream;
+      const { runId } = plans()[0]!;
+      expect(dream.fix(bot, "0badc0de", `note:${sha8(OLD)}`, false)).toEqual({ ok: false, error: "not-newest" });
+      writeMemoryFile(bot, raw.replace(OLD, "- The main account's plan ends in May (noted 2026-11-21)"));
+      expect(dream.fix(bot, runId, `note:${sha8(OLD)}`, false)).toEqual({ ok: false, error: "changed" });
+      expect(history()).toBe("");
+    });
+
+    it("checks no owner line for a bot set to live", async () => {
+      setMode({ [bot]: "live" });
+      await quiet();
+      expect(generate.mock.calls.some(([prompt]) => prompt.includes("<pairs>"))).toBe(false);
+      expect(plans()).toEqual([]);
+    });
   });
 
   it("sweeps plans past 14 days but never the newest", async () => {

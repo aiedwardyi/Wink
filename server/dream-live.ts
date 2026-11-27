@@ -4,15 +4,20 @@ import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
-import { DREAMED_FILE } from "./dream-archive.ts";
+import { DREAMED_FILE, dreamedPath, fixedEntry, markUndone } from "./dream-archive.ts";
+import type { DreamJudges } from "./dream-judge.ts";
+import { applyFix, checkWrong, ownerRows, savedNotes, undoFix, type FixItem, type JudgeLog, type OwnerRow, type SavedNotes } from "./dream-wrong.ts";
 import { closedAskLine, refPrs, stepLeft, withClosed, type MergedPr } from "./ask-prs.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { cleanerSkip, runIdOf, sha8 } from "./memory-clean.ts";
-import type { Move } from "./memory-sleep.ts";
+import { appendArchive, type Move } from "./memory-sleep.ts";
+import { pickStamp } from "./picks.ts";
 import { redactRoomMemory } from "./redact.ts";
 import { isOpenAsk, trimClosed, type TaskAsk } from "./task-asks.ts";
 import { DROPPED_KEEP_MS } from "./task-dropped.ts";
 import { normalize, serializeBounded, type TaskResumePacket } from "./task-state.ts";
+import type { Message } from "./store.ts";
+import { memoryFileRaw, rawRevision, readMemoryFile, saveMemoryFile } from "./workspace.ts";
 
 const DAY = 24 * 60 * 60_000;
 export const DREAM_FILE = "dream-live.json";
@@ -34,6 +39,17 @@ const askItemSchema = z.object({
   told: z.boolean().optional(),
 });
 const NOTES_STATES = ["checked", "unchanged", "off-here", "no-model", "stopped", "conflict", "error"] as const;
+const FIX_STATES = ["checked", "off-here", "no-model", "stopped", "conflict", "error"] as const;
+const fixItemSchema = z.object({
+  op: z.literal("fix"),
+  target: z.string(),
+  text: z.string(),
+  by: z.string(),
+  why: z.literal("wrong"),
+  listOnly: z.boolean(),
+  evidence: z.object({ thread: z.string(), message: z.string(), at: z.number(), quote: z.string() }),
+  done: z.object({ at: z.number(), line: z.number(), cr: z.boolean(), id: z.string(), undoneAt: z.number().optional() }).optional(),
+});
 const planSchema = z.object({
   runId: z.string(),
   botId: z.string(),
@@ -41,6 +57,8 @@ const planSchema = z.object({
   mode: z.literal("dry"),
   notes: z.object({ state: z.enum(NOTES_STATES), items: z.array(noteItemSchema) }),
   asks: z.object({ threads: z.number(), skipped: z.number(), unchecked: z.number(), items: z.array(askItemSchema) }),
+  // through: the newest owner line checked; the next pass reads only lines after it
+  fixes: z.object({ state: z.enum(FIX_STATES), through: z.number(), items: z.array(fixItemSchema) }).optional(),
   runUntil: z.number(),
   dropUntil: z.number(),
 });
@@ -51,6 +69,9 @@ export type AskItem = z.infer<typeof askItemSchema>;
 export type NoteItem = z.infer<typeof noteItemSchema>;
 export type DreamAsks = DreamPlan["asks"];
 export type DryNotes = { state: (typeof NOTES_STATES)[number]; moves: Move[] };
+export type DreamFixes = NonNullable<DreamPlan["fixes"]>;
+export type DryFixes = DreamFixes & { pairs?: number; bytes?: number; judges?: Partial<Record<keyof DreamJudges, JudgeLog>>; reason?: string };
+export type FixResult = { ok: true; revision: string } | { ok: false; error: "no-run" | "not-newest" | "no-item" | "list-only" | "done" | "undone" | "changed" | "busy" };
 
 export interface DreamLiveDeps {
   dataDir: string;
@@ -63,6 +84,8 @@ export interface DreamLiveDeps {
   /** Reads the repos the bot's asks and reports cite, so a bare "PR n" can be placed. */
   cite(botId: string): Promise<void>;
   merged(botId: string, threadId: string, ask: TaskAsk, start: boolean): MergedPr[] | null | undefined;
+  /** The chat's user text rows and Auto Notes receipts from `since` on. */
+  rows(threadId: string, since: number): Message[];
   /** Resolves once every gh check started so far has finished. */
   checked(): Promise<void>;
   /** After a fresh look at the thread's repo: whether a revert there undid this PR. */
@@ -172,13 +195,46 @@ export function createDreamLive(deps: DreamLiveDeps) {
     return plan;
   }
 
+  async function fixes(botId: string, judges: DreamJudges | null, signal: AbortSignal): Promise<DryFixes> {
+    const at = now();
+    const through = plans(botId).find((each) => each.fixes?.state === "checked")?.fixes?.through ?? at - RUN_KEEP_MS;
+    if (!judges) return { state: "off-here", through, items: [] };
+    const raw = memoryFileRaw(botId);
+    // receipts from the start of that day: a note stamped the same day as a line is ordered by when it was saved
+    const since = new Date(through).setHours(0, 0, 0, 0);
+    const rows: OwnerRow[] = [];
+    const saved: SavedNotes[] = [];
+    for (const threadId of deps.threads(botId)) {
+      const messages = deps.rows(threadId, since);
+      rows.push(...ownerRows(threadId, messages, through));
+      saved.push(...savedNotes(messages));
+    }
+    rows.sort((left, right) => left.at - right.at);
+    try {
+      const checked = await checkWrong({ raw, rows, saved, judges, today: pickStamp(at).slice(0, 10), signal, now });
+      const fields: Omit<DryFixes, keyof DreamFixes> = { pairs: checked.pairs, bytes: checked.bytes, judges: checked.logs };
+      if (checked.reason) fields.reason = checked.reason;
+      if (memoryFileRaw(botId) !== raw) return { state: "conflict", through, items: [], ...fields };
+      return { state: checked.state, through: checked.state === "checked" ? at : through, items: checked.items, ...fields };
+    } catch {
+      return { state: signal.aborted ? "stopped" : "error", through, items: [] };
+    }
+  }
+
+  // the last plan's fixes stay listed until their line ages out, OK'd or not; a waiting one goes once its note changed
+  function carried(botId: string, at: number, found: readonly FixItem[]): FixItem[] {
+    const raw = memoryFileRaw(botId).split("\n").map((line) => line.replace(/\r$/, ""));
+    const kept = (plans(botId)[0]?.fixes?.items ?? []).filter((item) => item.evidence.at > at - RUN_KEEP_MS && (item.done || raw.some((line) => `note:${sha8(line)}` === item.target)));
+    return [...kept, ...found.filter((item) => !kept.some((each) => each.target === item.target))];
+  }
+
   function sweep(botId: string, keep: string) {
     for (const plan of plans(botId)) {
       if (plan.runId !== keep && now() - plan.at > RUN_KEEP_MS) rmSync(join(botDir(botId), plan.runId), { recursive: true, force: true });
     }
   }
 
-  function plan(botId: string, at: number, notes: DryNotes, asked: DreamAsks): DreamPlan {
+  function plan(botId: string, at: number, notes: DryNotes, asked: DreamAsks, found?: DryFixes): DreamPlan {
     const runId = runIdOf(deps.pc(), botId, at);
     const archive = DREAMED_FILE;
     // MEMORY.md has not changed since the last checked plan, so its moves still stand; a pass that skipped notes in between saved none
@@ -186,6 +242,7 @@ export function createDreamLive(deps: DreamLiveDeps) {
       ? (plans(botId).find((each) => each.notes.state === "checked" || each.notes.state === "unchanged")?.notes.items ?? []).map((item) => ({ ...item, history: archive }))
       : notes.moves.map((move) => ({ op: "move", target: `note:${sha8(move.text)}`, text: copy(move.text), by: copy(move.by), why: move.why, history: archive }));
     const saved: DreamPlan = { runId, botId, at, mode: "dry", notes: { state: notes.state, items }, asks: asked, runUntil: at + RUN_KEEP_MS, dropUntil: at + DROPPED_KEEP_MS };
+    if (found) saved.fixes = { state: found.state, through: found.through, items: carried(botId, at, found.items) };
     const dir = join(botDir(botId), runId);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileAtomic(join(dir, "plan.json"), `${JSON.stringify(saved, null, 2)}\n`, { mode: 0o600 });
@@ -193,15 +250,63 @@ export function createDreamLive(deps: DreamLiveDeps) {
     return saved;
   }
 
+  /** The user's OK on one fix, or its Undo: OK swaps the note's line for the fix and archives the old line; Undo puts the old bytes back. */
+  function fix(botId: string, runId: string, target: string, undo: boolean): FixResult {
+    const newest = live(botId) ? undefined : plans(botId)[0];
+    if (!newest) return { ok: false, error: "no-run" };
+    if (newest.runId !== runId) return { ok: false, error: "not-newest" };
+    const item = newest.fixes?.items.find((each) => each.target === target);
+    if (!item) return { ok: false, error: "no-item" };
+    const raw = memoryFileRaw(botId);
+    const at = now();
+    if (!undo) {
+      if (item.listOnly) return { ok: false, error: "list-only" };
+      if (item.done && item.done.undoneAt === undefined) return { ok: false, error: "done" };
+      const swapped = applyFix(raw, item);
+      if (!swapped) return { ok: false, error: "changed" };
+      const id = sha8(`${runId}\0${target}\0${at}`);
+      // the archive first: a save that fails takes its record back
+      const unarchive = appendArchive(dreamedPath(botId), fixedEntry(id, item, swapped.line, at));
+      let conflict: boolean;
+      try {
+        conflict = saveMemoryFile(botId, swapped.text, rawRevision(raw)).conflict;
+      } catch (error) {
+        unarchive();
+        throw error;
+      }
+      if (conflict) {
+        unarchive();
+        return { ok: false, error: "busy" };
+      }
+      item.done = { at, line: swapped.line, cr: swapped.cr, id };
+    } else {
+      if (!item.done || item.done.undoneAt !== undefined) return { ok: false, error: "undone" };
+      const back = undoFix(raw, item);
+      if (back === null) return { ok: false, error: "changed" };
+      if (saveMemoryFile(botId, back, rawRevision(raw)).conflict) return { ok: false, error: "busy" };
+      try {
+        const path = dreamedPath(botId);
+        writeFileAtomic(path, markUndone(readFileSync(path, "utf8"), item.done.id, at), { mode: 0o600 });
+      } catch {
+        // the line is back either way; the heading only says so
+      }
+      item.done = { ...item.done, undoneAt: at };
+    }
+    writeFileAtomic(join(botDir(botId), runId, "plan.json"), `${JSON.stringify(newest, null, 2)}\n`, { mode: 0o600 });
+    return { ok: true, revision: readMemoryFile(botId).revision };
+  }
+
   return {
     live,
     asks,
+    fixes,
     plan,
+    fix,
     /** The newest plan on this PC as the Memory row reads it; null for a bot set to live. */
     latest(botId: string) {
       const newest = live(botId) ? undefined : plans(botId)[0];
       if (!newest) return null;
-      return { runId: newest.runId, at: newest.at, files: [], beforeBytes: 0, afterBytes: 0, merged: 0, replaced: 0, moved: 0, undoneAt: null, undoable: false, dream: { mode: newest.mode, notes: newest.notes, asks: newest.asks, runUntil: newest.runUntil, dropUntil: newest.dropUntil } };
+      return { runId: newest.runId, at: newest.at, files: [], beforeBytes: 0, afterBytes: 0, merged: 0, replaced: 0, moved: 0, undoneAt: null, undoable: false, dream: { mode: newest.mode, notes: newest.notes, asks: newest.asks, fixes: newest.fixes, runUntil: newest.runUntil, dropUntil: newest.dropUntil } };
     },
     /** Close lines a live pass owes this thread and has not told yet, read from its run manifests. */
     owed(botId: string, threadId: string): { runId: string; target: string; line: string }[] {

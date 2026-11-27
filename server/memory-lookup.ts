@@ -58,7 +58,7 @@ const DEADLINE_EVERY = 256;
 
 const STOP = new Set("a an and are as at be but by can could did do does for from had has have how i if in into is it its me my no not of on or our should so than that the their them then there these they this to too us was we were what when where which who why will with would you your ok okay yes yeah please thanks thank hey hi just let lets go some".split(" "));
 const CHAT = new Set("u ur ya im ive id ill youre dont doesnt didnt cant wont isnt arent wasnt werent thats whats hows theres heres lol haha btw pls plz thx ty idk imo tldr cool nice great good sweet sure right really actually maybe probably also still already again now today tomorrow yesterday later soon first next last back way thing things stuff something anything everything nothing one two three more most much many very all any each every both other another same new old big little think thought know knew see saw seen look looks looking looked want wanted need needed needs wait waiting waited mean means meant say said says tell told ask asked asking give gave given get got getting make made making take took taken put use used using try tried trying come came going gone went like lot lots bit kind sort done sent send ready happen happened help".split(" "));
-const skipped = (word: string) => STOP.has(word) || CHAT.has(word);
+export const skipped = (word: string) => STOP.has(word) || CHAT.has(word);
 
 const DATED = /\b(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b|\b(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/g;
 

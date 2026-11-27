@@ -46,6 +46,12 @@ export function dreamedEntry(runId: string, moves: readonly Move[], now: number)
   return [`## ${date}${RUN(runId)}`, ...moves.flatMap((move) => [move.text, `  - from MEMORY.md:${move.at + 1} on ${date}: ${REASONS[move.why]}`])].join("\n");
 }
 
+/** A fixed note's old line, word for word, with the owner's words that showed it wrong. */
+export function fixedEntry(id: string, item: { text: string; evidence: { at: number; quote: string } }, line: number, now: number): string {
+  const date = pickStamp(now).slice(0, 10);
+  return [`## ${date}${RUN(id)}`, item.text, `  - from MEMORY.md:${line + 1} on ${date}: the user wrote on ${pickStamp(item.evidence.at).slice(0, 10)}: "${item.evidence.quote}"`].join("\n");
+}
+
 /** The twin key of every line the archive holds: one back in MEMORY.md was put back, so it never moves again. */
 export function dreamedKeys(botId: string): Set<string> {
   let text = "";

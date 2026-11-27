@@ -523,6 +523,13 @@ export function notesSinceOn(handle: DatabaseSync, threadId: string, at: number)
 }
 
 /** A thread's options rows, oldest first, from their index. */
+/** The user's text rows and one tool's activity rows in a chat from `at` on, oldest first. */
+export function typedSince(threadId: string, at: number, tool: string): Message[] {
+  // SAFETY: This projection selects the stored message JSON.
+  const rows = db().prepare("SELECT json FROM messages INDEXED BY messages_thread_at WHERE thread_id = ? AND at >= ? AND ((role = 'user' AND kind = 'text') OR (kind = 'activity' AND json_extract(json, '$.tool.name') = ?)) ORDER BY at, rowid").all(threadId, at, tool) as Array<{ json: string }>;
+  return rows.map(rowToMessage);
+}
+
 export function optionRows(threadId: string): Message[] {
   // SAFETY: This projection selects the stored message JSON.
   const rows = db().prepare("SELECT json FROM messages WHERE thread_id = ? AND kind = 'options' ORDER BY rowid").all(threadId) as Array<{ json: string }>;

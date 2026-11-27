@@ -9,6 +9,7 @@ import { MemoryCleanRow } from "./MemoryCleanRow";
 import { MemoryTidyLine } from "./MemoryTidyLine";
 import { MemoryCleanIcon } from "./MemoryCleanMotion";
 import { noteMemoryFrame } from "@/lib/memory-clean-events";
+import type { DreamFix } from "@/lib/memory-clean";
 
 const store = vi.hoisted(() => ({ dispatch: vi.fn() }));
 vi.mock("@/state/store", () => ({ useStore: () => store }));
@@ -47,6 +48,25 @@ describe("cleanup copy", () => {
     await act(async () => host.querySelector("button")!.click());
     expect(host.textContent).toContain("1 busy chats not checked.");
     expect(host.textContent).toContain("2 to-dos' PRs not checked yet.");
+  });
+  it("lists a fix with the owner's words, OK on a waiting one, Undo on a done one, none on a rule", async () => {
+    const onFix = vi.fn();
+    const fix = (target: string, extra: Partial<DreamFix> = {}) => ({ op: "fix" as const, target, text: "- Plan ends in January (noted 2026-11-20)", by: "- Plan ends in March (noted 2026-11-20)", why: "wrong" as const, listOnly: false, evidence: { thread: "t", message: "m", at: new Date(2026, 10, 24).getTime(), quote: "It lasts till march" }, ...extra });
+    const items = [fix("note:a"), fix("note:b", { listOnly: true }), fix("note:c", { done: { at: 1, line: 3, cr: false, id: "x" } }), fix("note:d", { done: { at: 1, line: 3, cr: false, id: "y", undoneAt: 2 } })];
+    const dream = { mode: "dry" as const, notes: { state: "checked" as const, items: [] }, asks: { threads: 1, skipped: 0, unchecked: 0, items: [] }, fixes: { state: "checked" as const, through: run.at, items }, runUntil: run.at, dropUntil: run.at };
+    await mount(createElement(MemoryCleanRow, { run: { ...run, dream }, onUndo: vi.fn(), onFix }));
+    expect(host.textContent).toContain("Would move 0 notes, fix 2 notes and close 0 to-dos.");
+    await act(async () => host.querySelector("button")!.click());
+    const lines = [...host.querySelectorAll("li")].map((li) => li.textContent);
+    expect(lines[0]).toBe('Fix note "Plan ends in January (noted 2026-11-20)": you wrote on Nov 24: "It lasts till march". New note: "Plan ends in March (noted 2026-11-20)". · OK');
+    expect(lines[1]).toContain("change it by hand if you agree.");
+    expect(lines[2]).toContain("Fixed. The old note is in memory/dreamed.md, still searchable. · Undo");
+    expect(lines[3]).toContain("Fix undone.");
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>("li button")];
+    expect(buttons.map((button) => button.textContent)).toEqual(["OK", "Undo"]);
+    await act(async () => buttons[0]!.click());
+    await act(async () => buttons[1]!.click());
+    expect(onFix.mock.calls).toEqual([["note:a", false], ["note:c", true]]);
   });
   it("omits zero-count details", async () => {
     await mount(createElement(MemoryCleanRow, { run: { ...run, merged: 0, replaced: 0 }, onUndo: vi.fn() }));

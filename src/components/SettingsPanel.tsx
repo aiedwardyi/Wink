@@ -256,7 +256,7 @@ const MEMORY_READ_MS = 10_000;
 function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: boolean }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
-  const { run, undo } = useMemoryClean(bot.id, bot.messages, active);
+  const { run, undo, fix } = useMemoryClean(bot.id, bot.messages, active);
   const target = active ? state.settingsMemoryTarget : null;
   const autoNotes = memoryNotesEnabled(state.config, bot);
   const [botId] = useState(bot.id);
@@ -521,7 +521,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
         />
       </MemoryGroup>
       <MemoryFile ref={fileRow} text={text} loading={blank} save={inFold ? status : undefined} open={expanded} onDone={inFold ? done : undefined} onToggle={() => openFile(!expanded)}>
-        {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
+        {run && <MemoryCleanRow run={run} onUndo={undo} onFix={fix} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
         <Fold open={inFold}>
           <div className="px-4 pb-4 pt-3">
             {loading && <div className="text-[13px] text-ink-secondary">{t("bot.memoryLoading")}</div>}

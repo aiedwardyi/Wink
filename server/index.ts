@@ -204,7 +204,7 @@ import { BUSY_RESUME_DELAYS_MS, isRetryLine, retryLine } from "./drivers/retry.t
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import "./comms-visibility.ts";
 import type { CommsBus } from "./comms-visibility.ts";
-import { lastMessageAt } from "./message-db.ts";
+import { lastMessageAt, typedSince } from "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, inertMentions, turnReplaysTranscript, unstampedAsGuest, userTurnReactionKeys } from "./replies.ts";
 import { replyActivity } from "./reply-activity.ts";
@@ -3221,6 +3221,7 @@ const dreamLive = createDreamLive({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   cite: (botId) => knownRepos.cite(botId),
   merged: (botId, threadId, ask, start) => askPrs.merged(botId, threadId, ask, start),
+  rows: (threadId, since) => typedSince(threadId, since, MEMORY_SAVE_TOOL),
   checked: () => askPrs.settled(),
   reverted: async (botId, threadId) => {
     const pinned = store.taskByThread(botId, threadId)?.cwd;
@@ -9507,6 +9508,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         store.patchMessage(threadId, line.id, { tool: { ...line.tool, tidy: { ...line.tool.tidy, undoneAt: Date.now() } } });
         break;
       }
+      return json(res, 200, result);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/clean\/fix$/);
+    if (m && method === "POST") {
+      if (commsCallers.resolve(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const body = z.object({ runId: z.string(), target: z.string(), undo: z.boolean().optional() }).safeParse(await readBody(req));
+      if (!body.success) return json(res, 400, { error: "runId and target required" });
+      if (botHasActiveTurn(bot.id)) return json(res, 409, { ok: false, error: "busy" });
+      const result = dreamLive.fix(bot.id, body.data.runId, body.data.target, body.data.undo === true);
+      if (!result.ok) return json(res, result.error === "no-run" || result.error === "no-item" ? 404 : 409, result);
+      broadcast({ kind: "memory.changed", botId: bot.id });
+      void memoryLookup.refresh(bot.id, true);
       return json(res, 200, result);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/import$/);

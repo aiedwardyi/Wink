@@ -21,6 +21,11 @@ export type MemoryCleanRun = {
   dream?: DreamRun;
 };
 export type DreamPr = { repo?: string; number: number; mergedAt: number };
+export type DreamFix = {
+  op: "fix"; target: string; text: string; by: string; why: "wrong"; listOnly: boolean;
+  evidence: { thread: string; message: string; at: number; quote: string };
+  done?: { at: number; line: number; cr: boolean; id: string; undoneAt?: number };
+};
 export type DreamRun = {
   mode: "dry";
   notes: {
@@ -33,6 +38,7 @@ export type DreamRun = {
     unchecked: number;
     items: { op: "close" | "ask" | "fall-out"; target: string; ask: string; prs: DreamPr[]; lands?: "stays" | "leaves-now" | "leaves-next"; closedAt?: number }[];
   };
+  fixes?: { state: "checked" | "off-here" | "no-model" | "stopped" | "conflict" | "error"; through: number; items: DreamFix[] };
   runUntil: number;
   dropUntil: number;
 };
@@ -100,5 +106,20 @@ export function useMemoryClean(botId: string, messages: readonly Message[], acti
     } catch { setRun(null); }
     finally { busy.current = false; }
   };
-  return { run, undo };
+  // one fix item: OK swaps the note, back undoes that swap
+  const fix = async (target: string, back: boolean) => {
+    if (!run?.dream || busy.current) return;
+    busy.current = true;
+    try {
+      await fetchResponse(`/api/bots/${botId}/memory/clean/fix`, { method: "POST", body: JSON.stringify({ runId: run.runId, target, undo: back }) });
+      pending.delete(botId);
+      forgetMemory(botId);
+      listeners.get(botId)?.forEach((listener) => listener());
+    } catch {
+      // the row reads the plan again on the next memory change
+    } finally {
+      busy.current = false;
+    }
+  };
+  return { run, undo, fix };
 }

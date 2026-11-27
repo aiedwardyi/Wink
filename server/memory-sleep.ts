@@ -9,7 +9,7 @@ import { renameRetrying, writeFileAtomic } from "./atomic.ts";
 import { anchored, DREAMED_FILE, DREAMED_HEAD, dreamedEntry, dreamedKeys, dreamedPath, markUndone, putBack, type ArchivedMove } from "./dream-archive.ts";
 import { agreed, dreamPrompt, parseDream, planDream, type DreamJudges, type Flag } from "./dream-judge.ts";
 import { decisionSpan, type NoteGenerator } from "./memory-pass.ts";
-import type { DreamAsks, DryNotes } from "./dream-live.ts";
+import type { DreamAsks, DryFixes, DryNotes } from "./dream-live.ts";
 import { pickStamp } from "./picks.ts";
 import { loadedMemory, memoryFileRaw, rawRevision, readMemoryFile, saveMemoryFile, workspaceDir } from "./workspace.ts";
 
@@ -63,6 +63,7 @@ interface SleepLog {
   threads?: number;
   skipped?: number;
   unchecked?: number;
+  fixes?: { state: DryFixes["state"]; pairs?: number; bytes?: number; items: number; input: number; output: number; judges?: DryFixes["judges"]; reason?: string };
 }
 
 export interface MemorySleepDeps {
@@ -86,7 +87,9 @@ export interface MemorySleepDeps {
   /** Dreaming (dream-live.ts): a dry bot's pass plans its asks and notes and writes nothing else. */
   dream?: {
     asks(botId: string, signal: AbortSignal): Promise<DreamAsks | null>;
-    plan(botId: string, at: number, notes: DryNotes, asks: DreamAsks): void;
+    /** The wrong-note check over the owner's lines since the last pass; null judges: notes are not checked on this PC. */
+    fixes(botId: string, judges: DreamJudges | null, signal: AbortSignal): Promise<DryFixes>;
+    plan(botId: string, at: number, notes: DryNotes, asks: DreamAsks, fixes?: DryFixes): void;
   };
   now?(): number;
 }
@@ -276,7 +279,7 @@ export function withoutLines(raw: string, at: readonly number[]): string {
 }
 
 // appended, never written over: a file that cannot be opened stops the tidy; the returned undo takes the entry back off the end
-function appendArchive(path: string, entry: string): () => void {
+export function appendArchive(path: string, entry: string): () => void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   let undo: () => void;
   try {
@@ -471,14 +474,18 @@ export function createMemorySleep(deps: MemorySleepDeps): MemorySleep {
     if (!asks) return log({ botId, mode: "dry", ms: now() - started, result: signal.aborted ? stopped(signal) : "error" });
     const notes = await dryNotes(botId, signal, record.digest);
     if (disposed) return;
-    dream.plan(botId, started, { state: notes.state, moves: notes.moves }, asks);
+    const fixes = await dream.fixes(botId, deps.enabled(botId) ? deps.judges(botId) : null, signal);
+    if (disposed) return;
+    dream.plan(botId, started, { state: notes.state, moves: notes.moves }, asks, fixes);
     deps.changed(botId);
     if (notes.digest) {
       bots.set(botId, { ...bots.get(botId), at: started, digest: notes.digest });
       save();
     }
     const count = (op: string) => asks.items.filter((item) => item.op === op).length;
-    log({ botId, mode: "dry", ...notes.fields, wouldMove: notes.moves.length, closes: count("close"), asked: count("ask"), fellOut: count("fall-out"), threads: asks.threads, skipped: asks.skipped, unchecked: asks.unchecked, ms: now() - started, result: "dry" });
+    const fixed = Object.values(fixes.judges ?? {});
+    const fixLog = { state: fixes.state, pairs: fixes.pairs, bytes: fixes.bytes, items: fixes.items.length, input: fixed.reduce((sum, each) => sum + each.input, 0), output: fixed.reduce((sum, each) => sum + each.output, 0), judges: fixes.judges, reason: fixes.reason };
+    log({ botId, mode: "dry", ...notes.fields, fixes: fixLog, wouldMove: notes.moves.length, closes: count("close"), asked: count("ask"), fellOut: count("fall-out"), threads: asks.threads, skipped: asks.skipped, unchecked: asks.unchecked, ms: now() - started, result: "dry" });
   };
 
   const run = async (botId: string, signal: AbortSignal) => {
