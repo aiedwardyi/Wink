@@ -3614,6 +3614,19 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("takes a second key save while the first one settles its cards", async () => {
+    const hosts = ["api.first-save.example", "api.second-save.example"];
+    const settings = "/api/config?secretStorage=external";
+    try {
+      const saves = await Promise.all(hosts.map((host) => api("PUT", settings, {
+        customKeys: { [host]: { name: "Saved Key", header: "x-api-key", prefix: "", key: "test-only-key" } },
+      })));
+      expect(saves.map((save) => save.status)).toEqual([200, 200]);
+    } finally {
+      await api("PUT", settings, { customKeys: Object.fromEntries(hosts.map((host) => [host, null])) });
+    }
+  });
+
   it("tracks and cancels a queued channel credential continuation before provider dispatch", async () => {
     const first = (await api("POST", "/api/bots", {})).body.bot;
     const second = (await api("POST", "/api/bots", {})).body.bot;

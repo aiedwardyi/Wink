@@ -9905,11 +9905,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           key !== "features",
       );
       if (reloadKeys.length > 0) await reloadProviders();
-      try {
-        await resumeSavedCredentialCards(patch);
-      } catch (error) {
-        console.error("Credential card settlement failed", error);
-      }
+      // after the reply: the sweep reads every stored row, and other saves would get 409 meanwhile
+      void resumeSavedCredentialCards(patch).catch((error) => console.error("Credential card settlement failed", error));
       const status = configStatus();
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
@@ -10152,7 +10149,6 @@ startupTiming.afterPaint("bootReads", () => startBootReads({
   reportThreads: store.bots.map((bot) => bot.threadId),
 }));
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
-startupTiming.afterPaint("credentialCards", () => resumeSavedCredentialCards(cfg));
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
 startupTiming.afterPaint("usageStats", async () => usageStats.start());
 startupTiming.afterPaint("droppedAsks", async () => sweepDroppedAsks());
