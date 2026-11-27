@@ -133,6 +133,21 @@ describe("retiring finished one-off picks", () => {
     expect(retirePicks(text, NOW, () => null)).toBeNull();
   });
 
+  it("dates a pick by its newest tweak even when an older one landed after it", () => {
+    const text = ["# Decision timeline", "", ...entry("2026-11-24 10:00", "Release checks", "Run the checks", '- Tweak 2026-11-26 09:00: "Move this to next week"', '- Tweak 2026-11-25 09:00: "Run it tonight"')].join("\n");
+    expect(retirePicks(text, NOW + 86_400_000)).toBeNull();
+  });
+
+  it("numbers a second card's colliding key within the key limit, so a tweak by that key finds it", () => {
+    const key = "For the upcoming release, which signing service should we use for the beta builds?";
+    const tap = (questionId: string, messageId: string, picked: string, at: number) => ({ kind: "pick" as const, at, key, picked, said: picked, tapped: true, binding: { at, messageId, questionId, thread: "t1", files: [], overPictures: [], named: true } as never });
+    const two = applyPicks("", [tap("q1", "a1", "Local signing", NOW), tap("q2", "a2", "Cloud signing", NOW + 60_000)])!.text;
+    const second = currentPicks(two).find(({ picked }) => picked === "Cloud signing")!;
+    expect(second.key.length).toBeLessThanOrEqual(60);
+    const tweaked = applyPicks(two, [{ kind: "tweak", at: NOW + 120_000, key: second.key, said: "use the EV certificate" }])!.text;
+    expect(currentPicks(tweaked).map(({ picked, tweaks }) => [picked, tweaks.map(({ said }) => said)])).toEqual([["Local signing", []], ["Cloud signing", ["use the EV certificate"]]]);
+  });
+
   it("never retires a recurring instruction, whatever time it names", () => {
     const text = ["# Decision timeline", "", ...entry("2026-11-20 10:00", "When should alerts go to the backup?", "Every day after 13:30", "- Tapped: yes")].join("\n");
     expect(retirePicks(text, NOW)).toBeNull();

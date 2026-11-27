@@ -243,7 +243,7 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     // another card's pick that shares only a shortened question or the note-taker's key stays current beside this one
     if (change.kind === "pick" && change.tapped && card && current?.tapped && current.binding === "verified" && current.questionId && current.questionId !== card.questionId && !(card.question && same(current.key, card.question.replace(/\|/g, "/")))) {
       current = undefined;
-      for (let n = 2; entries.some((entry) => !entry.replacedBy && slotOf(entry) === slotOf({ key })); n += 1) key = `${asked} (${n})`;
+      for (let n = 2; entries.some((entry) => !entry.replacedBy && slotOf(entry) === slotOf({ key })); n += 1) key = `${clip(asked, KEY_MAX - ` (${n})`.length)} (${n})`;
       moved.set(slot, slotOf({ key }));
     }
     if (change.kind === "goal") {
@@ -614,7 +614,8 @@ export function retirePicks(text: string, now: number, done: (entry: PickEntry) 
     if (RECURRING.test(`${entry.key}\n${answer}`) || WAITS.test(answer)) continue;
     const finished = done(entry);
     if (finished === null) continue;
-    const tweak = entry.tweaks.at(-1);
+    // a delayed batch can append an older tweak after a newer one
+    const tweak = entry.tweaks.reduce<Tweak | undefined>((newest, each) => (!newest || each.at >= newest.at ? each : newest), undefined);
     const due = new Date(entryTime(entry));
     if (/\btomorrow\b/i.test(entry.picked)) due.setDate(due.getDate() + 1);
     // the question and the options it beat never date the answer
