@@ -70,6 +70,6 @@ export function roomMedia(threadId: string, roomId: string, files: ReadonlyArray
     if (isRoomPicture(file)) return { key: file.id, name: file.name, at: file.at, src: roomFileUrl(base, file, true), image: true };
     const src = roomFileUrl(base, file, false);
     return { key: file.id, name: file.name, at: file.at, src, size: file.bytes, sender: file.sender, video: file.type.startsWith("video/") || undefined,
-      tap: { threadId, path: file.name, src } };
+      tap: { threadId, path: file.name, src, type: file.type } };
   });
 }

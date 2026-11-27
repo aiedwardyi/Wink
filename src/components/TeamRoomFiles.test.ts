@@ -46,6 +46,28 @@ describe("room files", () => {
     expect(document.querySelector("[data-media-viewer] video")?.getAttribute("src")).toBe(`${base}/files/${files[0]!.id}`);
   });
 
+  it.each(["/api/rooms/r1", "/api/joined/rooms/r1"])("opens a clip its name doesn't mark from %s, and still downloads other files", async (base) => {
+    const files = [
+      { id: "a".repeat(24), name: "recording.mkv", type: "video/webm", bytes: 100 },
+      { id: "b".repeat(24), name: "clip", type: "video/mp4", bytes: 100 },
+      { id: "c".repeat(24), name: "notes", type: "text/plain", bytes: 100 },
+    ];
+    await render(createElement(MediaViewerProvider, { threadId: "room", messages: [], children: createElement(RoomFileRows, { base, files }) }));
+    const saved: Array<string | null> = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { saved.push(this.getAttribute("href")); });
+    const rows = [...host.querySelectorAll<HTMLButtonElement>("[data-room-file]")];
+    for (const [at, file] of files.slice(0, 2).entries()) {
+      await act(async () => rows[at]!.click());
+      expect(document.querySelector("[data-media-viewer] video")?.getAttribute("src")).toBe(`${base}/files/${file.id}`);
+      await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      expect(document.querySelector("[data-media-viewer]")).toBeNull();
+    }
+    await act(async () => rows[2]!.click());
+    expect(document.querySelector("[data-media-viewer]")).toBeNull();
+    expect(saved).toEqual([`${base}/files/${files[2]!.id}`]);
+    click.mockRestore();
+  });
+
   it("uses the desktop picker and keeps the path when a move fails", async () => {
     const pickFolder = vi.fn(async () => "D:\\Team files");
     vi.stubGlobal("ogb", { pickFolder });

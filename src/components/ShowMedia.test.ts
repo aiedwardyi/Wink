@@ -640,6 +640,21 @@ it("a room video opens in the media viewer", async () => {
   expect(document.querySelector("[data-media-viewer] video")?.getAttribute("src")).toBe(`/api/rooms/r1/files/${id(4)}`);
 });
 
+it.each([["recording.mkv", "video/webm"], ["clip", "video/mp4"]])("a room video named %s opens in the media viewer by its type", async (name, type) => {
+  frames(true);
+  room = { files: [{ id: id(4), name, type, bytes: 10, at: 4, sender: "Mina" }] };
+  await render({ threadId: "r-thread", roomId: "r1", messages: [] });
+  const { togglePane } = await import("@/lib/show-pane");
+  await act(async () => togglePane("r-thread"));
+  await click(tab("Media"));
+  await settle();
+  const saved = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  await click(host.querySelector<HTMLElement>(`[data-media-grid] [title="${name}"]`)!);
+  expect(document.querySelector("[data-media-viewer] video")?.getAttribute("src")).toBe(`/api/rooms/r1/files/${id(4)}`);
+  expect(saved).not.toHaveBeenCalled();
+  saved.mockRestore();
+});
+
 it("a video whose frame can't be read keeps its play icon and name", async () => {
   frames(false);
   await act(async () => showMedia("t1"));

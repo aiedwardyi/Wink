@@ -457,6 +457,11 @@ export async function sendBlob(req: IncomingMessage, res: ServerResponse, path: 
     await handle?.close();
     return false;
   }
+  // A viewer closed while the file opened has no one left to answer, and a pipe to it would throw.
+  if (res.destroyed) {
+    await handle.close();
+    return true;
+  }
   const range = byteRange(req.headers.range, file.bytes);
   if (range === "bad") {
     await handle.close();

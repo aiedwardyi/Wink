@@ -9,7 +9,7 @@ import { CHAT_PEEK_WINDOW_SIZE, peekRows, useChatPeekRows, useChatPeekSettled, u
 import { tailWindowStart } from "@/lib/transcript-window";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { useI18n } from "@/lib/i18n";
-import { fileOpen, openFile } from "@/lib/open-file";
+import { openFile, tapOpen, type FileTap } from "@/lib/open-file";
 import { useRoomFilesState } from "@/lib/room-files-state";
 import { useBubbleSwipe } from "@/lib/use-bubble-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -61,7 +61,10 @@ export function RoomFileRows({ base, files, threadId, className }: { base: strin
               key={file.id}
               type="button"
               data-room-file
-              onClick={(event) => openFile({ threadId, path: file.name, src: roomFileUrl(base, file, false) }, fileOpen(file.name) === "video" ? { view: view(event.currentTarget) } : {})}
+              onClick={(event) => {
+                const tap: FileTap = { threadId, path: file.name, src: roomFileUrl(base, file, false), type: file.type };
+                openFile(tap, tapOpen(tap) === "video" ? { view: view(event.currentTarget) } : {});
+              }}
               className="block w-full rounded-lg text-left hover:bg-raised/50"
             >
               <FileAttachmentRow file={{ path: file.id, name: file.name, size: file.bytes }} />

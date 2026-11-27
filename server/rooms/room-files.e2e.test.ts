@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, createReadStream, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import { createServer, request, type IncomingHttpHeaders, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer, request as requestHttps, type Server } from "node:https";
 import { createConnection, createServer as createTcpServer, type AddressInfo, type Server as TcpServer, type Socket } from "node:net";
@@ -31,17 +32,27 @@ import { createPeopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
 import { removeTestData } from "../testing/test-home.ts";
 
-const disk = vi.hoisted(() => ({ shortWrites: false }));
+interface Disk {
+  shortWrites: boolean;
+  /** awaited before each open, so a test can close a request while its file opens */
+  hold: ((path: string) => Promise<void>) | null;
+  opened: Map<string, FileHandle>;
+}
+const disk = vi.hoisted((): Disk => ({ shortWrites: false, hold: null, opened: new Map() }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs/promises")>();
-  const open = async (...args: Parameters<typeof fs.open>) =>
-    new Proxy(await fs.open(...args), {
+  const open = async (...args: Parameters<typeof fs.open>) => {
+    await disk.hold?.(String(args[0]));
+    const handle = await fs.open(...args);
+    disk.opened.set(String(args[0]), handle);
+    return new Proxy(handle, {
       get(target, key) {
         if (key === "write" && disk.shortWrites) return (buffer: Buffer, offset = 0, length = buffer.length - offset) => target.write(buffer, offset, Math.min(length, 7));
         const value = Reflect.get(target, key, target);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
+  };
   return { ...fs, open };
 });
 
@@ -64,6 +75,7 @@ let access: PhoneAccess;
 let store: Store;
 let engine: Record<"sendTurn" | "generateText" | "generateReview" | "answerWords", ReturnType<typeof vi.fn>>;
 let client: GuestClient | null = null;
+let served: Promise<void> = Promise.resolve();
 
 const hop = {
   server: null as TcpServer | null,
@@ -113,7 +125,7 @@ beforeAll(async () => {
     }
   });
   hop.port = await listenLocal(hop.server);
-  local = createServer((req, res) => void localApp(req, res));
+  local = createServer((req, res) => void (served = localApp(req, res)));
   await new Promise<void>((resolve) => local.listen(0, "127.0.0.1", resolve));
   localPort = (local.address() as AddressInfo).port;
   const relay = { status: () => ({ ...PHONE_RELAY_OFF, state: "connected" as const, host: HOST }), stop: async () => {} };
@@ -176,6 +188,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  disk.hold = null;
+  disk.opened.clear();
   delete roomAskHooks.words;
   vi.restoreAllMocks();
   hop.drop();
@@ -650,6 +664,33 @@ describe("a teammate on 1.0.256 and video or audio files", () => {
       const privateFile = await hostUpload(otherRoom, bytes, "private.mp4");
       expect((await call("GET", `/api/joined/rooms/${otherRoom}/files/${privateFile.id}`, undefined, { range: "bytes=100-199" })).status).toBe(404);
     }
+  });
+
+  it.each(["host", "guest"])("ends a %s video quietly, its file closed, when the viewer closes while it opens", async (side) => {
+    const { roomId } = await joinedTeam();
+    const file = await hostUpload(roomId, mp4(4096), "clip.mp4");
+    expect((await call("POST", `/api/rooms/${roomId}/send`, Buffer.from(JSON.stringify({ text: "clip", fileIds: [file.id] })))).status).toBe(200);
+    await until(() => filesOf(roomId, "clip").length === 1);
+    const path = side === "host" ? `/api/rooms/${roomId}/files/${file.id}` : `/api/joined/rooms/${roomId}/files/${file.id}`;
+    expect((await call("GET", path)).status).toBe(200);
+    const blob = join(DATA_DIR, side === "host" ? "room-files" : "joined-files", roomId, file.id);
+    let opening!: () => void;
+    let gone!: () => void;
+    const entered = new Promise<void>((resolve) => (opening = resolve));
+    const closed = new Promise<void>((resolve) => (gone = resolve));
+    local.once("request", (_req: IncomingMessage, res: ServerResponse) => res.once("close", gone));
+    disk.hold = async (opened) => {
+      if (opened !== blob) return;
+      opening();
+      await closed;
+    };
+    const req = request({ host: "127.0.0.1", port: localPort, path, headers: { range: "bytes=0-" }, agent: false });
+    req.on("error", () => {});
+    req.end();
+    await entered;
+    req.destroy();
+    await expect(served).resolves.toBeUndefined();
+    expect(disk.opened.get(blob)?.fd).toBe(-1);
   });
 
   it("keeps the room live and loadable, with the media named in the line", async () => {
