@@ -73,7 +73,6 @@ async function call(route: (req: IncomingMessage, res: ServerResponse) => Promis
 
 function routes(group = false, readOnly = false) {
   return createInternalRoutes({
-    readOnlyTurn: () => false,
     cfg: { imageGen: { key: "test-key" } }, store,
     connectorThread: () => ({ ...(group ? { group: { id: "group" } } : {}) }),
     botOutputRoots: () => [folder],
