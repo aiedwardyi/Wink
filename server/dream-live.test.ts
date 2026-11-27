@@ -628,6 +628,49 @@ describe("dreaming, dry", () => {
       expect(offered.map((item) => [item.by, item.evidence.message])).toEqual([[update, "newer"]]);
     });
 
+    it("drops a waiting fix once the owner takes it back and a newer pass finds nothing wrong", async () => {
+      await quiet();
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)?.by).toBe(NEW);
+      typed.set("t1", [said("retraction", Date.now() + 1000, "The main account plan ends in January after all, not March. January was right.")]);
+      const sent: string[] = [];
+      generator = async (prompt) => {
+        if (prompt.includes("<pairs>")) sent.push(prompt);
+        return JSON.stringify({ wrong: [] });
+      };
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(sent.some((prompt) => prompt.includes("January was right") && prompt.includes(OLD))).toBe(true);
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)).toBeUndefined();
+      expect(approve(false)).toEqual({ ok: false, error: "no-item" });
+      expect(memoryFileRaw(bot)).toBe(raw);
+    });
+
+    it("keeps a waiting fix through a pass that checked nothing about its note", async () => {
+      await quiet();
+      typed.set("t1", [said("other", Date.now() + 1000, "The weekly sync moved to Thursday afternoons.")]);
+      generator = async () => JSON.stringify({ wrong: [] });
+      sleep.onSettled(bot);
+      await quiet(SLEEP_GAP_MS);
+      expect(plans()[0]!.fixes!.items.find((item) => item.text === OLD)?.by).toBe(NEW);
+    });
+
+    it("offers the newest of two agreed corrections in one pass", async () => {
+      const march = "The main account plan ends in March, not in January";
+      const april = "The main account plan ends in April now, not in March";
+      typed.set("t1", [said("march", NOW - DAY, march), said("april", NOW - DAY + 3_600_000, april)]);
+      const update = NEW.replace("March", "April");
+      // March first in the reply, so order alone does not pick April
+      generator = async (prompt) => {
+        const pairs = [...prompt.matchAll(/^PAIR\n(L\d+) \(written [^)]*\): ([^\n]+)\n(M\d+) \([^)]*\): ([^\n]+)/gm)];
+        const wrong = pairs.flatMap(([, note, text, message, row]) => (text === OLD && (row === march || row === april) ? [{ note, message, row, quote: row === march ? "ends in March" : "ends in April now", fix: row === march ? NEW : update }] : []));
+        wrong.sort((a, b) => Number(b.row === march) - Number(a.row === march));
+        return JSON.stringify({ wrong });
+      };
+      await quiet();
+      const offered = plans()[0]!.fixes!.items.filter((item) => item.text === OLD);
+      expect(offered.map((item) => [item.by, item.evidence.message])).toEqual([[update, "april"]]);
+    });
+
     it("does no wrong-note work when a turn settles, only once the bot is idle", async () => {
       const count = () => generate.mock.calls.filter(([prompt]) => prompt.includes("<pairs>")).length;
       sleep.onSettled(bot);

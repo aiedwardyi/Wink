@@ -232,8 +232,12 @@ export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: Readon
   for (const one of a) {
     const pair = refs.get(one.message);
     // a flag names the note it was paired with, never one from another pair
-    if (!pair || one.note !== `L${pair.note.at + 1}` || items.some((item) => item.target === `note:${sha8(pair.note.text)}`)) continue;
+    if (!pair || one.note !== `L${pair.note.at + 1}`) continue;
     const { note, row } = pair;
+    const target = `note:${sha8(note.text)}`;
+    // the newest owner line that agrees wins, whatever order the judge listed it in
+    const held = items.findIndex((item) => item.target === target);
+    if (held >= 0 && items[held]!.evidence.at >= row.at) continue;
     const no = (why: string) => rejected.push({ note: note.at + 1, message: row.id, why });
     const other = b.find((each) => each.note === one.note && each.message === one.message);
     if (!other) {
@@ -271,10 +275,12 @@ export function planWrong(a: readonly Wrong[], b: readonly Wrong[], refs: Readon
       no("fix not grounded in the old line and the quote");
       continue;
     }
-    items.push({
-      op: "fix", target: `note:${sha8(note.text)}`, text: note.text, by, why: "wrong", listOnly: handOnly(note, context.all),
+    const item: FixItem = {
+      op: "fix", target, text: note.text, by, why: "wrong", listOnly: handOnly(note, context.all),
       evidence: { thread: row.thread, message: row.id, at: row.at, quote },
-    });
+    };
+    if (held >= 0) items[held] = item;
+    else items.push(item);
   }
   return { items, rejected };
 }
@@ -287,7 +293,8 @@ export function writtenAt(saved: readonly SavedNotes[]) {
   };
 }
 
-export type WrongCheck = { state: "checked" | "no-model"; items: FixItem[]; pairs: number; bytes: number; logs: Partial<Record<keyof DreamJudges, JudgeLog>>; reason?: string };
+/** judged: the notes both judges read against a newer owner line this pass, fixed or not. */
+export type WrongCheck = { state: "checked" | "no-model"; items: FixItem[]; judged: string[]; pairs: number; bytes: number; logs: Partial<Record<keyof DreamJudges, JudgeLog>>; reason?: string };
 
 /** One pass: pair, ask both judges once, keep what both agree on and the gates pass. */
 export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]; saved: readonly SavedNotes[]; judges: DreamJudges; today: string; signal: AbortSignal; now(): number }): Promise<WrongCheck> {
@@ -295,7 +302,8 @@ export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]
   const notes = fixTargets(input.raw);
   const { prompt, refs } = wrongPrompt(await wrongPairs(input.raw, notes, input.rows, input.signal), input.today);
   const none: FixItem[] = [];
-  const base = { items: none, pairs: refs.size, bytes: refs.size ? Buffer.byteLength(prompt) : 0, logs };
+  const unread: string[] = [];
+  const base = { items: none, judged: unread, pairs: refs.size, bytes: refs.size ? Buffer.byteLength(prompt) : 0, logs };
   if (!refs.size) return { state: "checked", ...base };
   const { claude, gemini } = input.judges;
   if (!claude || !gemini) return { state: "no-model", ...base, reason: `${[!claude && "claude", !gemini && "gemini"].filter(Boolean).join(" and ")} judge unavailable` };
@@ -319,7 +327,8 @@ export async function checkWrong(input: { raw: string; rows: readonly OwnerRow[]
     return { state: "no-model", ...base, reason: `${failed === a ? "claude" : "gemini"} judge ${failed.status === "rejected" ? "failed" : "reply unreadable"}` };
   }
   const all = input.raw.split("\n").map(plain);
-  return { state: "checked", ...base, items: planWrong(a.value, b.value, refs, { all, today: input.today, written: writtenAt(input.saved) }).items };
+  const judged = [...new Set([...refs.values()].map((pair) => `note:${sha8(pair.note.text)}`))];
+  return { state: "checked", ...base, judged, items: planWrong(a.value, b.value, refs, { all, today: input.today, written: writtenAt(input.saved) }).items };
 }
 
 // the lines that read as the fix, and the heading above one

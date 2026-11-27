@@ -27,6 +27,13 @@ const PROMPT_TAGS = /<\/?notes\b[^>]*>/gi;
 const FULL_DATE = /(?<![\d/-])(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?![\d/])/g;
 // 11-19 or 11/19; a one-digit side like 3-5 or 1/3 is a range or a share far more often than a day
 const SHORT_DATE = /(?<![\d/-])(0[1-9]|1[0-2])[-/](0[1-9]|[12]\d|3[01])(?![\d/-])/g;
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const MONTH = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?";
+const ORDINAL = "(0?[1-9]|[12]\\d|3[01])(?:st|nd|rd|th)?";
+const YEAR = "(?:,?\\s+(20\\d{2}))?";
+// November 10, Nov. 10th, 2026, 10 Nov; a lowercase "2 may" is a verb far more often than a day
+const MONTH_DAY = new RegExp(`\\b${MONTH}\\s+${ORDINAL}\\b${YEAR}`, "gi");
+const DAY_MONTH = new RegExp(`\\b${ORDINAL}\\s+(?:of\\s+)?${MONTH}\\b${YEAR}`, "gi");
 // a standing rule, however old its date: an ALL CAPS label, or always, never, must, a rule
 const RULE_CAPS = /^[-*+]\s+(?:\*\*)?[A-Z][A-Z0-9&/'+-]{2,}(?:\s+[A-Z0-9&/'+-]+)*(?:\*\*)?\s*[:(]/;
 const RULE_WORDS = /\b(?:never|always|must|rules?|don['’]?t|do not)\b/i;
@@ -41,7 +48,13 @@ export function writtenDays(text: string, today: string): string[] {
   const body = withoutStamp(text);
   const days = [...body.matchAll(FULL_DATE)].map(([, y, m, d]) => `${y}-${m}-${d}`);
   const rest = body.replace(FULL_DATE, " ");
-  return [...days, ...[...rest.matchAll(SHORT_DATE)].map(([, m, d]) => `${today.slice(0, 4)}-${m}-${d}`)];
+  const named = (month: string, date: string, year?: string) => `${year ?? today.slice(0, 4)}-${String(MONTHS.indexOf(month.slice(0, 3).toLowerCase()) + 1).padStart(2, "0")}-${date.padStart(2, "0")}`;
+  return [
+    ...days,
+    ...[...rest.matchAll(SHORT_DATE)].map(([, m, d]) => `${today.slice(0, 4)}-${m}-${d}`),
+    ...[...rest.matchAll(MONTH_DAY)].map(([, m, d, y]) => named(m!, d!, y)),
+    ...[...rest.matchAll(DAY_MONTH)].flatMap(([, d, m, y]) => (m === "may" ? [] : [named(m!, d!, y)])),
+  ];
 }
 
 /** A one-off whose every written day is before today; a note with no written day never expires. */

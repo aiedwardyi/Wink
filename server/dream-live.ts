@@ -70,7 +70,7 @@ export type NoteItem = z.infer<typeof noteItemSchema>;
 export type DreamAsks = DreamPlan["asks"];
 export type DryNotes = { state: (typeof NOTES_STATES)[number]; moves: Move[] };
 export type DreamFixes = NonNullable<DreamPlan["fixes"]>;
-export type DryFixes = DreamFixes & { pairs?: number; bytes?: number; judges?: Partial<Record<keyof DreamJudges, JudgeLog>>; reason?: string };
+export type DryFixes = DreamFixes & { judged?: string[]; pairs?: number; bytes?: number; judges?: Partial<Record<keyof DreamJudges, JudgeLog>>; reason?: string };
 export type FixResult = { ok: true; revision: string } | { ok: false; error: "no-run" | "not-newest" | "no-item" | "list-only" | "done" | "undone" | "changed" | "conflict" | "busy" };
 
 export interface DreamLiveDeps {
@@ -212,20 +212,21 @@ export function createDreamLive(deps: DreamLiveDeps) {
     rows.sort((left, right) => left.at - right.at);
     try {
       const checked = await checkWrong({ raw, rows, saved, judges, today: pickStamp(at).slice(0, 10), signal, now });
-      const fields: Omit<DryFixes, keyof DreamFixes> = { pairs: checked.pairs, bytes: checked.bytes, judges: checked.logs };
+      const fields: Omit<DryFixes, keyof DreamFixes | "judged"> = { pairs: checked.pairs, bytes: checked.bytes, judges: checked.logs };
       if (checked.reason) fields.reason = checked.reason;
       if (memoryFileRaw(botId) !== raw) return { state: "conflict", through, items: [], ...fields };
-      return { state: checked.state, through: checked.state === "checked" ? at : through, items: checked.items, ...fields };
+      return { state: checked.state, through: checked.state === "checked" ? at : through, items: checked.items, judged: checked.judged, ...fields };
     } catch {
       return { state: signal.aborted ? "stopped" : "error", through, items: [] };
     }
   }
 
-  // the last plan's fixes stay listed until their line ages out, OK'd or not; a waiting one goes once its note changed or a newer check fixed it again
-  function carried(botId: string, at: number, found: readonly FixItem[]): FixItem[] {
+  // the last plan's fixes stay listed until their line ages out, OK'd or not; a waiting one goes once its note changed or both judges read its note again against a newer line
+  function carried(botId: string, at: number, found: DryFixes): FixItem[] {
     const raw = memoryFileRaw(botId).split("\n").map((line) => line.replace(/\r$/, ""));
-    const kept = (plans(botId)[0]?.fixes?.items ?? []).filter((item) => item.evidence.at > at - RUN_KEEP_MS && (item.done || (raw.some((line) => `note:${sha8(line)}` === item.target) && !found.some((each) => each.target === item.target))));
-    return [...kept, ...found.filter((item) => !kept.some((each) => each.target === item.target))];
+    const judged = new Set([...(found.judged ?? []), ...found.items.map((each) => each.target)]);
+    const kept = (plans(botId)[0]?.fixes?.items ?? []).filter((item) => item.evidence.at > at - RUN_KEEP_MS && (item.done || (raw.some((line) => `note:${sha8(line)}` === item.target) && !judged.has(item.target))));
+    return [...kept, ...found.items.filter((item) => !kept.some((each) => each.target === item.target))];
   }
 
   function sweep(botId: string, keep: string) {
@@ -242,7 +243,7 @@ export function createDreamLive(deps: DreamLiveDeps) {
       ? (plans(botId).find((each) => each.notes.state === "checked" || each.notes.state === "unchanged")?.notes.items ?? []).map((item) => ({ ...item, history: archive }))
       : notes.moves.map((move) => ({ op: "move", target: `note:${sha8(move.text)}`, text: copy(move.text), by: copy(move.by), why: move.why, history: archive }));
     const saved: DreamPlan = { runId, botId, at, mode: "dry", notes: { state: notes.state, items }, asks: asked, runUntil: at + RUN_KEEP_MS, dropUntil: at + DROPPED_KEEP_MS };
-    if (found) saved.fixes = { state: found.state, through: found.through, items: carried(botId, at, found.items) };
+    if (found) saved.fixes = { state: found.state, through: found.through, items: carried(botId, at, found) };
     const dir = join(botDir(botId), runId);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileAtomic(join(dir, "plan.json"), `${JSON.stringify(saved, null, 2)}\n`, { mode: 0o600 });
