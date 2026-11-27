@@ -72,6 +72,7 @@ export function windowRowVisible(
   const day = new Date(message.at).toDateString();
   for (let i = index - 1; i >= 0; i--) {
     const prev = messages[i];
+    if (!isShownMessage(prev) && !isStepText(prev)) continue;
     if (prev.role !== message.role || prev.from?.botId !== message.from?.botId || new Date(prev.at).toDateString() !== day) break;
     if (isStepText(prev)) return false;
     if (prev.kind === "activity" && prev.tool && !prev.comm && !prev.tool.name.startsWith("error:") && prev.tool.name !== "memory.save") continue;
