@@ -92,13 +92,19 @@ describe("card picks survive a session restart", () => {
     expect(memorySystemPrompt(other.id)).toMatch(/- Which accent color\? \(\d\d-\d\d\): Neon pink/);
   });
   const copy = 'Use "Your draft is saved on this device. You can close this window and return when you are ready to finish."';
+  const approval = "Send the release notes\n> Wait for my approval before sending.";
   it.each([
     { name: "a typed quoted reply", question: "Which wood should the bookshelf use?", options: ["Use red oak", "Skip"], answer: "Use red oak", send: "typed" },
     { name: "a spoken quoted reply", question: "Restart at 8:15 PM instead?", options: ["Yes, 8:15 PM"], answer: "Yeah, that's better.", send: "spoken" },
     { name: "a tapped choice holding a long quote", question: "Which message should appear when a draft is saved?", options: [copy, "Skip"], answer: copy, send: "tap" },
+    { name: "a tapped choice holding a blockquote", question: "How should we handle the release notes?", options: [approval, "Leave unchanged"], answer: approval, send: "tap" },
+    { name: "a typed choice holding a blockquote", question: "How should we handle the release notes?", options: [approval, "Leave unchanged"], answer: approval, send: "typed" },
+    // a quote the user pasted under their own words is not what they said
+    { name: "a typed reply quoting an earlier message", question: "How should we handle the release notes?", options: [approval, "Leave unchanged"], answer: "Send the release notes\n> Hold everything until Friday.", send: "typed", filed: "Send the release notes" },
+    { name: "a tapped choice holding a secret in its blockquote", question: "Which box should the release use?", options: ["Use the staging box\n> password: Tr0ub4dor&3xQ", "Skip"], answer: "Use the staging box\n> password: Tr0ub4dor&3xQ", send: "tap", secret: "Tr0ub4dor" },
     // the letter reads clean; the option it names holds a password, only partly masked by the text redactor
     { name: "a tapped letter naming a secret option", question: "Which wifi should the kiosk join?", options: ["A) Wi-Fi password: Tr0ub4dor&3xQ", "B) Guest network"], answer: "A", send: "tap", secret: "Wi-Fi password" },
-  ])("files $name under the card the chat says it answers, in its whole words", async ({ question, options, answer, send, secret }) => {
+  ])("files $name under the card the chat says it answers, in its whole words", async ({ question, options, answer, send, secret, filed: typed }) => {
     const store = new Store(() => ({ instanceId: "claude", model: "claude-opus-5-5" }));
     const pass = createMemoryPass({ store, dataDir: DATA_DIR, generate: () => async () => "[]", enabled: () => true, busy: () => false });
     const bot = store.createBot({}, { seedMessages: false });
@@ -123,7 +129,8 @@ describe("card picks survive a session restart", () => {
       expect(prompt).not.toContain(secret);
       return;
     }
-    expect(currentPicks(filed).find((entry) => entry.questionId === card.id)?.picked).toBe(answer);
-    expect(`${prompt}\n`).toContain(`: ${answer}\n`);
+    const words = (typed ?? answer).replace(/\s+/g, " ");
+    expect(currentPicks(filed).find((entry) => entry.questionId === card.id)?.picked).toBe(words);
+    expect(`${prompt}\n`).toContain(`: ${words}\n`);
   });
 });

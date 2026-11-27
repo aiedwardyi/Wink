@@ -168,12 +168,14 @@ export function withoutBlocks(text: string): string {
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
 }
 
-/** keepQuotes: the text is a card's own option, so a long quote in it is the choice, not a paste. */
-export function userTyping(text: string, dropSensitive = true, keepImages = false, keepQuotes = false): string {
-  const typed = withoutBlocks(text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : ""));
+/** option: the text is a card's own option, kept whole: its quotes and blockquotes are the choice, not a paste. */
+export function userTyping(text: string, dropSensitive = true, keepImages = false, option = false): string {
+  const attached = text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : "");
+  const typed = option ? attached : withoutBlocks(attached);
   // the whole message: a label and its value can sit in different paragraphs
   if (dropSensitive && secretValue(typed)) return "";
-  const unwrapped = keepQuotes ? typed : typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
+  if (option) return redactSecretsInText(typed.trim());
+  const unwrapped = typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
   const kept = unwrapped
     .split(/\n\s*\n/)
     .filter((paragraph) => paragraph.length <= 400 && paragraph.split("\n").length <= 6)
