@@ -121,11 +121,16 @@ export function createSummaryRepair(deps: SummaryRepairDeps): SummaryRepair {
     const instance = await deps.instanceFor(botId, threadId);
     if (disposed || !instance?.generateText) return;
     const messages = deps.store.activePath(threadId);
-    const found = repairTarget(messages);
-    if (!found || !eligible(found.target.messageId)) return;
-    const targetId = found.target.messageId;
-    const runNumber = (budgets.get(targetId)?.runs ?? 0) + 1;
-    budgets.set(targetId, { runs: runNumber, nextAt: Number.POSITIVE_INFINITY });
+    const latest = repairTarget(messages);
+    if (!latest || !eligible(latest.fallback.messageId)) return;
+    const span = { messages, userName: deps.userName(), referenceMessages: deps.store.messagesFor(threadId) };
+    // A build chained past the fallback is provisional; past the cap the fallback's own span is repaired.
+    const found = latest.target !== latest.fallback && repairBatches({ ...span, target: latest }) > MAX_REPAIR_BATCHES
+      ? { ...latest, target: latest.fallback }
+      : latest;
+    const fallbackId = found.fallback.messageId;
+    const runNumber = (budgets.get(fallbackId)?.runs ?? 0) + 1;
+    budgets.set(fallbackId, { runs: runNumber, nextAt: Number.POSITIVE_INFINITY });
     const controller = new AbortController();
     if (active) active.controller = controller;
     let wallClock = false;
@@ -143,11 +148,9 @@ export function createSummaryRepair(deps: SummaryRepairDeps): SummaryRepair {
       deadlineMs: instance.textTimeoutMs === undefined ? null : REPAIR_CALL_TIMEOUT_MS,
     };
     const result = await repairModelContext({
-      messages,
       target: found,
       taskRecordText: deps.taskRecordText(threadId, found.target.value.contextWindow),
-      userName: deps.userName(),
-      referenceMessages: deps.store.messagesFor(threadId),
+      ...span,
       maxBatches: MAX_REPAIR_BATCHES,
       signal: controller.signal,
       summarize: (prompt) =>
@@ -155,22 +158,26 @@ export function createSummaryRepair(deps: SummaryRepairDeps): SummaryRepair {
       onSummaryCall: (record) => logSummaryCall(context, record),
     }).finally(() => clearTimeout(timer));
     if (result.status === "too-large") {
-      budgets.set(targetId, { runs: MAX_REPAIR_RUNS, nextAt: Number.POSITIVE_INFINITY });
+      budgets.set(fallbackId, { runs: MAX_REPAIR_RUNS, nextAt: Number.POSITIVE_INFINITY });
       console.warn(`[summary-repair] skipped too-large ${JSON.stringify({ botId, threadId, batches: result.batches })}`);
       return;
     }
     const end = Date.now();
-    budgets.set(targetId, {
-      runs: runNumber,
-      nextAt: runNumber < MAX_REPAIR_RUNS ? end + REPAIR_BACKOFF_MS[runNumber - 1]! : Number.POSITIVE_INFINITY,
-    });
+    // a ready repair a newer row beat retargets at the next settle, with no backoff
+    if (result.status === "ready") budgets.delete(fallbackId);
+    else {
+      budgets.set(fallbackId, {
+        runs: runNumber,
+        nextAt: runNumber < MAX_REPAIR_RUNS ? end + REPAIR_BACKOFF_MS[runNumber - 1]! : Number.POSITIVE_INFINITY,
+      });
+    }
     const outcome: SummaryCallResult = result.status === "ready" ? "ok" : wallClock ? "timeout" : result.result;
     timeouts = outcome === "timeout" ? timeouts + 1 : 0;
     if (timeouts >= BREAKER_TIMEOUTS) {
       timeouts = 0;
       pausedUntil = end + BREAKER_PAUSE_MS;
     }
-    if (result.status === "ready" && !disposed) land(threadId, botId, found.fallback.messageId, result.compaction);
+    if (result.status === "ready" && !disposed) land(threadId, botId, fallbackId, result.compaction);
   };
 
   const pump = () => {
@@ -195,7 +202,7 @@ export function createSummaryRepair(deps: SummaryRepairDeps): SummaryRepair {
       const pending = held.get(threadId);
       if (pending && land(threadId, pending.botId, pending.fallbackId, pending.compaction)) return;
       const found = repairTarget(deps.store.activePath(threadId));
-      if (!found || !eligible(found.target.messageId)) return;
+      if (!found || !eligible(found.fallback.messageId)) return;
       if (active?.threadId === threadId || queue.some((item) => item.threadId === threadId)) return;
       queue.push({ botId, threadId });
       pump();

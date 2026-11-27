@@ -387,6 +387,91 @@ describe("summary build after settle", () => {
     expect(path.filter((row) => row.kind !== "compaction" || row.id === "fallback").map((row) => row.id)).toEqual(raw);
   });
 
+  const echo = (prompt: string) => `SUMMARY\n${prompt.includes(RELEASE) ? RELEASE : "no release"}`;
+  const helper = (repairs: { ok: boolean }) => vi.fn(async (prompt: string) => (repairs.ok ? echo(prompt) : "no sentinel"));
+  const repairWith = (harness: ReturnType<typeof setup>, generateText: (prompt: string) => Promise<string>) => createSummaryRepair({
+    store: harness.store,
+    instanceFor: async () => ({ driverKind: "claude", generateText, textModel: "claude-haiku-5-5", textTimeoutMs: 90_000 }),
+    busy: () => harness.state.busy,
+    taskRecordText: () => "Goal: build",
+    userName: () => "User",
+  });
+  const nextContext = async (harness: ReturnType<typeof setup>) => {
+    harness.threads.get("t")!.push(message("next", "next question"));
+    const { prepared } = await harness.sendPrepares("t", "next");
+    return prepared.status === "ready" ? prepared.transcript.map((item) => item.text).join("\n") : "";
+  };
+
+  it("repairs the fallback's own span after backoff when a build widened the span past the cap", async () => {
+    const harness = setup(vi.fn(async () => "SUMMARY\nbuilt from the fallback"));
+    const { threads, state, appended, build } = harness;
+    state.window = 8_192;
+    const tail = turns("k", 20);
+    threads.set("t", [...turns("h", 12), ...tail.slice(0, 2), standIn("fallback digest", 8_192), ...tail.slice(2)]);
+    const repairs = { ok: false };
+    const generateText = helper(repairs);
+    const repair = repairWith(harness, generateText);
+
+    repair.onSettled("bot", "t");
+    await repair.idle();
+    expect(generateText).toHaveBeenCalled();
+    build.onSettled("bot", "t");
+    await build.idle();
+    expect(appended.map((row) => row.compaction.previousCompactionId)).toEqual(["fallback"]);
+    generateText.mockClear();
+    repair.onSettled("bot", "t");
+    await repair.idle();
+    expect(generateText).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(10 * MINUTE);
+    repairs.ok = true;
+    repair.onSettled("bot", "t");
+    await repair.idle();
+
+    const path = threads.get("t")!;
+    expect(generateText).toHaveBeenCalledTimes(4);
+    expect(applicableCompaction(path)).toMatchObject({ value: { coveredThroughId: "h11", summary: expect.stringContaining(RELEASE) } });
+    expect(repairTarget(path)).toBeNull();
+    expect(await nextContext(harness)).toContain(RELEASE);
+  });
+
+  it("repairs a second fallback from the summary before the first, not from a build chained onto it", async () => {
+    const harness = setup(vi.fn(async () => "SUMMARY\nbuilt from the stand-in"));
+    const { threads, appended, build, sendPrepares } = harness;
+    const first = overBudgetThread("a");
+    first[1] = message("ab0", `${RELEASE}.`, { role: "bot" });
+    threads.set("t", [
+      ...first,
+      message("fallback", "", { role: "bot", kind: "compaction", compaction: { v: 1, summary: `${NOTICE}\nfallback digest`, coveredThroughId: "ab67", firstKeptId: "au68", contextWindow: WINDOW, estimatedTokensBefore: 9_000, sourceMessageCount: 136 } }),
+      ...overBudgetThread("b"),
+    ]);
+    const repairs = { ok: false };
+    const generateText = helper(repairs);
+    const repair = repairWith(harness, generateText);
+
+    repair.onSettled("bot", "t");
+    await repair.idle();
+    build.onSettled("bot", "t");
+    await build.idle();
+    expect(appended.map((row) => row.compaction.previousCompactionId)).toEqual(["fallback"]);
+    threads.get("t")!.push(...overBudgetThread("c"), message("send", "next question"));
+    const { prepared } = await sendPrepares("t", "send", { summarize: vi.fn(async () => "no sentinel") });
+    if (prepared.status !== "ready" || !isFallbackSummary(prepared.compaction!.summary)) throw new Error("the fixture did not land a second fallback");
+    expect(prepared.compaction!.previousCompactionId).toBe(appended[0]!.id);
+    threads.get("t")!.push(message("fallback-2", "", { role: "bot", kind: "compaction", compaction: prepared.compaction! }));
+
+    generateText.mockClear();
+    repairs.ok = true;
+    repair.onSettled("bot", "t");
+    await repair.idle();
+
+    const path = threads.get("t")!;
+    expect(generateText.mock.calls[0]![0]).toContain(RELEASE);
+    expect(applicableCompaction(path)).toMatchObject({ value: { summary: expect.stringContaining(RELEASE) } });
+    expect(repairTarget(path)).toBeNull();
+    expect(await nextContext(harness)).toContain(RELEASE);
+  });
+
   it("lands nothing when the leaf moved", async () => {
     const { calls, generateText } = deferred();
     const { threads, appended, build } = setup(generateText);

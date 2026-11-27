@@ -228,6 +228,12 @@ describe("summary repair queue", () => {
 
     expect(calls).toHaveLength(2);
     expect(appended).toEqual([]);
+    repair.onSettled("bot-n", "newer");
+    await settle();
+    expect(calls).toHaveLength(3);
+    calls[2]!.resolve("SUMMARY\nrepaired newer");
+    await repair.idle();
+    expect(appended.map((item) => [item.threadId, item.compaction.coveredThroughId])).toEqual([["newer", "nm20"]]);
   });
 
   it("does nothing for an engine without generateText", async () => {

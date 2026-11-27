@@ -797,12 +797,16 @@ export function repairTarget(messages: Message[]): RepairTarget | null {
     later.pathIndex > row.pathIndex && later.value.coveredThroughId === row.value.coveredThroughId && !derives(later, row);
   const chain = rows.filter((row) => !rows.some((later) => repairs(later, row)));
   let fallbackAt = -1;
+  let firstAt = -1;
   chain.forEach((row, index) => {
-    if (isFallbackSummary(row.value.summary)) fallbackAt = index;
-    else if (rows.some((earlier) => repairs(row, earlier))) fallbackAt = -1;
+    if (isFallbackSummary(row.value.summary)) {
+      fallbackAt = index;
+      if (firstAt < 0) firstAt = index;
+    } else if (rows.some((earlier) => repairs(row, earlier))) fallbackAt = firstAt = -1;
   });
   if (fallbackAt < 0) return null;
-  const good = chain.slice(0, fallbackAt).findLast((row) => !isFallbackSummary(row.value.summary)) ?? null;
+  // A row chained onto a fallback since the run's first one is provisional, so the repair starts before it.
+  const good = chain.slice(0, firstAt).findLast((row) => !isFallbackSummary(row.value.summary)) ?? null;
   return { target, fallback: chain[fallbackAt]!, good };
 }
 
