@@ -533,6 +533,73 @@ describe("memory sync", () => {
     expect(tidying(b, c)).toEqual([true, false]);
   });
 
+  it("lets go of the tidy while a split folder still holds the other PC's older copy that names itself", () => {
+    const [a, b] = devices("aaaaaaaaaaaa", "bbbbbbbbbbbb");
+    seed(MEMORY_SEED, a, b);
+    talk(a, T0);
+    talk(b, T0);
+    swap(a, b);
+    // a week on the laptop: it takes the tidy
+    talk(b, T0 + 8 * DAY);
+    const stale = capture(b);
+    const back = T0 + 11 * DAY;
+    receive(b, a);
+    sync(a, back - 60_000);
+    talk(a, back);
+    expect(tidying(a, b)).toEqual([false, true]);
+    // Drive split the desktop's folder and left the laptop's older copy in the second one
+    const split = join(a.folder, "memory-v2 (1)", "bot-1");
+    mkdirSync(split, { recursive: true });
+    writeFileSync(join(split, `${b.ledger.device}.json`), stale);
+    receive(a, b);
+    sync(b, back + 60_000);
+    expect(tidying(b)).toEqual([false]);
+    // hourly turns on both PCs, each copy landing a minute after its message
+    for (let hour = 0; hour < 12; hour++) {
+      const at = back + hour * HOUR;
+      if (hour) {
+        talk(a, at);
+        receive(a, b);
+        sync(b, at + 60_000);
+      }
+      talk(b, at + 2 * 60_000);
+      receive(b, a);
+      sync(a, at + 3 * 60_000);
+      expect(tidying(a, b)).toEqual([true, false]);
+    }
+  });
+
+  it("waits on the newest of two PCs that name themselves, so a third PC takes the tidy six hours after the last message on the one that has it", () => {
+    const [a, b, c] = devices("aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc");
+    seed(MEMORY_SEED, a, b, c);
+    talk(b, T0);
+    talk(c, T0);
+    swap(b, c);
+    // a week on c: it takes the tidy
+    talk(c, T0 + 8 * DAY);
+    expect(tidying(c)).toEqual([true]);
+    // back at b: it waits on c and names itself
+    const back = T0 + 11 * DAY;
+    receive(c, b);
+    talk(b, back - 60_000);
+    expect(tidying(b)).toEqual([false]);
+    talk(a, back);
+    // c's last message before it is closed
+    const last = back + 5 * HOUR;
+    talk(c, last);
+    expect(tidying(c)).toEqual([true]);
+    receive(b, a);
+    sync(a, last + 60_000);
+    receive(c, a);
+    sync(a, last + 2 * 60_000);
+    sync(a, back + 6 * HOUR);
+    expect(tidying(a)).toEqual([false]);
+    sync(a, last + 6 * HOUR - 1);
+    expect(tidying(a)).toEqual([false]);
+    sync(a, last + 6 * HOUR);
+    expect(tidying(a)).toEqual([true]);
+  });
+
   it("recovers a timeline parked by an older build without asking the bot to edit it", () => {
     const [a] = pcs();
     const at = new Date(2026, 10, 17, 10).getTime();

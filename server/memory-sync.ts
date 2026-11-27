@@ -312,7 +312,7 @@ type Talked = Map<string, { at: number; tidier?: string }>;
 function pickTidier(talked: Talked, mine: (device: string) => boolean) {
   const latest = Math.max(...[...talked.values()].map(({ at }) => at));
   const pick = [...talked].filter(([, { at }]) => at >= latest - HANDOVER_MS + LET_GO_MS).map(([device]) => device).sort()[0];
-  const holder = [...talked].find(([device, { at, tidier }]) => tidier === device && !mine(device) && at >= latest - HANDOVER_MS)?.[0];
+  const holder = [...talked].filter(([device, { at, tidier }]) => tidier === device && !mine(device) && at >= latest - HANDOVER_MS).sort(([, x], [, y]) => y.at - x.at)[0]?.[0];
   return { pick, holder };
 }
 
@@ -667,7 +667,9 @@ export function syncBotMemory(
     for (const snapshot of snapshots) {
       if (snapshot.device === me || snapshot.talkedAt > now + AHEAD_MS) continue;
       const prior = talked.get(snapshot.device);
-      talked.set(snapshot.device, { at: Math.max(snapshot.talkedAt, prior?.at ?? 0), tidier: prior?.tidier === snapshot.device ? prior.tidier : snapshot.tidier });
+      // one whole copy per PC, the newest, so an older one in a split folder cannot lend its claim to a newer stamp; a tie keeps the claim, as its wait still ends
+      if (prior && (prior.at > snapshot.talkedAt || (prior.at === snapshot.talkedAt && prior.tidier === snapshot.device))) continue;
+      talked.set(snapshot.device, { at: snapshot.talkedAt, tidier: snapshot.tidier });
     }
     const mine = (device: string) => device === me || Boolean(ledger.renamed?.includes(device));
     const { pick: picked, holder } = pickTidier(talked, mine);
