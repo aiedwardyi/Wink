@@ -1291,8 +1291,9 @@ describe("a nudge while the person's question waits", () => {
     const h = waiting({ consumed: true }, "fix the build");
     mainAcks(h);
     expect((await h.send({ text: "sidekick answer me" })).data.steered).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // the helper is asked inside the send, so none was asked by now
     expect(h.ask).not.toHaveBeenCalled();
+    expect(h.steer.mock.calls[0]![1]).not.toMatch(/earlier question/);
   });
 
   it("asks nothing once the bot replied after the question", async () => {
@@ -1300,7 +1301,7 @@ describe("a nudge while the person's question waits", () => {
     h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Looking it up." });
     mainAcks(h);
     await h.send({ text: "sidekick answer me" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(h.ask).not.toHaveBeenCalled();
+    expect(h.steer.mock.calls[0]![1]).not.toMatch(/earlier question/);
   });
 });
