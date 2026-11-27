@@ -9182,7 +9182,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // the pixels of one screen message, fetched only when something shows it
     m = path.match(/^\/api\/threads\/([\w-]+)\/messages\/([\w-]+)\/image$/);
     if (m && method === "GET") {
-      return await threadRoutes.messageImage(res, m);
+      return await threadRoutes.messageImage(req, res, m);
     }
 
     if (method === "POST" && path === "/api/attachments") {

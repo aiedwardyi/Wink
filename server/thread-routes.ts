@@ -119,7 +119,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       mediaIndex ??= createMediaIndex(store, (id) => coldPath(store, id));
       return json(res, 200, await mediaIndex(threadId, url.searchParams.get("v")));
     },
-    messageImage: async (res: ServerResponse, m: RegExpMatchArray) => {
+    messageImage: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       // Same guard as the page route above, and for the same reason twice
       // over: an unknown id should 404 deliberately rather than by accident,
       // and `messagesFor` materialises and caches a ThreadState for whatever
@@ -132,7 +132,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       const message = store.messagesFor(m[1]).find((msg) => msg.id === m![2]);
       if (message?.kind === "screen" && message.roomFiles) {
         const file = message.roomFiles.find((each) => !each.deleted && each.type.startsWith("image/"));
-        if (file && group?.hosted && await serveRoomFile(res, group.hosted.roomId, file.id, true)) return;
+        if (file && group?.hosted && await serveRoomFile(req, res, group.hosted.roomId, file.id, true)) return;
         return json(res, 404, { error: "no image on that message" });
       }
       const attachment = message?.image ? readAttachment(message.image) : null;
