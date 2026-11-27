@@ -121,4 +121,12 @@ describe("scorer reads only what the bot gets", () => {
     expect(run.status).not.toBe(0);
     expect(run.stderr).toMatch(/take\(\) gave the bot/);
   }, 60_000);
+
+  it("fails an arm whose lookup writes no log row, naming it", () => {
+    const dir = kit();
+    const run = bench(dir, [], arm('const LOG_FILE = "lookup-log.jsonl";', 'const LOG_FILE = "lookup-log-moved.jsonl";'));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/: no lookup log row: take\(\) wrote nothing to /);
+    expect(run.stderr).not.toMatch(/ENOENT/);
+  }, 60_000);
 });

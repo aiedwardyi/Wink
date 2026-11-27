@@ -71,7 +71,8 @@ export function tourney({ spec, on = "tuning", sets, ledger, out = join(sets, ".
     if (!arm.patch) refuse(`arm ${arm.name} needs a sha or a patch`);
     const patch = resolve(arm.patch);
     lockCheck(arm.name, lines(git(repo, "apply", "--numstat", patch)).map((line) => line.split("\t")[2]));
-    return { ...arm, patch };
+    // a patch arm's commit sha changes every run, so its held-out identity is the patch text
+    return { ...arm, patch, patchHash: fileHash(patch) };
   });
 
   const ledgerJson = join(dirname(resolve(ledger)), "ledger.json");
@@ -95,8 +96,8 @@ export function tourney({ spec, on = "tuning", sets, ledger, out = join(sets, ".
   const used = uses[hash] ?? [];
   if (on === "held-out") {
     if (used.length >= USES) refuse(`held-out ${hash.slice(0, 12)} has had ${used.length} runs: reseed it (recall-sets.ts make <sets> --reseed) and file a new pre-registration`);
-    const seen = new Set(used.flatMap((run) => run.arms.filter((arm) => !arm.sham).map((arm) => arm.sha)));
-    for (const arm of arms) if (arm.sha && !arm.sham && seen.has(arm.sha)) refuse(`arm ${arm.name} ${arm.sha.slice(0, 9)} already had its held-out run on this set`);
+    const seen = new Set(used.flatMap((run) => run.arms.filter((arm) => !arm.sham).flatMap((arm) => [arm.sha, arm.patchHash])).filter(Boolean));
+    for (const arm of arms) if (!arm.sham && (seen.has(arm.sha) || seen.has(arm.patchHash))) refuse(`arm ${arm.name} ${(arm.sha ?? arm.patchHash).slice(0, 9)} already had its held-out run on this set`);
   }
 
   const run = `${spec.name}-${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}`;
@@ -123,6 +124,15 @@ export function tourney({ spec, on = "tuning", sets, ledger, out = join(sets, ".
       lockCheck(arm.name, diff);
       return { ...arm, sha, diff, root };
     });
+    const set = { name: on, hash, use: on === "held-out" ? used.length + 1 : null, of: USES };
+    if (on === "held-out") {
+      // spend the use before the first score, so a round that stops partway still counts
+      const start = { run, date: today, on, set, prereg: spec.prereg, started: true, base: { sha: base }, arms: ready.map(({ name, sham, sha, patchHash }) => ({ name, sham: Boolean(sham), sha, patchHash })) };
+      uses[hash] = [...used, { run, date: today, arms: start.arms }];
+      writeFileSync(usesFile, `${JSON.stringify(uses, null, 1)}\n`);
+      writeFileSync(join(dir, "start.json"), `${JSON.stringify(start, null, 1)}\n`);
+      execFileSync(process.execPath, [resolve(ledger), "tourney", join(dir, "start.json")], { stdio: "inherit" });
+    }
     const baseScore = score(baseRoot, on, sets, join(dir, "base.json"), PARITY);
     if (baseScore.parity.mismatches || baseScore.parity.checked < Math.min(PARITY, baseScore.totals.cases)) refuse(`bench parity ${baseScore.parity.checked - baseScore.parity.mismatches}/${baseScore.parity.checked} with the base lookup: the scorer no longer reads the real pick`);
     const scored = ready.map((arm) => ({ ...arm, score: score(arm.root, on, sets, join(dir, `${arm.name}.json`), 0) }));
@@ -131,7 +141,7 @@ export function tourney({ spec, on = "tuning", sets, ledger, out = join(sets, ".
       run,
       date: today,
       on,
-      set: { name: on, hash, use: on === "held-out" ? used.length + 1 : null, of: USES },
+      set,
       prereg: spec.prereg,
       bench: git(BENCH, "rev-parse", "HEAD"),
       ruleHash,
@@ -141,11 +151,7 @@ export function tourney({ spec, on = "tuning", sets, ledger, out = join(sets, ".
       arms: scored.map((arm, at) => ({ name: arm.name, sham: Boolean(arm.sham), sha: arm.sha, patch: arm.patch, diff: arm.diff, totals: arm.score.totals, lookupMs: arm.score.lookupMs, ...round.arms[at] })),
     };
     writeFileSync(join(dir, "result.json"), `${JSON.stringify(result, null, 1)}\n`);
-    if (on === "held-out") {
-      uses[hash] = [...used, { run, date: today, arms: result.arms.map(({ name, sham, sha }) => ({ name, sham, sha })) }];
-      writeFileSync(usesFile, `${JSON.stringify(uses, null, 1)}\n`);
-      execFileSync(process.execPath, [resolve(ledger), "tourney", join(dir, "result.json")], { stdio: "inherit" });
-    }
+    if (on === "held-out") execFileSync(process.execPath, [resolve(ledger), "tourney", join(dir, "result.json")], { stdio: "inherit" });
     return { dir, result };
   } finally {
     if (!keep) for (const path of trees.reverse()) dropWorktree(repo, path);

@@ -2,7 +2,7 @@
 // top 2 rows read from its lookup log, checked against the text take() gave the bot, and judged against the known answer.
 // --parity N also replays the first N cases through the index, gate and the review-base pick, and counts where the real lookup differs. Writes only to a temp HOME and data dir.
 // node --experimental-strip-types scripts/recall-bench.ts --root <checkout> --sets <dir> --set <name> --out <json> [--parity N]
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -102,8 +102,11 @@ try {
     const given = lookup.take(item.bot, "t", undefined, item.ask);
     ms.push(performance.now() - started);
     await settle();
+    const log = join(DATA_DIR, "lookup-log.jsonl");
+    const logged = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n")[0] : "";
+    if (!logged) throw new Error(`${item.id}: no lookup log row: take() wrote nothing to ${log}, and the scorer reads the bot's rows from that log, so an arm must log every take`);
     // SAFETY: the lookup writes one JSON row per take, and the data dir is new for each case
-    const entry = JSON.parse(readFileSync(join(DATA_DIR, "lookup-log.jsonl"), "utf8").trim().split("\n")[0]!) as { fired: boolean; rows: Array<{ row: string }> };
+    const entry = JSON.parse(logged) as { fired: boolean; rows: Array<{ row: string }> };
     // the bot reads two rows at most, so a row logged past them or missing from take()'s text never counts
     const shown = entry.fired ? entry.rows.slice(0, MAX_ROWS).map((row) => row.row) : [];
     const carried = given.join("\n").split("\n").filter((line) => line.startsWith("- ")).slice(0, MAX_ROWS);

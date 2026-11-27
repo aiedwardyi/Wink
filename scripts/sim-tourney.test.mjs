@@ -10,6 +10,7 @@ import { armDiff, fileHash, LOCKED, lockedIn } from "./sim-tourney.mjs";
 const TOURNEY = fileURLToPath(new URL("./sim-tourney.mjs", import.meta.url));
 const BENCH = fileURLToPath(new URL("..", import.meta.url));
 const temps = [];
+const lines = (text) => text.split("\n").map((line) => line.trim()).filter(Boolean);
 afterEach(() => {
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -107,8 +108,29 @@ describe("bench lock", () => {
   });
 });
 
+const manifest = JSON.parse(readFileSync(join(BENCH, "scripts", "recall-sets.json"), "utf8"));
+const pins = () => ({
+  ruleHash: fileHash(join(BENCH, "scripts", "sim-rule.mjs")),
+  scorerHash: fileHash(join(BENCH, "scripts", "recall-bench.ts")),
+  generatorHash: fileHash(join(BENCH, "scripts", "recall-sets.ts")),
+  tuning: manifest.tuning.hash,
+  heldOut: manifest["held-out"].hash,
+  bench: execFileSync("git", ["-C", BENCH, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+});
+const filed = (dir, files) => writeFileSync(join(dir, "ledger.json"), JSON.stringify({ bench: { prereg: [{ id: "p", files }] } }));
+
 describe("held-out safety", () => {
   const fair = (dir, base, arm) => ({ name: "t", base, prereg: "p", arms: [{ name: "sham", sham: true, sha: base }, { name: "fair", sha: arm("server/memory-lookup.ts") }] });
+  // a stand-in held-out set the scorer refuses by hash, so the round stops at its first score
+  const heldOut = (dir) => {
+    mkdirSync(join(dir, "sets"));
+    writeFileSync(join(dir, "sets", "held-out.json"), "{}");
+    filed(dir, pins());
+    writeFileSync(join(dir, "ledger.mjs"), 'import { appendFileSync, readFileSync } from "node:fs";\nappendFileSync(new URL("./calls.jsonl", import.meta.url), readFileSync(process.argv[3], "utf8").replace(/\\n/g, "") + "\\n");\n');
+    return ["--on", "held-out", "--ledger", join(dir, "ledger.mjs")];
+  };
+  const usesOf = (dir) => JSON.parse(readFileSync(join(dir, "sets", "uses.json"), "utf8"))[manifest["held-out"].hash];
+  const calls = (dir) => lines(readFileSync(join(dir, "calls.jsonl"), "utf8")).map((line) => JSON.parse(line));
 
   it("runs on tuning unless held-out is named, and refuses a tuning folder that holds the held-out set", () => {
     const { dir, base, arm } = repo();
@@ -128,20 +150,39 @@ describe("held-out safety", () => {
     expect(out.status).toBe(1);
     expect(out.stderr).toContain("tuning.json sits in the held-out folder");
   });
+
+  it("spends the held-out use in uses.json and the ledger before the first score, so a round that stops still counts", () => {
+    const { dir, git, base, arm } = repo();
+    const spec = fair(dir, base, arm);
+    const extra = heldOut(dir);
+    const out = run(dir, spec, extra);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("scorer failed");
+    const sha = spec.arms[1].sha;
+    expect(usesOf(dir).map((use) => use.arms.map((each) => [each.name, each.sha]))).toEqual([[["sham", base], ["fair", sha]]]);
+    expect(calls(dir)).toMatchObject([{ started: true, prereg: "p", set: { use: 1, of: 3 }, base: { sha: base }, arms: [{ name: "sham", sham: true }, { name: "fair", sham: false, sha }] }]);
+    expect(git("worktree", "list").split("\n")).toHaveLength(1);
+    const again = run(dir, spec, extra);
+    expect(again.status).toBe(1);
+    expect(again.stderr).toContain(`arm fair ${sha.slice(0, 9)} already had its held-out run on this set`);
+  });
+
+  it("refuses a patch arm whose patch already had its held-out run, under any name", () => {
+    const { dir, git, base, arm } = repo();
+    const patch = join(dir, "fair.patch");
+    writeFileSync(patch, `${git("diff", base, arm("server/memory-lookup.ts"))}\n`);
+    git("checkout", "-q", "--detach", base);
+    const extra = heldOut(dir);
+    const spec = (name) => ({ name: "t", base, prereg: "p", arms: [{ name: "sham", sham: true, sha: base }, { name, patch }] });
+    expect(run(dir, spec("fair"), extra).stderr).toContain("scorer failed");
+    const again = run(dir, spec("renamed"), extra);
+    expect(again.status).toBe(1);
+    expect(again.stderr).toMatch(/arm renamed [0-9a-f]{9} already had its held-out run on this set/);
+    expect(usesOf(dir)).toHaveLength(1);
+  });
 });
 
 describe("pre-registration pins the bench", () => {
-  const manifest = JSON.parse(readFileSync(join(BENCH, "scripts", "recall-sets.json"), "utf8"));
-  const pins = () => ({
-    ruleHash: fileHash(join(BENCH, "scripts", "sim-rule.mjs")),
-    scorerHash: fileHash(join(BENCH, "scripts", "recall-bench.ts")),
-    generatorHash: fileHash(join(BENCH, "scripts", "recall-sets.ts")),
-    tuning: manifest.tuning.hash,
-    heldOut: manifest["held-out"].hash,
-    bench: execFileSync("git", ["-C", BENCH, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
-  });
-  const filed = (dir, files) => writeFileSync(join(dir, "ledger.json"), JSON.stringify({ bench: { prereg: [{ id: "p", files }] } }));
-
   for (const [key, stale] of [["scorerHash", "a".repeat(64)], ["generatorHash", undefined], ["heldOut", "b".repeat(64)], ["bench", "0".repeat(40)]]) {
     it(`refuses a pre-registration whose ${key} is not the bench's`, () => {
       const { dir, base, arm } = repo();
