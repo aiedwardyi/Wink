@@ -9,7 +9,7 @@ import { EXTENDED_REACTIONS } from "../shared/reactions.ts";
 import type { AskReply } from "./ask-bot.ts";
 import type { watchAskHold } from "./ask-hold.ts";
 import { askUserRequestSchema, postAskUser } from "./ask-user.ts";
-import { importLocalImage, saveImage, type FileScope, type SavedAttachment } from "./attachments.ts";
+import { importLocalImage, saveImage, type SavedAttachment } from "./attachments.ts";
 import type { BoardCalls } from "./board-calls.ts";
 import type { BotCalls } from "./bot-call.ts";
 import { checkPicture } from "./bot-hooks.ts";
@@ -31,6 +31,7 @@ import { json, readBody } from "./http-helpers.ts";
 import type { KeepGoing } from "./keep-going.ts";
 import { callApi, callApiRequestSchema, recordKeyUse } from "./key-broker.ts";
 import { buildNotification, type Notification } from "./notify.ts";
+import { fileScope } from "./owner-turn.ts";
 import { requestPeerApproval, type ApprovalBus } from "./peer-approval.ts";
 import type { RoomFile } from "./rooms/db.ts";
 import type { RoutineRequestService } from "./routine-requests.ts";
@@ -63,6 +64,8 @@ type InternalRouteDeps = {
   taskPacketForWrite: (threadId: string) => TaskResumePacket | null;
   persistTaskPacket: (packet: TaskResumePacket, opts?: { staged?: boolean }, seen?: readonly TaskAsk[]) => TaskResumePacket | null;
   readOnlyTurn: (botId: string, threadId: string) => boolean;
+  /** The owner's own typed 1:1 turn, running now: the only one that reads files outside the bot's folders. */
+  ownerTurn: (botId: string, threadId: string) => boolean;
   /** The user line a running room turn was dispatched to answer. */
   answeredLine: (threadId: string) => string | undefined;
   /** The last text the bot's current turn in that thread wrote. */
@@ -206,8 +209,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         return json(res, 400, { error: "this task has no working folder for artifacts" });
       }
       const folder = taskCwd ?? "";
-      // read-only turns were refused above
-      const scope: FileScope = { kind: "any" };
+      const scope = fileScope(deps.ownerTurn(bot.id, body.fromThreadId), taskCwd ? [taskCwd] : []);
       const { kept: artifacts, dropped } = groundTaskArtifacts(body.artifacts ?? [], folder, scope);
 
       const next = structuredClone(current);
@@ -551,7 +553,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         from.cwd,
         workspaceDir(from.id),
       ].filter((root): root is string => Boolean(root));
-      const scope: FileScope = deps.readOnlyTurn(from.id, fromThreadId) ? { kind: "roots", roots } : { kind: "any" };
+      const scope = fileScope(deps.ownerTurn(from.id, fromThreadId), roots);
       let saved: ReturnType<typeof importLocalImage>;
       try {
         saved = importLocalImage(String(body.path ?? ""), scope);

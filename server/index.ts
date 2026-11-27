@@ -93,6 +93,7 @@ import * as composio from "./composio.ts";
 import { isUtilityShutdownMessage } from "./utility-parent.ts";
 import { chiefOfStaffSystemPrompt, peerAgentsSystemPrompt } from "./chief-of-staff.ts";
 import { openMausStatusSystemPrompt } from "./openmaus-status-capsule.ts";
+import { ownerOwnTurn } from "./owner-turn.ts";
 import {
   containerComputerAction,
   containerComputerExists,
@@ -6416,7 +6417,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
-      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text), helperHint: turnStartedByUser(opts) && Boolean(integrations.terminal) });
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text), helperHint: turnStartedByUser(opts) && Boolean(integrations.terminal), typed: turnStartedByUser(opts) });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -8348,6 +8349,16 @@ function guestRoomTurn(botId: string, threadId: string) {
   const hosted = store.groupByThread(threadId)?.hosted;
   return readOnlyRoomTurn(botId, threadId) || joinedGuestThreads.has(threadId) || Boolean(hosted && teammateAskTurn(hosted.roomId, threadId, botId));
 }
+function ownerFileTurn(botId: string, threadId: string) {
+  return ownerOwnTurn({
+    current: (id) => turnRegistry.current(id),
+    ownerChats: (id) => {
+      const bot = store.bot(id);
+      return bot ? ownerChats(bot, notOwnerChats()) : [];
+    },
+    roomTurn: (id, thread) => Boolean(store.groupByThread(thread)) || joinedRoomThreads.has(thread) || guestRoomTurn(id, thread),
+  }, botId, threadId);
+}
 const boardRoutes = createBoardRoutes({
   board,
   caller: (header) => commsCallers.resolve(header),
@@ -8360,6 +8371,7 @@ const boardRoutes = createBoardRoutes({
 });
 const internalRoutes = createInternalRoutes({
   readOnlyTurn: readOnlyRoomTurn,
+  ownerTurn: ownerFileTurn,
   planHint: { room: sharedTurn(store, joinedRoomThreads), workerReady: workerEngineSignedIn, livePanes: botLivePanes },
   answeredLine: (threadId) => roomTurnInstruction.get(threadId),
   turnText: (botId, threadId) => askTexts.last(botId, threadId),

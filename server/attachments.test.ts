@@ -317,7 +317,7 @@ describe("show-image route", () => {
   it("publishes into the sender's own thread as a screen message", () => {
     expect(route).toContain("connectorThread(from.id, fromThreadId)");
     expect(route).toContain("importLocalImage(String(body.path ?? \"\"), scope)");
-    expect(route).toContain('const scope: FileScope = deps.readOnlyTurn(from.id, fromThreadId) ? { kind: "roots", roots } : { kind: "any" };');
+    expect(route).toContain("const scope = fileScope(deps.ownerTurn(from.id, fromThreadId), roots);");
     expect(route).toContain("workspaceDir(from.id)");
     expect(route).toContain('kind: "screen"');
     expect(route).toMatch(/shared \? \{[^}]*roomFiles: shared\.roomFiles[^}]*\} : \{ image: saved\.name \}/);

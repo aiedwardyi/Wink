@@ -77,6 +77,7 @@ function routes(group = false, readOnly = false) {
     connectorThread: () => ({ ...(group ? { group: { id: "group" } } : {}) }),
     botOutputRoots: () => [folder],
     readOnlyTurn: () => readOnly,
+    ownerTurn: () => !readOnly,
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
 }
 
@@ -110,7 +111,7 @@ async function refused(reason: string) {
 
 describe("a bot's picture in a team room", () => {
   const shared = (roomPicture: (...args: unknown[]) => Promise<unknown>) => createInternalRoutes({
-    readOnlyTurn: () => false,
+    readOnlyTurn: () => false, ownerTurn: () => false,
     cfg: { imageGen: { key: "test-key" } }, store,
     connectorThread: () => ({ group: { id: "group" } }),
     botOutputRoots: () => [folder],
@@ -131,7 +132,7 @@ describe("a bot's picture in a team room", () => {
   it("posts only to the conversation the caller's own token names", async () => {
     const roomPicture = vi.fn(async () => ({ messageId: "room-row", url: "/api/rooms/r1/files/f/preview" }));
     const routes = createInternalRoutes({
-      readOnlyTurn: () => false,
+      readOnlyTurn: () => false, ownerTurn: () => false,
       cfg: { imageGen: { key: "test-key" } }, store,
       connectorThread: () => ({ group: { id: "group" } }),
       botOutputRoots: () => [folder],

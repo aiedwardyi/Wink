@@ -1,47 +1,92 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CommsCallers } from "./comms-caller.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
+import { ownerChats } from "./one-mind.ts";
+import { ownerOwnTurn } from "./owner-turn.ts";
 import { seedTaskResumePacket } from "./task-state-fold.ts";
 import type { TaskResumePacket } from "./task-state.ts";
+import { TurnRegistry, type LiveTurn } from "./turn-registry.ts";
 
-// bot-a's chat is a read-only (guest) turn; bot-b's chat is the owner's own, working turn.
+// bot-a: a read-only joined-room guest. bot-b: the owner's own 1:1. bot-j: a joined-room guest who may make bots work.
+// bot-h: a hosted room where a teammate who may make bots work asked an Auto bot.
 const callers = new CommsCallers();
-const bots: Record<string, { id: string; name: string; threadId: string }> = {
-  "bot-a": { id: "bot-a", name: "A", threadId: "chat-a" },
-  "bot-b": { id: "bot-b", name: "B", threadId: "chat-b" },
+const bots: Record<string, { id: string; name: string; threadId: string; tasks: { threadId: string }[]; autoApprove?: boolean }> = {
+  "bot-a": { id: "bot-a", name: "A", threadId: "chat-a", tasks: [{ threadId: "chat-a" }] },
+  "bot-b": { id: "bot-b", name: "B", threadId: "chat-b", tasks: [{ threadId: "chat-b" }] },
+  "bot-j": { id: "bot-j", name: "J", threadId: "chat-j", tasks: [{ threadId: "chat-j" }] },
+  "bot-h": { id: "bot-h", name: "H", threadId: "chat-h", tasks: [{ threadId: "chat-h" }], autoApprove: true },
 };
+const room = { id: "group-h", threadId: "room-h", memberIds: ["bot-h"], hosted: { roomId: "r" } };
+
+const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
+function load(name: string, deps: Record<string, unknown>) {
+  const node = index.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === name);
+  if (!node) throw new Error(`index.ts has no function ${name}`);
+  const code = ts.transpileModule(node.getText(index), { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+  return new Function(...Object.keys(deps), `${code}\nreturn ${name};`)(...Object.values(deps));
+}
 
 let dir: string;
 let taskDir: string;
 let outside: string;
+let inside: string;
+let picture: string;
+let insidePicture: string;
 let packets: Map<string, TaskResumePacket>;
+let turns: TurnRegistry;
 let routes: ReturnType<typeof createInternalRoutes>;
+
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("pixels")]);
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "file-scope-caller-"));
   taskDir = join(dir, "task");
   outside = join(dir, "outside.txt");
+  inside = join(taskDir, "inside.txt");
+  picture = join(dir, "outside.png");
+  insidePicture = join(taskDir, "inside.png");
   mkdirSync(taskDir);
   writeFileSync(outside, "private");
-  packets = new Map(Object.values(bots).map((bot) => [bot.threadId, seedTaskResumePacket({ threadId: bot.threadId, botId: bot.id, text: "Build the site", messageId: "m", now: 1, turnsAtWrite: 0 })]));
-  const owns = (botId: string, threadId: string) => (bots[botId]?.threadId === threadId ? {} : undefined);
+  writeFileSync(inside, "work");
+  writeFileSync(picture, PNG);
+  writeFileSync(insidePicture, PNG);
+  const threads = [...Object.values(bots).map((bot) => bot.threadId), room.threadId];
+  packets = new Map(threads.map((threadId) => [threadId, seedTaskResumePacket({ threadId, botId: threadId === room.threadId ? "bot-h" : `bot-${threadId.slice(-1)}`, text: "Build the site", messageId: "m", now: 1, turnsAtWrite: 0 })]));
+  turns = new TurnRegistry();
+  const owns = (botId: string, threadId: string) =>
+    threadId === room.threadId ? (botId === "bot-h" ? { group: room } : undefined) : bots[botId]?.threadId === threadId ? {} : undefined;
+  const store = {
+    bot: (id: string) => bots[id],
+    groupByThread: (threadId: string) => (threadId === room.threadId ? room : undefined),
+    conversationForBot: owns,
+    taskByThread: (_botId: string, threadId: string) => (threadId === room.threadId ? undefined : { cwd: taskDir }),
+    groupTaskByThread: () => ({ pinnedCwd: taskDir }),
+    appendMessage: () => ({ id: "shown" }),
+  };
+  // what index.ts records as it dispatches each of these turns
+  const readOnlyTurnThreads = new Set(["chat-a"]);
+  const joinedRoomThreads = new Set(["chat-a", "chat-j"]);
+  const joinedGuestThreads = new Set(["chat-a", "chat-j"]);
+  const roomTaskThreads = new Set(["chat-a", "chat-j"]);
+  const readOnlyAskTurn = () => false;
+  const teammateAskTurn = (_roomId: string, threadId: string) => threadId === room.threadId;
+  const readOnlyRoomTurn = load("readOnlyRoomTurn", { store, readOnlyTurnThreads, readOnlyAskTurn, teammateAskTurn });
+  const guestRoomTurn = load("guestRoomTurn", { store, readOnlyRoomTurn, joinedGuestThreads, teammateAskTurn });
+  const ownerFileTurn = load("ownerFileTurn", { ownerOwnTurn, turnRegistry: turns, store, ownerChats, notOwnerChats: () => roomTaskThreads, joinedRoomThreads, guestRoomTurn });
   routes = createInternalRoutes({
-    store: {
-      bot: (id: string) => bots[id],
-      conversationForBot: owns,
-      taskByThread: () => ({ cwd: taskDir }),
-      groupTaskByThread: () => undefined,
-    },
+    store,
     connectorThread: owns,
     taskPacketForWrite: (threadId: string) => structuredClone(packets.get(threadId)!),
     persistTaskPacket: (next: TaskResumePacket) => (packets.set(next.threadId, next), next),
-    readOnlyTurn: (_botId: string, threadId: string) => threadId === "chat-a",
+    readOnlyTurn: readOnlyRoomTurn,
+    ownerTurn: ownerFileTurn,
     resolveCommsCaller: (header: string | string[] | undefined) => callers.resolve(header),
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
 });
@@ -64,6 +109,11 @@ async function post(route: "taskState" | "showImage", token: [string, string] | 
 }
 
 const artifactsOf = (threadId: string) => packets.get(threadId)!.artifacts.map((artifact) => artifact.ref);
+const live = (botId: string, threadId: string, turn: Partial<LiveTurn> = {}) =>
+  turns.start(`turn-${threadId}`, { botId, threadId, owner: "user", depth: 0, typed: true, ...turn });
+const record = (botId: string, threadId: string, refs: string[]) =>
+  post("taskState", [botId, threadId], { fromBotId: botId, fromThreadId: threadId, artifacts: refs.map((ref) => ({ ref, label: "x" })) });
+const show = (botId: string, threadId: string, path: string) => post("showImage", [botId, threadId], { fromBotId: botId, fromThreadId: threadId, path });
 
 describe("file scope follows the turn the token belongs to", () => {
   it("a read-only turn's token can't record an outside file on another chat's task", async () => {
@@ -78,14 +128,72 @@ describe("file scope follows the turn the token belongs to", () => {
     expect(result.error).toContain("does not belong to sender");
   });
 
-  it("the chat's own working turn still records any local file", async () => {
-    const result = await post("taskState", ["bot-b", "chat-b"], { fromBotId: "bot-b", fromThreadId: "chat-b", artifacts: [{ ref: outside, label: "x" }] });
-    expect(result.status).toBe(200);
+  it("the owner's own typed turn records and shows any local file", async () => {
+    live("bot-b", "chat-b");
+    expect((await record("bot-b", "chat-b", [outside])).status).toBe(200);
     expect(artifactsOf("chat-b")).toEqual([realpathSync(outside)]);
+    expect((await show("bot-b", "chat-b", picture)).status).toBe(201);
   });
 
   it("the boot token can still write for a named chat", async () => {
     const result = await post("taskState", null, { fromBotId: "bot-b", fromThreadId: "chat-b", artifacts: [{ ref: outside, label: "x" }] });
     expect(result.status).toBe(200);
+  });
+});
+
+describe("only the owner's own 1:1 turn reads outside the bot's folders", () => {
+  it("a joined-room guest who may make bots work, on its own token, gets folder-only pictures and artifacts", async () => {
+    live("bot-j", "chat-j");
+    expect((await show("bot-j", "chat-j", picture)).status).toBe(403);
+    expect((await show("bot-j", "chat-j", insidePicture)).status).toBe(201);
+    expect((await record("bot-j", "chat-j", [outside, inside])).status).toBe(200);
+    expect(artifactsOf("chat-j")).toEqual([realpathSync(inside)]);
+  });
+
+  it("a hosted room teammate's working turn gets folder-only pictures and artifacts", async () => {
+    live("bot-h", room.threadId, { owner: "room", typed: undefined });
+    expect((await show("bot-h", room.threadId, picture)).status).toBe(403);
+    expect((await show("bot-h", room.threadId, insidePicture)).status).toBe(201);
+    expect((await record("bot-h", room.threadId, [outside, inside])).status).toBe(200);
+    expect(artifactsOf(room.threadId)).toEqual([realpathSync(inside)]);
+  });
+
+  it("a peer's ask, running in the owner's 1:1 on that chat's token, records only task-folder artifacts", async () => {
+    live("bot-b", "chat-b", { owner: "peer", depth: 1, typed: false });
+    expect((await record("bot-b", "chat-b", [outside, inside])).status).toBe(200);
+    expect(artifactsOf("chat-b")).toEqual([realpathSync(inside)]);
+    expect((await show("bot-b", "chat-b", picture)).status).toBe(403);
+  });
+
+  it.each([
+    ["a routine, webhook, wake or card continuation", { typed: false }],
+    ["another bot's turn", { botId: "bot-j" }],
+  ])("%s in the owner's 1:1 gets folder-only", async (_, turn) => {
+    live("bot-b", "chat-b", turn);
+    expect((await show("bot-b", "chat-b", picture)).status).toBe(403);
+    expect((await record("bot-b", "chat-b", [outside])).status).toBe(200);
+    expect(artifactsOf("chat-b")).toEqual([]);
+  });
+
+  it("an owner chat's token after its turn ended gets folder-only", async () => {
+    live("bot-b", "chat-b");
+    turns.settle("turn-chat-b");
+    expect((await show("bot-b", "chat-b", picture)).status).toBe(403);
+    expect((await record("bot-b", "chat-b", [outside])).status).toBe(200);
+    expect(artifactsOf("chat-b")).toEqual([]);
+  });
+
+  it("a read-only joined-room turn is still refused task updates and kept to its folders for pictures", async () => {
+    live("bot-a", "chat-a");
+    expect((await record("bot-a", "chat-a", [inside])).status).toBe(403);
+    expect((await show("bot-a", "chat-a", picture)).status).toBe(403);
+    expect((await show("bot-a", "chat-a", insidePicture)).status).toBe(201);
+  });
+
+  it("opens an unrestricted file scope only through owner-turn.ts", () => {
+    const opened = readdirSync(import.meta.dirname, { recursive: true, encoding: "utf8" })
+      .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts") && file !== "owner-turn.ts")
+      .filter((file) => readFileSync(join(import.meta.dirname, file), "utf8").split("\n").some((line) => /kind:\s*"any"/.test(line) && !line.includes("type FileScope =")));
+    expect(opened, 'pick a file scope with fileScope(deps.ownerTurn(botId, threadId), roots) from owner-turn.ts, never a literal { kind: "any" }').toEqual([]);
   });
 });

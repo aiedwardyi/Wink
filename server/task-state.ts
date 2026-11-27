@@ -576,10 +576,12 @@ const NETWORK_PATH = /^[\\/]{2}/;
 
 function groundedTaskArtifact(cwd: string, ref: string, scope: FileScope): string | null {
   // a share can block the event loop, so refuse before any fs call
-  if (NETWORK_PATH.test(ref)) return null;
+  const path = resolve(cwd, ref);
+  if (NETWORK_PATH.test(ref) || NETWORK_PATH.test(path)) return null;
   try {
-    const candidate = realpathSync(resolve(cwd, ref));
-    return !NETWORK_PATH.test(candidate) && inScope(scope, realpathSync.native(candidate)) && statSync(candidate).isFile() ? candidate : null;
+    const candidate = realpathSync(path);
+    const real = realpathSync.native(candidate);
+    return !NETWORK_PATH.test(candidate) && !NETWORK_PATH.test(real) && inScope(scope, real) && statSync(candidate).isFile() ? candidate : null;
   } catch {
     return null;
   }

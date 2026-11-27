@@ -19,7 +19,7 @@ function harness(readOnly: boolean) {
     store: { bot: (id: string) => bots[id], dmGroup: () => undefined },
     connectorThread: (botId: string, threadId: string) => (bots[botId]?.threadId === threadId ? {} : undefined),
     botOutputRoots: () => [],
-    readOnlyTurn: () => readOnly,
+    readOnlyTurn: () => readOnly, ownerTurn: () => false,
     askBotAndWait,
     routines,
     MAX_COMMS_DEPTH: 1,

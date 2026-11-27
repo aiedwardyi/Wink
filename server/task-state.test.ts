@@ -37,6 +37,11 @@ import {
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket } from "./task-state-fold.ts";
 import { taskAskSchema, type TaskAsk } from "./task-asks.ts";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, realpathSync: Object.assign(vi.fn(actual.realpathSync), { native: vi.fn(actual.realpathSync.native) }), statSync: vi.fn(actual.statSync) };
+});
+
 const packet = (overrides: Partial<TaskResumePacket> = {}): TaskResumePacket => ({
   v: 1,
   threadId: "thread-1",
@@ -610,6 +615,16 @@ describe("task state clipping", () => {
     const { kept, dropped } = groundTaskArtifacts(refs.map((ref) => ({ ref, label: "L" })), cwd, { kind: "roots", roots: [cwd] });
     expect(kept).toEqual([{ ref: realpathSync(join(cwd, "brief.md")), label: "L" }]);
     expect(dropped).toEqual(refs.slice(1));
+  });
+
+  it.runIf(process.platform === "win32").each([
+    ["scoped", { kind: "roots", roots: ["\\\\server\\share\\project"] }],
+    ["unscoped", { kind: "any" }],
+  ] as const)("drops a relative artifact under a network task folder before touching the filesystem (%s)", (_, scope) => {
+    const calls = [realpathSync, realpathSync.native, statSync].map((fn) => vi.mocked(fn));
+    calls.forEach((fn) => fn.mockClear());
+    expect(groundTaskArtifacts([{ ref: "brief.md", label: "L" }], "\\\\server\\share\\project", scope).dropped).toEqual(["brief.md"]);
+    calls.forEach((fn) => expect(fn).not.toHaveBeenCalled());
   });
 
   it.runIf(process.platform === "win32")("scopes a folder given by its Windows short name", (context) => {

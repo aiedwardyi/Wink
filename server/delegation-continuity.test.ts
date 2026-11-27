@@ -44,7 +44,7 @@ async function replay(messages = store.activePath(bot.threadId)) {
 
 function routes(askBotAndWait?: Parameters<typeof createInternalRoutes>[0]["askBotAndWait"]) {
   const deps: Partial<Parameters<typeof createInternalRoutes>[0]> = {
-    store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1, delegationWatch: new Map(), askBotAndWait, readOnlyTurn: () => false,
+    store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1, delegationWatch: new Map(), askBotAndWait, readOnlyTurn: () => false, ownerTurn: () => false,
     connectorThread: (botId, threadId) => store.conversationForBot(botId, threadId),
   };
   // SAFETY: these routes use only the dependencies supplied above.

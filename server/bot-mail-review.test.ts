@@ -170,7 +170,7 @@ function response() {
 }
 
 function routes(askBotAndWait = vi.fn(), resolveCommsCaller?: Parameters<typeof createInternalRoutes>[0]["resolveCommsCaller"]) {
-  return createInternalRoutes({ readOnlyTurn: () => false, store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
+  return createInternalRoutes({ readOnlyTurn: () => false, ownerTurn: () => false, store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
     MAX_WORKSPACE_BOTS: 100, checkedMemberIds: (memberIds: string[]) => ({ ok: true, memberIds }),
     checkedGroupResponder: () => ({ kind: "everyone" }),
     createdBotSelection: (chief: BotRecord["modelSelection"]) => ({ ok: true, selection: { ...chief } }),
