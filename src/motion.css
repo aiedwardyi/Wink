@@ -26,7 +26,6 @@
   --animate-panel-slide: panel-slide var(--motion-large) var(--ease-standard);
   --animate-pop-in: pop-in var(--motion-moderate) var(--ease-entrance);
   --animate-fade-in: fade-in var(--motion-moderate) var(--ease-entrance);
-  --animate-step-in: step-in var(--motion-moderate) var(--ease-entrance);
   --animate-tip-in: tip-in var(--motion-fast) var(--ease-entrance);
 }
 
@@ -48,10 +47,6 @@
 }
 @keyframes fade-in {
   from { opacity: 0; }
-}
-@keyframes step-in {
-  from { transform: translateY(4px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
 }
 @keyframes tip-in {
   from { opacity: 0; }

@@ -164,8 +164,8 @@ export function visibleNotificationThread(
 }
 
 /** A reply pulled from another PC is history, not a fresh answer. */
-export function autoSpeaks(frame: { imported?: boolean; message?: { role?: string; text?: string; summarized?: boolean; step?: boolean } }): boolean {
-  return !frame.imported && !frame.message?.step && Boolean(frame.message?.text?.trim() && isShownMessage(frame.message));
+export function autoSpeaks(frame: { imported?: boolean; message?: { role?: string; text?: string; summarized?: boolean } }): boolean {
+  return !frame.imported && Boolean(frame.message?.text?.trim() && isShownMessage(frame.message));
 }
 
 /** A conversation on an unfocused or hidden window is not being read, even

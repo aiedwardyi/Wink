@@ -194,8 +194,6 @@ export interface Message {
   summarized?: boolean;
   /** Hidden: a later text of its turn says the same, so replay skips it. */
   restated?: true;
-  /** Mid-turn progress line folded under Steps once the turn settles. */
-  step?: true;
   /** The reply of a new bot's offer turn that carries the Import Memory prompt; the provider buttons show only here. */
   importOffer?: true;
   /** Bot replies: the engine driver kind that wrote it; older rows have none. */

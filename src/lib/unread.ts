@@ -30,9 +30,9 @@ export function collapsedUnreadCount(
   );
 }
 
-type CountedMessage = { role?: string; kind?: string; summarized?: boolean; step?: true; at?: number; call?: CallTag; author?: { kind: string } };
+type CountedMessage = { role?: string; kind?: string; summarized?: boolean; at?: number; call?: CallTag; author?: { kind: string } };
 
-const isReply = (message: CountedMessage) => (message.role === "bot" || message.author?.kind === "person") && message.kind === "text" && !message.step && !isVoiceLine(message) && isShownMessage(message);
+const isReply = (message: CountedMessage) => (message.role === "bot" || message.author?.kind === "person") && message.kind === "text" && !isVoiceLine(message) && isShownMessage(message);
 
 /** Shown replies since the chat was last read (since your last message for records without readAt); unread with none still shows 1. */
 export function unreadReplyCount(

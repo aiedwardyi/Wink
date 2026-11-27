@@ -3,19 +3,15 @@
 // Collapsed by default. A run stays open once you open it, and search can
 // force it open so a hit is not stuck behind the fold. A failure shows as a
 // quiet cross beside the summary; the row itself never goes red.
-import { Fragment, memo, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useState } from "react";
 import { Bot, ChevronDown, Check, FileText, Globe, Loader2, Pencil, Search, SquareTerminal, Wrench, X } from "lucide-react";
 import type { Message } from "@/state/store";
-import { classifyServerNotice, describeRun, describeSteps, isCommsNotice, isStepText, describeSearch, localizeServerLine, sameNotices, type LinkedApproval } from "@/lib/activity-runs";
-import { cn } from "@/lib/cn";
+import { classifyServerNotice, describeRun, isCommsNotice, describeSearch, localizeServerLine, sameNotices, type LinkedApproval } from "@/lib/activity-runs";
 import { useI18n, type Translate } from "@/lib/i18n";
-import { revealOnOpen } from "@/lib/reveal-on-open";
 import { isTerminalToolSkin, useSkin } from "@/lib/skins";
 import { APPROVAL_WORD, TERM_STEP_WORD, termBlock, termHeaderArgs, termResultLine, termStepAria, termStepState, termUpdatedLine, termVerb } from "@/lib/terminal-skin";
 import "./ActivityRun.css";
-import { ChatMarkdown } from "./ChatMarkdown";
 import { Fold } from "./Fold";
-import { MessageBoundary } from "./TurnPresence";
 
 function StepStatus({ ok }: { ok: boolean | undefined }) {
   if (ok === undefined) return <Loader2 data-idle-hide size={13} className="shrink-0 animate-spin" />;
@@ -53,33 +49,18 @@ function TermNotice({ text, failed, comms = false }: { text: string; failed: boo
 
 /** One step inside an open run. A running step ticks its elapsed time, then
  * settles in the same row: same key, same element, only the status swaps. */
-export const ActivityStep = memo(function ActivityStep({ message, notices, baseDir, threadId }: { message: Message; notices?: LinkedApproval[]; baseDir?: string | null; threadId?: string }) {
+export const ActivityStep = memo(function ActivityStep({ message, notices }: { message: Message; notices?: LinkedApproval[] }) {
   const { t } = useI18n();
   const terminal = isTerminalToolSkin(useSkin());
-  const stepText = isStepText(message);
   const tool = message.tool;
   const comms = tool ? isCommsNotice(tool.name) : false;
-  const running = !stepText && tool?.ok === undefined && !comms;
+  const running = tool?.ok === undefined && !comms;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(() => setNow(Date.now()), 100);
     return () => clearInterval(timer);
   }, [running]);
-  if (stepText) {
-    const body = message.text ?? "";
-    return (
-      <div data-step-item="" className="relative text-[13.5px] leading-[1.55] text-ink-secondary select-text">
-        <span
-          aria-hidden="true"
-          className="absolute top-[0.6em] -left-[17.5px] size-1.5 rounded-full bg-ink-secondary/45 ring-2 ring-app"
-        />
-        <MessageBoundary fallbackText={body}>
-          <ChatMarkdown text={body} baseDir={baseDir} threadId={threadId} />
-        </MessageBoundary>
-      </div>
-    );
-  }
   if (!tool) return null;
   if (terminal && comms) return <TermNotice text={localizeServerLine(tool.name, t)} failed={false} comms />;
   const notice = classifyServerNotice(tool.name);
@@ -101,7 +82,7 @@ export const ActivityStep = memo(function ActivityStep({ message, notices, baseD
       <span className="ml-auto shrink-0 pl-3 text-[12px] tabular-nums">{elapsed === undefined ? "" : formatDuration(elapsed)}</span>
     </div>
   );
-}, (a, b) => a.message === b.message && a.baseDir === b.baseDir && a.threadId === b.threadId && sameNotices(a.notices, b.notices));
+}, (a, b) => a.message === b.message && sameNotices(a.notices, b.notices));
 
 type ToolDetail = NonNullable<Message["tool"]>["detail"];
 
@@ -157,41 +138,12 @@ export function ActivityRun({
 }) {
   const { t } = useI18n();
   const terminal = isTerminalToolSkin(useSkin());
-  const hasSteps = messages.some(isStepText);
   const failed = messages.some((message) => message.tool?.ok === false);
-  const running = messages.some((message) => message.kind === "activity" && message.tool?.ok === undefined);
+  const running = messages.some((message) => message.tool?.ok === undefined);
   const [open, setOpen] = useState(forceOpen);
-  const bodyRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (forceOpen) setOpen(true);
   }, [forceOpen]);
-  if (hasSteps) {
-    return (
-      <div data-steps-fold="" className="-mb-2.5 flex flex-col">
-        <div className="flex justify-start">
-          <button
-            type="button"
-            onClick={() => setOpen((value) => !value)}
-            aria-expanded={open}
-            title={open ? undefined : t("chat.stepsFoldHint")}
-            className="ml-1 flex items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1 text-[13px] font-medium text-ink-secondary hover:bg-control hover:text-ink focus-visible:bg-control focus-visible:text-ink"
-          >
-            <span>{describeSteps(messages, t)}</span>
-            <ChevronDown size={13} className={cn("shrink-0 text-ink-secondary/80 transition-transform", open && "rotate-180")} />
-          </button>
-        </div>
-        <Fold open={open} onOpened={() => revealOnOpen(bodyRef.current)}>
-          <div
-            ref={bodyRef}
-            data-steps-list=""
-            className="ml-3.5 mt-1 mb-2.5 flex max-w-[min(42rem,calc(100%-1rem))] flex-col gap-2.5 border-l border-hairline/65 pl-3.5 py-0.5"
-          >
-            {children}
-          </div>
-        </Fold>
-      </div>
-    );
-  }
   if (terminal) {
     return (
       <div className="flex flex-col">

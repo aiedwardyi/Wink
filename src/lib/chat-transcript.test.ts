@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { groupActivityRuns } from "./activity-runs";
-import { chatTranscriptRows, messageVisible, windowRowVisible } from "./chat-transcript";
+import { chatTranscriptRows, messageVisible } from "./chat-transcript";
 import { tailWindowStart } from "./transcript-window";
 import type { Message } from "@/state/store";
 
@@ -220,23 +220,5 @@ describe("chatTranscriptRows", () => {
     const result = rows([say("Late.", at(1, 23)), wake, say("Early.", at(2, 1))]);
     expect(result.map((row) => row.visible)).toEqual([true, false, true]);
     expect(result.map((row) => row.newDay)).toEqual([true, false, true]);
-  });
-
-  it("counts a Steps fold once in compact windows so phone peek never slices Steps (n)", () => {
-    const stepText = (body: string): Message => ({ ...say(body), step: true });
-    const messages = [
-      user("Check the nightly invoice sync."),
-      stepText("Pulling worker logs."),
-      step("Read"),
-      stepText("Found the cursor hang."),
-      step("Edit"),
-      stepText("Patched retry cursor."),
-      step("Bash"),
-      stepText("All 14 tests pass."),
-      step("Bash"),
-      say("Fixed and verified."),
-    ];
-    const renders = (index: number) => windowRowVisible(messages, index, { showToolCalls: false, transcript: messages });
-    expect(tailWindowStart(messages.length, 4, renders)).toBe(0);
   });
 });
