@@ -52,8 +52,8 @@ export type CallAudioPort = {
   boop(): void;
   heardShare(): number;
   micLevel(): number;
-  /** The context and the voice's element as the call goes live, for the start stats. */
-  sound?(): { ctx: AudioContextState; paused: boolean };
+  /** The context, the voice's element and the mic's open time as the call goes live, for the start stats. */
+  sound?(): { ctx: AudioContextState; paused: boolean; micMs?: number };
   readonly playing: boolean;
   onIdle: () => void;
   onStart: () => void;
@@ -91,8 +91,8 @@ type Request = { text: string; accounted: boolean; accepted: boolean; nudged: bo
 // `fix` corrects the voice's own last turn, so it skips the quiet gap.
 // `kept` is context it leaves behind when dropped as no longer valid.
 type Held = { text: string; valid?: () => boolean; kept?: string; played?: () => void; cut?: () => void; nudge?: true; fix?: true; update?: string; greet?: true };
-/** When each start step happened, ms from the tap: a call that never spoke shows where it stopped. No speech text. */
-type Start = { setupMs?: number; greet?: "sent" | "dropped"; greetMs?: number; ctx?: AudioContextState; paused?: boolean; noSound?: true; heardMs?: number; answerMs?: number; audioMs?: number; playMs?: number };
+/** When each start step happened, ms from the tap: a call that never spoke shows where it stopped. `micMs` is how long the mic took to open. No speech text. */
+type Start = { setupMs?: number; greet?: "sent" | "dropped"; greetMs?: number; ctx?: AudioContextState; paused?: boolean; micMs?: number; noSound?: true; heardMs?: number; answerMs?: number; audioMs?: number; playMs?: number };
 
 const HANGUL = /[가-힣]/g;
 const LETTER = /\p{L}/gu;

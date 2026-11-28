@@ -1134,7 +1134,7 @@ describe("LiveCall", () => {
 
   it("writes when each start step happened, timed from the tap", async () => {
     let t = 1_000;
-    const audio = { ...fakeAudio(), sound: () => ({ ctx: "running" as const, paused: false }) };
+    const audio = { ...fakeAudio(), sound: () => ({ ctx: "running" as const, paused: false, micMs: 240 }) };
     const { call, engine, posts } = setup({}, audio, () => t);
     call.retune({ voice: "Puck" }, 0.6);
     await call.start();
@@ -1150,7 +1150,7 @@ describe("LiveCall", () => {
     call.end();
     await flush();
     const stats = posts.find((p) => p.path.endsWith("/call/end"))!.body.stats;
-    expect(stats.start).toEqual({ setupMs: 900, greet: "sent", greetMs: 900, ctx: "running", paused: false, answerMs: 1_500, audioMs: 1_500, playMs: 1_500, heardMs: 3_000, volume: 0.6, voiceAsked: "Puck" });
+    expect(stats.start).toEqual({ setupMs: 900, greet: "sent", greetMs: 900, ctx: "running", paused: false, micMs: 240, answerMs: 1_500, audioMs: 1_500, playMs: 1_500, heardMs: 3_000, volume: 0.6, voiceAsked: "Puck" });
   });
 
   it("a start that never got a model turn says the greeting went and nothing came back", async () => {

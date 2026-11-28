@@ -65,6 +65,19 @@ function setup() {
   return { audio: new CallAudio({ ctx, voice: output } as unknown as CallSound), ctx, output, destination, getUserMedia, micTrack, voiceTrack, voice, sources, tones, buffers };
 }
 
+// Chrome on Android lists an earpiece input; opened() names each mic open in order.
+function earpiece(getUserMedia: ReturnType<typeof setup>["getUserMedia"]) {
+  const earTrack = { stop: vi.fn() };
+  const ear = { getTracks: () => [earTrack] };
+  const devices = [{ kind: "audioinput", label: "Speakerphone", deviceId: "s" }, { kind: "audioinput", label: "Headset earpiece", deviceId: "e" }];
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia, enumerateDevices: vi.fn(async () => devices) } });
+  const mic = getUserMedia.getMockImplementation()!;
+  const deviceOf = (constraints?: MediaStreamConstraints) => (constraints?.audio && constraints.audio !== true ? constraints.audio.deviceId : undefined);
+  getUserMedia.mockImplementation(async (constraints) => (deviceOf(constraints) ? ear : mic()));
+  const opened = () => getUserMedia.mock.calls.map(([constraints]) => deviceOf(constraints) ?? "default");
+  return { ear, earTrack, opened };
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("CallAudio", () => {
@@ -109,14 +122,7 @@ describe("CallAudio", () => {
 
   it("opens and closes the earpiece before each default mic, so Chrome on Android keeps the voice on call volume", async () => {
     const { audio, getUserMedia, micTrack, output } = setup();
-    const earTrack = { stop: vi.fn() };
-    const ear = { getTracks: () => [earTrack] };
-    const devices = [{ kind: "audioinput", label: "Speakerphone", deviceId: "s" }, { kind: "audioinput", label: "Headset earpiece", deviceId: "e" }];
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia, enumerateDevices: vi.fn(async () => devices) } });
-    const mic = getUserMedia.getMockImplementation()!;
-    const deviceOf = (constraints?: MediaStreamConstraints) => (constraints?.audio && constraints.audio !== true ? constraints.audio.deviceId : undefined);
-    getUserMedia.mockImplementation(async (constraints) => (deviceOf(constraints) ? ear : mic()));
-    const opened = () => getUserMedia.mock.calls.map(([constraints]) => deviceOf(constraints) ?? "default");
+    const { earTrack, opened } = earpiece(getUserMedia);
     await audio.capture(() => {});
     expect(opened()).toEqual([{ exact: "e" }, "default"]);
     expect(earTrack.stop.mock.invocationCallOrder[0]).toBeLessThan(getUserMedia.mock.invocationCallOrder[1]!);
@@ -126,6 +132,40 @@ describe("CallAudio", () => {
     await audio.heal();
     expect(opened()).toEqual([{ exact: "e" }, "default", { exact: "e" }, "default"]);
     expect(earTrack.stop).toHaveBeenCalledTimes(2);
+    audio.close();
+  });
+
+  it("skips the earpiece while the mic is live, so an answer switch mid-call keeps the route", async () => {
+    const { audio, getUserMedia } = setup();
+    const { opened } = earpiece(getUserMedia);
+    await audio.capture(() => {});
+    audio.handOver();
+    audio.close();
+    await audio.capture(() => {});
+    expect(opened()).toEqual([{ exact: "e" }, "default", "default"]);
+    audio.close();
+  });
+
+  it("opens no default mic when the call ends during the earpiece step", async () => {
+    const { audio, getUserMedia } = setup();
+    const { ear, earTrack, opened } = earpiece(getUserMedia);
+    let grant = () => {};
+    getUserMedia.mockImplementationOnce(() => new Promise((resolve) => { grant = () => resolve(ear); }));
+    const capture = audio.capture(() => {});
+    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalled());
+    audio.close();
+    grant();
+    expect(await capture).toBe(false);
+    expect(opened()).toEqual([{ exact: "e" }]);
+    expect(earTrack.stop).toHaveBeenCalledOnce();
+  });
+
+  it("times the mic open for the start stats", async () => {
+    const { audio } = setup();
+    expect(audio.sound().micMs).toBeUndefined();
+    vi.spyOn(performance, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(1_240);
+    await audio.capture(() => {});
+    expect(audio.sound().micMs).toBe(240);
     audio.close();
   });
 
@@ -425,6 +465,7 @@ describe("CallAudio", () => {
     getUserMedia.mockReturnValueOnce(new Promise((resolve) => { grant = resolve; }));
     micTrack.readyState = "ended";
     const healing = audio.heal();
+    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
     audio.close();
     grant({ getTracks: () => [late], getAudioTracks: () => [late] });
     await expect(healing).resolves.toBe(false);

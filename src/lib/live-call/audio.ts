@@ -15,8 +15,8 @@ const HEAL_MS = 800;
 const EARPIECE = "Headset earpiece";
 
 // Chrome on Android leaves the speakerphone set when a default mic closes, so the next one plays the voice outside call volume (crbug.com/40275979); an earpiece mic opened and closed first clears it.
-async function openMic(): Promise<MediaStream> {
-  const devices = await navigator.mediaDevices.enumerateDevices?.().catch(() => []) ?? [];
+async function openMic(reset: boolean, closed: () => boolean): Promise<MediaStream | null> {
+  const devices = reset ? await navigator.mediaDevices.enumerateDevices?.().catch(() => []) ?? [] : [];
   const earpiece = devices.find((device) => device.kind === "audioinput" && device.label === EARPIECE);
   if (earpiece) {
     try {
@@ -26,6 +26,8 @@ async function openMic(): Promise<MediaStream> {
       // The default mic still opens.
     }
   }
+  // A hang-up during the earpiece step opens no mic at all.
+  if (closed()) return null;
   return navigator.mediaDevices.getUserMedia(MIC);
 }
 
@@ -35,6 +37,7 @@ export class CallAudio {
   private source: MediaStreamAudioSourceNode | null = null;
   private reopening?: Promise<boolean>;
   private closed = false;
+  private micMs?: number;
   private sources = new Set<AudioBufferSourceNode>();
   // Where each queued buffer starts, on the clock and in the turn, so a new speed remakes only what is not yet heard.
   // The stretch holds one turn; a remake touches only that turn's audio, never an earlier turn still queued.
@@ -71,12 +74,16 @@ export class CallAudio {
 
   /** False once the mic is open but the voice waits on a tap: a call answered from a notification, or a slow mic prompt, has no tap left. */
   async capture(onFrame: (pcm: ArrayBuffer) => void): Promise<boolean> {
-    const stream = await openMic();
+    const at = performance.now();
+    // An answer switch keeps the mic on; an earpiece opened beside it would flip the route mid-call.
+    const live = this.stream?.getAudioTracks().some((track) => track.readyState === "live") ?? false;
+    const stream = await openMic(!live, () => this.closed);
+    this.micMs = Math.round(performance.now() - at);
     // A keyless try's mic, granted late, must not stay on beside this one.
     if (this.stream !== stream) for (const track of this.stream?.getTracks() ?? []) track.stop();
     this.stream = stream;
     // The mic now opens beside the call token, so a hang-up or a failed token can land first.
-    if (this.closed) {
+    if (this.closed || !this.stream) {
       this.stopMic();
       return false;
     }
@@ -140,10 +147,10 @@ export class CallAudio {
   private async reopen(): Promise<boolean> {
     for (const track of this.stream?.getTracks() ?? []) track.stop();
     try {
-      const stream = await openMic();
+      const stream = await openMic(true, () => this.closed);
       // A hang-up while the phone granted it must not leave the mic on.
-      if (this.closed) {
-        for (const track of stream.getTracks()) track.stop();
+      if (this.closed || !stream) {
+        for (const track of stream?.getTracks() ?? []) track.stop();
         return false;
       }
       this.listen(stream);
@@ -185,7 +192,7 @@ export class CallAudio {
   }
 
   sound() {
-    return { ctx: this.ctx.state, paused: this.output.paused };
+    return { ctx: this.ctx.state, paused: this.output.paused, micMs: this.micMs };
   }
 
   get playing(): boolean {
