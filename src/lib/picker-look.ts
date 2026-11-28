@@ -28,7 +28,7 @@ export function pickerLook(skin: SkinId): PickerLook {
 export function pickerLookSkin(skin: SkinId, look: PickerLook): SkinId | undefined {
   if (look === "atelier") return skin === "atelier" ? undefined : "atelier";
   if (look === "light") return LIGHT_SKIN_IDS.has(skin) && skin !== "atelier" ? undefined : "wink-day";
-  return HUD_SKIN_IDS.has(skin) ? DEFAULT_SKIN : undefined;
+  return LIGHT_SKIN_IDS.has(skin) ? "wink" : HUD_SKIN_IDS.has(skin) ? DEFAULT_SKIN : undefined;
 }
 
 export function shownPickerLook(choice: PickerLookChoice, skin: SkinId): PickerLook {
