@@ -22,6 +22,7 @@ function worker(hostname, network = () => Promise.reject(new TypeError("Failed t
       listeners[type] = listener;
     },
     registration: {
+      navigationPreload: { enable: async () => {} },
       showNotification: async (title, options) => {
         // As browsers do: a silent alert may not vibrate.
         if (options.silent && options.vibrate) throw new TypeError("silent notifications cannot vibrate");
@@ -30,8 +31,13 @@ function worker(hostname, network = () => Promise.reject(new TypeError("Failed t
     },
     clients: { matchAll: async () => windows, openWindow: async (url) => opened.push(url) },
   };
+  // Cache names this origin holds, an older worker's offline page among them.
+  const names = new Set(["wink-offline-v2"]);
   const caches = {
+    keys: async () => [...names],
+    delete: async (name) => names.delete(name),
     open: async (name) => {
+      names.add(name);
       const store = name === "wink-calls-v1" ? calls : cache;
       return {
         add: async (request) => store.set(request.url, `cached ${request.url}`),
@@ -50,7 +56,7 @@ function worker(hostname, network = () => Promise.reject(new TypeError("Failed t
   }
   const clock = { now: 1_800_000_000_000 };
   runInNewContext(SOURCE, { self, caches, fetch: network, Request, Response, URL, setTimeout, Date: { now: () => clock.now } });
-  return { listeners, cache, calls, shown, opened, now: clock.now, clock };
+  return { listeners, cache, calls, names, shown, opened, now: clock.now, clock };
 }
 
 async function push(listeners, data) {
@@ -80,6 +86,50 @@ function load(listeners, mode) {
     waitUntil: (promise) => waits.push(promise),
   });
   return answer && Promise.all([answer, ...waits]).then(([page]) => page);
+}
+
+/** Runs public/offline.html's scripts online, with the relay's status and the PC's own answer faked. */
+async function offlinePage({ status, pcAnswers, retriedAt = null, statuses = [status] }) {
+  const page = readFileSync(join(ROOT, "public/offline.html"), "utf8");
+  const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+  const elements = new Map();
+  const element = (id) => {
+    if (!elements.has(id)) elements.set(id, { textContent: "", hidden: false, addEventListener() {} });
+    return elements.get(id);
+  };
+  const location = { hostname: RELAY, href: `https://${RELAY}/`, reload: vi.fn() };
+  const asked = [];
+  const fetch = async (url) => {
+    asked.push(url);
+    if (url === "https://relay.wink.test/v1/status/abcdefghijklmnop") {
+      const next = statuses.length > 1 ? statuses.shift() : statuses[0];
+      return { json: async () => next };
+    }
+    if (pcAnswers) return { ok: true };
+    throw new TypeError("Failed to fetch");
+  };
+  const ticks = [];
+  const saved = new Map(retriedAt === null ? [] : [["wink-offline-retry", String(retriedAt)]]);
+  const sessionStorage = { getItem: (key) => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value) };
+  for (const script of scripts) {
+    runInNewContext(script, {
+      URL,
+      Date,
+      location,
+      history: {},
+      fetch,
+      sessionStorage,
+      navigator: { onLine: true, language: "en" },
+      localStorage: { getItem: () => null },
+      document: { documentElement: {}, getElementById: element },
+      window: { addEventListener() {} },
+      setInterval: (tick) => (ticks.push(tick), 0),
+      setTimeout() {},
+    });
+  }
+  await vi.waitFor(() => expect(asked.length).toBeGreaterThan(0));
+  await new Promise((resolve) => setImmediate(resolve));
+  return { location, asked, saved, ticks, detail: element("detail"), panel: element("panel") };
 }
 
 describe("service worker", () => {
@@ -219,6 +269,7 @@ describe("service worker", () => {
         document: { documentElement: {}, getElementById: element },
         window: { addEventListener() {} },
         setInterval() {},
+        setTimeout() {},
       });
     }
     expect(location.href).toBe(`https://${RELAY}/?bot=b1&thread=t-new#top`);
@@ -241,12 +292,59 @@ describe("service worker", () => {
         document: { documentElement: {}, getElementById: () => ({ textContent: "", addEventListener() {} }) },
         window: { addEventListener() {} },
         setInterval() {},
+        setTimeout() {},
       });
     }
     const shown = { url: location.href, focus: async () => {}, postMessage: (data) => serviceWorker.onmessage({ data }) };
     const { listeners, now } = worker(RELAY, undefined, [shown]);
     await click(listeners, "/?bot=b1&thread=t-new");
     expect(location.assign).toHaveBeenCalledExactlyOnceWith(`https://${RELAY}/?bot=b1&thread=t-new&t0=${now}`);
+  });
+
+  it("loads the page again, unseen, when a load failed while the PC was up and the PC answers now", async () => {
+    const shown = await offlinePage({ status: { online: true, since: 1 }, pcAnswers: true });
+    expect(shown.asked).toEqual(["https://relay.wink.test/v1/status/abcdefghijklmnop", "/manifest.json"]);
+    expect(shown.location.reload).toHaveBeenCalledOnce();
+    expect(shown.panel.hidden).toBe(true);
+  });
+
+  it("keeps the certificate hint when the PC is up but does not answer this phone", async () => {
+    const shown = await offlinePage({ status: { online: true, since: 1 }, pcAnswers: false });
+    expect(shown.location.reload).not.toHaveBeenCalled();
+    expect(shown.detail.textContent).toMatch(/^Your PC is online, but this page did not load/);
+    expect(shown.panel.hidden).toBe(false);
+  });
+
+  it("loads again at most once a minute, so a load that keeps failing cannot loop", async () => {
+    const shown = await offlinePage({ status: { online: true, since: 1 }, pcAnswers: true, retriedAt: Date.now() - 5_000 });
+    expect(shown.location.reload).not.toHaveBeenCalled();
+    expect(shown.detail.textContent).toMatch(/^Your PC is online, but this page did not load/);
+    expect(shown.panel.hidden).toBe(false);
+  });
+
+  it("still says the PC is asleep, without loading again, when the relay says it is offline", async () => {
+    const shown = await offlinePage({ status: { online: false }, pcAnswers: false });
+    expect(shown.asked).toEqual(["https://relay.wink.test/v1/status/abcdefghijklmnop"]);
+    expect(shown.location.reload).not.toHaveBeenCalled();
+    expect(shown.detail.textContent).toBe("Your PC is asleep or Wink is closed.");
+    expect(shown.panel.hidden).toBe(false);
+  });
+
+  it("loads the page again, without asking the PC, when it comes back while the page watches", async () => {
+    const shown = await offlinePage({ statuses: [{ online: false }, { online: true }], pcAnswers: false });
+    expect(shown.detail.textContent).toBe("Your PC is asleep or Wink is closed.");
+    shown.ticks[0]();
+    await vi.waitFor(() => expect(shown.location.reload).toHaveBeenCalledOnce());
+    expect(shown.asked).not.toContain("/manifest.json");
+  });
+
+  it("drops an older offline page when a new worker takes over", async () => {
+    const { listeners, names } = worker(RELAY);
+    await install(listeners);
+    let done;
+    listeners.activate({ waitUntil: (promise) => (done = promise) });
+    await done;
+    expect([...names]).toEqual(["wink-offline-v3"]);
   });
 
   it("lets a reachable PC answer the page load itself", async () => {
@@ -272,6 +370,7 @@ describe("service worker", () => {
       document: { documentElement: {}, getElementById: element },
       window: { addEventListener() {} },
       setInterval() {},
+      setTimeout() {},
     });
     expect(element("pick").href).toBe("https://wink.test/?pick=1");
     expect(element("pick").textContent).toBe(text);

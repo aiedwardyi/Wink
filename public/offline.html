@@ -96,7 +96,7 @@
   </head>
   <body>
     <main>
-      <div class="panel">
+      <div class="panel" id="panel">
         <svg viewBox="0 0 256 256" aria-hidden="true">
           <rect x="12" y="12" width="232" height="232" rx="54" fill="#1f2747" />
           <path d="M72 86 L122 128 L72 170" fill="none" stroke="#ff4d9d" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" />
@@ -110,10 +110,14 @@
     </main>
     <script>
       // Shown by sw.js only when a page load could not reach this PC at all.
-      // The relay's public status tells "PC asleep" from "relay down"; when the
-      // PC is online the likely cause is its certificate, which only the
+      // The relay's public status tells "PC asleep" from "relay down". When the
+      // PC is online, the PC itself is asked: one that answers means the load
+      // failed on the way (a phone waking onto its network), so the page loads
+      // again; one that does not points at its certificate, which only the
       // browser can show.
       (() => {
+        const RETRY_KEY = "wink-offline-retry";
+        const RETRY_GAP_MS = 60_000;
         const COPY = {
           en: {
             title: "Cannot reach this PC",
@@ -143,6 +147,11 @@
           lang = saved === "ko" ? "ko" : saved === "system" ? system : "en";
         } catch {}
         const t = (key, time) => COPY[lang][key].replace("{time}", time || "");
+        // Held back until the first check, so a load that works on its second try never shows this page.
+        const panel = document.getElementById("panel");
+        panel.hidden = true;
+        const show = () => (panel.hidden = false);
+        setTimeout(show, 1000);
         document.documentElement.lang = lang;
         document.getElementById("title").textContent = t("title");
         const detail = document.getElementById("detail");
@@ -160,28 +169,63 @@
         const statusUrl = `https://relay.${base}/v1/status/${label}`;
         let down = false;
 
-        async function check() {
+        // Any answer from this PC, even an error page, means its address and certificate work now.
+        async function pcAnswers() {
+          try {
+            await fetch("/manifest.json", { cache: "no-store" });
+            return true;
+          } catch {
+            return false;
+          }
+        }
+
+        // Loads the page again unless this tab already did in the last minute, so a lasting fault cannot loop.
+        function loadAgain() {
+          try {
+            const last = Number(sessionStorage.getItem(RETRY_KEY));
+            if (Date.now() - last < RETRY_GAP_MS) return false;
+            sessionStorage.setItem(RETRY_KEY, String(Date.now()));
+          } catch {
+            return false;
+          }
+          location.reload();
+          return true;
+        }
+
+        async function message() {
           if (!navigator.onLine) {
             down = true;
-            detail.textContent = t("phoneOffline");
-            return;
+            return t("phoneOffline");
           }
+          let status;
           try {
             const res = await fetch(statusUrl, { cache: "no-store", credentials: "omit" });
-            const status = await res.json();
-            if (status.online) {
-              // Came back while we watched: try the page again once.
-              if (down) location.reload();
-              detail.textContent = t("online");
-              return;
-            }
-            down = true;
-            const since = typeof status.since === "number" ? new Date(status.since).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) : "";
-            detail.textContent = since ? t("asleepSince", since) : t("asleep");
+            status = await res.json();
           } catch {
             down = true;
-            detail.textContent = t("relayDown");
+            return t("relayDown");
           }
+          if (status.online) {
+            // Came back while we watched: try the page again once.
+            if (down) {
+              location.reload();
+              return null;
+            }
+            // Set first, so a probe that stalls past the panel's hold still shows the hint.
+            detail.textContent = t("online");
+            if ((await pcAnswers()) && loadAgain()) return null;
+            return t("online");
+          }
+          down = true;
+          const since = typeof status.since === "number" ? new Date(status.since).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) : "";
+          return since ? t("asleepSince", since) : t("asleep");
+        }
+
+        async function check() {
+          const text = await message();
+          if (text === null) return;
+          detail.textContent = text;
+          show();
         }
 
         void check();
