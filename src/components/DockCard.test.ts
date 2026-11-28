@@ -105,6 +105,19 @@ it("glides off the screen on the chat pages' spring before a swipe closes it, an
   expect(dock()!.hasAttribute("data-sheet-moving")).toBe(false);
 });
 
+it("dismisses the card that was swiped when the next one takes its place mid-glide, and ignores a touch meanwhile", async () => {
+  screen(true);
+  const first = vi.fn();
+  const next = vi.fn();
+  await render(true, { id: "a", onDismiss: first });
+  await pull(dock()!, 200);
+  await render(true, { id: "b", onDismiss: next });
+  await pull(dock()!, 200, 200, true);
+  expect(dock()!.style.translate).toBe("");
+  await vi.waitFor(() => expect(first).toHaveBeenCalledTimes(1));
+  expect(next).not.toHaveBeenCalled();
+});
+
 it("catches a spring back where it is when the finger comes down again", async () => {
   screen(true);
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(300);

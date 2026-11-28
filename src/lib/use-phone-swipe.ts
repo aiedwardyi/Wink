@@ -490,14 +490,16 @@ export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boo
         spring(0, clear);
         return;
       }
-      // like a chat page a swipe commits, the sheet keeps going off the screen before it closes
+      // like a chat page a swipe commits, the sheet keeps going off the screen before it closes;
+      // the close is the one of the card swiped, though another may take its place meanwhile
+      const shut = latest.current;
       leaving = true;
       const pulled = done.lastY - done.y;
       const at = up ? Math.min(0, pulled) : Math.max(0, pulled);
       const rect = sheet.getBoundingClientRect();
       spring(up ? at - rect.bottom : at + window.innerHeight - rect.top, () => {
         leaving = false;
-        latest.current();
+        shut();
       });
     };
     const onEnd = (e: TouchEvent) => finish(true, e);
