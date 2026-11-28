@@ -275,7 +275,7 @@ describe("composer reply focus", () => {
     expect(document.activeElement).toBe(textarea);
   });
 
-  describe("Reply tap on a phone", () => {
+  describe("Reply pick", () => {
     function Harness({ locked, room }: { locked: boolean; room: boolean }) {
       const draft = useReplyDraft("tap-thread", "tap-draft", transcript);
       const pick = useReplyFocus(draft.selectReply);
@@ -285,9 +285,9 @@ describe("composer reply focus", () => {
         createElement("button", { "data-reply": true, onClick: () => selectReply(replyMessage) }),
         createElement(Composer, { replyTo, locked }));
     }
-    async function phone(locked = false, room = false) {
+    async function mountReply(locked = false, room = false, touch = true) {
       const matchMedia = window.matchMedia.bind(window);
-      vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ ...matchMedia(query), matches: query === "(pointer: coarse)" }));
+      vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ ...matchMedia(query), matches: touch && query === "(pointer: coarse)" }));
       host = document.createElement("div");
       document.body.append(host);
       root = createRoot(host);
@@ -296,19 +296,28 @@ describe("composer reply focus", () => {
     }
 
     it.each([false, true])("opens the keyboard inside the tap itself (team room %s)", async (room) => {
-      const { textarea, tap } = await phone(false, room);
+      const { textarea, tap } = await mountReply(false, room);
       tap();
       expect(document.activeElement).toBe(textarea);
     });
 
+    it.each([false, true])("puts the cursor back in the box when the same message is picked again on desktop (team room %s)", async (room) => {
+      const { textarea, tap } = await mountReply(false, room, false);
+      await act(async () => tap());
+      expect(document.activeElement).toBe(textarea);
+      host!.querySelector<HTMLButtonElement>("[data-reply]")!.focus();
+      await act(async () => tap());
+      expect(document.activeElement).toBe(textarea);
+    });
+
     it("leaves a locked box alone", async () => {
-      const { textarea, tap } = await phone(true);
+      const { textarea, tap } = await mountReply(true);
       tap();
       expect(document.activeElement).not.toBe(textarea);
     });
 
     it("leaves a modal alone", async () => {
-      const { textarea, tap } = await phone();
+      const { textarea, tap } = await mountReply();
       const dialog = document.createElement("div");
       dialog.setAttribute("role", "dialog");
       dialog.setAttribute("aria-modal", "true");
