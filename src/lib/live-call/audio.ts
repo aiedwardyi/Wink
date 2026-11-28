@@ -11,6 +11,23 @@ const PIECE = VOICE_RATE / 5;
 const MIC = { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
 // A phone that wants a tap leaves resume() pending, so the check gives up after this.
 const HEAL_MS = 800;
+// Chrome on Android names its earpiece input this; the label shows once the mic is allowed.
+const EARPIECE = "Headset earpiece";
+
+// Chrome on Android leaves the speakerphone set when a default mic closes, so the next one plays the voice outside call volume (crbug.com/40275979); an earpiece mic opened and closed first clears it.
+async function openMic(): Promise<MediaStream> {
+  const devices = await navigator.mediaDevices.enumerateDevices?.().catch(() => []) ?? [];
+  const earpiece = devices.find((device) => device.kind === "audioinput" && device.label === EARPIECE);
+  if (earpiece) {
+    try {
+      const reset = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: earpiece.deviceId } } });
+      for (const track of reset.getTracks()) track.stop();
+    } catch {
+      // The default mic still opens.
+    }
+  }
+  return navigator.mediaDevices.getUserMedia(MIC);
+}
 
 export class CallAudio {
   private stream: MediaStream | null = null;
@@ -54,7 +71,7 @@ export class CallAudio {
 
   /** False once the mic is open but the voice waits on a tap: a call answered from a notification, or a slow mic prompt, has no tap left. */
   async capture(onFrame: (pcm: ArrayBuffer) => void): Promise<boolean> {
-    const stream = await navigator.mediaDevices.getUserMedia(MIC);
+    const stream = await openMic();
     // A keyless try's mic, granted late, must not stay on beside this one.
     if (this.stream !== stream) for (const track of this.stream?.getTracks() ?? []) track.stop();
     this.stream = stream;
@@ -123,7 +140,7 @@ export class CallAudio {
   private async reopen(): Promise<boolean> {
     for (const track of this.stream?.getTracks() ?? []) track.stop();
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(MIC);
+      const stream = await openMic();
       // A hang-up while the phone granted it must not leave the mic on.
       if (this.closed) {
         for (const track of stream.getTracks()) track.stop();
