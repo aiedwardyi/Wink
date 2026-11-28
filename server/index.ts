@@ -334,7 +334,7 @@ import { recoverHandedMail } from "./mail-index.ts";
 import { bootReads, skipBootReads, startBootReads } from "./boot-reads.ts";
 import { createMailboxReceipts } from "./mailbox-receipts.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
-import { bootPaneWakes, isWakeNote, paneWakeEnabled, PANE_WAKE_PROMPT, PaneWakeScheduler } from "./pane-wake.ts";
+import { isWakeNote, paneWakeChats, paneWakeEnabled, PANE_WAKE_PROMPT, PaneWakeScheduler } from "./pane-wake.ts";
 import { KEEP_GOING_USAGE_FRESH_MS, KeepGoing } from "./keep-going.ts";
 import { LimitWaits } from "./limit-wait.ts";
 import {
@@ -10181,8 +10181,8 @@ startTeamReportOwner({ dir: join(DATA_DIR, "team-report-inbox"), base: () => pho
   ...reportOwnerPost(store, profileSyncSettings.deviceId, (botId, threadId) => paneWake.noteArrived(botId, threadId)), warn: (line) => console.warn(line) });
 // Wake timers die with the process; re-arm teachers whose stored notes are
 // undelivered. Untracked legacy tasks wait for the next send, as before.
-startupTiming.measure("paneWake", () => {
-  for (const { botId, threadId } of bootPaneWakes(store, profileSyncSettings.deviceId)) paneWake.noteArrived(botId, threadId);
+void bootReads().then((rows) => {
+  for (const { botId, threadId } of rows.paneWakes) paneWake.noteArrived(botId, threadId);
 });
 // Saved probes steer automatic picks until the deferred refresh lands.
 rememberAutomaticAvailability(registry.describeSaved());
@@ -10208,6 +10208,7 @@ startupTiming.afterPaint("bootReads", () => startBootReads({
   dataDir: DATA_DIR, now: Date.now(), askThreads: [...quickAskThreads(store).keys()], cutoverAt: migrationCutoverAt(DATA_DIR),
   notices: { migration: `error: ${CONFLICT_NOTICE}`, conflict: [CONFLICT_NOTICE, CONFLICT_NOTICE_V2].map((notice) => `error: ${notice}`) },
   reportThreads: store.bots.map((bot) => bot.threadId),
+  paneWakes: { chats: paneWakeChats(store), deviceId: profileSyncSettings.deviceId },
 }));
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));

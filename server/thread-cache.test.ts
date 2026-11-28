@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import { readThread, replaceThread } from "./message-db.ts";
-import { bootPaneWakes } from "./pane-wake.ts";
+import { paneWakeChats } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 import type { SyncChange } from "./thread-sync-v2.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
 import { removeTestData } from "./testing/test-home.ts";
 
 const selection = () => ({ instanceId: "claude", model: "opus" });
@@ -182,12 +183,13 @@ describe("thread cache", () => {
     const bot = store.botByThread(legacy!)!;
     store.markPaneNotesDelivered(bot.id, bot.threadId, undefined);
     const wake = { botId: bot.id, threadId: bot.threadId };
+    const wakes = () => bootRowsNow([], DATA_DIR, Date.now(), [], { chats: paneWakeChats(store), deviceId: "home" }).paneWakes;
     store.messagesFor(legacy!);
-    expect(bootPaneWakes(store, "home")).toEqual([wake]);
+    expect(wakes()).toEqual([wake]);
     store.messagesFor(b!);
     store.messagesFor(c!);
     expect(store.loaded(legacy!)).toBe(false);
-    expect(bootPaneWakes(store, "home")).toEqual([wake]);
+    expect(wakes()).toEqual([wake]);
     expect(store.loaded(legacy!)).toBe(false);
   });
 
