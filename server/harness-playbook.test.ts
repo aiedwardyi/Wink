@@ -135,6 +135,16 @@ describe("harness playbook", () => {
     expect(await gate.hold("s1", launch("FIX"))).toContain("is a fix card that names no change to undo");
   });
 
+  it.each([
+    ["a read-only title nickname", "FIX-X read-only", "Fix the regression in the header."],
+    ["a Purpose opening on a read-only feature", "ROOM-GUESTS | opus | high | FRESH", "Read-only rooms broke after #2239: guests can edit. Fix it."],
+    ["a Purpose opening on review-only cards", "SPAWN-HOLD | opus | high | FRESH", "Review-only cards are held by the spawn hook. Fix the hold."],
+  ])("holds a fix card with %s and no Undo first", async (_, title, purpose) => {
+    const gate = createPlaybookGate("BODY", () => `# ${title}\n## Purpose\n${purpose}\n## Already built\n- none found (searched: x)\n## Files\n- a.ts\n`);
+    gate.read("s1");
+    expect(await gate.hold("s1", "claude --model x 'Read C:\\cards\\FIX.md and do it.'")).toContain("is a fix card that names no change to undo");
+  });
+
   it("finds a relative card in the spawn's cwd and skips it without one", async () => {
     const cwd = String.raw`D:\wt\site`;
     const gate = createPlaybookGate("BODY", (path) => (path === join(cwd, "CARD.md") ? "# CARD\n## Already built\n" : undefined));
