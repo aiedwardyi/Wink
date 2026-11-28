@@ -240,8 +240,9 @@ describe("install terminal script", () => {
     const lines = terminal.buildInstallScript({ driverKind: "claudeAgent", command: "irm https://claude.ai/install.ps1 | iex", needsNode: false, signInCommand: signIn }, "win32").split("\n");
     expect(lines.join("\n")).not.toMatch(/winget|nodejs/i);
     expect(lines[0]).toBe("$ErrorActionPreference='Stop'");
-    expect(lines[1]).toBe(`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedSignIn("$ErrorActionPreference='Stop'\nirm https://claude.ai/install.ps1 | iex")}`);
-    expect(lines[2]).toMatch(/^if \(\$LASTEXITCODE -ne 0\) \{ Write-Host "[^"]+"; return \}$/);
+    expect(lines[1]).toMatch(/^Write-Host 'Installing /);
+    expect(lines[2]).toBe(`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedSignIn("$ErrorActionPreference='Stop'\nirm https://claude.ai/install.ps1 | iex")}`);
+    expect(lines[3]).toMatch(/^if \(\$LASTEXITCODE -ne 0\) \{ Write-Host "[^"]+"; return \}$/);
     expect(lines.at(-1)).toBe(`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedSignIn(`$env:Path=(Join-Path $HOME '.local/bin')+';'+$env:Path; ${signIn}`)}`);
   });
 
