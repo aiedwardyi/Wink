@@ -583,7 +583,7 @@ describe("task state clipping", () => {
     expect(result.clipped).toEqual(["completed_note (354 > 300)"]);
   });
 
-  it("keeps a file from any folder and drops folders, device paths and missing files", () => {
+  it("drops an artifact outside the task folder and keeps the rest", () => {
     const outsideFile = join(outside, "notes.md");
     const device = "\\\\?\\Z:\\nope\\notes.md";
     const result = submit({
@@ -596,11 +596,8 @@ describe("task state clipping", () => {
       ],
     });
     expect(result).not.toHaveProperty("error");
-    expect(result.kept).toEqual([
-      { ref: realpathSync(join(cwd, "brief.md")), label: "Brief" },
-      { ref: realpathSync(outsideFile), label: "Notes" },
-    ]);
-    expect(result.dropped).toEqual([join(cwd, "repro"), device, join(outside, "gone.md")]);
+    expect(result.kept).toEqual([{ ref: realpathSync(join(cwd, "brief.md")), label: "Brief" }]);
+    expect(result.dropped).toEqual([outsideFile, join(cwd, "repro"), device, join(outside, "gone.md")]);
   });
 
   it("saves a mixed update and reports the clip and the drop in one line", () => {
@@ -612,14 +609,14 @@ describe("task state clipping", () => {
     });
     expect(result).not.toHaveProperty("error");
     expect(result.kept).toHaveLength(1);
-    expect(taskStateNotice(result.clipped, result.dropped)).toBe(
-      `Clipped to fit: plan.1.step (228 > 200), completed_note (354 > 300). Dropped artifacts that are not files: ${missing}.`,
+    expect(taskStateNotice(result.clipped, result.dropped, cwd)).toBe(
+      `Clipped to fit: plan.1.step (228 > 200), completed_note (354 > 300). Dropped artifacts that are not files inside ${cwd}: ${missing}.`,
     );
   });
 
   it("gives a clean save no notice", () => {
     const result = submit({ goal: "Ship", artifacts: [{ ref: "brief.md", label: "Brief" }] });
-    expect(taskStateNotice(result.clipped, result.dropped)).toBe("");
+    expect(taskStateNotice(result.clipped, result.dropped, cwd)).toBe("");
   });
 
   it("clips every length-limited string", () => {
@@ -696,8 +693,8 @@ describe("task state clipping", () => {
     expect(result.clipped).toEqual([]);
     expect(result.kept).toEqual([]);
     expect(result.dropped).toEqual([ref]);
-    expect(taskStateNotice(result.clipped, result.dropped)).toBe(
-      `Dropped artifacts that are not files: ${ref}.`,
+    expect(taskStateNotice(result.clipped, result.dropped, cwd)).toBe(
+      `Dropped artifacts that are not files inside ${cwd}: ${ref}.`,
     );
   });
 

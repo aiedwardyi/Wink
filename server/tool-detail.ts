@@ -69,8 +69,9 @@ function redactPreview(text: string): string {
 }
 
 export function redactToolMessage<T extends Pick<Message, "tool" | "recorded">>(message: T): T {
-  // every row write and sync passes here, so a task-state label is scrubbed as the task packet scrubs it
+  // every row write and sync passes here, so a task-state label or shell output name is scrubbed as the task packet scrubs it
   if (message.recorded) message = { ...message, recorded: message.recorded.map(({ ref, label }) => ({ ref: redactSecretsInText(ref), label: redactSecretsInText(label) })) };
+  if (message.tool?.made) message = { ...message, tool: { ...message.tool, made: message.tool.made.map(redactSecretsInText) } };
   const source = message.tool?.detail;
   if (!source) return message;
   const input = normalize(source.input ?? "");
