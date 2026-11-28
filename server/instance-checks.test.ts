@@ -85,4 +85,17 @@ describe("first-run engine checks", () => {
     await registry.describe({ refresh: true });
     expect(publish).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])("pushes a later check that turns sign-in to %s", async (authenticated) => {
+    let current = !authenticated;
+    const registry = await slowRegistry(async () => ({ state: "available", authenticated: current }));
+    await registry.describe();
+    const publish = vi.fn();
+    const checks = createInstanceChecks(registry, publish);
+    await checks.describe();
+
+    current = authenticated;
+    await registry.describe({ refresh: true });
+    await vi.waitFor(() => expect(publish.mock.lastCall?.[0].find((row: { instanceId: string }) => row.instanceId === "b")?.snapshot.authenticated).toBe(authenticated));
+  });
 });

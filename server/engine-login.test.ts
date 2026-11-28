@@ -172,6 +172,41 @@ describe("EngineLogin", () => {
     expect(manager.submit("added", capture.inputGeneration!, "late")).toBe(false);
   });
 
+  describe("a waiting code sign-in's time limit", () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    async function waitingCode() {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const dir = mkdtempSync(join(tmpdir(), "engine-login-"));
+      dirs.push(dir);
+      const script = join(dir, "phone.cjs");
+      const received = join(dir, "received.txt");
+      writeFileSync(script, `process.stdout.write(${JSON.stringify(REAL_OUTPUT.claudePhone)});
+        process.stdin.once('data', (code) => { require('node:fs').writeFileSync(${JSON.stringify(received)}, code); process.exit(0); });`);
+      const manager = new EngineLogin();
+      managers.push(manager);
+      const capture = await manager.start("claude", `"${process.execPath}" "${script}"`, [], {}, [], { ...ME, scope: "claudeAgent", paste: true });
+      expect(capture.inputGeneration).toBe(manager.generation("claude"));
+      return { manager, capture, received };
+    }
+
+    it("takes a code pasted just before 15 minutes", async () => {
+      const { manager, capture, received } = await waitingCode();
+      await vi.advanceTimersByTimeAsync(15 * 60_000 - 1000);
+      expect(manager.state("claude")).toBe("pending");
+      expect(manager.submit("claude", capture.inputGeneration!, "late-code#state")).toBe(true);
+      await manager.wait("claude");
+      expect(manager.state("claude")).toBe("complete");
+      expect(readFileSync(received, "utf8")).toBe("late-code#state\n");
+    });
+
+    it("ends a sign-in still waiting at 15 minutes", async () => {
+      const { manager } = await waitingCode();
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(manager.state("claude")).toBe("failed");
+    });
+  });
+
   it.each([
     "https://claude.com/cai/oauth/authorize?code=secret",
     "https://claude.com/other?code=true",
