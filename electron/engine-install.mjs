@@ -16,6 +16,9 @@ export function registerEngineInstall(ipcMain, { trusted, server, copy, fetch = 
     const pending = inFlight.get(instanceId);
     if (pending instanceof Promise) return pending;
     if (pending > Date.now()) return "running";
+    // Cleared before resolving, so the row's probe never reads the last window's failure as this one's.
+    const failMarker = marker(instanceId);
+    try { rmSync(failMarker, { force: true }); } catch {}
     // Defer work until the pending promise is stored, including synchronous server failures.
     const result = Promise.resolve().then(async () => {
       let running = false;
@@ -30,8 +33,6 @@ export function registerEngineInstall(ipcMain, { trusted, server, copy, fetch = 
         const install = await response.json();
         if (!install?.command) throw new Error("Unknown engine install");
         try {
-          const failMarker = marker(instanceId);
-          try { rmSync(failMarker, { force: true }); } catch {}
           running = await open(installOnly === true ? { ...install, signInCommand: undefined, failMarker } : { ...install, failMarker });
           if (running) return "running";
         } catch (error) {
