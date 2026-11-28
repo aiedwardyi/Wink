@@ -471,10 +471,10 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             } : undefined;
             // a call line is spoken back and a peer-watched turn owes the person its own tagged line, so only other typed sends get an answer beside them
             const beside = Boolean(quick && gate && !call && !hasPeerWatch(threadId));
-            // "sidekick answer me" only asks for an answer: the helper answers the person's own question waiting above it beside the work, else the bot just reads it
+            // "sidekick answer me" only asks for an answer: the helper answers the person's own question waiting above it beside the work, else the send routes as any other
             const nudge = beside && isNudge(text);
             const waiting = nudge && gate ? claimWaitingQuestion(gate) : undefined;
-            if (quick && gate && !nudge && routesQuick(gate)) {
+            if (quick && gate && !waiting && routesQuick(gate)) {
               const message = store.appendMessage(threadId, { role: "user", kind: "text", text, sendId, quick: { state: "asked" }, call, answersCard, actedAt, sendSeq, sentAfterId });
               markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
               startQuick(quick, bot.id, threadId, message);
