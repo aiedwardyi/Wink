@@ -1,12 +1,21 @@
-import { existsSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openBlankTerminal, openInstallTerminal } from "./terminal-launch.mjs";
 
-const installMarker = (instanceId) => join(tmpdir(), `wink-install-${instanceId}.failed`);
-
-export function registerEngineInstall(ipcMain, { trusted, server, copy, fetch = globalThis.fetch, open = openInstallTerminal, blank = openBlankTerminal, marker = installMarker }) {
+export function registerEngineInstall(ipcMain, { trusted, server, copy, fetch = globalThis.fetch, open = openInstallTerminal, blank = openBlankTerminal, markers = join(tmpdir(), "wink-install") }) {
   const inFlight = new Map();
+  // One marker per launched window ("+" is outside the id charset), so an older window's late failure never marks a newer attempt.
+  const current = new Map();
+  const sweep = (instanceId) => {
+    let names = [];
+    try { names = readdirSync(markers); } catch {}
+    for (const name of names) {
+      const path = join(markers, name);
+      if (name.startsWith(`${instanceId}+`) && path !== current.get(instanceId)) try { rmSync(path, { force: true }); } catch {}
+    }
+  };
   const check = (event, instanceId) => {
     if (!trusted(event)) throw new Error("Untrusted install caller");
     if (typeof instanceId !== "string" || !/^[\w.-]+$/.test(instanceId)) throw new Error("Invalid engine id");
@@ -16,9 +25,10 @@ export function registerEngineInstall(ipcMain, { trusted, server, copy, fetch = 
     const pending = inFlight.get(instanceId);
     if (pending instanceof Promise) return pending;
     if (pending > Date.now()) return "running";
-    // Cleared before resolving, so the row's probe never reads the last window's failure as this one's.
-    const failMarker = marker(instanceId);
-    try { rmSync(failMarker, { force: true }); } catch {}
+    const failMarker = join(markers, `${instanceId}+${randomUUID()}.failed`);
+    current.set(instanceId, failMarker);
+    try { mkdirSync(markers, { recursive: true }); } catch {}
+    sweep(instanceId);
     // Defer work until the pending promise is stored, including synchronous server failures.
     const result = Promise.resolve().then(async () => {
       let running = false;
@@ -52,7 +62,9 @@ export function registerEngineInstall(ipcMain, { trusted, server, copy, fetch = 
   // The install window writes the marker when a step fails; the row's probe asks here.
   ipcMain.handle("engine:install-failed", async (event, instanceId) => {
     check(event, instanceId);
-    const failed = existsSync(marker(instanceId));
+    const marker = current.get(instanceId);
+    const failed = Boolean(marker && existsSync(marker));
+    sweep(instanceId);
     // A failed window offers Try Again, so it must not wait out the repeat-tap window.
     if (failed && !(inFlight.get(instanceId) instanceof Promise)) inFlight.delete(instanceId);
     return failed;

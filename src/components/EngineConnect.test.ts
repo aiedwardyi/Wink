@@ -10,6 +10,10 @@ import { NoEngines } from "./NoEngines";
 import { EngineConnect } from "./EngineConnect";
 import { PRIMARY_BUTTON } from "@/lib/button-style";
 import { landFold, spyReveal } from "./Fold.test-land";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { registerEngineInstall, type InstallHandler } from "../../electron/engine-install.mjs";
 
 let instances: InstanceInfo[];
 let host: HTMLDivElement;
@@ -316,6 +320,44 @@ describe("first engine connection", () => {
     expect(row().textContent).toContain("Finish in the window that opened.");
     await advance(5000);
     expect(row().textContent).toContain("Finish in the window that opened.");
+  });
+
+  it("keeps probing after Open Again when the older install window fails late", async () => {
+    const temp = mkdtempSync(join(tmpdir(), "wink-overlap-"));
+    for (const key of ["TEMP", "TMP", "TMPDIR"]) vi.stubEnv(key, temp);
+    try {
+      const handlers = new Map<string, InstallHandler>();
+      const windows: { failMarker: string }[] = [];
+      registerEngineInstall({ handle: (channel, fn) => { handlers.set(channel, fn); } }, {
+        trusted: () => true, server: () => ({ port: 1 }), copy: vi.fn(), blank: vi.fn(async () => false),
+        fetch: async () => ({ ok: true, json: async () => ({ driverKind: "codex", command: "install" }) }),
+        open: async (spec) => { windows.push(spec); return true; },
+      });
+      Object.assign(window.ogb!, {
+        openEngineInstall: (id: string) => handlers.get("engine:install")!({}, id),
+        engineInstallFailed: (id: string) => handlers.get("engine:install-failed")!({}, id),
+      });
+      let installed = false;
+      fetchMock.mockImplementation(async (url: string) => new Response(JSON.stringify(url === "/api/bots?messages=0" ? { bots: [] } : {
+        instances: instances.map((row) => row.instanceId === "codex" && installed ? { ...row, snapshot: { state: "available", authenticated: false } } : row),
+      })));
+      await connect();
+      const row = () => host.querySelector('[data-engine-connect="codex"]')!;
+      await press(row());
+      await advance(11000);
+      await press(row());
+      expect(windows).toHaveLength(2);
+      writeFileSync(windows[0]!.failMarker, "failed");
+      await advance(5000);
+      expect(row().textContent).toContain("Finish in the window that opened.");
+      expect(existsSync(windows[0]!.failMarker)).toBe(false);
+      installed = true;
+      await advance(5000);
+      expect(row().textContent).toContain("Sign in to Codex");
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(temp, { recursive: true, force: true });
+    }
   });
 
   it("keeps polling after a failed recheck, without losing the commands escape", async () => {

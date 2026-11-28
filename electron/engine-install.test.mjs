@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { EventEmitter } from "node:events";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { BUILT_IN_DRIVERS } from "../server/drivers/builtIn.ts";
 import { createFixtureHome } from "../server/testing/test-home.ts";
@@ -17,7 +17,6 @@ const encodedSignIn = (script) => Buffer.from(script, "utf16le").toString("base6
 function setup(trusted = true, opened = true) {
   const handlers = {};
   const dir = mkdtempSync(join(tmpdir(), "wink-install-marker-"));
-  const marker = (id) => join(dir, `${id}.failed`);
   const contents = { isDestroyed: () => false, getURL: () => "http://localhost:5199/", mainFrame: { url: "http://localhost:5199/" } };
   const event = { sender: trusted ? contents : {}, senderFrame: contents.mainFrame };
   const fetch = vi.fn(async () => ({ ok: true, json: async () => descriptor }));
@@ -27,39 +26,45 @@ function setup(trusted = true, opened = true) {
   const server = vi.fn(() => ({ port: 8799, token: "test-token" }));
   install.registerEngineInstall({ handle: (channel, fn) => { handlers[channel] = fn; } }, {
     trusted: (caller) => trustedTerminalSender(caller, contents, "http://localhost:5199"),
-    server, fetch, copy, open, blank, marker,
+    server, fetch, copy, open, blank, markers: dir,
   });
   expect(Object.keys(handlers)).toEqual(["engine:install", "engine:install-failed"]);
-  return { call: (id, ...rest) => handlers["engine:install"](event, id, ...rest), failed: (id) => handlers["engine:install-failed"](event, id), marker, server, fetch, copy, open, blank };
+  return { call: (id, ...rest) => handlers["engine:install"](event, id, ...rest), failed: (id) => handlers["engine:install-failed"](event, id), marker: () => open.mock.lastCall[0].failMarker, dir, server, fetch, copy, open, blank };
 }
 
 describe("engine install IPC", () => {
-  it("reports a failure marker the install window wrote and clears it before the next launch", async () => {
+  it("reads only the latest window's failure marker and sweeps older ones", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       const d = setup();
-      writeFileSync(d.marker("codex"), "failed");
       expect(await d.call("codex")).toBe("running");
-      expect(d.open).toHaveBeenLastCalledWith({ ...descriptor, failMarker: d.marker("codex") });
-      expect(existsSync(d.marker("codex"))).toBe(false);
+      const first = d.marker();
+      expect(d.open).toHaveBeenLastCalledWith({ ...descriptor, failMarker: first });
+      expect(first.startsWith(join(d.dir, "codex+"))).toBe(true);
       expect(await d.failed("codex")).toBe(false);
-      writeFileSync(d.marker("codex"), "failed");
+      writeFileSync(first, "failed");
       expect(await d.failed("codex")).toBe(true);
       expect(await d.failed("claude")).toBe(false);
+      expect(await d.call("codex")).toBe("running");
+      const second = d.marker();
+      expect(second).not.toBe(first);
+      expect(existsSync(first)).toBe(false);
+      expect(await d.failed("codex")).toBe(false);
       vi.setSystemTime(Date.now() + 10000);
       expect(await d.call("codex")).toBe("running");
+      const third = d.marker();
+      writeFileSync(second, "failed");
       expect(await d.failed("codex")).toBe(false);
-      writeFileSync(d.marker("codex"), "failed");
+      expect(readdirSync(d.dir)).toEqual([]);
+      writeFileSync(third, "failed");
       expect(await d.failed("codex")).toBe(true);
-      expect(await d.call("codex")).toBe("running");
+      expect(readdirSync(d.dir)).toEqual([basename(third)]);
       expect(d.open).toHaveBeenCalledTimes(3);
-      expect(await d.failed("codex")).toBe(false);
-      vi.setSystemTime(Date.now() + 10000);
       let resolveFetch;
       d.fetch.mockImplementationOnce(() => new Promise((resolve) => { resolveFetch = resolve; }));
-      writeFileSync(d.marker("codex"), "failed");
       const retry = d.call("codex");
       expect(await d.failed("codex")).toBe(false);
+      expect(existsSync(third)).toBe(false);
       resolveFetch({ ok: true, json: async () => descriptor });
       expect(await retry).toBe("running");
       await expect(d.failed("../codex")).rejects.toThrow("Invalid engine id");
@@ -152,7 +157,7 @@ describe("engine install IPC", () => {
     const d = setup();
     expect(await d.call("codex", "renderer payload")).toBe("running");
     expect(d.fetch).toHaveBeenCalledWith("http://127.0.0.1:8799/api/instances/codex/install", expect.objectContaining({ redirect: "error", headers: { Authorization: "Bearer test-token" } }));
-    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...descriptor, failMarker: d.marker("codex") });
+    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...descriptor, failMarker: d.marker() });
     expect(JSON.stringify(d.open.mock.calls)).not.toContain("renderer payload");
     expect(d.copy).not.toHaveBeenCalled();
   });
