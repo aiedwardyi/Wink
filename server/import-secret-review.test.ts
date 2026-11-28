@@ -156,7 +156,7 @@ describe("the chat route never echoes a flagged line", () => {
       caller: () => ({ botId: "b1", threadId: "t1" }),
       ownerChat: () => true,
       messages: () => [typed(text)],
-      open: () => true,
+      open: () => () => true,
     });
     return String(JSON.parse(raw).text);
   }

@@ -7,8 +7,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { aboutYouRoutes, aboutYouSources, ABOUT_YOU_MAX_PASTE, declineImport } from "./about-you.ts";
 import { DATA_DIR } from "./config.ts";
 import { importMemoryPins } from "./import-memory-pin.ts";
-import { importMemoryRoute, importMemoryTool, noteSendLocale, type ImportMemoryDeps } from "./memory-import-offer.ts";
+import { importMemoryRoute, importMemoryTool, importTurnGate, noteSendLocale, type ImportMemoryDeps } from "./memory-import-offer.ts";
 import type { Message } from "./store.ts";
+import { TurnRegistry } from "./turn-registry.ts";
 import { en } from "../src/lib/i18n-catalog.ts";
 import { removeTestData } from "./testing/test-home.ts";
 
@@ -17,7 +18,7 @@ const typed = (text: string) => ({ role: "user", kind: "text", text }) as Messag
 const reply = (text: string) => ({ role: "bot", kind: "text", text }) as Message;
 const paste = ["- The user is Dana Park; call her Dana.", "- Speaks Korean and English.", "Source: ChatGPT"].join("\n");
 
-async function call(body: object, chat: Message[], ownerChat = true, open: ImportMemoryDeps["open"] = () => true) {
+async function call(body: object, chat: Message[], ownerChat = true, open: ImportMemoryDeps["open"] = () => () => true) {
   let status = 0;
   let raw = "";
   const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: (text: string) => { raw = text; } } as unknown as ServerResponse;
@@ -69,7 +70,7 @@ describe("import_memory tool for a new chat", () => {
     chat.push(reply("hello"), typed("b"), reply("c"), typed("d"), reply("e"), typed(paste));
     const open = importMemoryTool(chat);
     expect(pins.forTurn("t1", "claude", "s1", open)).toBe(true);
-    expect((await call({}, chat, true, () => open)).text).toContain("Settings > Import Memory still works");
+    expect((await call({}, chat, true, () => (open ? () => true : null))).text).toContain("Settings > Import Memory still works");
     expect(existsSync(join(dir, "MEMORY.md"))).toBe(false);
     expect(pins.forTurn("t1", "claude", undefined, importMemoryTool(chat))).toBe(false);
   });
@@ -114,10 +115,35 @@ describe("import_memory saves through the Settings path", () => {
       let raw = "";
       const res = { writeHead: () => {}, setHeader: () => {}, end: (text: string) => { raw = text; } } as unknown as ServerResponse;
       const done = importMemoryRoute(Object.assign(body, { headers: {} }) as unknown as IncomingMessage, res, {
-        caller: () => ({ botId: "b1", threadId: "t1" }), ownerChat: () => true, messages: () => chat, open: () => open,
+        caller: () => ({ botId: "b1", threadId: "t1" }), ownerChat: () => true, messages: () => chat, open: () => () => open,
       });
       await new Promise((r) => setImmediate(r));
       close();
+      body.push("{}");
+      body.push(null);
+      await done;
+      expect(JSON.parse(raw).text).toContain("Settings > Import Memory still works");
+      expect(aboutYouSources()).toEqual([]);
+    }
+  });
+
+  it("a pending save dies with its own turn, even when the next turn may save", async () => {
+    for (const originMay of [true, false]) {
+      removeTestData(dir);
+      const turns = new TurnRegistry();
+      const turn = (turnId: string, importMemory: boolean) => turns.start(turnId, { botId: "b1", threadId: "t1", owner: "user", depth: 0, importMemory });
+      turn("u1", originMay);
+      const chat = [typed(paste)];
+      const body = new Readable({ read() {} });
+      let raw = "";
+      const res = { writeHead: () => {}, setHeader: () => {}, end: (text: string) => { raw = text; } } as unknown as ServerResponse;
+      const done = importMemoryRoute(Object.assign(body, { headers: {} }) as unknown as IncomingMessage, res, {
+        caller: () => ({ botId: "b1", threadId: "t1" }), ownerChat: () => true, messages: () => chat, open: importTurnGate(turns),
+      });
+      await new Promise((r) => setImmediate(r));
+      turns.settle("u1");
+      turn("u2", true);
+      chat.push(typed("- The user prefers new hiking trails.\nSource: ChatGPT"));
       body.push("{}");
       body.push(null);
       await done;

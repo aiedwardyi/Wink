@@ -7,6 +7,7 @@ import { catalogs, type MessageKey } from "../src/lib/i18n-catalog.ts";
 import { aboutYouFacts, addToAboutYou, day, declineImport, importDeclined } from "./about-you.ts";
 import { json, readBody } from "./http-helpers.ts";
 import type { Message } from "./store.ts";
+import type { TurnRegistry } from "./turn-registry.ts";
 
 export const IMPORT_MEMORY_TOOL = "import_memory";
 // the paste can come a message or two into the chat
@@ -39,8 +40,8 @@ export type ImportMemoryDeps = {
   caller: (header: string | string[] | undefined) => Caller | undefined;
   ownerChat: (caller: Caller) => boolean;
   messages: (threadId: string) => readonly Message[];
-  /** The calling turn is the owner's typed turn the per-turn rule opened; a session can keep the tool listed past it. */
-  open: (caller: Caller) => boolean;
+  /** At entry: the calling turn's own check, or null if the per-turn rule did not open it. A session can keep the tool listed past that turn. */
+  open: (caller: Caller) => (() => boolean) | null;
   now?: () => number;
 };
 
@@ -66,14 +67,25 @@ const RECAP = {
   ko: "그다음 지금 알게 된 내용을 말해 주세요: 저장된 사실 목록에서 가장 구체적인 것 최대 5개를 짧은 글머리표로 (목록이 적으면 더 적게). 저장된 사실 목록에 있는 것만 쓰고, 덧붙이지 마세요. 한국어로, 자연스러운 존댓말로 쓰세요.",
 };
 
+// bound to the turn id seen at entry: a later turn, however eligible, never stands in for a settled one
+export function importTurnGate(turns: Pick<TurnRegistry, "current">): ImportMemoryDeps["open"] {
+  return ({ botId, threadId }) => {
+    const origin = turns.current(threadId);
+    if (origin?.botId !== botId || origin.importMemory !== true) return null;
+    return () => turns.current(threadId)?.turnId === origin.turnId;
+  };
+}
+
 export async function importMemoryRoute(req: IncomingMessage, res: ServerResponse, deps: ImportMemoryDeps): Promise<void> {
   const source = deps.caller(req.headers.authorization);
   if (!source) return json(res, 403, { error: "unknown sender" });
   // a room holds other people's text: only the owner's own chat may write their memory
   if (!deps.ownerChat(source)) return json(res, 403, { error: `${IMPORT_MEMORY_TOOL} works only in the user's own chat with you` });
+  const live = deps.open(source);
+  if (!live) return json(res, 200, { text: CLOSED });
   const body = await readBody(req);
-  // Settings now, not at turn start, and after the body: no await may sit between this check and the write
-  if (!deps.open(source) || !offerOpen()) return json(res, 200, { text: CLOSED });
+  // after the body, with no await before the write: the same turn is still running and Settings has not closed the offer
+  if (!live() || !offerOpen()) return json(res, 200, { text: CLOSED });
   if (body?.decline === true) {
     declineImport();
     return json(res, 200, { text: "Saved: no bot offers this again. Settings > Import Memory still works." });

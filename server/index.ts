@@ -350,7 +350,7 @@ import { createMemorySleep } from "./memory-sleep.ts";
 import { createDreamLive } from "./dream-live.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
 import { importMemoryPins } from "./import-memory-pin.ts";
-import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
+import { importMemoryRoute, importMemoryTool, importTurnGate } from "./memory-import-offer.ts";
 import { goalRoute } from "./goal-route.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { botAsks, createMemoryLookup } from "./memory-lookup.ts";
@@ -8769,7 +8769,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           ownerChat: ({ botId, threadId }) => { const bot = store.bot(botId); return Boolean(bot && ownerChats(bot, notOwnerChats()).includes(threadId)); },
           messages: (threadId) => store.activePath(threadId),
           // the chat's one token outlives its turns: the turn running now must be the one the per-turn rule opened
-          open: ({ botId, threadId }) => { const turn = turnRegistry.current(threadId); return turn?.botId === botId && turn.importMemory === true; },
+          open: importTurnGate(turnRegistry),
         });
         for (const bot of store.bots) void memoryLookup.refresh(bot.id);
         return;
