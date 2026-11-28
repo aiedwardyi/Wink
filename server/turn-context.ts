@@ -955,7 +955,7 @@ export function buildTurnContext(input: TurnContextInput): {
   );
   const record = [durableRecord && (rewound || fresh || recycled || contextCapped || recovering)
     ? durableRecord
-    : asksText, memoryText].filter(Boolean).join("\n");
+    : asksText, resume ? "" : memoryText].filter(Boolean).join("\n");
   if (!replay && !record) return { turnText: text, resume };
   if (!replay) return { turnText: `${record}\n\n${text}`, resume };
   const history = [

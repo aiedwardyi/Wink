@@ -1127,7 +1127,7 @@ describe("context compaction e2e", () => {
     expect(prompt).toContain("tree inspected");
   }, 30_000);
 
-  it("names its plan, shots folder and built list after a fresh session, and keeps them on the next turn", async () => {
+  it("names its plan, shots folder and built list after a fresh session, and adds nothing to the next turn", async () => {
     const send = async (text: string) => {
       expect((await api("POST", `/api/bots/${MARKETING.botId}/messages`, { text })).status).toBe(202);
       await waitFor(async () => (await botById(MARKETING.botId))?.busy === false);
@@ -1150,13 +1150,10 @@ describe("context compaction e2e", () => {
     const next = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
       .map((line) => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(line)))
       .filter((line) => line.pid === dump.pid).at(-1)!;
-    expect(next.text).toContain("and friday?");
-    expect(pinned(next.text)).toEqual(expect.arrayContaining(plans));
-    expect(pinned(next.text)).not.toContain(join(launch, "plan.md和review.txt"));
-    expect(next.text).not.toContain("The conversation so far");
+    expect(next.text).toBe("and friday?");
   }, 60_000);
 
-  it("keeps saved files on an engine switch and the next resumed turn", async () => {
+  it("names saved files on an engine switch and adds nothing to the next resumed turn", async () => {
     const send = async (text: string) => {
       expect((await api("POST", `/api/bots/${ENGINE_SWITCH.botId}/messages`, { text })).status).toBe(202);
       await waitFor(async () => (await botById(ENGINE_SWITCH.botId))?.busy === false);
@@ -1172,12 +1169,11 @@ describe("context compaction e2e", () => {
     const next = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
       .map((line) => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(line)))
       .filter((line) => line.pid === dump.pid).at(-1)!;
-    expect(next.text).toContain("what should I do next?");
-    expect(next.text).not.toContain("The conversation so far");
-    expect([fresh, next.text].map((prompt) => prompt.includes("real-shots 1 (cover.png)"))).toEqual([true, true]);
+    expect(fresh).toContain("real-shots 1 (cover.png)");
+    expect(next.text).toBe("what should I do next?");
   }, 30_000);
 
-  it("keeps saved files on an engine switch after selecting a branch, and the next turn", async () => {
+  it("names saved files on an engine switch after selecting a branch, and adds nothing to the next turn", async () => {
     const send = async (text: string) => {
       expect((await api("POST", `/api/bots/${ENGINE_SWITCH_BRANCH.botId}/messages`, { text })).status).toBe(202);
       await waitFor(async () => (await botById(ENGINE_SWITCH_BRANCH.botId))?.busy === false);
@@ -1193,9 +1189,8 @@ describe("context compaction e2e", () => {
     const next = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
       .map((line) => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(line)))
       .filter((line) => line.pid === dump.pid).at(-1)!;
-    expect(next.text).toContain("what should I do next?");
-    expect(next.text).not.toContain("The conversation so far");
-    expect([fresh, next.text].map((prompt) => prompt.includes("real-shots 1 (cover.png)"))).toEqual([true, true]);
+    expect(fresh).toContain("real-shots 1 (cover.png)");
+    expect(next.text).toBe("what should I do next?");
   }, 30_000);
 
   it("still --resumes Stop recovery on an uncompacted fat Claude soak", async () => {

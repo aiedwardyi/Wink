@@ -1345,14 +1345,14 @@ describe("fresh-session memory block", () => {
     }, cwd)).toEqual([join(home, "brief.md"), join(cwd, "paste", "03-thursday.md"), join(home, "launch", "order.md"), join(home, "RUNNER~1", "a.md")]);
   });
 
-  it("rides every turn it is given and names no chat search tool", () => {
+  it("rides only a turn that starts a provider session and names no chat search tool", () => {
     const memoryText = memoryBlock({ files: [], plans: [plan] });
     const transcript = [{ role: "user" as const, text: "plan it" }, { role: "assistant" as const, text: "done" }];
     const recycled = buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: true, recycleReason: "session-fat", replaysNatively: false, memoryText });
     expect(recycled.turnText).toContain("03-thursday.md");
     expect(recycled.turnText).not.toContain("search_my_chats");
     const resumed = buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: false, replaysNatively: false, memoryText });
-    expect(resumed.turnText).toBe(`${memoryText}\n\npost it`);
+    expect(resumed.turnText).toBe("post it");
     expect(buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: false, replaysNatively: false }).turnText).toBe("post it");
   });
 

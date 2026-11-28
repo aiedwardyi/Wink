@@ -1365,7 +1365,6 @@ const wireTask = ({
   lastInstanceId: _lastInstanceId,
   lastModel: _lastModel,
   providerSessionBoundId: _providerSessionBoundId,
-  hasFreshProviderSession: _hasFreshProviderSession,
   resumeSeed: _resumeSeed,
   paneNotesDeliveredId: _paneNotesDeliveredId,
   reactionsDelivered: _reactionsDelivered,
@@ -3050,7 +3049,7 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
   return store.taskPacket(threadId);
 }
 
-/** Saved paths, never file contents: what a chat that had a fresh provider session gets each turn. */
+/** Saved paths, never file contents, for a new provider session's first turn. */
 function freshSessionMemory(botId: string, threadId: string, record: TaskResumePacket | null, messages: readonly Message[]): string {
   return chatMemory({
     record,
@@ -5864,7 +5863,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const hasPriorUserTurn = activeMessages.some(
     (message) => message.role === "user" && message.kind === "text" && Boolean(message.text?.trim()) && !skipTranscript.has(message.id),
   );
-  const engineChanged =
+  const fresh =
+    !rewound &&
     engineIsFresh({
       instanceId,
       model,
@@ -5876,8 +5876,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       transcript,
       hasPriorUserTurn,
     });
-  // a rewind replays the branch itself, but a new engine still needs the saved paths
-  const fresh = !rewound && engineChanged;
   const lastTurnToolRounds = countLastTurnToolRounds(activeMessages, skipTranscript, task.providerSessionBoundId);
   const sessionToolRounds = countSessionToolRounds(
     activeMessages,
@@ -6011,10 +6009,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...askNotes, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
-  // from the first fresh provider session on, every turn keeps the bot's saved paths
-  const sessionTask = store.taskByThread(bot.id, threadId);
-  const restarted = commsDepth === 0 && (engineChanged || recycled || latestCompactionId !== null || sessionTask?.providerSessionBoundId || sessionTask?.hasFreshProviderSession);
-  const memoryText = restarted ? freshSessionMemory(bot.id, threadId, taskRecord, activeMessages) : "";
+  // a room turn answers everyone there, so the owner's saved paths stay out
+  const memoryText = commsDepth === 0 && !notOwnerChats().has(threadId) ? freshSessionMemory(bot.id, threadId, taskRecord, activeMessages) : "";
   const elsewhereAsks = commsDepth === 0 ? store.otherChatAsks(bot.id, threadId, notOwnerChats()) : [];
   // the durable record holds only this chat's asks
   const recordText = [durableTaskRecordText, asksNudge(undefined, Date.now(), text, elsewhereAsks)].filter(Boolean).join("\n") || undefined;
@@ -6059,7 +6055,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     taskRecordText: recordText,
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
-    memoryText: memoryText || (commsDepth === 0 ? freshSessionMemory(bot.id, threadId, taskRecord, activeMessages) : ""),
+    memoryText,
   }).turnText;
 
   const persona = [
@@ -6673,7 +6669,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // dispatched: the rewind is spent
       if (rewound) store.patchBot(bot.id, { rewound: false });
       // and this engine now owns the thread's most recent turn
-      store.markTaskDispatched(bot.id, threadId, instanceId, model, commsDepth === 0 && engineChanged);
+      store.markTaskDispatched(bot.id, threadId, instanceId, model);
       // a turn can settle before dispatch returns, and a poller started
       // after its own turn.completed would never be torn down — it would
       // keep polling the box forever, carrying dead per-turn state. busy

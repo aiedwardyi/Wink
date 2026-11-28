@@ -1096,17 +1096,6 @@ describe("Store", () => {
     expect(task?.lastModel).toBe("gpt-5.2");
   });
 
-  it("remembers a fresh provider session across later turns and a restart", () => {
-    const store = new Store(selection);
-    const bot = store.createBot();
-    store.markTaskDispatched(bot.id, bot.threadId, "codex", "gpt-5.2");
-    expect(store.taskByThread(bot.id, bot.threadId)?.hasFreshProviderSession).toBeUndefined();
-    store.markTaskDispatched(bot.id, bot.threadId, "codex", "gpt-5.2", true);
-    store.markTaskDispatched(bot.id, bot.threadId, "codex", "gpt-5.2");
-    store.flushSaves();
-    expect(new Store(selection).taskByThread(bot.id, bot.threadId)?.hasFreshProviderSession).toBe(true);
-  });
-
   it("a pane note a wake delivered stays delivered after a restart", () => {
     const store = new Store(selection);
     const bot = store.createBot();

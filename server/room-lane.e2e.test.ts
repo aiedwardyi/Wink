@@ -267,6 +267,25 @@ describe("room lane", () => {
     await settled(bot.id);
   }, 90_000);
 
+  it("gives a hosted room's turn none of the owner's saved paths", async () => {
+    const bot = await newBot("claude", "Fay");
+    const built = join(home, "fay-built.md");
+    writeFileSync(built, "- launch posts\n");
+    const memory = join(home, ".orbit", "workspaces", bot.id, "MEMORY.md");
+    mkdirSync(dirname(memory), { recursive: true });
+    writeFileSync(memory, `Built list = ${built}, one line per feature.\n`);
+    await say(bot.id, "first");
+    await poll(async () => replies((await botOf(bot.id)).messages)).toBe(1);
+    await settled(bot.id);
+    const room = await newRoom("Saved paths room", [bot.id], true);
+    await post(room.id, "@Fay hosted-turn-nine hello");
+    await poll(async () => replies((await groupOf(room.id)).messages)).toBe(1);
+    await settled(bot.id, room.id);
+    const [turn] = sent("hosted-turn-nine");
+    expect(turn!.text).not.toContain("[Wink memory");
+    expect(turn!.text).not.toContain(built);
+  }, 60_000);
+
   it("dispatches a busy bot's room once, and drains a second room when the lane frees", async () => {
     const bot = await newBot("claude", "Eve");
     const rooms = { x6: await newRoom("First room", [bot.id], true), y6: await newRoom("Second room", [bot.id], true) };
