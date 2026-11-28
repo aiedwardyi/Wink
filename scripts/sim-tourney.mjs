@@ -1,12 +1,13 @@
 // Offline recall tourney: spec -> one worktree per arm at a frozen sha -> scripts/recall-bench.ts -> scripts/sim-rule.mjs ->
 // result.json, and on held-out a pick-ledger entry. The scorer, sets and rule run from this checkout; an arm may only change app code.
-// node scripts/sim-tourney.mjs <spec.json> --sets <dir> --ledger <ledger.mjs> [--on tuning|held-out] [--out <dir>] [--repo <dir>] [--keep]
+// node scripts/sim-tourney.mjs <spec.json> --sets <dir> --ledger <ledger.mjs> [--on tuning|held-out] [--manifest scripts/recall-sets.*.json] [--out <dir>] [--repo <dir>] [--keep]
 // Each set sits alone in its own folder; arm seats get only the tuning folder, and a held-out run must say --on held-out.
-// spec: { name, base, prereg, arms: [{ name, sha } | { name, patch }, ...] }, exactly one arm with sham: true
+// spec: { name, base, prereg, arms: [{ name, sha, guess? } | { name, patch, guess? }, ...] }, exactly one arm with sham: true; guess = expected gain in points, filed before the first score
+// A manifest entry's alsoWin names sets (each in its own folder beside --sets) that every arm is also scored on: a win must be a win on each.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -47,14 +48,28 @@ function dropWorktree(repo, dir) {
   git(repo, "worktree", "remove", "--force", dir);
 }
 
-function score(root, on, sets, out, parity) {
-  const run = spawnSync(process.execPath, ["--experimental-strip-types", join(BENCH, "scripts", "recall-bench.ts"), "--root", root, "--sets", sets, "--set", on, "--out", out, "--parity", String(parity)], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+/** A main-set win stays a win only if the arm also wins on every alsoWin set; arms are in the same order in each round. */
+export function mustAlsoWin(arms, sides) {
+  const names = Object.keys(sides);
+  if (!names.length) return arms;
+  return arms.map((arm, at) => {
+    const also = Object.fromEntries(names.map((name) => [name, sides[name].arms[at].verdict]));
+    const holds = names.every((name) => also[name] === "win");
+    return { ...arm, also, verdict: arm.verdict === "win" && !holds ? "promising" : arm.verdict };
+  });
+}
+
+function score(root, on, sets, out, parity, manifestPath) {
+  const run = spawnSync(process.execPath, ["--experimental-strip-types", join(BENCH, "scripts", "recall-bench.ts"), "--root", root, "--sets", sets, "--set", on, "--out", out, "--parity", String(parity), "--manifest", manifestPath], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
   if (run.status !== 0) refuse(`scorer failed on ${root}`);
   return JSON.parse(readFileSync(out, "utf8"));
 }
 
-export function tourney({ spec, on = "tuning", sets, ledger, out = join(sets, "..", "runs"), repo = BENCH, keep = false, today = new Date().toLocaleDateString("sv-SE") }) {
+export function tourney({ spec, on = "tuning", sets, ledger, manifest: manifestPath = join(BENCH, "scripts", "recall-sets.json"), out = join(sets, "..", "runs"), repo = BENCH, keep = false, today = new Date().toLocaleDateString("sv-SE") }) {
   if (!["held-out", "tuning"].includes(on)) refuse(`--on is tuning or held-out, not ${on}`);
+  manifestPath = resolve(manifestPath);
+  const manifestRel = relative(BENCH, manifestPath).replace(/\\/g, "/");
+  if (!lockedIn([manifestRel]).length || !manifestRel.endsWith(".json")) refuse(`--manifest ${manifestPath} is not a bench sets manifest (scripts/recall-sets.*.json): set hashes must sit where arms cannot change them`);
   const stray = ["held-out", "tuning"].find((other) => other !== on && existsSync(join(sets, `${other}.json`)));
   if (stray) refuse(`${join(sets, `${stray}.json`)} sits in the ${on} folder: each set needs its own folder, and arm seats get only the tuning one`);
   if (!spec.name || !spec.base || !spec.prereg || !Array.isArray(spec.arms) || !spec.arms.length) refuse("spec needs name, base, prereg and arms");
@@ -82,13 +97,19 @@ export function tourney({ spec, on = "tuning", sets, ledger, out = join(sets, ".
   if (!prereg) refuse(`no pre-registration ${spec.prereg} in ${ledgerJson}: file the rule first with node ledger.mjs prereg <file.json>`);
   const newer = filed.find((entry) => entry.supersedes === spec.prereg);
   if (newer) refuse(`pre-registration ${spec.prereg} is superseded by ${newer.id}: name ${newer.id} in the spec`);
-  const manifest = JSON.parse(readFileSync(join(BENCH, "scripts", "recall-sets.json"), "utf8"));
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const pins = { ruleHash, scorerHash: fileHash(join(BENCH, "scripts", "recall-bench.ts")), generatorHash: fileHash(join(BENCH, "scripts", "recall-sets.ts")), tuning: manifest.tuning?.hash, heldOut: manifest["held-out"]?.hash };
   for (const [key, now] of Object.entries(pins)) if (prereg.files?.[key] !== now) refuse(`pre-registration ${spec.prereg} names files.${key} ${prereg.files?.[key]}, but the bench has ${now}: a changed scorer, set generator, set or rule needs a new pre-registration`);
   const filedAt = spawnSync("git", ["-C", BENCH, "rev-parse", "--verify", "--quiet", `${prereg.files.bench}^{commit}`], { encoding: "utf8" }).stdout.trim();
   if (!filedAt) refuse(`pre-registration ${spec.prereg} names bench ${prereg.files.bench}, which is not a commit here: file a new pre-registration at this bench`);
   const drift = lockedIn(armDiff(BENCH, filedAt, "HEAD"));
   if (drift.length) refuse(`pre-registration ${spec.prereg} was filed at bench ${filedAt.slice(0, 9)}; ${drift.join(", ")} changed since: file a new pre-registration`);
+  const alsoWin = manifest[on]?.alsoWin ?? [];
+  for (const name of alsoWin) {
+    if (!manifest[name]?.hash) refuse(`${on} names alsoWin set ${name}, which has no hash in ${manifestRel}`);
+    if (prereg.sides?.[name] !== manifest[name].hash) refuse(`pre-registration ${spec.prereg} names sides.${name} ${prereg.sides?.[name]}, but the bench has ${manifest[name].hash}: a changed set needs a new pre-registration`);
+    if (!existsSync(join(sets, "..", name, `${name}.json`))) refuse(`${on} needs its alsoWin set ${name} in ${join(sets, "..", name)}`);
+  }
 
   const hash = manifest[on]?.hash;
   const usesFile = join(sets, "uses.json");
@@ -127,16 +148,22 @@ export function tourney({ spec, on = "tuning", sets, ledger, out = join(sets, ".
     const set = { name: on, hash, use: on === "held-out" ? used.length + 1 : null, of: USES };
     if (on === "held-out") {
       // spend the use before the first score, so a round that stops partway still counts
-      const start = { run, date: today, on, set, prereg: spec.prereg, started: true, base: { sha: base }, arms: ready.map(({ name, sham, sha, patchHash }) => ({ name, sham: Boolean(sham), sha, patchHash })) };
+      const start = { run, date: today, on, set, prereg: spec.prereg, started: true, base: { sha: base }, arms: ready.map(({ name, sham, sha, patchHash, guess }) => ({ name, sham: Boolean(sham), sha, patchHash, guess })) };
       uses[hash] = [...used, { run, date: today, arms: start.arms }];
       writeFileSync(usesFile, `${JSON.stringify(uses, null, 1)}\n`);
       writeFileSync(join(dir, "start.json"), `${JSON.stringify(start, null, 1)}\n`);
       execFileSync(process.execPath, [resolve(ledger), "tourney", join(dir, "start.json")], { stdio: "inherit" });
     }
-    const baseScore = score(baseRoot, on, sets, join(dir, "base.json"), PARITY);
+    const baseScore = score(baseRoot, on, sets, join(dir, "base.json"), PARITY, manifestPath);
     if (baseScore.parity.mismatches || baseScore.parity.checked < Math.min(PARITY, baseScore.totals.cases)) refuse(`bench parity ${baseScore.parity.checked - baseScore.parity.mismatches}/${baseScore.parity.checked} with the base lookup: the scorer no longer reads the real pick`);
-    const scored = ready.map((arm) => ({ ...arm, score: score(arm.root, on, sets, join(dir, `${arm.name}.json`), 0) }));
-    const round = judge({ base: baseScore.rows, arms: scored.map((arm) => ({ name: arm.name, sham: arm.sham, rows: arm.score.rows })) });
+    const scored = ready.map((arm) => ({ ...arm, score: score(arm.root, on, sets, join(dir, `${arm.name}.json`), 0, manifestPath) }));
+    const main = judge({ base: baseScore.rows, arms: scored.map((arm) => ({ name: arm.name, sham: arm.sham, rows: arm.score.rows })) });
+    const sides = Object.fromEntries(alsoWin.map((name) => {
+      const folder = join(sets, "..", name);
+      const sideBase = score(baseRoot, name, folder, join(dir, `base.${name}.json`), 0, manifestPath);
+      return [name, judge({ base: sideBase.rows, arms: ready.map((arm) => ({ name: arm.name, sham: arm.sham, rows: score(arm.root, name, folder, join(dir, `${arm.name}.${name}.json`), 0, manifestPath).rows })) })];
+    }));
+    const round = { void: main.void, arms: mustAlsoWin(main.arms, sides) };
     const result = {
       run,
       date: today,
@@ -148,7 +175,8 @@ export function tourney({ spec, on = "tuning", sets, ledger, out = join(sets, ".
       rule: RULE,
       base: { sha: base, totals: baseScore.totals, parity: baseScore.parity, lookupMs: baseScore.lookupMs },
       void: round.void,
-      arms: scored.map((arm, at) => ({ name: arm.name, sham: Boolean(arm.sham), sha: arm.sha, patch: arm.patch, diff: arm.diff, totals: arm.score.totals, lookupMs: arm.score.lookupMs, ...round.arms[at] })),
+      ...(alsoWin.length ? { sides: Object.fromEntries(Object.entries(sides).map(([name, side]) => [name, { hash: manifest[name].hash, arms: side.arms.map(({ name: arm, hits, of, b, c, gain, pHolm, verdict }) => ({ name: arm, hits, of, b, c, gain, pHolm, verdict })) }])) } : {}),
+      arms: scored.map((arm, at) => ({ name: arm.name, sham: Boolean(arm.sham), sha: arm.sha, patch: arm.patch, diff: arm.diff, guess: arm.guess, totals: arm.score.totals, lookupMs: arm.score.lookupMs, ...round.arms[at] })),
     };
     writeFileSync(join(dir, "result.json"), `${JSON.stringify(result, null, 1)}\n`);
     if (on === "held-out") execFileSync(process.execPath, [resolve(ledger), "tourney", join(dir, "result.json")], { stdio: "inherit" });
@@ -160,17 +188,17 @@ export function tourney({ spec, on = "tuning", sets, ledger, out = join(sets, ".
 
 const line = (result) => [
   `${result.run} on ${result.on} ${result.set.hash.slice(0, 12)}${result.set.use ? ` (use ${result.set.use}/${result.set.of})` : ""}, base ${result.base.sha.slice(0, 9)} ${result.base.totals.hits}/${result.base.totals.positives}, parity ${result.base.parity.checked - result.base.parity.mismatches}/${result.base.parity.checked}${result.void ? ", VOID: the sham won" : ""}`,
-  ...result.arms.map((arm) => `  ${arm.name}${arm.sham ? " (sham)" : ""} ${arm.sha.slice(0, 9)}: ${arm.hits}/${arm.of} (b ${arm.b}, c ${arm.c}, gain ${(arm.gain * 100).toFixed(1)} pts, p ${arm.p.toPrecision(3)}, Holm ${arm.pHolm.toPrecision(3)}), guards: wrong-scope ${arm.guards.wrongScope}, superseded ${arm.guards.superseded}, must-hold ${arm.guards.mustHold}, new false recall ${arm.guards.falseRecall} (shown on ${arm.totals.falseRecall}/${arm.totals.misses}) -> ${arm.verdict}`),
+  ...result.arms.map((arm) => `  ${arm.name}${arm.sham ? " (sham)" : ""} ${arm.sha.slice(0, 9)}: ${arm.hits}/${arm.of} (b ${arm.b}, c ${arm.c}, gain ${(arm.gain * 100).toFixed(1)} pts${arm.guess === undefined ? "" : ` (guess ${arm.guess})`}, p ${arm.p.toPrecision(3)}, Holm ${arm.pHolm.toPrecision(3)}), guards: wrong-scope ${arm.guards.wrongScope}, superseded ${arm.guards.superseded}, must-hold ${arm.guards.mustHold}, new false recall ${arm.guards.falseRecall} (shown on ${arm.totals.falseRecall}/${arm.totals.misses})${arm.also ? `, also ${Object.entries(arm.also).map(([name, verdict]) => `${name} ${verdict}`).join(", ")}` : ""} -> ${arm.verdict}`),
 ].join("\n");
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { values: opt, positionals: [specFile] } = parseArgs({ allowPositionals: true, options: { on: { type: "string", default: "tuning" }, sets: { type: "string" }, ledger: { type: "string" }, out: { type: "string" }, repo: { type: "string" }, keep: { type: "boolean", default: false } } });
+  const { values: opt, positionals: [specFile] } = parseArgs({ allowPositionals: true, options: { on: { type: "string", default: "tuning" }, sets: { type: "string" }, manifest: { type: "string" }, ledger: { type: "string" }, out: { type: "string" }, repo: { type: "string" }, keep: { type: "boolean", default: false } } });
   try {
-    if (!specFile) refuse("usage: node scripts/sim-tourney.mjs <spec.json> --sets <dir> --ledger <ledger.mjs> [--on tuning|held-out] [--out <dir>] [--repo <dir>] [--keep]");
+    if (!specFile) refuse("usage: node scripts/sim-tourney.mjs <spec.json> --sets <dir> --ledger <ledger.mjs> [--on tuning|held-out] [--manifest scripts/recall-sets.*.json] [--out <dir>] [--repo <dir>] [--keep]");
     const spec = JSON.parse(readFileSync(specFile, "utf8"));
     // a spec's patch paths are relative to the spec
     for (const arm of spec.arms ?? []) if (arm.patch) arm.patch = resolve(dirname(specFile), arm.patch);
-    const { dir, result } = tourney({ spec, on: opt.on, sets: opt.sets ?? refuse("--sets <dir> is required"), ledger: opt.ledger ?? refuse("--ledger <ledger.mjs> is required"), out: opt.out, repo: opt.repo ? resolve(opt.repo) : undefined, keep: opt.keep });
+    const { dir, result } = tourney({ spec, on: opt.on, sets: opt.sets ?? refuse("--sets <dir> is required"), ledger: opt.ledger ?? refuse("--ledger <ledger.mjs> is required"), manifest: opt.manifest, out: opt.out, repo: opt.repo ? resolve(opt.repo) : undefined, keep: opt.keep });
     console.log(line(result));
     console.log(join(dir, "result.json"));
   } catch (error) {

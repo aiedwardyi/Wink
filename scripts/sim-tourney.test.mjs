@@ -1,11 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { armDiff, fileHash, LOCKED, lockedIn } from "./sim-tourney.mjs";
+import { armDiff, fileHash, LOCKED, lockedIn, mustAlsoWin } from "./sim-tourney.mjs";
 
 const TOURNEY = fileURLToPath(new URL("./sim-tourney.mjs", import.meta.url));
 const BENCH = fileURLToPath(new URL("..", import.meta.url));
@@ -193,4 +193,48 @@ describe("pre-registration pins the bench", () => {
       expect(out.stderr).toContain("new pre-registration");
     });
   }
+});
+
+describe("sets manifest and single-judge sets", () => {
+  const REAL = join(BENCH, "scripts", "recall-sets.real-v1.json");
+  const real = JSON.parse(readFileSync(REAL, "utf8"));
+  const spec = (base, arm) => ({ name: "t", base, prereg: "p", arms: [{ name: "sham", sham: true, sha: base }, { name: "fair", sha: arm("server/memory-lookup.ts"), guess: 1 }] });
+  const held = (dir) => {
+    mkdirSync(join(dir, "sets"));
+    writeFileSync(join(dir, "sets", "held-out.json"), "{}");
+    return ["--on", "held-out", "--manifest", REAL];
+  };
+
+  it("refuses a --manifest that is not a locked bench sets file", () => {
+    const { dir, base, arm } = repo();
+    writeFileSync(join(dir, "loose.json"), JSON.stringify(real));
+    const out = run(dir, spec(base, arm), ["--manifest", join(dir, "loose.json")]);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("is not a bench sets manifest");
+  });
+
+  it("pins the set hashes from --manifest, then needs each alsoWin set pinned and present before spending the held-out use", () => {
+    const { dir, base, arm } = repo();
+    const round = spec(base, arm);
+    const extra = held(dir);
+    filed(dir, pins());
+    expect(run(dir, round, extra).stderr).toMatch(/names files\.tuning /);
+    const files = { ...pins(), tuning: real.tuning.hash, heldOut: real["held-out"].hash };
+    filed(dir, files);
+    expect(run(dir, round, extra).stderr).toContain("names sides.held-out-opus undefined");
+    writeFileSync(join(dir, "ledger.json"), JSON.stringify({ bench: { prereg: [{ id: "p", files, sides: { "held-out-opus": real["held-out-opus"].hash, "held-out-sol": real["held-out-sol"].hash } }] } }));
+    const out = run(dir, round, extra);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("needs its alsoWin set held-out-opus");
+    expect(existsSync(join(dir, "sets", "uses.json"))).toBe(false);
+  });
+
+  it("keeps a win only when every alsoWin set is a win too", () => {
+    const arms = [{ name: "sham", verdict: "no gain" }, { name: "a", verdict: "win" }, { name: "b", verdict: "win" }, { name: "c", verdict: "worse" }];
+    const side = (verdicts) => ({ arms: verdicts.map((verdict) => ({ verdict })) });
+    const out = mustAlsoWin(arms, { opus: side(["no gain", "win", "win", "worse"]), sol: side(["no gain", "win", "promising", "no gain"]) });
+    expect(out.map((arm) => [arm.name, arm.verdict])).toEqual([["sham", "no gain"], ["a", "win"], ["b", "promising"], ["c", "worse"]]);
+    expect(out[2].also).toEqual({ opus: "win", sol: "promising" });
+    expect(mustAlsoWin(arms, {})).toBe(arms);
+  });
 });

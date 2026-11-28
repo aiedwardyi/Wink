@@ -9,7 +9,11 @@
   "topBotShare": 0.646,
   "from": "2026-10-29T12:03:55.859Z",
   "to": "2026-11-17T14:36:43.803Z",
-  "note": "clear asks only: both judges agree on whether an answer row exists; answer rows = rows both marked; both saw an answer but share no row = no-match"
+  "note": "clear asks only: both judges agree on whether an answer row exists; answer rows = rows both marked; both saw an answer but share no row = no-match",
+  "alsoWin": [
+   "tuning-opus",
+   "tuning-sol"
+  ]
  },
  "tuning-disputed": {
   "hash": "5d75e83566061d8819b771a71edc5f9bac0d96d6cf7bbbfaf0b9947bd1928c6f",
@@ -57,7 +61,11 @@
   "topBotShare": 0.802,
   "from": "2026-11-17T14:49:27.173Z",
   "to": "2026-11-28T11:57:43.006Z",
-  "note": "clear asks only: both judges agree on whether an answer row exists; answer rows = rows both marked; both saw an answer but share no row = no-match"
+  "note": "clear asks only: both judges agree on whether an answer row exists; answer rows = rows both marked; both saw an answer but share no row = no-match",
+  "alsoWin": [
+   "held-out-opus",
+   "held-out-sol"
+  ]
  },
  "held-out-disputed": {
   "hash": "2b09189410f1a7000484ab7ab044ed5044ce5bdd8de67a95202aca305f59c55c",
