@@ -9,6 +9,7 @@ import { pickerPrice } from "@/lib/model-index";
 import { pickerLookSkin, type PickerLook } from "@/lib/picker-look";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { reducedMotion } from "@/lib/phone-swipe";
+import { useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
 import type { SkinId } from "@/lib/skins";
 import { useI18n, type Translate } from "@/lib/i18n";
 import {
@@ -235,6 +236,7 @@ export function QuickModelPicker({
   selection: ModelSelection;
 }) {
   const { t } = useI18n();
+  const phone = useIsPhone();
   const thumbBodyRef = useRef<HTMLDivElement>(null);
   const readoutRef = useRef<HTMLSpanElement>(null);
   const sweepRef = useRef<HTMLDivElement>(null);
@@ -323,6 +325,7 @@ export function QuickModelPicker({
 
   useBackLayer(!closing && styleOpen, onCloseStyle);
   useBackLayer(!closing && !styleOpen, () => onClose("trigger"));
+  useSheetSwipe(cardRef, phone && !closing, () => onClose("trigger"), true);
 
   useEffect(() => {
     if (closing) return;

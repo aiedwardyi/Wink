@@ -33,9 +33,9 @@ function makeInstance(
   };
 }
 
-function mockMedia({ reduced = false } = {}) {
+function mockMedia({ reduced = false, phone = false } = {}) {
   vi.spyOn(window, "matchMedia").mockImplementation((query: string) => ({
-    matches: query.includes("reduce") ? reduced : query.split(", ").some((part) => !part.startsWith("(max-width")),
+    matches: query.includes("reduce") ? reduced : query.split(", ").some((part) => phone || !part.startsWith("(max-width")),
     media: query,
     onchange: null,
     addEventListener: () => undefined,
@@ -325,6 +325,61 @@ describe("Quick picker style", () => {
     expect(triggerBtn().hasAttribute("style")).toBe(false);
     expect(triggerBtn().hasAttribute("data-light")).toBe(false);
     expect(triggerBtn().querySelector("[data-quick-flourish]")).toBeNull();
+  });
+});
+
+describe("Quick on a phone", () => {
+  const touch = (target: Element, type: string, x: number, y: number, timeStamp: number) => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperties(event, {
+      touches: { value: type === "touchend" ? [] : [{ clientX: x, clientY: y }] },
+      timeStamp: { value: timeStamp },
+    });
+    target.dispatchEvent(event);
+  };
+  // a finger moved through the points, lifting where it stopped unless it holds on
+  const drag = (target: Element, points: [number, number][], ms = 16, hold = false) => act(async () => {
+    points.forEach(([x, y], index) => touch(target, index ? "touchmove" : "touchstart", x, y, index * ms));
+    if (!hold) touch(target, "touchend", 0, 0, points.length * ms);
+  });
+  const open = async (phone: boolean) => {
+    mockMedia({ phone });
+    await mountPicker(atHigh, [claude, codex]);
+    await act(async () => triggerBtn().click());
+    Object.defineProperty(quickCard()!, "offsetHeight", { configurable: true, value: 400 });
+    return quickCard()!.querySelector(".quick-head")!;
+  };
+
+  it("rides the finger up and springs back from a short slow drag", async () => {
+    const head = await open(true);
+    await drag(head, [[100, 500], [100, 485], [100, 470]], 100, true);
+    expect(quickCard()!.style.translate).toBe("0 -30px");
+    await act(async () => touch(head, "touchend", 0, 0, 300));
+    expect(quickCard()!.style.translate).toBe("0 0");
+    expect(quickCard()!.hasAttribute("data-closing")).toBe(false);
+  });
+
+  it("closes on a swipe up", async () => {
+    const head = await open(true);
+    await drag(head, [[100, 500], [100, 490], [100, 420], [100, 340]]);
+    await vi.waitFor(() => expect(quickCard()?.hasAttribute("data-closing") ?? true).toBe(true));
+    expect(triggerBtn().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("leaves a sideways drag on the effort steps to the steps", async () => {
+    const head = await open(true);
+    const deck = quickCard()!.querySelector("[data-quick-effort-deck]")!;
+    await drag(deck, [[100, 500], [140, 498], [220, 496]]);
+    expect(quickCard()!.style.translate).toBe("");
+    expect(quickCard()!.hasAttribute("data-closing")).toBe(false);
+    expect(head.isConnected).toBe(true);
+  });
+
+  it("stays put on a desktop drag", async () => {
+    const head = await open(false);
+    await drag(head, [[100, 500], [100, 490], [100, 420], [100, 340]]);
+    expect(quickCard()!.style.translate).toBe("");
+    expect(quickCard()!.hasAttribute("data-closing")).toBe(false);
   });
 });
 
