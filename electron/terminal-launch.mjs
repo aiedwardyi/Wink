@@ -86,6 +86,10 @@ export async function openBlankTerminal(platform = process.platform, run = execF
   return false;
 }
 
+// An installer can download for a minute before its first line; say what is coming first.
+const INSTALL_NAMES = { claudeAgent: "Claude Code", codex: "Codex", antigravityAgent: "Gemini (Antigravity)", grokAgent: "Grok", museAgent: "Meta Muse" };
+const installingLine = (driverKind) => `Installing ${INSTALL_NAMES[driverKind] ?? "the engine"}. This can take 1-2 minutes...`;
+
 /** Terminal opens at 80x24, which hides agy's sign-in code box below the fold. */
 function openMacTerminal(script, run) {
   return launch("osascript", [
@@ -121,6 +125,7 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
     const mark = failMarker ? ` try { Set-Content -LiteralPath '${failMarker.replaceAll("'", "''")}' -Value failed } catch {};` : "";
     return [
       "$ErrorActionPreference='Stop'",
+      `Write-Host '${installingLine(driverKind)}'`,
       ...(needsNode && /^\s*npm(?:\s|$)/.test(command) ? [
         refreshPath,
         "if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {",
@@ -137,7 +142,7 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
   }
   // Native installers only edit rc files, which this already-open shell has read.
   const path = 'export PATH="$HOME/.local/bin:$HOME/.grok/bin:$PATH"';
-  return signIn ? `{\n${command}\n} && ${path} && ${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${signIn}` : command;
+  return `echo '${installingLine(driverKind)}'\n${signIn ? `{\n${command}\n} && ${path} && ${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${signIn}` : command}`;
 }
 
 export async function openInstallTerminal(install, platform = process.platform, run = execFile) {
