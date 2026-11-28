@@ -4,7 +4,7 @@
 // node --experimental-strip-types scripts/recall-bench.ts --root <checkout> --sets <dir> --set <name> --out <json> [--parity N]
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -24,8 +24,16 @@ const want = (JSON.parse(readFileSync(opt.manifest, "utf8")) as Record<string, {
 const hash = sha256(text);
 if (hash !== want) throw new Error(`set ${opt.set} hash ${hash} is not the manifest's ${want ?? "(none)"}: sets are frozen; remake them only with recall-sets.ts --reseed`);
 // SAFETY: the bytes match the manifest hash, so this is the file setFile() wrote
-const set = JSON.parse(text) as { anchor: string; cases: Case[] };
+const set = JSON.parse(text) as { anchor: string; cases: Case[]; snapshots?: Record<string, Record<string, string>> };
 const noon = Date.parse(`${set.anchor}T12:00:00Z`);
+for (const item of set.cases) {
+  if (!item.snapshot) continue;
+  const files = set.snapshots?.[item.snapshot];
+  if (!files) throw new Error(`${item.id}: snapshot ${item.snapshot} is not in the set`);
+  item.files = files;
+}
+// a real-traffic case runs at its turn's time, so undated rows take that day as live
+const timeOf = (item: Case) => item.at ?? noon;
 
 const temp = mkdtempSync(join(tmpdir(), "recall-bench-"));
 // before any server module loads: its data dir and home are read at import
@@ -33,26 +41,28 @@ process.env.HOME = process.env.USERPROFILE = temp;
 process.env.OMB_DATA_DIR = join(temp, "data");
 const from = (path: string) => pathToFileURL(join(root, path)).href;
 // SAFETY: --root is a checkout of this repo, so its server modules have these exports; an arm that drops one fails at the call
-const [{ buildRecallIndex, createMemoryLookup, searchable }, { userTyping }, { DATA_DIR }] = (await Promise.all([import(from("server/memory-lookup.ts")), import(from("server/memory-pass.ts")), import(from("server/config.ts"))])) as [
+const [{ buildRecallIndex, createMemoryLookup, searchable }, { userTyping }, { DATA_DIR }, { loadMemory, memoryFileRaw }, { clean }] = (await Promise.all([import(from("server/memory-lookup.ts")), import(from("server/memory-pass.ts")), import(from("server/config.ts")), import(from("server/workspace.ts")), import(from("server/recall-row.ts"))])) as [
   typeof import("../server/memory-lookup.ts"),
   typeof import("../server/memory-pass.ts"),
   typeof import("../server/config.ts"),
+  typeof import("../server/workspace.ts"),
+  typeof import("../server/recall-row.ts"),
 ];
 
-const put = (path: string, body: string) => {
+const put = (path: string, body: string, at: number) => {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, body);
-  // rows without a date take the file's day, so files carry the set's anchor
-  utimesSync(path, noon / 1000, noon / 1000);
+  // rows without a date take the file's day, so files carry the set's anchor or the case's time
+  utimesSync(path, at / 1000, at / 1000);
 };
 
 function seed(item: Case) {
   rmSync(DATA_DIR, { recursive: true, force: true });
   const workspace = join(DATA_DIR, "workspaces", item.bot);
-  for (const [name, body] of Object.entries(item.files)) if (name !== "notes.md") put(join(workspace, name), body);
-  for (const [name, body] of Object.entries(item.otherFiles)) put(join(DATA_DIR, "workspaces", item.other, name), body);
+  for (const [name, body] of Object.entries(item.files)) if (name !== "notes.md") put(join(workspace, name), body, timeOf(item));
+  for (const [name, body] of Object.entries(item.otherFiles)) put(join(DATA_DIR, "workspaces", item.other, name), body, timeOf(item));
   const notes = join(DATA_DIR, "notes.md");
-  put(notes, item.files["notes.md"]!);
+  put(notes, item.files["notes.md"]!, timeOf(item));
   return { workspace, notes };
 }
 
@@ -71,8 +81,14 @@ function pick(passed: RecallHit[]): RecallHit[] {
 }
 
 async function replay(item: Case, workspace: string, notes: string) {
-  const sources = readdirSync(join(workspace, "memory")).map((name) => `memory/${name}`).sort();
+  // real notes nest folders under memory/ and run past the MEMORY.md cut, and the lookup reads both
+  const memory = join(workspace, "memory");
+  const sources = (existsSync(memory) ? readdirSync(memory, { recursive: true, withFileTypes: true }) : []).filter((entry) => entry.isFile()).map((entry) => `memory/${relative(memory, join(entry.parentPath, entry.name)).replace(/\\/g, "/")}`).sort();
+  const loaded = loadMemory(item.bot);
+  const raw = memoryFileRaw(item.bot);
+  const past: NoteFile[] = loaded?.truncated && raw.startsWith(loaded.text) ? [{ source: "MEMORY.md", tier: 0, text: raw.slice(loaded.text.length), firstLine: loaded.text.split("\n").length, mtime: statSync(join(workspace, "MEMORY.md")).mtimeMs }] : [];
   const files: NoteFile[] = [
+    ...past,
     ...sources.map((source) => ({ source, tier: 0 as const, text: readFileSync(join(workspace, source), "utf8"), mtime: statSync(join(workspace, source)).mtimeMs })),
     { source: "notes.md", tier: 1, text: readFileSync(notes, "utf8"), mtime: statSync(notes).mtimeMs },
   ];
@@ -96,7 +112,7 @@ try {
   const mismatched: string[] = [];
   for (const [at, item] of set.cases.entries()) {
     const { workspace, notes } = seed(item);
-    const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => notes, now: () => noon });
+    const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => notes, now: () => timeOf(item) });
     await lookup.refresh(item.bot);
     const started = performance.now();
     const given = lookup.take(item.bot, "t", undefined, item.ask);
@@ -114,9 +130,16 @@ try {
       const [, source, at] = /^(.*):(\d+)$/.exec(ref) ?? [];
       return { source, text: source === undefined ? undefined : (item.files[source] ?? item.otherFiles[source])?.split("\n")[Number(at) - 1] };
     };
+    // a line past the lookup's piece size reaches the bot as one piece: its start, or its head + " ... " + a later part
+    const pieceOf = (line: string, body: string) => {
+      const cut = body.indexOf(" ... ");
+      return line.startsWith(body) || (cut > 0 && line.startsWith(body.slice(0, cut)) && line.includes(body.slice(cut + 5)));
+    };
     const faithful = carried.length === shown.length && shown.every((ref, at) => {
       const { source, text } = lineOf(ref);
-      return text !== undefined && carried[at]!.startsWith(`- ${source}, `) && carried[at]!.endsWith(`: ${text}`);
+      const prefix = `- ${source}, `;
+      // the lookup shows a line as clean() leaves it (tags stripped), so compare against that
+      return text !== undefined && carried[at]!.startsWith(prefix) && pieceOf(clean(text.trim()), carried[at]!.slice(prefix.length).replace(/^[^:]*: /, ""));
     });
     if (!faithful) throw new Error(`${item.id}: the lookup logged ${JSON.stringify(shown)} but take() gave the bot ${JSON.stringify(carried)}: the scorer judges only rows the bot gets`);
     if (at < parity && JSON.stringify(await replay(item, workspace, notes)) !== JSON.stringify(shown)) mismatched.push(item.id);

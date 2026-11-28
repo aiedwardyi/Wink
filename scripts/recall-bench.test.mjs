@@ -80,7 +80,7 @@ describe("scorer", () => {
 function arm(from, to) {
   const dir = mkdtempSync(join(tmpdir(), "recall-bench-arm-"));
   temps.push(dir);
-  const todo = ["server/memory-lookup.ts", "server/memory-pass.ts", "server/config.ts", "package.json"].map((path) => join(ROOT, path));
+  const todo = ["server/memory-lookup.ts", "server/memory-pass.ts", "server/config.ts", "server/workspace.ts", "package.json"].map((path) => join(ROOT, path));
   for (const seen = new Set(); todo.length; ) {
     const path = todo.pop();
     if (seen.has(path)) continue;
@@ -129,4 +129,32 @@ describe("scorer reads only what the bot gets", () => {
     expect(run.stderr).toMatch(/: no lookup log row: take\(\) wrote nothing to /);
     expect(run.stderr).not.toMatch(/ENOENT/);
   }, 60_000);
+});
+
+describe("real-traffic sets", () => {
+  it("reads each case's notes from the set's snapshots at its turn's time, hits on any judged answer row, and keeps parity through nested folders, the MEMORY.md cut and lines split into pieces", () => {
+    const dir = mkdtempSync(join(tmpdir(), "recall-bench-test-"));
+    temps.push(dir);
+    const snapshots = {};
+    const head = Array.from({ length: 205 }, (_, n) => `- Filler line ${n}`).join("\n");
+    const tail = Array.from({ length: 40 }, (_, n) => `Side note ${n} <i>stays</i> put.`).join(" ");
+    const real = cases(TINY).map((item, n) => {
+      const long = (body) => (item.kind === "miss" ? body : body.replace(item.answer, `${item.answer} only demo pages get <footer data-demo-hold> here. ${tail}`));
+      const files = Object.fromEntries(Object.entries(item.files).map(([name, body]) => [name === "MEMORY.md" ? name : name.replace(/^memory\/(?!misc)/, "memory/deep/"), name === "MEMORY.md" ? `${head}\n${long(body)}` : long(body)]));
+      snapshots[`s${n}`] = files;
+      const { files: _files, ...rest } = item;
+      return { ...rest, snapshot: `s${n}`, at: Date.parse("2026-11-20T03:00:00Z") - n * 86_400_000, superseded: "", answers: item.kind === "miss" ? undefined : [refOf(item, item.answer).replace(/^memory\/(?!misc)/, "memory/deep/")] };
+    });
+    const text = `${JSON.stringify({ name: "tiny", anchor: TINY.anchor, cases: real, snapshots })}\n`;
+    writeFileSync(join(dir, "tiny.json"), text);
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify({ tiny: { hash: sha256(text) } }));
+    const run = bench(dir, ["--parity", "15"]);
+    expect(run.status, run.stderr).toBe(0);
+    const out = JSON.parse(readFileSync(join(dir, "out.json"), "utf8"));
+    expect(out.parity).toEqual({ checked: 15, mismatches: 0 });
+    const byId = new Map(real.map((each) => [each.id, each]));
+    for (const row of out.rows) expect(row.hit).toBe(row.kind !== "miss" && row.shown.some((ref) => byId.get(row.id).answers.includes(ref)));
+    expect(out.totals.hits).toBeGreaterThan(0);
+    expect(out.rows.some((row) => row.shown.some((ref) => ref.startsWith("memory/deep/")))).toBe(true);
+  });
 });

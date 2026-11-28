@@ -24,6 +24,10 @@ export type Case = {
   answer: string;
   superseded: string;
   stale: string[];
+  /** real-traffic sets: every judged answer row's ref, the turn's time, and the notes as of it by name in the set's snapshots */
+  answers?: string[];
+  at?: number;
+  snapshot?: string;
 };
 
 export const TUNING: Pool = {
@@ -144,10 +148,11 @@ export const refOf = (item: Case, row: string) => {
 
 /** What the rows a lookup showed mean for this case; a no-match ask is judged by whether anything showed. */
 export function judgeCase(item: Case, shown: string[]) {
+  const want = item.kind === "miss" ? [] : (item.answers ?? [refOf(item, item.answer)]);
   return {
-    hit: item.kind !== "miss" && shown.includes(refOf(item, item.answer)),
+    hit: shown.some((ref) => want.includes(ref)),
     wrongScope: shown.some((ref) => ref.includes("-team.md:")),
-    superseded: item.kind !== "miss" && shown.includes(refOf(item, item.superseded)),
+    superseded: item.kind !== "miss" && Boolean(item.superseded) && shown.includes(refOf(item, item.superseded)),
     stale: item.stale.some((row) => shown.includes(refOf(item, row))),
   };
 }
