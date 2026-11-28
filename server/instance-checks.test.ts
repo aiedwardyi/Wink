@@ -139,7 +139,7 @@ describe("first-run engine checks", () => {
     expect(signIn(await registry.describe({ refresh: true }))).toBe(true);
     await vi.waitFor(() => expect(signIn(pushed.at(-1) ?? [])).toBe(true));
   });
-  it("keeps the sign-in card in an open window through a version check and a status check that time out, until a confirmed sign-in", async () => {
+  it.each(["before", "after"])("keeps the sign-in card in an open window through a version check and a status check that time out, another engine changing %s the CLI answers again", async (order) => {
     let other = true;
     let codex: ProviderSnapshot = { state: "available", authenticated: false };
     const fast = makeFakeDriver({ kind: "fast" });
@@ -155,19 +155,26 @@ describe("first-run engine checks", () => {
     const pushed: Rows[] = [];
     const checks = createInstanceChecks(registry, (rows) => { pushed.push(rows); });
     const row = (rows: Rows) => rows.find((candidate) => candidate.instanceId === "b")!.snapshot;
-    const card = (rows: Rows) => row(rows).state === "available" && row(rows).authenticated === false;
+    const card = (rows: Rows) => row(rows).authenticated === false;
+    // Another engine's change pushes the whole list.
+    const otherChanges = async () => {
+      other = false;
+      await registry.describe({ refresh: true });
+      await vi.waitFor(() => expect(pushed.at(-1)?.find((candidate) => candidate.instanceId === "a")?.snapshot.authenticated).toBe(false));
+    };
     expect(card(await checks.describe())).toBe(true);
 
-    // Another window re-checks: --version times out, so the CLI reads unavailable to that window alone.
+    // Another window re-checks: --version times out, so the CLI reads unavailable, still signed out.
     codex = { state: "unavailable", reason: "CLI not found" };
-    expect(row(await registry.describe({ refresh: true })).state).toBe("unavailable");
+    expect(row(await registry.describe({ refresh: true }))).toMatchObject({ state: "unavailable", authenticated: false });
+    if (order === "before") {
+      await otherChanges();
+      expect(row(pushed.at(-1)!).state).toBe("unavailable");
+    }
     // The next check finds the CLI but its status times out.
     codex = { state: "available" };
     expect(row(await registry.describe({ refresh: true }))).toMatchObject({ state: "available", authenticated: false });
-    // Then another engine's change pushes the whole list.
-    other = false;
-    await registry.describe({ refresh: true });
-    await vi.waitFor(() => expect(pushed.at(-1)?.find((candidate) => candidate.instanceId === "a")?.snapshot.authenticated).toBe(false));
+    if (order === "after") await otherChanges();
     expect(pushed.map(card)).toEqual(pushed.map(() => true));
 
     codex = { state: "available", authenticated: true };

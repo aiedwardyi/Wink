@@ -808,6 +808,9 @@ export class ProviderRegistry {
     const snapshot = { ...probe.snapshot };
     delete snapshot.accountIdentity;
     delete snapshot.accountAuthenticated;
+    // Every row shows the last confirmed sign-in, whatever this check found of the CLI.
+    const confirmed = probe === this.probed.get(entry.instanceId) ? this.probed.signedIn(entry.instanceId) : undefined;
+    if (snapshot.authenticated === undefined && confirmed !== undefined) snapshot.authenticated = confirmed;
     if (entry.shadow) {
       return {
         instanceId: entry.instanceId,

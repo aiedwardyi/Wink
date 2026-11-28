@@ -33,7 +33,7 @@ import {
   type InstanceInfo,
   type Message,
 } from "@/state/store";
-import { EngineSetup, needsCli, needsSignIn, setupErrorAction } from "./EngineSetup";
+import { EngineSetup, needsCli, setupErrorAction } from "./EngineSetup";
 import { AccountSignInCard, SignedInCard, SignInCard } from "./SignInCard";
 import { DockCard } from "./DockCard";
 import { BotAvatar } from "./Avatar";
@@ -1993,7 +1993,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
         <ChatPeekPart part="composer">
         {calls.bar}
         {!preview && <CallWidgetSlot className="px-3 pb-2 md:hidden" />}
-        <DockCard open={Boolean(signInEngine && !bot.busy && needsSignIn(signInEngine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn))}>
+        <DockCard open={Boolean(signInEngine && !bot.busy && signInEngine.snapshot.authenticated === false && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn))}>
           {signInEngine && <div className="px-5 pb-2"><SignInCard instance={signInEngine} help={t("chat.signInHelp", { name: bot.name })} /></div>}
         </DockCard>
         <TaskRecoveryCard
