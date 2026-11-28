@@ -121,19 +121,21 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
     const refreshPath = "$env:Path=$env:Path+';'+[Environment]::GetEnvironmentVariable('Path', 'Machine')+';'+[Environment]::GetEnvironmentVariable('Path', 'User')";
     const signInEnv = agy ? "$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; "
       : driverKind === "claudeAgent" ? "$env:Path=(Join-Path $HOME '.local/bin')+';'+$env:Path; " : "";
+    // The Codex installer otherwise ends on a "Start Codex now?" prompt the sign-in step would wait behind.
+    const installEnv = driverKind === "codex" ? "$env:CODEX_NON_INTERACTIVE='1'; " : "";
     return [
       "$ErrorActionPreference='Stop'",
       `Write-Host '${installingLine(driverKind)}'`,
       ...(needsNode && /^\s*npm(?:\s|$)/.test(command) ? [
         refreshPath,
         "if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {",
-        "winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements",
-        "if (-not $? -or $LASTEXITCODE -ne 0) { return }",
+        "$node = $false; try { winget install -e --id OpenJS.NodeJS.LTS --source winget --accept-source-agreements --accept-package-agreements; $node = $LASTEXITCODE -eq 0 } catch {}",
+        `if (-not $node) { Write-Host "Node.js didn't install. Install Node.js LTS from https://nodejs.org, then try the install again in Wink."; return }`,
         refreshPath,
         "}",
       ] : []),
-      `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`$ErrorActionPreference='Stop'\n${command}`, "utf16le").toString("base64")}`,
-      "if ($LASTEXITCODE -ne 0) { return }",
+      `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`$ErrorActionPreference='Stop'\n${installEnv}${command}`, "utf16le").toString("base64")}`,
+      `if ($LASTEXITCODE -ne 0) { Write-Host "The install didn't finish. See the error above, then try the install again in Wink."; return }`,
       refreshPath,
       ...(signIn ? [`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`${signInEnv}${signIn}`, "utf16le").toString("base64")}`] : []),
     ].join("\n");

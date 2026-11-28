@@ -70,6 +70,7 @@ export function windowsKnownDirs(): string[] {
     join(appData, "npm"), // npm -g shims: claude, codex
     join(process.env.ProgramFiles ?? "C:\\Program Files", "nodejs"), // Node installer: runs those shims
     join(localAppData, "Programs", "muse"), // Meta Muse native launcher
+    join(localAppData, "Programs", "OpenAI", "Codex", "bin"), // Codex standalone installer
     join(home, ".grok", "bin"), // x.ai installer
     join(localAppData, "agy", "bin"), // Antigravity installer
     join(home, ".local", "bin"), // claude native installer

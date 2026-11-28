@@ -10,7 +10,7 @@ import * as terminal from "./terminal-launch.mjs";
 
 const install = await import("./engine-install.mjs").catch(() => ({}));
 const descriptor = { driverKind: "codex", command: "npm install -g official", needsNode: true, signInCommand: "official login" };
-const encodedCommand = Buffer.from(`$ErrorActionPreference='Stop'\n${descriptor.command}`, "utf16le").toString("base64");
+const encodedCommand = Buffer.from(`$ErrorActionPreference='Stop'\n$env:CODEX_NON_INTERACTIVE='1'; ${descriptor.command}`, "utf16le").toString("base64");
 const encodedSignIn = (script) => Buffer.from(script, "utf16le").toString("base64");
 
 function setup(trusted = true, opened = true) {
@@ -183,8 +183,38 @@ describe("install terminal script", () => {
   it("checks npm and bootstraps Node before installing", () => {
     const script = terminal.buildInstallScript(descriptor, "win32");
     expect(script).toContain("Get-Command npm -ErrorAction SilentlyContinue");
-    expect(script).toContain("winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements");
+    expect(script).toContain("winget install -e --id OpenJS.NodeJS.LTS --source winget --accept-source-agreements --accept-package-agreements");
     expect(script.indexOf("winget install")).toBeLessThan(script.indexOf(encodedCommand));
+  });
+
+  it("pins the Node install to the winget source and says what to do when a step fails", () => {
+    const lines = terminal.buildInstallScript(descriptor, "win32").split("\n");
+    const winget = lines.findIndex((line) => line.includes("winget install"));
+    expect(lines[winget]).toContain("try { winget install -e --id OpenJS.NodeJS.LTS --source winget --accept-source-agreements --accept-package-agreements;");
+    expect(lines[winget + 1]).toMatch(/^if \(-not \$node\) \{ Write-Host ".*https:\/\/nodejs\.org.*"; return \}$/);
+    const failures = lines.filter((line) => line.includes("return"));
+    expect(failures).toHaveLength(2);
+    for (const line of failures) expect(line).toMatch(/Write-Host "[^"]+"; return \}$/);
+  });
+
+  it("installs Codex on Windows with no Node: the official standalone installer, without its prompts", () => {
+    const codex = BUILT_IN_DRIVERS.find((driver) => driver.driverKind === "codex");
+    expect(codex.install.command.win32).toBe("irm https://chatgpt.com/codex/install.ps1 | iex");
+    expect(codex.install.needsNode).toBeFalsy();
+    const script = terminal.buildInstallScript({ ...codex.install, command: codex.install.command.win32, driverKind: "codex" }, "win32");
+    expect(script).not.toMatch(/winget|nodejs|Get-Command npm/);
+    expect(script).toContain(encodedSignIn("$ErrorActionPreference='Stop'\n$env:CODEX_NON_INTERACTIVE='1'; irm https://chatgpt.com/codex/install.ps1 | iex"));
+  });
+
+  it("keeps a Claude install free of the Node step", () => {
+    const signIn = "claude auth login";
+    const lines = terminal.buildInstallScript({ driverKind: "claudeAgent", command: "irm https://claude.ai/install.ps1 | iex", needsNode: false, signInCommand: signIn }, "win32").split("\n");
+    expect(lines.join("\n")).not.toMatch(/winget|nodejs/i);
+    expect(lines[0]).toBe("$ErrorActionPreference='Stop'");
+    expect(lines[1]).toMatch(/^Write-Host 'Installing /);
+    expect(lines[2]).toBe(`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedSignIn("$ErrorActionPreference='Stop'\nirm https://claude.ai/install.ps1 | iex")}`);
+    expect(lines[3]).toMatch(/^if \(\$LASTEXITCODE -ne 0\) \{ Write-Host "[^"]+"; return \}$/);
+    expect(lines.at(-1)).toBe(`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedSignIn(`$env:Path=(Join-Path $HOME '.local/bin')+';'+$env:Path; ${signIn}`)}`);
   });
 
   it("refreshes registry PATH before the npm check", () => {
