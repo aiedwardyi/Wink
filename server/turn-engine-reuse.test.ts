@@ -110,7 +110,8 @@ describe("owner chat engine reuse across typed turns and wakes", () => {
       await say(bot, log, "eight");
       const seen = rows(log).map((row) => ({ pid: row.pid, resume: row.argv.includes("--resume"), text: row.text.slice(0, 40).replace(/\s+/g, " ") }));
       const differs = [...new Set([...Object.keys(typedEnv), ...Object.keys(wakeEnv)])].filter((key) => typedEnv[key] !== wakeEnv[key]);
-      console.log("PROBE happy " + JSON.stringify({ seen, envKeysThatDiffer: differs, argvSame: typedArgs === wakeArgs }));
+      expect(differs, "a wake runs with the same engine env as a typed turn").toEqual([]);
+      expect(wakeArgs, "a wake runs with the same engine args as a typed turn").toBe(typedArgs);
       expect(seen[1]!.pid, "control: typed then typed reuses the process").toBe(seen[0]!.pid);
       const settled = seen.slice(seen.findIndex((row) => row.text === "five"));
       expect(settled.map((row) => row.text.slice(0, 5)), "five, six, wake, seven, eight").toHaveLength(5);
@@ -136,8 +137,6 @@ describe("owner chat engine reuse across typed turns and wakes", () => {
       await expect.poll(() => Boolean(wake(log)), { timeout: 15_000 }).toBe(true);
       await expect.poll(() => busy(bot.id), { timeout: 15_000 }).toBe(false);
       const woke = wake(log)!.pid;
-      await new Promise((r) => setTimeout(r, 6_500));
-      console.log("PROBE task " + JSON.stringify({ pids: rows(log).map((row) => row.pid), first, woke, firstAliveAfterWake: alive(first) }));
       expect(woke, "the wake should land in the process that holds the background task").toBe(first);
       expect(alive(first), "the background task process should outlive the wake").toBe(true);
     } finally {
