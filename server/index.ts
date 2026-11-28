@@ -4958,9 +4958,9 @@ bus.subscribe((event: RuntimeEvent) => {
   if (event.turnId) {
     if (settleMail(store, event.threadId, event.turnId, event.ok, event.stopReason ?? undefined)) paneWake.noteArrived(sourceBotId ?? "", event.threadId);
     turnRegistry.settle(event.turnId);
-    importGate.settled(event.threadId, event.turnId);
     usageBoard.turnSettled(event.turnId, event.ok);
   }
+  importGate.settled(event.threadId, event.turnId);
   drainQueuedSends();
   if (!event.ok || event.stopReason === "cancelled" || event.stopReason === "interrupted") discardDelegations(commsBus, event.threadId, sourceBotId, event.turnId);
   else drainDelegations(commsBus, approvalBus, event.threadId, runDelegatedTurn, sourceBotId);

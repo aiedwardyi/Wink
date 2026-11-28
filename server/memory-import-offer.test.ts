@@ -220,6 +220,16 @@ describe("import_memory saves through the Settings path", () => {
     }
   });
 
+  it("an ID-less turn.completed after Stop reopens with no stall", async () => {
+    const turns = new TurnRegistry();
+    const gate = importTurnGate(turns);
+    turns.start("u1", { botId: "b1", threadId: "t1", owner: "user", depth: 0, importMemory: true });
+    gate.stop("t1");
+    gate.settled("t1", undefined);
+    turns.start("u2", { botId: "b1", threadId: "t1", owner: "user", depth: 0, importMemory: true });
+    expect((await call({}, [typed(paste)], true, gate)).text).toContain("Import Memory says: Added 2 new.");
+  });
+
   it("a room Stop or a deleted thread holds nothing", async () => {
     for (const end of ["room", "deleted"]) {
       removeTestData(dir);

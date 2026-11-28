@@ -71,9 +71,12 @@ const RECAP = {
 // Stop and a stall end a turn before its engine exits; the call carries no turn, so the chat stays closed until turn.completed.
 export function importTurnGate(turns: Pick<TurnRegistry, "current" | "onSettled">) {
   const stopped = new Map<string, Set<string>>();
-  const settled = (threadId: string, turnId: string): void => {
+  const settled = (threadId: string, turnId: string | undefined): void => {
     const held = stopped.get(threadId);
-    if (held?.delete(turnId) && !held.size) stopped.delete(threadId);
+    if (!held) return;
+    // an ID-less turn.completed ends the turn the thread still has current
+    const id = turnId ?? turns.current(threadId)?.turnId;
+    if (id && held.delete(id) && !held.size) stopped.delete(threadId);
   };
   // a lost, ID-less or mismatched turn.completed never names the stopped turn, so any settle of it reopens
   turns.onSettled(settled);
