@@ -148,6 +148,31 @@ const chatSwitchSchema = z
   })
   .strict();
 
+// One line per run of dead chat taps on a phone (watchDeadTaps in src/lib/chat-switch-diag.ts).
+const deadTapsSchema = z
+  .object({
+    kind: z.literal("dead-taps"),
+    taps: z.number().int().min(0).max(100),
+    hit: z.string().max(120),
+    path: z.array(z.string().max(120)).max(10),
+    target: z.string().max(120),
+    onTarget: z.boolean(),
+    prevented: z.array(z.string().max(16)).max(4),
+    active: z.string().max(120),
+    stage: z.string().max(200),
+    rider: z.string().max(200),
+    idle: z.string().max(16),
+    held: z.array(z.string().max(120)).max(10),
+    back: z.number().int().min(0).max(1000),
+    viewport: z.string().max(60),
+    build: z.string().max(80),
+    sinceSwitch: z.number().int(),
+    focused: z.boolean(),
+    visibility: z.string().max(16),
+    userAgent: z.string().max(512),
+  })
+  .strict();
+
 async function readJson(req: AsyncIterable<Buffer>): Promise<{ body: unknown } | Exclude<Received, { status: 200 }>> {
   const text = await readCapped(req);
   if (text === null) return { status: 413, error: "body too large" };
@@ -162,8 +187,13 @@ export async function receiveChatSwitch(req: AsyncIterable<Buffer>, log: (line: 
   const read = await readJson(req);
   if ("error" in read) return read;
   const parsed = chatSwitchSchema.safeParse(read.body);
-  if (!parsed.success) return { status: 400, error: "invalid chat switch" };
-  log(`[chat-switch] ${JSON.stringify(parsed.data)}`);
+  if (parsed.success) {
+    log(`[chat-switch] ${JSON.stringify(parsed.data)}`);
+    return { status: 200 };
+  }
+  const dead = deadTapsSchema.safeParse(read.body);
+  if (!dead.success) return { status: 400, error: "invalid chat switch" };
+  log(`[dead-taps] ${JSON.stringify(dead.data)}`);
   return { status: 200 };
 }
 
