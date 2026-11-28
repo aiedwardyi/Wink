@@ -70,7 +70,7 @@ const isParked = (ask: TaskAsk, now: number) => isOpenAsk(ask) && ask.until !== 
 const isWaiting = (ask: TaskAsk) => ask.status === "waiting-for-user";
 // once its verdict row rode, a waiting ask waits 3 more days, so the next turn reaches the next ones instead of repeating it
 const needsVerdict = (ask: TaskAsk, now: number) =>
-  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !isPromise(ask) && ask.key === undefined && (!ask.ref || isWaiting(ask)) && now - Math.max(ask.changedAt, ask.until ?? 0, isWaiting(ask) ? ask.shown ?? 0 : 0) >= ASK_VERDICT_MS;
+  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !isPromise(ask) && (ask.key === undefined || isWaiting(ask)) && (!ask.ref || isWaiting(ask)) && now - Math.max(ask.changedAt, ask.until ?? 0, isWaiting(ask) ? ask.shown ?? 0 : 0) >= ASK_VERDICT_MS;
 const words = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -204,11 +204,11 @@ const unchecked = (ask: TaskAsk) => ask.status === "open" && (isPromise(ask) || 
 // past the first few, unchecked promises ride as their IDs on one line; each keeps its row, and a status question lists them all
 const MAX_LISTED_PROMISES = 3;
 export const MORE_PROMISES = "more unchecked promises, each open by ID; a status question lists them:";
-// a waiting ask needs the user, so past the first few an ordinary turn holds the rest for later instead of asking about them all
+// a waiting ask needs the user, so past the first few an ordinary turn holds the rest for later instead of asking about them all; the least recently shown go first
 const MAX_LISTED_WAITING = 3;
 const byAge = (left: TaskAsk, right: TaskAsk) => left.at - right.at;
 const verdictRows = (due: readonly TaskAsk[]) => {
-  const oldest = due.filter(isWaiting).sort(byAge).slice(0, MAX_LISTED_WAITING);
+  const oldest = due.filter(isWaiting).sort((left, right) => (left.shown ?? 0) - (right.shown ?? 0) || byAge(left, right)).slice(0, MAX_LISTED_WAITING);
   return due.filter((ask) => !isWaiting(ask) || oldest.includes(ask));
 };
 const rows = (asks: readonly TaskAsk[], line: (ask: TaskAsk) => string, all: boolean) => {
@@ -220,14 +220,14 @@ const askLine = (ask: TaskAsk, now: number, carried = false, verdict = needsVerd
   ? `- ${ask.id} parked back ${day(ask.until!)}: ${ask.ask}`
   : `- ${ask.id} ${ask.status}${ask.kind ? ` ${ask.kind}` : ""}${carried || unchecked(ask) ? " unchecked" : ""}${verdict ? " needs verdict" : ""} ${day(ask.at)}: ${ask.ask}${ask.choices ? ` (choices: ${ask.choices})` : ""}${ask.ref ? ` (${ask.ref})` : ""}`;
 
-/** Open asks, needing a verdict first and then oldest, then parked ones by return day; past MAX_STATUS_ASKS_BYTES the least recently shown come first and the rest wait. */
-function listed(asks: readonly TaskAsk[] | undefined, now: number) {
+/** Open asks, needing a verdict first and then oldest, then parked ones by return day; past MAX_STATUS_ASKS_BYTES the least recently shown come first and the rest wait. With flagged, only those rows say needs verdict. */
+function listed(asks: readonly TaskAsk[] | undefined, now: number, flagged?: ReadonlySet<TaskAsk>) {
   const open = (asks ?? []).filter((ask) => isOpenAsk(ask) && !isParked(ask, now));
   const parked = (asks ?? []).filter((ask) => isParked(ask, now)).sort((left, right) => left.until! - right.until!);
   const due = open.filter((ask) => needsVerdict(ask, now)).sort(byAge);
   const rest = open.filter((ask) => !needsVerdict(ask, now)).sort(byAge);
   const ordered = [...due, ...rest.filter((ask) => !isQuestion(ask)), ...rest.filter(isQuestion)];
-  const line = (ask: TaskAsk) => askLine(ask, now);
+  const line = (ask: TaskAsk) => askLine(ask, now, false, flagged ? flagged.has(ask) : needsVerdict(ask, now));
   const bytes = (ask: TaskAsk) => Buffer.byteLength(line(ask), "utf8") + 1;
   const all = [...ordered, ...parked];
   if (all.reduce((sum, ask) => sum + bytes(ask), 0) <= MAX_STATUS_ASKS_BYTES) return { ordered, parked, due, shown: all, line };
@@ -257,14 +257,15 @@ export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, sta
   return listBlock(asks ?? [], now, statusTurn, false).text;
 }
 
-/** The list, or with verdictOnly just the asks needing a verdict, the oldest MAX_LISTED_WAITING of them waiting on the user; shown holds the rows it carries. */
+/** The list, or with verdictOnly just the asks needing a verdict; off a status turn only the MAX_LISTED_WAITING least recently shown waiting ones say so. shown holds the rows it carries. */
 function listBlock(asks: readonly TaskAsk[], now: number, statusTurn: boolean, verdictOnly: boolean) {
   const open = asks.filter(isOpenAsk);
   if (!open.length) return { text: "", shown: open };
   const parked = open.filter((ask) => isParked(ask, now)).length;
   const due = open.filter((ask) => needsVerdict(ask, now));
   if (verdictOnly && !due.length) return { text: "", shown: due };
-  const { shown, line } = listed(verdictOnly ? verdictRows(due) : asks, now);
+  const asked = statusTurn ? due : verdictRows(due);
+  const { shown, line } = listed(verdictOnly ? asked : asks, now, new Set(asked));
   const them = due.length === 1 ? "it" : "them";
   const flagged = due.length ? `, ${due.length} need${due.length === 1 ? "s" : ""} a verdict: no ref and no change in 3+ days${due.some((ask) => ask.status === "waiting-for-user") ? ", or waiting on the user that long, so check whether the user already did their part, then" : ", so"} build, park or close ${them} yourself, and ask the user about at most 3 at a time` : "";
   const waiting = open.length - shown.length;

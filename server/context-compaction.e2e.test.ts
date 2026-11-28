@@ -154,12 +154,8 @@ const GOAL_ONLY = { botId: "goal-only-bot", botThreadId: "goal-only-thread" };
 const PLAN_CLEARED = { botId: "plan-cleared-bot", botThreadId: "plan-cleared-thread" };
 const ASKS_CODEX = { botId: "asks-codex-bot", botThreadId: "asks-codex-thread", name: "Asks codex", selection: { instanceId: "codex", model: "gpt-fake-default" } };
 const ASKS_CLAUDE = { botId: "asks-claude-bot", botThreadId: "asks-claude-thread", name: "Asks claude", selection: { instanceId: "claude", model: "claude-fake" } };
-const ROOM_ASKS = {
-  botId: "room-asks-bot",
-  botThreadId: "room-asks-direct-thread",
-  groupId: "room-asks-group",
-  roomThreadId: "room-asks-room-thread",
-};
+const ROOM_ASKS = { botId: "room-asks-bot", botThreadId: "room-asks-direct-thread", groupId: "room-asks-group", roomThreadId: "room-asks-room-thread", name: "Room asks", instanceId: "claude", days: 2 };
+const ROOM_LAUNCH = { botId: "room-launch-bot", botThreadId: "room-launch-direct-thread", groupId: "room-launch-group", roomThreadId: "room-launch-room-thread", name: "Room launch", instanceId: "claude-missing", days: 4 };
 const SECRET_COLLISION = {
   botId: "secret-collision-bot",
   botThreadId: "secret-collision-direct-thread",
@@ -311,6 +307,7 @@ describe("context compaction e2e", () => {
           },
           config: { cli: FAKE_CLAUDE_CLI },
         },
+        "claude-missing": { driver: "claudeAgent", config: { cli: join(home, "missing-claude") } },
       },
     }));
     writeFileSync(join(dataDir, "bots.json"), JSON.stringify([
@@ -620,20 +617,20 @@ describe("context compaction e2e", () => {
         createdAt: 1,
         tasks: [{ threadId: SECRET_COLLISION.botThreadId, title: "Release", createdAt: 1, resumeCursors: {} }],
       },
-      {
-        id: ROOM_ASKS.botId,
-        threadId: ROOM_ASKS.botThreadId,
-        name: "Room asks",
+      ...[ROOM_ASKS, ROOM_LAUNCH].map((room) => ({
+        id: room.botId,
+        threadId: room.botThreadId,
+        name: room.name,
         title: "Release owner",
         description: "Keep the release moving.",
         notifications: true,
         color: "green",
         unread: false,
-        modelSelection: { instanceId: "claude", model: "claude-fake" },
+        modelSelection: { instanceId: room.instanceId, model: "claude-fake" },
         resumeCursors: {},
         createdAt: 1,
-        tasks: [{ threadId: ROOM_ASKS.botThreadId, title: "Release", createdAt: 1, resumeCursors: {} }],
-      },
+        tasks: [{ threadId: room.botThreadId, title: "Release", createdAt: 1, resumeCursors: {} }],
+      })),
       ...[ASKS_CODEX, ASKS_CLAUDE].map((bot) => ({
         id: bot.botId,
         threadId: bot.botThreadId,
@@ -699,17 +696,17 @@ describe("context compaction e2e", () => {
         createdAt: 1,
         tasks: [{ threadId: SECRET_COLLISION.roomThreadId, title: "Release", createdAt: 1 }],
       },
-      {
-        id: ROOM_ASKS.groupId,
-        threadId: ROOM_ASKS.roomThreadId,
-        name: "Room asks",
-        memberIds: [ROOM_ASKS.botId],
-        defaultResponder: { kind: "member", botId: ROOM_ASKS.botId },
+      ...[ROOM_ASKS, ROOM_LAUNCH].map((room) => ({
+        id: room.groupId,
+        threadId: room.roomThreadId,
+        name: room.name,
+        memberIds: [room.botId],
+        defaultResponder: { kind: "member", botId: room.botId },
         bulletin: "",
         unread: false,
         createdAt: 1,
-        tasks: [{ threadId: ROOM_ASKS.roomThreadId, title: "Release", createdAt: 1 }],
-      },
+        tasks: [{ threadId: room.roomThreadId, title: "Release", createdAt: 1 }],
+      })),
     ]));
     // 61 user turns, one past the compaction cap, so every thread below compacts on its next send.
     const messages = Array.from({ length: 121 }, (_, index) => ({
@@ -889,11 +886,10 @@ describe("context compaction e2e", () => {
         turnsAtWrite: 0,
       }));
     }
-    const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
-    writeFileSync(join(dataDir, "task-state", `${ROOM_ASKS.roomThreadId}.json`), JSON.stringify({
+    for (const room of [ROOM_ASKS, ROOM_LAUNCH]) writeFileSync(join(dataDir, "task-state", `${room.roomThreadId}.json`), JSON.stringify({
       v: 1,
-      threadId: ROOM_ASKS.roomThreadId,
-      botId: ROOM_ASKS.botId,
+      threadId: room.roomThreadId,
+      botId: room.botId,
       goal: "Ship the room release",
       plan: [],
       completed: [],
@@ -901,7 +897,7 @@ describe("context compaction e2e", () => {
       artifacts: [],
       blockers: [],
       nextAction: "",
-      asks: [1, 2, 3, 4].map((id) => ({ id: `A${id}`, ask: `Room handoff ${id}`, status: "waiting-for-user", ref: `VM ${id} ready`, at: twoDaysAgo, changedAt: twoDaysAgo + id })),
+      asks: [1, 2, 3, 4].map((id) => ({ id: `A${id}`, ask: `Room handoff ${id}`, status: "waiting-for-user", ref: `VM ${id} ready`, at: Date.now() - room.days * 24 * 60 * 60 * 1000, changedAt: Date.now() - room.days * 24 * 60 * 60 * 1000 + id })),
       updatedAt: 1,
       updatedBy: "bot",
       flushReason: "progress",
@@ -1684,5 +1680,21 @@ describe("context compaction e2e", () => {
     expect(prompt).toContain("- A4 waiting-for-user ");
     expect(prompt).toContain(": Room handoff 2 (VM 2 ready)\n- +1 more waiting on the user");
     expect(prompt).not.toContain("- A1 waiting-for-user ");
+  }, 30_000);
+
+  it("keeps the verdict rows a failed room launch never delivered for the next reply", async () => {
+    const logged = () => existsSync(claudePromptLogPath) ? readFileSync(claudePromptLogPath, "utf8").split("\n").slice(0, -1) : [];
+    const rested = () => storedTaskPacket(ROOM_LAUNCH.roomThreadId).asks.filter((item: { shown?: number }) => item.shown !== undefined).map((item: { id: string }) => item.id);
+    const room = async () => (await api("GET", "/api/bots")).body.groups.find((group: { id: string }) => group.id === ROOM_LAUNCH.groupId);
+    expect((await api("POST", `/api/groups/${ROOM_LAUNCH.groupId}/messages`, { text: "done" })).status).toBe(202);
+    await waitFor(async () => (await room()).working === false && (await room()).messages.some((message: { tool?: { name: string } }) => message.tool?.name.startsWith("error: ")));
+    expect(rested()).toEqual([]);
+    expect((await api("PATCH", `/api/bots/${ROOM_LAUNCH.botId}`, { modelSelection: { mode: "pinned", instanceId: "claude", model: "claude-fake", effort: "low" } })).status).toBe(200);
+    const before = logged().length;
+    expect((await api("POST", `/api/groups/${ROOM_LAUNCH.groupId}/messages`, { text: "done" })).status).toBe(202);
+    await waitFor(async () => logged().length > before && (await room()).working === false);
+    const prompt = z.object({ text: z.string() }).parse(JSON.parse(logged()[before]!)).text;
+    for (const id of ["A1", "A2", "A3"]) expect(prompt).toContain(`- ${id} waiting-for-user needs verdict `);
+    await waitFor(async () => rested().join() === "A1,A2,A3");
   }, 30_000);
 });

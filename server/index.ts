@@ -3075,22 +3075,29 @@ function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }
   }
 }
 
-// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time; a leftover no turn showed yet rides until one does; a waiting ask's verdict row rests once shown
-function stampShownAsks(threadId: string, sent: string): void {
+// Thread → the waiting asks its dispatched turn carries verdict rows for; a launch can fail after sendTurn returns, so they rest only once it landed
+const sentVerdicts = new Map<string, { turnId: string; ids: string[] }>();
+
+// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time; a leftover no turn showed yet rides until one does
+function stampShownAsks(threadId: string, sent: string, turnId: string | undefined): void {
   const record = taskPacketForWrite(threadId);
   const now = Date.now();
   const more = sent.split("\n").filter((line) => line.includes(MORE_PROMISES)).join(" ");
   const left = record?.asks?.filter((ask) => ask.shown === 0 && (sent.includes(`- ${ask.id} `) || new RegExp(`\\b${ask.id}\\b`).test(more))).map((ask) => ask.id) ?? [];
-  const ids = [...(record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) ?? [] : []), ...left, ...shownVerdicts(record?.asks, sent)];
-  const stamped = new Set(ids);
-  if (record && ids.length) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => stamped.has(ask.id) ? { ...ask, shown: now } : ask) });
+  const ids = [...(record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) ?? [] : []), ...left];
+  sentVerdicts.set(threadId, { turnId: turnId ?? "", ids: shownVerdicts(record?.asks, sent) });
+  if (record && ids.length) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
-// a close saves once the turn that showed its line landed, and never over the bot's own edit in that turn
+// a close saves, and a waiting ask's verdict row rests, once the turn that showed it landed; a close never over the bot's own edit in that turn
 function saveLandedCloses(threadId: string, turnId: string | undefined, landed: boolean): void {
   const record = taskPacketForWrite(threadId);
   const ids = askPrs.landed(threadId, turnId ?? "", landed, record?.asks);
-  if (record && ids.length) persistTaskPacket({ ...record, asks: withClosed(record.asks, ids, Date.now()) });
+  const sent = sentVerdicts.get(threadId)?.turnId === (turnId ?? "") ? sentVerdicts.get(threadId) : undefined;
+  if (sent) sentVerdicts.delete(threadId);
+  const rested = new Set(landed ? sent?.ids : []);
+  const now = Date.now();
+  if (record && (ids.length || rested.size)) persistTaskPacket({ ...record, asks: withClosed(record.asks, ids, now).map((ask) => rested.has(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
 // a building ask whose ref PRs all merged shows as done on this turn, with a line; the store keeps it building until the turn lands
@@ -6625,7 +6632,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
       // a leftover counts as shown once an engine took the prompt; a setup failure leaves it for the retry
-      stampShownAsks(threadId, turnText);
+      stampShownAsks(threadId, turnText, started.turnId);
       boardTurnStarted(bot.id, threadId, started.turnId);
       if (currentTurnEpoch(bot.id) !== epoch) return;
       if (started.turnId && settledTurnIdByThread.get(threadId) !== started.turnId) liveTurnIdByThread.set(threadId, started.turnId);
@@ -7707,7 +7714,7 @@ async function runClaimedGroupMemberTurn(
         bindInterruptedTurn(threadId, started.turnId, turnKey, epoch);
         askPrs.closing(threadId, started.turnId ?? "", closes.ids);
         markMailRead(store, threadId, roomMail, started.turnId ?? "");
-        stampShownAsks(threadId, roomContext);
+        stampShownAsks(threadId, roomContext, started.turnId);
         accountNote.commit();
         releaseStarting();
         boardTurnStarted(bot.id, threadId, started.turnId);
