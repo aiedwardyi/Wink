@@ -5889,7 +5889,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   });
   // Someone else's read-only turn never resumes a session an owner's turn built: that turn's file
   // reads are in it. It starts over from the chat's words, even past background work.
-  const guestRecycle = (opts?.readOnly === true ? guestSessions.guestTurn(threadId) : (guestSessions.ownerTurn(threadId), false))
+  const guestRecycle = (opts?.readOnly === true ? guestSessions.guestTurn(threadId, instanceId, task.resumeCursors[instanceId]) : (guestSessions.ownerTurn(threadId), false))
     && !rewound && !fresh && task.resumeCursors[instanceId] !== undefined;
   // A recycle closes the live CLI and kills its background work. Resume it
   // instead; the first turn after that work settles recycles on the same checks.
@@ -5900,8 +5900,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // Stop / crash Continuity on an uncompacted thread keeps the cursor.
   if (recycled) {
     // Drop the fat cursor, then pin the watermark and lastInput to this
-    // send so the next slim turn can resume the new session.
-    store.clearResumeCursors(bot.id, threadId);
+    // send so the next slim turn can resume the new session. A guest's turn
+    // only skips the owner's: its own session replaces it once one opens.
+    if (!guestRecycle) store.clearResumeCursors(bot.id, threadId);
     // A card continuation's id never enters the transcript, so it cannot bound.
     store.markProviderSessionBound(
       bot.id,

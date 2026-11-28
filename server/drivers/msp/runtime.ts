@@ -5,7 +5,7 @@
 // approvals + userInput answers. Effort/model switching and account usage
 // windows build on the same channel. Never extend acp/core.ts.
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import os, { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -246,12 +246,15 @@ const isSettledApprovalError = (err: unknown): boolean =>
 const isDecideSettlementError = (err: unknown): boolean =>
   err instanceof Error && /approval decide settlement failed/.test(err.message);
 
+const deskPath = (threadId: string): string => join(DATA_DIR, "guest-desks", createHash("sha256").update(threadId).digest("hex").slice(0, 16));
 /** An empty folder of its own per chat, where a guest's read-only turn works. */
 const guestDesk = (threadId: string): string => {
-  const dir = join(DATA_DIR, "guest-desks", createHash("sha256").update(threadId).digest("hex").slice(0, 16));
+  const dir = deskPath(threadId);
   mkdirSync(dir, { recursive: true });
   return dir;
 };
+// the cursor names the root its session works in, so a resume never has to guess it
+const cursorOf = (sessionId: string, guest: boolean): string => `${guest ? "desk" : "project"}:${sessionId}`;
 
 export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConfig> {
   const DRIVER_KIND = support.driverKind;
@@ -506,7 +509,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       const openSession = async (
         host: Host,
         request: Request,
-        shape: Pick<SendTurnInput, "resumeCursor" | "model"> & Partial<Pick<SendTurnInput, "readOnly" | "ownerText">>,
+        shape: Pick<SendTurnInput, "threadId" | "resumeCursor" | "model"> & Partial<Pick<SendTurnInput, "readOnly" | "ownerText">>,
         sessionRoot: string,
         sessionConfig: object,
       ) => {
@@ -518,15 +521,18 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         };
         // a resumed session keeps the root it started in, the host's project: someone else's words start over
         if (typeof shape.resumeCursor === "string" && !guestText(shape)) {
+          // Muse 1.4.25+ moves a guest's desk session to this turn's root, but refuses any root for a loaded session,
+          // so a project one attaches bare. A cursor older than its root may be a guest's wherever a guest worked.
+          const root = /^(project|desk):/.exec(shape.resumeCursor)?.[1];
+          const sessionId = root ? shape.resumeCursor.slice(root.length + 1) : shape.resumeCursor;
+          const relocate = root === "desk" || (!root && existsSync(deskPath(shape.threadId)));
           try {
-            // a guest's turn may have started this session in its empty folder: Muse 1.4.25+ moves it
-            // to this turn's root. A resume that can't move starts fresh below, never in the old root.
             const resumed: any = await request(
               "session/resume",
-              { commandId: uuidv7(), sessionId: shape.resumeCursor, workspaceRoot: sessionRoot, ...sessionConfig },
+              { commandId: uuidv7(), sessionId, workspaceRoot: relocate ? sessionRoot : undefined, ...sessionConfig },
               SESSION_TIMEOUT,
             );
-            host.sessionId = typeof resumed?.session?.sessionId === "string" ? resumed.session.sessionId : shape.resumeCursor;
+            host.sessionId = typeof resumed?.session?.sessionId === "string" ? resumed.session.sessionId : sessionId;
             host.model = typeof resumed?.session?.modelId === "string" ? resumed.session.modelId : null;
             host.resumedOk = true;
           } catch {
@@ -618,7 +624,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           await openSession(host, request, shape, isWslCli() ? toWslPath(cwd) : cwd, sessionConfigFor(shape.integrations));
           // A fresh session cannot serve the asked-for cursor.
           if (host.fellBack) throw new Error("resume fell back to a fresh session");
-          host.session = typeof shape.resumeCursor === "string" ? { kind: "loaded", id: host.sessionId! } : { kind: "fresh" };
+          host.session = typeof shape.resumeCursor === "string" ? { kind: "loaded", id: shape.resumeCursor } : { kind: "fresh" };
           // Off the Send path: a method-not-found reply proves the host reads stdin.
           await request("orbit/ping", {}, 1_000).catch((err: unknown) => {
             if ((err as { code?: unknown })?.code !== -32601) throw err;
@@ -880,7 +886,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           if (seen !== turnHost.identity || now.generation !== captured.generation) return false;
           for (const off of bound.splice(0)) off();
           channel.onServerRequest(null);
-          Object.assign(turnHost, { session: { kind: "loaded", id: sessionId }, sessionId, model: state.model, resumedOk: true, fellBack: false });
+          Object.assign(turnHost, { session: { kind: "loaded", id: cursorOf(sessionId, false) }, sessionId, model: state.model, resumedOk: true, fellBack: false });
           identity = seen;
           checked = prepares;
           if (lease) {
@@ -959,7 +965,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             state.model = typeof started?.session?.modelId === "string" ? started.session.modelId : null;
             // Callers record the cursor from session.started: the fresh id
             // steers Retry onto the recovered session, not the poisoned one.
-            emit({ ...base(threadId, turnId), type: "session.started", sessionId: freshId, model: state.model ?? turn.model ?? null });
+            emit({ ...base(threadId, turnId), type: "session.started", sessionId: cursorOf(freshId, guestText(turn)), model: state.model ?? turn.model ?? null });
             systemSent = turn.system;
             const retryText = turn.system
               ? `${turn.system}\n\n${turn.resumeFallback?.text ?? turn.text}`
@@ -1429,7 +1435,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             state.sessionId = sessionId;
             state.model = turnHost.model;
             const promptText = turnHost.fellBack ? (turn.resumeFallback?.text ?? turn.text) : turn.text;
-            emit({ ...base(threadId, turnId), type: "session.started", sessionId, model: state.model ?? turn.model ?? null });
+            emit({ ...base(threadId, turnId), type: "session.started", sessionId: cursorOf(sessionId, guestText(turn)), model: state.model ?? turn.model ?? null });
             turnTimer.mark("cliReady");
             // A session that already holds this exact system text gets only the turn text.
             const system = turn.system && (turnHost.fellBack || !systemHeld.holds(sessionId, turn.system)) ? turn.system : undefined;
