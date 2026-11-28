@@ -154,6 +154,12 @@ const GOAL_ONLY = { botId: "goal-only-bot", botThreadId: "goal-only-thread" };
 const PLAN_CLEARED = { botId: "plan-cleared-bot", botThreadId: "plan-cleared-thread" };
 const ASKS_CODEX = { botId: "asks-codex-bot", botThreadId: "asks-codex-thread", name: "Asks codex", selection: { instanceId: "codex", model: "gpt-fake-default" } };
 const ASKS_CLAUDE = { botId: "asks-claude-bot", botThreadId: "asks-claude-thread", name: "Asks claude", selection: { instanceId: "claude", model: "claude-fake" } };
+const ROOM_ASKS = {
+  botId: "room-asks-bot",
+  botThreadId: "room-asks-direct-thread",
+  groupId: "room-asks-group",
+  roomThreadId: "room-asks-room-thread",
+};
 const SECRET_COLLISION = {
   botId: "secret-collision-bot",
   botThreadId: "secret-collision-direct-thread",
@@ -614,6 +620,20 @@ describe("context compaction e2e", () => {
         createdAt: 1,
         tasks: [{ threadId: SECRET_COLLISION.botThreadId, title: "Release", createdAt: 1, resumeCursors: {} }],
       },
+      {
+        id: ROOM_ASKS.botId,
+        threadId: ROOM_ASKS.botThreadId,
+        name: "Room asks",
+        title: "Release owner",
+        description: "Keep the release moving.",
+        notifications: true,
+        color: "green",
+        unread: false,
+        modelSelection: { instanceId: "claude", model: "claude-fake" },
+        resumeCursors: {},
+        createdAt: 1,
+        tasks: [{ threadId: ROOM_ASKS.botThreadId, title: "Release", createdAt: 1, resumeCursors: {} }],
+      },
       ...[ASKS_CODEX, ASKS_CLAUDE].map((bot) => ({
         id: bot.botId,
         threadId: bot.botThreadId,
@@ -678,6 +698,17 @@ describe("context compaction e2e", () => {
         unread: false,
         createdAt: 1,
         tasks: [{ threadId: SECRET_COLLISION.roomThreadId, title: "Release", createdAt: 1 }],
+      },
+      {
+        id: ROOM_ASKS.groupId,
+        threadId: ROOM_ASKS.roomThreadId,
+        name: "Room asks",
+        memberIds: [ROOM_ASKS.botId],
+        defaultResponder: { kind: "member", botId: ROOM_ASKS.botId },
+        bulletin: "",
+        unread: false,
+        createdAt: 1,
+        tasks: [{ threadId: ROOM_ASKS.roomThreadId, title: "Release", createdAt: 1 }],
       },
     ]));
     // 61 user turns, one past the compaction cap, so every thread below compacts on its next send.
@@ -858,6 +889,24 @@ describe("context compaction e2e", () => {
         turnsAtWrite: 0,
       }));
     }
+    const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    writeFileSync(join(dataDir, "task-state", `${ROOM_ASKS.roomThreadId}.json`), JSON.stringify({
+      v: 1,
+      threadId: ROOM_ASKS.roomThreadId,
+      botId: ROOM_ASKS.botId,
+      goal: "Ship the room release",
+      plan: [],
+      completed: [],
+      evidence: [],
+      artifacts: [],
+      blockers: [],
+      nextAction: "",
+      asks: [1, 2, 3, 4].map((id) => ({ id: `A${id}`, ask: `Room handoff ${id}`, status: "waiting-for-user", ref: `VM ${id} ready`, at: twoDaysAgo, changedAt: twoDaysAgo + id })),
+      updatedAt: 1,
+      updatedBy: "bot",
+      flushReason: "progress",
+      turnsAtWrite: 0,
+    }));
     writeFileSync(join(dataDir, "task-state", `${ROOM_TASK.roomThreadId}.json`), JSON.stringify({
       v: 1,
       threadId: ROOM_TASK.roomThreadId,
@@ -1613,7 +1662,7 @@ describe("context compaction e2e", () => {
     expect(compacted.tools).toContain("agents-proxy");
 
     const resumed = await turn(`${bot.name}: thanks`);
-    expect(resumed.prompt).toContain("- A1 waiting-for-user needs verdict ");
+    expect(resumed.prompt, "a shown verdict row rests").toContain("- A1 waiting-for-user 01-01: Review the model picker PR");
 
     const closed = await botTaskState(bot.botId, bot.botThreadId, { asks: [{ id: "A1", status: "done" }] }, resumed.token);
     expect(closed.status).toBe(200);
@@ -1624,4 +1673,16 @@ describe("context compaction e2e", () => {
     const morning = await turn(`${bot.name}: morning, where are we?`);
     expect(morning.prompt).toContain("[Wink asks list - 1 open. Build any summary or status from this list.]\n- A3 building ");
   }, 60_000);
+
+  it("brings a room's newest asks waiting on the user to a typed done", async () => {
+    const logged = () => existsSync(claudePromptLogPath) ? readFileSync(claudePromptLogPath, "utf8").split("\n").slice(0, -1) : [];
+    const before = logged().length;
+    expect((await api("POST", `/api/groups/${ROOM_ASKS.groupId}/messages`, { text: "done" })).status).toBe(202);
+    await waitFor(async () => logged().length > before && (await botById(ROOM_ASKS.botId))?.busy === false);
+    const prompt = z.object({ text: z.string() }).parse(JSON.parse(logged()[before]!)).text;
+    expect(prompt).toContain("[Wink asks waiting on the user - 4 open, newest first.");
+    expect(prompt).toContain("- A4 waiting-for-user ");
+    expect(prompt).toContain(": Room handoff 2 (VM 2 ready)\n- +1 more waiting on the user");
+    expect(prompt).not.toContain("- A1 waiting-for-user ");
+  }, 30_000);
 });

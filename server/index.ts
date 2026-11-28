@@ -285,7 +285,7 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { ASKS_LIST, asksNudge, fileLeftovers, isStatusTurn, MORE_PROMISES, rotatedAsks, TASK_ASKS_PROMPT, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, fileLeftovers, isStatusTurn, MORE_PROMISES, rotatedAsks, shownVerdicts, TASK_ASKS_PROMPT, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { sweepDroppedAsks } from "./task-dropped.ts";
@@ -3075,13 +3075,13 @@ function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }
   }
 }
 
-// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time; a leftover no turn showed yet rides until one does
+// a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time; a leftover no turn showed yet rides until one does; a waiting ask's verdict row rests once shown
 function stampShownAsks(threadId: string, sent: string): void {
   const record = taskPacketForWrite(threadId);
   const now = Date.now();
   const more = sent.split("\n").filter((line) => line.includes(MORE_PROMISES)).join(" ");
   const left = record?.asks?.filter((ask) => ask.shown === 0 && (sent.includes(`- ${ask.id} `) || new RegExp(`\\b${ask.id}\\b`).test(more))).map((ask) => ask.id) ?? [];
-  const ids = [...(record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) ?? [] : []), ...left];
+  const ids = [...(record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) ?? [] : []), ...left, ...shownVerdicts(record?.asks, now, sent)];
   if (record && ids.length) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
@@ -7342,6 +7342,8 @@ async function runClaimedGroupMemberTurn(
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
   if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   spoken.add(botId);
+  // a person typed the message this hop answers: no chained hop, routine, resume or connector line
+  const typed = hop === 0 && !cardContinuation;
   const userName = cfg.profile?.name?.trim() || "User";
   if (bot.busy && !lane) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority, hands, chainAsk);
@@ -7456,7 +7458,7 @@ async function runClaimedGroupMemberTurn(
   }
   const roomMail = mailForTurn(store, threadId, [], modelContextWindow);
   const roomContext = [
-    prepared.compacted && durableTaskRecordText ? durableTaskRecordText : asksNudge(taskRecord?.asks, Date.now(), latestUser?.text ?? "") || null,
+    prepared.compacted && durableTaskRecordText ? durableTaskRecordText : asksNudge(taskRecord?.asks, Date.now(), latestUser?.text ?? "", [], typed) || null,
     prepared.transcript.map((message) => replayMessageText(message, instance.driverKind, bot.id, selection.model)).join("\n"),
     ...roomMail.map((part) => inertMentions(part.text)),
     ...memberClosedAskNotes(store.activePath(threadId), bot.id),
@@ -7540,7 +7542,7 @@ async function runClaimedGroupMemberTurn(
   if (!lane) {
     store.setActivity(bot.id, "working", threadId);
     dispatchedThreads.set(bot.id, threadId);
-    keepGoing.turnStarted(bot.id, threadId, hop === 0 && !cardContinuation);
+    keepGoing.turnStarted(bot.id, threadId, typed);
   }
   const releaseStarting = takeStartingHold(turnKey);
   releaseTurnStart?.();

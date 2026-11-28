@@ -29,7 +29,7 @@ export const taskAskSchema = z.object({
   wake: z.string().min(1).max(128).optional(),
   /** parked: off the bots' list until this time, then open again */
   until: z.number().int().nonnegative().optional(),
-  /** when a list past MAX_STATUS_ASKS_BYTES last showed it */
+  /** when a list past MAX_STATUS_ASKS_BYTES, or a waiting ask's verdict row, last showed it */
   shown: z.number().int().nonnegative().optional(),
   /** Wink filed it from a turn's words: the full words' identity, so a repeat matches past the clip; unchecked while open */
   key: askKeySchema.optional(),
@@ -67,9 +67,10 @@ const QUESTION_MARK = /[?？]$/;
 const isParked = (ask: TaskAsk, now: number) => isOpenAsk(ask) && ask.until !== undefined && ask.until > now;
 // a skipped question waits for a natural pause, so it never nags an ordinary turn
 // a ref spares only work that runs: an ask waiting on the user goes stale with one once they did their part
-const needsVerdict = (ask: TaskAsk, now: number) =>
-  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !isPromise(ask) && ask.key === undefined && (!ask.ref || ask.status === "waiting-for-user") && now - Math.max(ask.changedAt, ask.until ?? 0) >= ASK_VERDICT_MS;
 const isWaiting = (ask: TaskAsk) => ask.status === "waiting-for-user";
+// once its verdict row rode, a waiting ask waits 3 more days, so the next turn reaches the next ones instead of repeating it
+const needsVerdict = (ask: TaskAsk, now: number) =>
+  isOpenAsk(ask) && !isParked(ask, now) && !isQuestion(ask) && !isPromise(ask) && ask.key === undefined && (!ask.ref || isWaiting(ask)) && now - Math.max(ask.changedAt, ask.until ?? 0, isWaiting(ask) ? ask.shown ?? 0 : 0) >= ASK_VERDICT_MS;
 const words = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -242,6 +243,10 @@ export function rotatedAsks(asks: readonly TaskAsk[] | undefined, now: number): 
   return shown.length < ordered.length + parked.length ? shown.map((ask) => ask.id) : null;
 }
 
+/** The waiting asks whose verdict row the sent context carries, to stamp shown on. */
+export const shownVerdicts = (asks: readonly TaskAsk[] | undefined, now: number, sent: string): string[] =>
+  (asks ?? []).filter((ask) => isWaiting(ask) && needsVerdict(ask, now) && sent.includes(askLine(ask, now))).map((ask) => ask.id);
+
 /** Every open ask, then each parked one with the day it comes back, or with verdictOnly just the asks needing a verdict. Empty when none is open. */
 export function asksBlock(asks: readonly TaskAsk[] | undefined, now: number, statusTurn = false, verdictOnly = false): string {
   const { ordered, parked, due, shown: listShown, line } = listed(asks, now);
@@ -322,7 +327,8 @@ export function asksNudge(asks: readonly TaskAsk[] | undefined, now: number, tex
   const left = own.filter((ask) => isOpenAsk(ask) && ask.shown === 0 && !needsVerdict(ask, now));
   const verdict = waitingShown(own.filter((ask) => needsVerdict(ask, now)).sort((left, right) => left.at - right.at));
   const waiting = typed ? own.filter((ask) => isWaiting(ask) && !verdict.includes(ask)).sort((left, right) => right.changedAt - left.changedAt) : [];
-  const mine = new Set(own.filter((ask) => !needsVerdict(ask, now) && !left.includes(ask) && !waiting.slice(0, MAX_LISTED_WAITING).includes(ask)));
+  // a stale waiting ask the verdict rows held back stays nameable
+  const mine = new Set(own.filter((ask) => !(needsVerdict(ask, now) && (!isWaiting(ask) || verdict.includes(ask))) && !left.includes(ask) && !waiting.slice(0, MAX_LISTED_WAITING).includes(ask)));
   const render = (picked: readonly TaskAsk[]) => {
     const hits = picked.filter((ask) => mine.has(ask));
     return [

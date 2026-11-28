@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addQuestionAsk, answerQuestionAsk, ASK_VERDICT_MS, asksBlock, asksNudge, fileLeftovers, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, rotatedAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
+import { addQuestionAsk, answerQuestionAsk, ASK_VERDICT_MS, asksBlock, asksNudge, fileLeftovers, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, rotatedAsks, shownVerdicts, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
 import { taskRecordBlock } from "./turn-context.ts";
 
 const HOUR = 60 * 60 * 1000;
@@ -203,6 +203,30 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
     expect(listed(asksNudge(many, NOW, "status?"))).toHaveLength(30);
     const stale = Array.from({ length: 5 }, (_, index) => ask(index + 1, { changedAt: NOW - 4 * DAY }));
     expect(listed(asksNudge(stale, NOW, "thanks"))).toHaveLength(5);
+  });
+
+  it("names a stale waiting ask the verdict rows held back, by its words or its ref", () => {
+    const many = Array.from({ length: 30 }, (_, index) => ask(index + 1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY + index }));
+    many[3] = ask(4, { ask: "Set up the amber satellite", status: "waiting-for-user", ref: "zircon observatory", changedAt: NOW - 4 * DAY + 3 });
+    for (const text of ["amber satellite done", "zircon observatory done"]) {
+      expect(listed(asksNudge(many, NOW, text, [], true)), text).toContain("- A4 waiting-for-user needs verdict 11-12: Set up the amber satellite (zircon observatory)");
+    }
+  });
+
+  it("moves on to the next stale waiting asks once a turn showed their verdict rows, and brings them back 3 days later", () => {
+    let asks = Array.from({ length: 30 }, (_, index) => ask(index + 1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY + index }));
+    const verdicts = (sent: string) => listed(sent).filter((line) => line.includes("needs verdict")).map((line) => line.split(" ")[1]);
+    const turns: string[][] = [];
+    for (const [turn, text] of ["thanks", "hello", "sounds good", "nice", "got it"].entries()) {
+      const now = NOW + turn * HOUR;
+      const sent = asksNudge(asks, now, text, [], true);
+      turns.push(verdicts(sent));
+      const ids = shownVerdicts(asks, now, sent);
+      asks = asks.map((item) => ids.includes(item.id) ? { ...item, shown: now } : item);
+    }
+    expect(turns).toEqual([["A1", "A2", "A3"], ["A4", "A5", "A6"], ["A7", "A8", "A9"], ["A10", "A11", "A12"], ["A13", "A14", "A15"]]);
+    expect(verdicts(asksNudge(asks, NOW + ASK_VERDICT_MS, "thanks", [], true))).toEqual(["A1", "A2", "A3"]);
+    expect(shownVerdicts(asks, NOW, asksNudge(asks, NOW, "done", [], true)), "never the passive rows A30, A29, A28").toEqual(["A16", "A17", "A18"]);
   });
 
   it("keeps a building ask with a ref and a parked one out of a typed reply", () => {
