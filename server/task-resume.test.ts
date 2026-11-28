@@ -517,8 +517,8 @@ describe("interrupt ownership", () => {
     }
     visit(room);
     const javascript = ts.transpileModule(`const bind = ${binding.getText(parsed)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
-    new Function("bindInterruptedTurn", "threadId", "bot", "epoch", "currentTurnEpoch", "isCancelled", "liveTurnIdByThread", "reply", "markMailRead", "store", "roomMail", "accountNote", "releaseStarting", "boardTurnStarted", "turnKey", "askPrs", "closes", `${javascript}\nreturn bind;`)(
-      f.bind, threadId, { id: "bot-1" }, 0, () => 1, () => true, f.liveTurnIdByThread, { claim: () => {} }, () => {}, {}, [], { commit: () => {} }, () => {}, () => {}, "bot-1", { closing: () => {} }, { ids: [] },
+    new Function("bindInterruptedTurn", "threadId", "bot", "epoch", "currentTurnEpoch", "isCancelled", "liveTurnIdByThread", "reply", "markMailRead", "store", "roomMail", "accountNote", "releaseStarting", "boardTurnStarted", "turnKey", "askPrs", "closes", "stampShownAsks", "roomContext", `${javascript}\nreturn bind;`)(
+      f.bind, threadId, { id: "bot-1" }, 0, () => 1, () => true, f.liveTurnIdByThread, { claim: () => {} }, () => {}, {}, [], { commit: () => {} }, () => {}, () => {}, "bot-1", { closing: () => {} }, { ids: [] }, () => {}, "",
     )({ turnId: "stopped-turn" });
     expect(f.liveTurnIdByThread.get(threadId)).toBe("new-turn");
     expect(f.stale(threadId, "new-turn")).toBe(false);

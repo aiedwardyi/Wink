@@ -12,10 +12,12 @@ import * as context from "./context-compaction.ts";
 import { joinRunningTurn } from "./continuation-turn.ts";
 import type { ProviderInstance, SendTurnInput } from "./contracts.ts";
 import { GrokAgentDriver } from "./drivers/acp/grok.ts";
+import { MspMuseAgentDriver } from "./drivers/msp/muse.ts";
 import { guestTurnInput } from "./drivers/turn-access.ts";
 import * as mail from "./mail.ts";
 import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import { closeMessageDb } from "./message-db.ts";
+import * as procs from "./procs.ts";
 import { roomEchoesSinceLastUserTurn } from "./one-mind.ts";
 import { GuestSessions } from "./rooms/guest-sessions.ts";
 import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
@@ -73,11 +75,17 @@ const recordJavascript = ts.transpileModule(`function rec(scope) { with (scope) 
   return { taskRows, messagesBeforeSummary, taskRecord, durableTaskRecordText, unsettled, recovering, recoveryLatestUserText };
 } }`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None } }).outputText;
 const taskRecordOf = new Function(`${recordJavascript}\nreturn rec;`)();
+// The engine event that stores a turn's cursor
+const sessionStarted = section('    case "session.started":', "\n      break;").replace('case "session.started":', "");
+const onSessionStarted = new Function(`${ts.transpileModule(`function on(scope) { with (scope) { ${sessionStarted} } }`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None } }).outputText}\nreturn on;`)();
 
 const fakeCli = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-acp-cli.ts");
+const model = "fake-model";
+const fakeMsp = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-msp-cli.ts");
 const CANARY = "host-only file: canary GJR-7731";
 let scratch: string;
 const live: ProviderInstance[] = [];
+const exits: Promise<unknown>[] = [];
 const envBefore = new Map<string, string | undefined>();
 const setEnv = (name: string, value: string) => {
   if (!envBefore.has(name)) envBefore.set(name, process.env[name]);
@@ -95,6 +103,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   for (const instance of live.splice(0)) await instance.dispose();
+  // a Muse child works in its guest desk, and Windows keeps that folder until the child exits
+  await Promise.all(exits.splice(0));
   for (const [name, value] of envBefore) value === undefined ? delete process.env[name] : (process.env[name] = value);
   envBefore.clear();
   _resetSteerQueue();
@@ -103,32 +113,52 @@ afterEach(async () => {
 });
 
 // A joined room stores the typed words as the task's user row (index.ts startTurn transcriptText), with no author
-const rig = async () => {
+const rig = async (engine: "grok" | "muse" = "grok") => {
   const project = join(scratch, "proj");
   mkdirSync(project, { recursive: true });
   writeFileSync(join(project, "notes.txt"), CANARY);
   const elsewhere = join(scratch, "elsewhere.txt");
   writeFileSync(elsewhere, "outside canary");
   const out = join(scratch, "read-out.txt");
-  setEnv("FAKE_ACP_MODE", "read");
-  setEnv("FAKE_ACP_READ_OUT", out);
-  const instance = await GrokAgentDriver.create({ instanceId: "replay-grok", displayName: undefined, environment: {}, enabled: true, config: { cli: fakeCli, fullAuto: true } });
-  live.push(instance);
-  const sendTurn = vi.spyOn(instance.adapter, "sendTurn");
-  const instanceId = "claude";
-  const model = "fake-model";
-  const store = new Store(() => ({ instanceId, model }));
-  const bot = store.createBot({}, { seedMessages: false });
+  if (engine === "grok") {
+    setEnv("FAKE_ACP_MODE", "read");
+    setEnv("FAKE_ACP_READ_OUT", out);
+  } else {
+    const spawn = procs.spawnCli;
+    vi.spyOn(procs, "spawnCli").mockImplementation((...args) => {
+      const child = spawn(...args);
+      exits.push(new Promise((done) => (child.exitCode === null ? child.once("exit", done) : done(null))));
+      return child;
+    });
+    setEnv("META_API_KEY", "meta-key");
+    setEnv("FAKE_MSP_MODE", "read");
+    setEnv("FAKE_MSP_READ_OUT", out);
+  }
+  // Muse's cursor comes from its own session.started, which the registry stamps with its instance id
+  const instanceId = engine === "grok" ? "claude" : "replay-muse";
+  const boot = async () => {
+    const created = engine === "grok"
+      ? await GrokAgentDriver.create({ instanceId: "replay-grok", displayName: undefined, environment: {}, enabled: true, config: { cli: fakeCli, fullAuto: true } })
+      : await MspMuseAgentDriver.create({ instanceId, displayName: undefined, environment: {}, enabled: true, config: { cli: fakeMsp, fullAuto: true } });
+    live.push(created);
+    if (engine === "muse") created.adapter.onEvent((event) => onSessionStarted({ event: { ...event, providerInstanceId: instanceId }, store, bot, staleTurnEvent: () => false, turnSeeds: new Map(), systemSeeds: new Map() }));
+    return { instance: created, sendTurn: vi.spyOn(created.adapter, "sendTurn") };
+  };
+  let store = new Store(() => ({ instanceId, model }));
+  let bot = store.createBot({}, { seedMessages: false });
+  let { instance, sendTurn } = await boot();
   const threadId = bot.threadId;
   const ref = { sessions: new GuestSessions() };
   const packets = new Map<string, Parameters<typeof recordTaskCompletion>[0]>();
+  const cursorNow = () => store.taskByThread(bot.id, threadId)?.resumeCursors[instanceId];
   const settle = (cursor: string) => {
     store.markTaskDispatched(bot.id, threadId, instanceId, model);
-    store.setResumeCursor(bot.id, instanceId, cursor, threadId);
-    store.markResumeSeeded(bot.id, threadId, { instanceId, cursor, compactionId: null });
+    if (engine === "grok") store.setResumeCursor(bot.id, instanceId, cursor, threadId);
+    const seeded = cursorNow();
+    if (seeded !== undefined) store.markResumeSeeded(bot.id, threadId, { instanceId, cursor: seeded, compactionId: null });
   };
   const answer = () => store.appendMessage(threadId, { role: "bot", kind: "text", text: "Answer.", from: { botId: bot.id, name: "Pete", color: bot.color } });
-  const send = async (who: "owner" | "guest", typed: string, ended: "ok" | "interrupted" | "failed" = "ok") => {
+  const send = async (who: "owner" | "guest", typed: string, ended: "ok" | "interrupted" | "failed" | "refused" = "ok") => {
     const prompt = who === "guest" ? `"Mina" asked you: ${inertMentions(typed)}` : `"Peter" asked you: ${typed}`;
     const { opts, userMessage } = joinedRow({
       store, bot, threadId, text: prompt, typed, readOnly: who === "guest", guest: who === "guest", randomUUID,
@@ -171,13 +201,14 @@ const rig = async () => {
       pendingInterruptThreads: { started: () => {} }, effort: undefined, leanStartup: false, isUnattended: () => false, turnCwdByThread: new Map(),
       joinRunningTurn, guestTurnInput, runningTurnIdByThread: new Map(), readOnly: opts.readOnly === true,
     });
-    expect(await recorder.until((e) => e.type === "turn.completed" && e.threadId === threadId)).toMatchObject({ ok: true });
+    expect(await recorder.until((e) => e.type === "turn.completed" && e.threadId === threadId)).toMatchObject({ ok: ended !== "refused" });
+    recorder.stop();
     const sent = sendTurn.mock.calls.at(-1)![0] as SendTurnInput;
     settle((sent.resumeCursor as string | undefined) ?? `${who}-session-${sendTurn.mock.calls.length}`);
     // a Stop, an engine error or a quit leaves the turn unsettled, as index.ts records it
     const reply = ended === "ok" ? answer() : undefined;
-    packets.set(threadId, recordTaskCompletion(packets.get(threadId)!, { ok: ended !== "failed", ...(ended === "interrupted" && { interrupted: true }), reply: reply?.text ?? "", messageId: reply?.id, now: Date.now(), turnsAtWrite: 0 }));
-    return { read: existsSync(out) ? readFileSync(out, "utf8") : null, sent, unsettled: rec.unsettled as string };
+    packets.set(threadId, recordTaskCompletion(packets.get(threadId)!, { ok: ended === "ok" || ended === "interrupted", ...(ended === "interrupted" && { interrupted: true }), reply: reply?.text ?? "", messageId: reply?.id, now: Date.now(), turnsAtWrite: 0 }));
+    return { read: existsSync(out) ? readFileSync(out, "utf8") : null, sent, unsettled: rec.unsettled as string, cursor: cursorNow() };
   };
   // a row as Wink wrote it before the guest stamp: the typed words, no author, no stamp
   const old = (typed: string) => {
@@ -185,7 +216,18 @@ const rig = async () => {
     answer();
     settle(`old-session-${store.messagesFor(threadId).length}`);
   };
-  return { send, old, restart: () => { ref.sessions = new GuestSessions(); }, ask: `@Pete-Coder what does @notes.txt say? and @${elsewhere}` };
+  // a restart reloads the store from disk and starts the engine again
+  const restart = async () => {
+    ref.sessions = new GuestSessions();
+    store.flushSaves();
+    closeMessageDb();
+    store = new Store(() => ({ instanceId, model }));
+    bot = store.bot(bot.id)!;
+    await instance.dispose();
+    live.splice(live.indexOf(instance), 1);
+    ({ instance, sendTurn } = await boot());
+  };
+  return { send, old, restart, ask: `@Pete-Coder what does @notes.txt say? and @${elsewhere}` };
 };
 
 // GATE-REVIEW-2239G: a guest turn that starts over replays the task, whose rows keep a guest's typed words raw
@@ -193,7 +235,7 @@ it.each([["the owner's turn", "owner"], ["a Wink restart", "restart"]] as const)
   const r = await rig();
   expect((await r.send("guest", r.ask)).read).toBeNull();
   if (between === "owner") await r.send("owner", "@Pete-Coder thanks");
-  else r.restart();
+  else await r.restart();
   const again = await r.send("guest", "@Pete-Coder and now?");
   expect(again.sent.resumeCursor).toBeUndefined();
   expect(again.read).toBeNull();
@@ -247,6 +289,38 @@ it("an owner turn that starts over in a room task inlines no file an unstamped r
   await own.send("owner", own.ask);
   setEnv("FAKE_ACP_LOAD_FAILS", "1");
   expect((await own.send("owner", "@Pete-Coder thanks")).read).toContain("outside canary");
+}, 30_000);
+
+// GATE-REVIEW-2267E must-fix 1: a guest's turn that fails before its session opens takes no owner session with it
+it("an owner's Muse turn after a restart resumes their session when a guest's setup failed in between", async () => {
+  const r = await rig("muse");
+  setEnv("FAKE_MSP_SESSION_ID", "original-owner");
+  expect(await r.send("owner", "@Pete-Coder hi")).toMatchObject({ read: CANARY, cursor: "project:original-owner" });
+  setEnv("FAKE_MSP_SESSION_ID", "guest-desk");
+  setEnv("FAKE_MSP_REFUSE_MODEL", model);
+  const guest = await r.send("guest", "@Pete-Coder hello", "refused");
+  expect(guest.sent.resumeCursor).toBeUndefined();
+  expect(guest.read).toBeNull();
+  setEnv("FAKE_MSP_REFUSE_MODEL", "");
+  await r.restart();
+  setEnv("FAKE_MSP_LOADED", "1");
+  setEnv("FAKE_MSP_SESSION_ID", "replacement-owner");
+  const owner = await r.send("owner", "@Pete-Coder still there?");
+  expect(owner.sent.resumeCursor).toBe("project:original-owner");
+  expect(owner).toMatchObject({ read: CANARY, cursor: "project:original-owner" });
+}, 30_000);
+
+it("a guest's Muse turn after a guest's failed setup still starts over in its desk", async () => {
+  const r = await rig("muse");
+  setEnv("FAKE_MSP_SESSION_ID", "original-owner");
+  await r.send("owner", "@Pete-Coder hi");
+  setEnv("FAKE_MSP_SESSION_ID", "guest-desk");
+  setEnv("FAKE_MSP_REFUSE_MODEL", model);
+  await r.send("guest", "@Pete-Coder hello", "refused");
+  setEnv("FAKE_MSP_REFUSE_MODEL", "");
+  const again = await r.send("guest", "@Pete-Coder and now?");
+  expect(again.sent.resumeCursor).toBeUndefined();
+  expect(again).toMatchObject({ read: null, cursor: "desk:guest-desk" });
 }, 30_000);
 
 it("reads a room task's rows for the model through taskRows", () => {

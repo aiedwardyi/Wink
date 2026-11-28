@@ -64,6 +64,13 @@
 //                   handling one inbound message and write them as a single
 //                   stdout chunk, the framing a busy real host produces.
 //   FAKE_MSP_RPC_DUMP  path to write the method sequence seen this run.
+//   FAKE_MSP_LOADED  1: every session is still loaded on the host, as Muse 1.4.25's
+//                   shared host keeps one past a restart, so a session/resume
+//                   naming workspaceRoot is refused with its error.
+//   FAKE_MSP_SESSION_ID  the id session/start opens (default fake-msp-session).
+//   FAKE_MSP_START_FAILS  1: session/start is refused.
+//   FAKE_MSP_REFUSE_MODEL  a model this host doesn't serve: session/start asking
+//                   for it opens on the default, and session/setModel to it is refused.
 //   FAKE_MSP_USAGE     JSON result for usage/read.
 //   FAKE_MSP_USAGE_CHANGED  JSON params for a usage/changed notification.
 //   FAKE_MSP_ITEMS     JSON item notifications before the scripted turn.
@@ -124,7 +131,7 @@ const recordConfig = (entry: unknown) => {
   }
 };
 
-const SESSION_ID = "fake-msp-session";
+const SESSION_ID = process.env.FAKE_MSP_SESSION_ID ?? "fake-msp-session";
 const READ_OUT = process.env.FAKE_MSP_READ_OUT;
 const sessionRoots = (): Record<string, string | null> => (READ_OUT && existsSync(`${READ_OUT}.roots.json`) ? JSON.parse(readFileSync(`${READ_OUT}.roots.json`, "utf8")) : {});
 const CONTRIBUTOR_BUILDS = ["muse-spark-1.3", "muse-spark-1.2"];
@@ -339,6 +346,10 @@ function handle(msg: any) {
     }
     case "session/start": {
       if (rejectSessionMcp(msg)) break;
+      if (process.env.FAKE_MSP_START_FAILS === "1") {
+        out({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: "session/start refused" } });
+        break;
+      }
       recordConfig({
         method: "session/start",
         modelId: msg.params?.modelId ?? null,
@@ -347,7 +358,7 @@ function handle(msg: any) {
         approvalMode: msg.params?.approvalMode,
         workspaceRoot: msg.params?.approvalMode ? msg.params.workspaceRoot : undefined,
       });
-      const modelId = typeof msg.params?.modelId === "string" ? msg.params.modelId : "fake-msp-default";
+      const modelId = typeof msg.params?.modelId === "string" && msg.params.modelId !== process.env.FAKE_MSP_REFUSE_MODEL ? msg.params.modelId : "fake-msp-default";
       const models = readModels();
       models[SESSION_ID] = modelId;
       writeModels(models);
@@ -362,6 +373,11 @@ function handle(msg: any) {
       recordConfig({ method: "session/resume", params: msg.params ?? null });
       if (mode === "resume-fails") {
         out({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } });
+        break;
+      }
+      if (process.env.FAKE_MSP_LOADED === "1" && msg.params?.workspaceRoot !== undefined) {
+        const message = "invalid session/resume params: workspaceRoot/workspaceRoots cannot relocate a session already loaded on this host; omit them to attach, or resume cold after this session unloads";
+        out({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message } });
         break;
       }
       const resumedId = msg.params?.sessionId ?? SESSION_ID;
@@ -583,6 +599,10 @@ function handle(msg: any) {
       recordConfig({ method: "session/setModel", params: msg.params ?? null });
       const target = typeof msg.params?.sessionId === "string" ? msg.params.sessionId : SESSION_ID;
       const next = msg.params?.model?.modelId;
+      if (next !== undefined && next === process.env.FAKE_MSP_REFUSE_MODEL) {
+        out({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message: `unknown model ${next}` } });
+        break;
+      }
       if (typeof next === "string") {
         const models = readModels();
         models[target] = next;
