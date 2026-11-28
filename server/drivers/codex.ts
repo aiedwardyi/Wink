@@ -238,9 +238,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     command: {
       darwin: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
       linux: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
-      win32: "npm install -g @openai/codex",
+      // The official standalone installer: no Node, no admin.
+      win32: "irm https://chatgpt.com/codex/install.ps1 | iex",
     },
-    needsNode: true,
     docsUrl: "https://github.com/openai/codex",
     signInCommand: "codex login",
     login: { args: ["login"], deviceArgs: ["login", "--device-auth"], authHosts: ["auth.openai.com"] },

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import * as terminal from "./terminal-launch.mjs";
 
 for (const shell of ["powershell.exe", "pwsh.exe"]) {
-  for (const scenario of ["success", "failure", "npm present", "npm missing", "winget failure", "winget missing", "irm Claude install", "irm failure", "installer exit"]) {
+  for (const scenario of ["success", "failure", "npm present", "npm missing", "winget failure", "winget missing", "irm Claude install", "irm Codex install", "irm failure", "installer exit"]) {
     test(`${shell}: ${scenario}`, { skip: process.platform !== "win32" }, () => {
       const dir = mkdtempSync(join(tmpdir(), "wink-engine-install-"));
       const bin = join(dir, "fresh-bin");
@@ -31,6 +31,8 @@ for (const shell of ["powershell.exe", "pwsh.exe"]) {
         if (scenario !== "winget missing") cmd("winget", `echo winget>>"${log}"\r\ncopy /y "${join(dir, "staged-npm.cmd")}" "${join(dir, "npm.cmd")}" >nul\r\nexit /b ${scenario === "winget failure" ? 8 : 0}`);
         const npm = scenario.startsWith("winget") || scenario.startsWith("npm");
         const command = scenario === "installer exit" ? "Write-Output 'installer-output'; Invoke-Expression 'exit 7'"
+          // The real Codex installer stops at "Start Codex now? [y/N]" unless CODEX_NON_INTERACTIVE is set.
+          : scenario === "irm Codex install" ? "function Invoke-RestMethod { 'if ($env:CODEX_NON_INTERACTIVE -ne ''1'') { throw ''Start Codex now? [y/N]'' }; install' }\nirm https://chatgpt.com/codex/install.ps1 | iex"
           : scenario.startsWith("irm") ? `function Invoke-RestMethod { '${scenario === "irm failure" ? "Write-Error stub-failure" : "install"}' }\nirm https://stub.invalid/install.ps1 | iex`
             : npm ? "npm install -g stub" : "install";
         const failMarker = join(dir, "it's failed.marker");
@@ -45,7 +47,7 @@ for (const shell of ["powershell.exe", "pwsh.exe"]) {
         assert.ifError(result.error);
         const calls = (() => { try { return readFileSync(log, "utf8").trim().split(/\r?\n/); } catch { return []; } })();
         const expected = claude ? ["install", "signin auth login"]
-          : scenario === "success" ? ["install", "signin"]
+          : ["success", "irm Codex install"].includes(scenario) ? ["install", "signin"]
             : scenario === "failure" ? ["install"]
               : scenario === "npm present" ? ["npm", "signin"]
                 : scenario === "npm missing" ? ["winget", "npm", "signin"]

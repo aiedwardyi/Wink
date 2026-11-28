@@ -175,6 +175,13 @@ describe("windowsKnownDirs", () => {
     expect(dirs.length).toBeGreaterThan(0);
     expect(dirs[0]).toMatch(/system32$/i);
   });
+
+  it("finds Codex where its standalone installer puts it", () => {
+    vi.stubEnv("LOCALAPPDATA", "C:\\Users\\tester\\AppData\\Local");
+    try {
+      expect(windowsKnownDirs()).toContain(join("C:\\Users\\tester\\AppData\\Local", "Programs", "OpenAI", "Codex", "bin"));
+    } finally { vi.unstubAllEnvs(); }
+  });
 });
 
 // Windows CLI resolution — spawn(cli) alone finds nothing on Windows (no

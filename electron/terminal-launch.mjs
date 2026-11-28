@@ -121,6 +121,8 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
     const refreshPath = "$env:Path=$env:Path+';'+[Environment]::GetEnvironmentVariable('Path', 'Machine')+';'+[Environment]::GetEnvironmentVariable('Path', 'User')";
     const signInEnv = agy ? "$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; "
       : driverKind === "claudeAgent" ? "$env:Path=(Join-Path $HOME '.local/bin')+';'+$env:Path; " : "";
+    // The Codex installer otherwise ends on a "Start Codex now?" prompt the sign-in step would wait behind.
+    const installEnv = driverKind === "codex" ? "$env:CODEX_NON_INTERACTIVE='1'; " : "";
     // Wink's install probe reads this file to stop saying "Finish in the window".
     const mark = failMarker ? ` try { Set-Content -LiteralPath '${failMarker.replaceAll("'", "''")}' -Value failed } catch {};` : "";
     return [
@@ -134,7 +136,7 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
         refreshPath,
         "}",
       ] : []),
-      `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`$ErrorActionPreference='Stop'\n${command}`, "utf16le").toString("base64")}`,
+      `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`$ErrorActionPreference='Stop'\n${installEnv}${command}`, "utf16le").toString("base64")}`,
       `if ($LASTEXITCODE -ne 0) { Write-Host "The install didn't finish. See the error above, then try the install again in Wink.";${mark} return }`,
       refreshPath,
       ...(signIn ? [`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`${signInEnv}${signIn}`, "utf16le").toString("base64")}`] : []),
