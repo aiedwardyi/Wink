@@ -52,6 +52,8 @@ export type CallAudioPort = {
   boop(): void;
   heardShare(): number;
   micLevel(): number;
+  /** The context and the voice's element as the call goes live, for the start stats. */
+  sound?(): { ctx: AudioContextState; paused: boolean };
   readonly playing: boolean;
   onIdle: () => void;
   onStart: () => void;
@@ -88,7 +90,9 @@ type Request = { text: string; accounted: boolean; accepted: boolean; nudged: bo
 /** A [Wink] line waiting for the voice to be quiet. */
 // `fix` corrects the voice's own last turn, so it skips the quiet gap.
 // `kept` is context it leaves behind when dropped as no longer valid.
-type Held = { text: string; valid?: () => boolean; kept?: string; played?: () => void; cut?: () => void; nudge?: true; fix?: true; update?: string };
+type Held = { text: string; valid?: () => boolean; kept?: string; played?: () => void; cut?: () => void; nudge?: true; fix?: true; update?: string; greet?: true };
+/** When each start step happened, ms from the tap: a call that never spoke shows where it stopped. No speech text. */
+type Start = { setupMs?: number; greet?: "sent" | "dropped"; greetMs?: number; ctx?: AudioContextState; paused?: boolean; noSound?: true; heardMs?: number; answerMs?: number; audioMs?: number; playMs?: number };
 
 const HANGUL = /[가-힣]/g;
 const LETTER = /\p{L}/gu;
@@ -318,6 +322,8 @@ export class LiveCall {
     guard: { nudges: 0, failLines: 0, promise: 0, cant: 0, unsure: 0 },
     hidden: { spans: 0, ms: 0 }, closeCodes: [] as number[], ttfa: [] as number[], usage: 0,
   };
+  private begin: Start = {};
+  private level = 1;
   private hiddenAt = 0;
   private stalled = false;
   private heals = 0;
@@ -373,6 +379,9 @@ export class LiveCall {
     this.now = deps.now ?? Date.now;
     this.prefs = deps.prefs;
     deps.audio.onStart = () => {
+      // Queued is not heard: a suspended context or a paused output plays nothing.
+      const sound = deps.audio.sound?.();
+      if (sound?.ctx === "running" && !sound.paused) this.mark("playMs");
       if (!this.turnHadAudio && this.spokeAt) {
         this.turnTtfa = this.now() - this.spokeAt;
         this.stats.ttfa.push(this.turnTtfa);
@@ -425,6 +434,7 @@ export class LiveCall {
     const mic = (this.mic ??= this.deps.audio.capture((pcm) => this.frame(pcm)).then((played) => {
       if (played === false) {
         this.stalled = true;
+        this.begin.noSound = true;
         this.set({ noSound: true });
       }
       return null;
@@ -469,6 +479,7 @@ export class LiveCall {
   /** Picks from the call menu: speed and level reach the next words heard; a new voice, style or language swaps the session. */
   retune(prefs: CallPrefs, volume = 1) {
     this.deps.audio.tune(callPace(prefs), volume);
+    this.level = volume;
     this.prefs = prefs;
     this.restyle();
   }
@@ -600,6 +611,10 @@ export class LiveCall {
         }
         if (!mine()) return;
         clearTimeout(this.readyTimer);
+        if (this.begin.setupMs === undefined) {
+          this.mark("setupMs");
+          Object.assign(this.begin, this.deps.audio.sound?.());
+        }
         this.connected = true;
         if (!this.wasLive) this.soundAt = this.now();
         this.wasLive = true;
@@ -611,13 +626,14 @@ export class LiveCall {
         this.early = undefined;
         for (const pcm of early?.frames ?? []) engine.sendAudio(pcm);
         // Sound from the tap may be a quick call or a click: the greeting waits a beat for his words, and goes only if none came.
-        if (!resumed) this.held.unshift(this.deps.opener ? { text: openerLine(this.deps.opener, this.app) } : { text: GREETING[this.app], valid: () => !this.greeted && !this.stats.userLines && !spokenText(this.heardBuf) });
+        if (!resumed) this.held.unshift(this.deps.opener ? { text: openerLine(this.deps.opener, this.app) } : { text: GREETING[this.app], greet: true, valid: () => !this.greeted && !this.stats.userLines && !spokenText(this.heardBuf) });
         if (early?.talked) this.pause();
         this.release();
         this.restyle();
       },
       audio: (pcm) => {
         if (!mine()) return;
+        this.mark("audioMs");
         this.stir();
         if (this.reack) {
           this.reack = false;
@@ -629,8 +645,12 @@ export class LiveCall {
         else this.deps.audio.play(pcm);
       },
       heard: (text) => {
-        if (draining()) return void (this.heardBuf += text);
+        if (draining()) {
+          this.mark("heardMs");
+          return void (this.heardBuf += text);
+        }
         if (!mine()) return;
+        this.mark("heardMs");
         this.stir();
         this.heardBuf += text;
         // The voice's own words back through a phone speaker are not his, however many chunks they come in.
@@ -687,6 +707,7 @@ export class LiveCall {
       },
       answering: () => {
         if (!mine()) return;
+        this.mark("answerMs");
         this.stir();
         this.generating = true;
         this.flushHeard();
@@ -1588,6 +1609,10 @@ export class LiveCall {
     this.carry();
     let item = this.held.shift();
     while (item?.valid && !item.valid()) {
+      if (item.greet) {
+        this.begin.greet = "dropped";
+        this.mark("greetMs");
+      }
       if (item.kept) this.context.push(item.kept);
       item = this.held.shift();
     }
@@ -1598,7 +1623,15 @@ export class LiveCall {
     this.riding = [];
     this.missed = false;
     this.readNext = false;
+    if (item.greet) {
+      this.begin.greet = "sent";
+      this.mark("greetMs");
+    }
     this.engine?.sendText(item.text);
+  }
+
+  private mark(step: "setupMs" | "greetMs" | "heardMs" | "answerMs" | "audioMs" | "playMs") {
+    this.begin[step] ??= this.now() - this.tapAt;
   }
 
   private carry() {
@@ -1847,6 +1880,7 @@ export class LiveCall {
         ackMs: { p50: percentile(this.ack, 0.5), p90: percentile(this.ack, 0.9) },
         asks: { ...counts.asks, ms: { p50: percentile(this.askMs, 0.5), p90: percentile(this.askMs, 0.9) } },
         usage: { total: usage },
+        start: { ...this.begin, volume: this.level, voiceAsked: this.prefs?.voice, voiceLive: this.live?.voice },
       },
     };
     // The server recaps the call on end, so the last lines and sends must land first.
