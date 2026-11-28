@@ -3407,6 +3407,7 @@ function forgetTurnThread(threadId: string) {
   pendingInterruptThreads.delete(threadId);
   adapterTurnByThread.delete(threadId);
   unreadTurns.forget(threadId);
+  importGate.forget(threadId);
 }
 
 function seedFromLastUser(botId: string, threadId: string, turnsAtWrite: number) {

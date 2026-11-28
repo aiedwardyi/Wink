@@ -18,6 +18,7 @@ export class TurnRegistry {
   private readonly turns = new Map<string, LiveTurn>();
   private readonly threads = new Map<string, string>();
   private readonly starting = new Map<string, Omit<LiveTurn, "nowWatch">>();
+  private readonly settledHooks: ((threadId: string, turnId: string) => void)[] = [];
 
   prepare(turn: TurnStart): void {
     this.starting.set(turn.threadId, { ...turn, rootId: turn.rootId ?? null });
@@ -60,10 +61,15 @@ export class TurnRegistry {
     if (turn) turn.rootId = rootId;
   }
 
+  onSettled(hook: (threadId: string, turnId: string) => void): void {
+    this.settledHooks.push(hook);
+  }
+
   settle(turnId: string): void {
     const turn = this.turns.get(turnId);
     if (turn && this.threads.get(turn.threadId) === turnId) this.threads.delete(turn.threadId);
     this.turns.delete(turnId);
+    if (turn) for (const hook of this.settledHooks) hook(turn.threadId, turnId);
   }
 }
 

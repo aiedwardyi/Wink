@@ -69,8 +69,14 @@ const RECAP = {
 
 // bound to the turn id seen at entry: a later turn, however eligible, never stands in for a settled one.
 // Stop and a stall end a turn before its engine exits; the call carries no turn, so the chat stays closed until turn.completed.
-export function importTurnGate(turns: Pick<TurnRegistry, "current">) {
+export function importTurnGate(turns: Pick<TurnRegistry, "current" | "onSettled">) {
   const stopped = new Map<string, Set<string>>();
+  const settled = (threadId: string, turnId: string): void => {
+    const held = stopped.get(threadId);
+    if (held?.delete(turnId) && !held.size) stopped.delete(threadId);
+  };
+  // a lost, ID-less or mismatched turn.completed never names the stopped turn, so any settle of it reopens
+  turns.onSettled(settled);
   const open: ImportMemoryDeps["open"] = ({ botId, threadId }) => {
     const origin = turns.current(threadId);
     if (origin?.botId !== botId || origin.importMemory !== true || stopped.has(threadId)) return null;
@@ -78,12 +84,13 @@ export function importTurnGate(turns: Pick<TurnRegistry, "current">) {
   };
   return Object.assign(open, {
     stop(threadId: string): void {
-      const turnId = turns.current(threadId)?.turnId;
-      if (turnId) stopped.set(threadId, (stopped.get(threadId) ?? new Set()).add(turnId));
+      const turn = turns.current(threadId);
+      // a room caller is refused before the gate
+      if (turn && turn.owner !== "room") stopped.set(threadId, (stopped.get(threadId) ?? new Set()).add(turn.turnId));
     },
-    settled(threadId: string, turnId: string): void {
-      const held = stopped.get(threadId);
-      if (held?.delete(turnId) && !held.size) stopped.delete(threadId);
+    settled,
+    forget(threadId: string): void {
+      stopped.delete(threadId);
     },
   });
 }

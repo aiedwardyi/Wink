@@ -202,6 +202,37 @@ describe("import_memory saves through the Settings path", () => {
     expect((await call({}, [typed(paste)], true, gate)).text).toContain("Import Memory says: Added 2 new.");
   });
 
+  it("reopens once the registry settles a stopped turn whose turn.completed was lost, ID-less or for another turn", async () => {
+    for (const fault of ["dropped", "no id", "wrong id"]) {
+      removeTestData(dir);
+      const turns = new TurnRegistry();
+      const gate = importTurnGate(turns);
+      turns.start("u1", { botId: "b1", threadId: "t1", owner: "user", depth: 0, importMemory: true });
+      gate.stop("t1");
+      if (fault === "wrong id") {
+        turns.settle("x9");
+        gate.settled("t1", "x9");
+      }
+      expect((await call({}, [typed(paste)], true, gate)).text).toContain("Settings > Import Memory still works");
+      turns.settle("u1");
+      turns.start("u2", { botId: "b1", threadId: "t1", owner: "user", depth: 0, importMemory: true });
+      expect((await call({}, [typed(paste)], true, gate)).text).toContain("Import Memory says: Added 2 new.");
+    }
+  });
+
+  it("a room Stop or a deleted thread holds nothing", async () => {
+    for (const end of ["room", "deleted"]) {
+      removeTestData(dir);
+      const turns = new TurnRegistry();
+      const gate = importTurnGate(turns);
+      turns.start("r1", { botId: "b1", threadId: "t1", owner: end === "room" ? "room" : "user", depth: 0 });
+      gate.stop("t1");
+      if (end === "deleted") gate.forget("t1");
+      turns.start("u2", { botId: "b1", threadId: "t1", owner: "user", depth: 0, importMemory: true });
+      expect((await call({}, [typed(paste)], true, gate)).text).toContain("Import Memory says: Added 2 new.");
+    }
+  });
+
   it("lists only the saved facts, never a flagged line", async () => {
     const text = (await call({}, [typed("- My password is hunter2-very-secret\n- Likes tea.\n- Plays tennis.\nSource: ChatGPT")])).text;
     expect(text).toContain("Saved facts:\n- Likes tea.\n- Plays tennis.");
