@@ -21,23 +21,56 @@ import { Fold } from "./Fold";
 const NEW_SKIN_IDS: readonly SkinId[] = ["samurai-ink", "night-rain", "warp", "circuit", "neon-grid", "lagoon", "lagoon-night", "snow", "snow-night", "precision-dimmed", "bronze", "dim-sand"];
 const FEATURED_SKIN_IDS: readonly SkinId[] = [...NEW_SKIN_IDS.filter((id) => id !== "precision-dimmed"), "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "wink-day", "notebook", "messenger"];
 
+const STILLS = import.meta.glob<string>("../scenes/tiles/*-tall.{jpg,png}", { query: "?no-inline", import: "default", eager: true });
+
 /** An animated theme's own scene, looping in its tile while mounted; a still tile under reduced motion. */
 function MiniScene({ scene }: { scene: SceneId }) {
   const layer = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (reducedMotion()) return;
+    const el = layer.current;
+    const tile = el?.closest<HTMLElement>("[data-skin]");
+    if (!el || !tile) return;
     let live = true;
     let host: SceneHost | undefined;
-    const cancel = startTogether({
+    // A phone lays the scene out at its still's size; it covers the thread as the still does (scenes.css). Layout sizes: ancestors may be mid-transform.
+    const fit = new ResizeObserver(([entry]) => {
+      const box = entry!.borderBoxSize[0]!;
+      const style = getComputedStyle(el);
+      const scale = parseFloat(style.getPropertyValue("--mini-scale"));
+      el.style.setProperty("--mini-cover", String(Math.max(box.inlineSize / (parseFloat(style.width) * scale), box.blockSize / (parseFloat(style.height) * scale))));
+    });
+    fit.observe(el.parentElement!);
+    // A phone's still is the scene's own first canvas, drawn as a canvas in the scene's layer: an image there lands on other subpixels.
+    let still: HTMLCanvasElement | undefined;
+    const url = window.matchMedia?.("(orientation: portrait)").matches ? (STILLS[`../scenes/tiles/${tile.dataset.skin}-tall.jpg`] ?? STILLS[`../scenes/tiles/${tile.dataset.skin}-tall.png`]) : undefined;
+    if (url) {
+      const image = new Image();
+      image.src = url;
+      image.decode().then(() => {
+        if (!live || el.dataset.live !== undefined) return;
+        // A scene sizes its canvas by the screen's density, up to the still's own.
+        const density = Math.min(1, (parseFloat(getComputedStyle(el).width) * devicePixelRatio) / image.naturalWidth);
+        still = document.createElement("canvas");
+        still.width = Math.round(image.naturalWidth * density);
+        still.height = Math.round(image.naturalHeight * density);
+        const paint = still.getContext("2d");
+        if (paint) paint.imageSmoothingQuality = "high";
+        paint?.drawImage(image, 0, 0, still.width, still.height);
+        el.prepend(still);
+        el.dataset.still = "";
+      }, () => {});
+    }
+    const cancel = reducedMotion() ? () => {} : startTogether({
       scene,
       start(module) {
-        const tile = layer.current?.closest<HTMLElement>("[data-skin]");
-        if (!live || !layer.current || !tile) return;
+        if (!live) return;
         try {
           // A loop is the longest runner, so every tile also rests on blur.
-          host = startScene(layer.current, { ...module, pauseOnBlur: true }, document.documentElement, tile);
+          host = startScene(el, { ...module, pauseOnBlur: true }, document.documentElement, tile);
           host.emit({ name: "loop" });
-          layer.current.dataset.live = "";
+          still?.remove();
+          delete el.dataset.still;
+          el.dataset.live = "";
         } catch {
           // A scene that cannot start (no canvas) leaves the still tile.
           host?.stop();
@@ -47,6 +80,7 @@ function MiniScene({ scene }: { scene: SceneId }) {
     return () => {
       live = false;
       cancel();
+      fit.disconnect();
       host?.stop();
     };
   }, [scene]);

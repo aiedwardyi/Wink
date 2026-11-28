@@ -1,0 +1,93 @@
+{
+  "build": "f61b9dba3ca604cd7b8d60092cfa07c5bcebd9d0",
+  "stills": {
+    "samurai-ink": "7de9c594bc513e11",
+    "night-rain": "c3008842f929298e",
+    "warp": "71acd769b2b068d8",
+    "circuit": "38690dcfa9227ccb",
+    "neon-grid": "109ad3b2eec73a3d",
+    "lagoon": "8263f7b55fb39c5e",
+    "lagoon-night": "d6d3adb751f395b8",
+    "snow": "6e7aaed106767d92",
+    "snow-night": "409b4b39d74b0b79"
+  },
+  "widths": {
+    "360": {
+      "samurai-ink": 0.011,
+      "night-rain": 0.007,
+      "warp": 0.008,
+      "circuit": 0.005,
+      "neon-grid": 0.003,
+      "lagoon": 0.002,
+      "lagoon-night": 0.003,
+      "snow": 0.003,
+      "snow-night": 0.007
+    },
+    "375": {
+      "samurai-ink": 0.011,
+      "night-rain": 0.007,
+      "warp": 0.008,
+      "circuit": 0.005,
+      "neon-grid": 0.002,
+      "lagoon": 0.002,
+      "lagoon-night": 0.002,
+      "snow": 0.005,
+      "snow-night": 0.007
+    },
+    "390": {
+      "samurai-ink": 0.011,
+      "night-rain": 0.006,
+      "warp": 0.008,
+      "circuit": 0.005,
+      "neon-grid": 0.002,
+      "lagoon": 0.002,
+      "lagoon-night": 0.002,
+      "snow": 0.005,
+      "snow-night": 0.015
+    },
+    "393": {
+      "samurai-ink": 0.011,
+      "night-rain": 0.006,
+      "warp": 0.007,
+      "circuit": 0.005,
+      "neon-grid": 0.002,
+      "lagoon": 0.002,
+      "lagoon-night": 0.002,
+      "snow": 0.004,
+      "snow-night": 0.015
+    },
+    "412": {
+      "samurai-ink": 0.012,
+      "night-rain": 0.007,
+      "warp": 0.008,
+      "circuit": 0.005,
+      "neon-grid": 0.002,
+      "lagoon": 0.002,
+      "lagoon-night": 0.002,
+      "snow": 0.003,
+      "snow-night": 0.007
+    },
+    "430": {
+      "samurai-ink": 0.013,
+      "night-rain": 0.007,
+      "warp": 0.008,
+      "circuit": 0.005,
+      "neon-grid": 0.002,
+      "lagoon": 0.002,
+      "lagoon-night": 0.002,
+      "snow": 0.006,
+      "snow-night": 0.017
+    },
+    "900x1000": {
+      "samurai-ink": 0.018,
+      "night-rain": 0.033,
+      "warp": 0.078,
+      "circuit": 0.005,
+      "neon-grid": 0.004,
+      "lagoon": 0.001,
+      "lagoon-night": 0.001,
+      "snow": 0.007,
+      "snow-night": 0.023
+    }
+  }
+}
