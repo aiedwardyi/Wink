@@ -1183,7 +1183,53 @@ describe("LiveCall", () => {
     expect(engine().texts).toEqual([]);
     call.end();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(posts.find((p) => p.path.endsWith("/call/end"))!.body.stats.start).toMatchObject({ greet: "dropped" });
+    expect(posts.find((p) => p.path.endsWith("/call/end"))!.body.stats.start).toMatchObject({ greet: "dropped", greetMs: 0 });
+  });
+
+  it("a voice queued while it cannot play records no playback until one can", async () => {
+    let t = 1_000;
+    let ctx: AudioContextState = "suspended";
+    let paused = false;
+    const audio = { ...fakeAudio(), sound: () => ({ ctx, paused }) };
+    const { call, engine, posts } = setup({}, audio, () => t);
+    await call.start();
+    engine().events.ready();
+    const reply = () => {
+      engine().events.audio(new Int16Array([500]));
+      audio.onStart();
+      engine().events.turnDone();
+    };
+    t = 2_000;
+    reply();
+    ctx = "running";
+    paused = true;
+    t = 3_000;
+    reply();
+    paused = false;
+    t = 4_000;
+    reply();
+    call.end();
+    await flush();
+    const { start } = posts.find((p) => p.path.endsWith("/call/end"))!.body.stats;
+    expect(start).toMatchObject({ ctx: "suspended", audioMs: 1_000, playMs: 3_000 });
+  });
+
+  it("words heard while a hang-up holds the socket record when they came", async () => {
+    let t = 1_000;
+    let frame!: (pcm: ArrayBuffer) => void;
+    const audio = { ...fakeAudio(), async capture(fn: (pcm: ArrayBuffer) => void) { frame = fn; } };
+    const { call, engine, posts } = setup({}, audio, () => t);
+    await call.start();
+    engine().events.ready();
+    engine().events.turnDone();
+    t = 2_000;
+    frame(new Int16Array([5_000]).buffer);
+    call.end();
+    t = 2_500;
+    engine().events.heard("Never mind, it works.");
+    engine().events.closed(1000, "");
+    await flush();
+    expect(posts.find((p) => p.path.endsWith("/call/end"))!.body.stats.start.heardMs).toBe(1_500);
   });
 
   it("ends the call only after its last lines are saved", async () => {

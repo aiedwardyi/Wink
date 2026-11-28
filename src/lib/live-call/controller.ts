@@ -379,7 +379,9 @@ export class LiveCall {
     this.now = deps.now ?? Date.now;
     this.prefs = deps.prefs;
     deps.audio.onStart = () => {
-      this.mark("playMs");
+      // Queued is not heard: a suspended context or a paused output plays nothing.
+      const sound = deps.audio.sound?.();
+      if (sound?.ctx === "running" && !sound.paused) this.mark("playMs");
       if (!this.turnHadAudio && this.spokeAt) {
         this.turnTtfa = this.now() - this.spokeAt;
         this.stats.ttfa.push(this.turnTtfa);
@@ -643,7 +645,10 @@ export class LiveCall {
         else this.deps.audio.play(pcm);
       },
       heard: (text) => {
-        if (draining()) return void (this.heardBuf += text);
+        if (draining()) {
+          this.mark("heardMs");
+          return void (this.heardBuf += text);
+        }
         if (!mine()) return;
         this.mark("heardMs");
         this.stir();
@@ -1604,7 +1609,10 @@ export class LiveCall {
     this.carry();
     let item = this.held.shift();
     while (item?.valid && !item.valid()) {
-      if (item.greet) this.begin.greet = "dropped";
+      if (item.greet) {
+        this.begin.greet = "dropped";
+        this.mark("greetMs");
+      }
       if (item.kept) this.context.push(item.kept);
       item = this.held.shift();
     }
