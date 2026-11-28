@@ -37,7 +37,7 @@ async function mount({ view = "chart", grokSignedIn = true, model = "claude-opus
   localStorage.setItem("omb-model-picker-view", view);
   const instances = [
     engine("claude", "claudeAgent", ["claude-opus-5-5", "claude-sonnet-5-5"]),
-    engine("codex", "codex", ["gpt-6.1-sol", "gpt-6-luna"]),
+    engine("codex", "codex", ["gpt-6.2-sol", "gpt-6-luna"]),
     engine("grok", "grokAgent", ["grok-4.7", "grok-4.6"], grokSignedIn),
   ];
   const bot: Bot = { id: "bot-1", threadId: "thread-1", name: "Chart", title: "", description: "", color: "green", notifications: false, unread: false, messages: [], modelSelection: { instanceId: "claude", model, effort: "high", mode: "pinned" } };
@@ -97,7 +97,7 @@ describe("ModelChart", () => {
 
   it.each([
     ["claude-sonnet-5-5", "xhigh"],
-    ["gpt-6.1-sol", "low"],
+    ["gpt-6.2-sol", "low"],
   ])("picks %s at %s from a chart dot the same as List", async (cell, level) => {
     await mount({ view: "list" });
     await click(`[data-model-cell="${cell}"]`);
@@ -129,11 +129,11 @@ describe("ModelChart", () => {
     for (let i = 0; i < 8; i++) await key("ArrowLeft");
     expect(effort()).toBe("low");
     await key("2");
-    expect(model()).toBe("gpt-6.1-sol");
+    expect(model()).toBe("gpt-6.2-sol");
     await key("ArrowRight");
     expect(effort()).toBe("medium");
     await key("Enter");
-    expect(saved()).toEqual({ instanceId: "codex", model: "gpt-6.1-sol", effort: "medium", mode: "pinned" });
+    expect(saved()).toEqual({ instanceId: "codex", model: "gpt-6.2-sol", effort: "medium", mode: "pinned" });
   });
 
   it('shows "-" and a dashed reticle on the nearest scored stop where no score is published', async () => {

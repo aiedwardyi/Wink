@@ -7,6 +7,7 @@ import { encodeFrame, readyMessageSchema, ROOM_CODE_RE, ROOM_CODE_TTL_MS, type R
 import { DEFAULT_LIMITS } from "../src/limits.ts";
 import { ROOM_CODES_PER_LABEL, RoomCodeStore } from "../src/room-codes.ts";
 import { makePc, openControl, startRelay, type Control, type Harness } from "./fixtures.ts";
+import { makeIssuer } from "./google-issuer.ts";
 
 let h: Harness | undefined;
 const dirs: string[] = [];
@@ -16,15 +17,17 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 
-function lookup(harness: Harness, code: string): Promise<{ status: number; body: Record<string, unknown> }> {
+function lookup(harness: Harness, code: string, origin?: string): Promise<{ status: number; body: Record<string, unknown>; cors?: string }> {
+  const host = `relay.${harness.base}`;
+  const headers = origin ? { host, origin } : { host };
   return new Promise((resolve, reject) => {
     const req = request(
-      { host: "127.0.0.1", port: harness.port, servername: `relay.${harness.base}`, ca: harness.ca.certPem, method: "GET", path: `/v1/room-codes/${code}`, agent: false, headers: { host: `relay.${harness.base}` } },
+      { host: "127.0.0.1", port: harness.port, servername: `relay.${harness.base}`, ca: harness.ca.certPem, method: "GET", path: `/v1/room-codes/${code}`, agent: false, headers },
       (res) => {
         let text = "";
         res.setEncoding("utf8");
         res.on("data", (chunk: string) => (text += chunk));
-        res.on("end", () => resolve({ status: res.statusCode!, body: JSON.parse(text) }));
+        res.on("end", () => resolve({ status: res.statusCode!, body: JSON.parse(text), cors: res.headers["access-control-allow-origin"] }));
       },
     );
     req.on("error", reject);
@@ -60,6 +63,19 @@ describe("room codes over the control channel", () => {
     ctl.socket.destroy();
   });
 
+  it("mints 8 characters for a PC that asks, and 6 for an older PC", async () => {
+    h = await startRelay();
+    const pc = makePc();
+    const ctl = await openControl(h, pc);
+    const old = (await mint(ctl)) as { code: string };
+    ctl.socket.write(encodeFrame({ type: "roomcode", id: "r2", long: true }));
+    const long = (await ctl.reader.next()) as { id: string; code: string };
+    expect(old.code).toMatch(/^[2-9A-HJ-NP-Z]{6}$/);
+    expect(long).toMatchObject({ id: "r2", code: expect.stringMatching(/^[2-9A-HJ-NP-Z]{8}$/) });
+    for (const code of [old.code, long.code]) expect(await lookup(h, code)).toEqual({ status: 200, body: { label: pc.label } });
+    ctl.socket.destroy();
+  });
+
   it("answers a wrong, lowercase or malformed code with not-found", async () => {
     h = await startRelay();
     const ctl = await openControl(h, makePc());
@@ -77,6 +93,19 @@ describe("room codes over the control channel", () => {
     expect((await lookup(h, code)).status).toBe(200);
     shift = ROOM_CODE_TTL_MS + 1;
     expect(await lookup(h, code)).toEqual({ status: 404, body: { error: "not-found" } });
+    ctl.socket.destroy();
+  });
+
+  it("lets only the sign-in page read a lookup from the browser", async () => {
+    const signinOrigin = "https://signin.test";
+    h = await startRelay({ google: { desktopClientId: "desktop.apps.googleusercontent.com", webClientId: "web.apps.googleusercontent.com", signinOrigin, keys: makeIssuer() } });
+    const pc = makePc();
+    const ctl = await openControl(h, pc);
+    const reply = await mint(ctl);
+    const code = reply?.type === "roomcoded" ? reply.code ?? "" : "";
+    expect(await lookup(h, code, signinOrigin)).toEqual({ status: 200, body: { label: pc.label }, cors: signinOrigin });
+    expect(await lookup(h, "ABCDEF", signinOrigin)).toEqual({ status: 404, body: { error: "not-found" }, cors: signinOrigin });
+    expect((await lookup(h, code, "https://evil.test")).cors).toBeUndefined();
     ctl.socket.destroy();
   });
 

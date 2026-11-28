@@ -1,4 +1,4 @@
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,6 +6,7 @@ import { DATA_DIR } from "./config.ts";
 import { createRoomFixes, type RoomFixDeps } from "./room-fixes.ts";
 import { closeRoomsDb, createRoom, recentRoomEntries } from "./rooms/db.ts";
 import { Store, type BotRecord, type GroupRecord } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const SESSION = "abcdef12-3456-7890-abcd-ef1234567890";
 const MERGE = "a".repeat(40);
@@ -36,7 +37,7 @@ const reportDone = () => store.appendMessage(bot.threadId, {
 
 beforeEach(() => {
   closeRoomsDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   bot = store.patchBot(store.createBot().id, { name: "Wink" })!;
   // SAFETY: created with hosted set, so hosted.roomId is present.
@@ -50,6 +51,19 @@ beforeEach(() => {
   });
 });
 afterEach(closeRoomsDb);
+
+describe("post_to_group", () => {
+  it("links exactly one hosted room entry to the bot's message", () => {
+    const text = "Research links\n- One\n- Two";
+    expect(fixes().postToGroup(bot.id, { group: "team", text })).toEqual({ text: 'Posted in "Team".' });
+    const entries = recentRoomEntries(room.hosted.roomId, 20);
+    expect(entries).toEqual([expect.objectContaining({ text, author: { kind: "bot", id: bot.id, name: bot.name } })]);
+    expect(store.messagesFor(room.threadId)).toEqual([expect.objectContaining({
+      text, role: "bot", kind: "text", from: { botId: bot.id, name: bot.name, color: bot.color }, roomEntryId: entries[0]!.id,
+    })]);
+    expect(store.group(room.id)?.unread).toBe(true);
+  });
+});
 
 describe("room fixes", () => {
   it("stores the link when a bot links the pane it just launched", async () => {

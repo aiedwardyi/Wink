@@ -226,6 +226,14 @@ describe("skins", () => {
     expect(css).toMatch(/@media \(max-width: 767px\) \{\s*@scope \(\[data-skin="precision"\], \[data-skin="snow-night"\], \[data-skin="precision-dimmed"\]\) to \(\[data-skin\]\) \{\s*\[data-orbit-message-body\] \{\s*max-width: 96%;/);
   });
 
+  it("lets no skin undo the phone bot bubble width", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const sheets = [join(root, "styles.css"), ...readdirSync(join(root, "skins")).filter((f) => f.endsWith(".css")).map((f) => join(root, "skins", f))];
+    const important = sheets.flatMap((file) => [...readFileSync(file, "utf8").matchAll(/\[data-orbit-message-body\][^{}]*\{[^}]*max-width:[^;}]*!important/g)].map(() => file));
+    expect(important).toEqual([]);
+    expect(readFileSync(join(root, "components/ChatBubble.tsx"), "utf8")).toContain('!user && "max-sm:max-w-full!"');
+  });
+
   it("gives every non-Midnight skin its own focus and control tokens", () => {
     // Midnight inherits Grok-blue --color-focus from @theme. A light skin
     // that skips the token wears that blue on stone, paper, or porcelain.
@@ -247,6 +255,44 @@ describe("skins", () => {
     for (const skin of SKINS) {
       expect(skin.name.length).toBeGreaterThan(0);
     }
+  });
+
+  it("keeps text on your own bubble readable on every skin", () => {
+    const source = (file: string) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../components", file), "utf8");
+    const inherits = css.match(/\[data-orbit-message="user"\] \[data-orbit-message-content\] :is\(([^{]*)\)\s*\{\s*color: inherit;/)?.[1].split(/,\s*/) ?? [];
+    const texts: [name: string, selector: string, className: string][] = [
+      ["link", "a", source("LinkedText.tsx").match(/<a [^>]*className="([^"]*)"/)![1]],
+      ["sent mid-turn", "", source("ChatBubble.tsx").match(/className="([^"]*)" title=\{t\("chat\.sentMidTurnHint"\)\}/)![1]],
+      ["fold toggle", "[data-fold-toggle]", source("FoldClip.tsx").match(/<button [^>]*className="([^"]*)"/)![1]],
+      ["file size", "[data-file-row] *", source("FileAttachmentRow.tsx").match(/<span className="([^"]*)">\{size\}/)![1]],
+    ];
+    const own = /\[data-orbit-message="user"\] \[data-orbit-message-content\]\s*\{/;
+    const lines = css.split("\n");
+    const failures: string[] = [];
+    for (const id of SKIN_IDS) {
+      const skin = `[data-skin="${id}"]`;
+      let fill = "--color-bubble-user";
+      let ink = "--color-ink";
+      let scope = "";
+      for (const [i, line] of lines.entries()) {
+        if (line.startsWith("@scope")) scope = line;
+        else if (line === "}") scope = "";
+        if (!own.test(line) || (line.includes("[data-skin=") ? !line.includes(skin) : scope && !scope.includes(skin))) continue;
+        const body = lines.slice(i).join("\n").match(/\{([^}]*)\}/)![1];
+        fill = body.match(/(?:^|[\s;])background:\s*var\((--[\w-]+)\)/)?.[1] ?? fill;
+        ink = body.match(/(?:^|[\s;])color:\s*var\((--[\w-]+)\)/)?.[1] ?? ink;
+      }
+      const token = (name: string) =>
+        sharedBodies(id).map((body) => body.match(new RegExp(`${name}\\s*:\\s*(#[0-9a-fA-F]+)`))?.[1]).find(Boolean)?.toLowerCase() ?? skinToken(id, name);
+      const ground = token(fill);
+      for (const [name, selector, className] of texts) {
+        const own = className.match(/\btext-((?:ink|accent)[\w-]*)(?:\/(\d+))?/);
+        const color = !own || inherits.includes(selector) ? token(ink) : blend(token(`--color-${own[1]}`), ground, own[2] ? Number(own[2]) / 100 : 1);
+        const ratio = contrast(color, ground);
+        if (ratio < 4.5) failures.push(`${id} ${name}: ${ratio.toFixed(2)}:1`);
+      }
+    }
+    expect(failures).toEqual([]);
   });
 
   it("keeps provider model dots at full color in every skin", () => {

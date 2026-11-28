@@ -1,10 +1,10 @@
 // Phone Model Index: a ranked list first, a light chart one tab away. The pinch and zoom chart stays behind full screen.
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode, type CSSProperties } from "react";
 import { Maximize2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Translate } from "@/lib/i18n";
 import { chartProvider, effortRank, fitLogTicks, formatCost, linearTicks, logTicks, type ChartProvider, type ModelIndexPoint } from "@/lib/model-index";
-import { botAvatarAssetPath, type BotAvatarId } from "../../shared/bot-avatar";
+import { ProviderMark } from "./ProviderIcons";
 import { edgeFade } from "./Segmented";
 
 export const PROVIDER_NAME = {
@@ -15,13 +15,13 @@ export const PROVIDER_NAME = {
   meta: "Meta",
 } satisfies Record<Exclude<ChartProvider, "other">, string>;
 
-const AVATAR = {
-  anthropic: "icon-45",
-  openai: "icon-46",
-  google: "icon-47",
-  xai: "icon-48",
-  meta: "icon-49",
-} satisfies Record<Exclude<ChartProvider, "other">, BotAvatarId>;
+const DRIVER = {
+  anthropic: "claudeAgent",
+  openai: "codex",
+  google: "geminiAgent",
+  xai: "grokAgent",
+  meta: "museAgent",
+} satisfies Record<Exclude<ChartProvider, "other">, string>;
 
 // Best value looks only at the top of the list, so a cheap low scorer never takes it.
 const VALUE_POOL = 9;
@@ -70,29 +70,25 @@ export function bestValue(rows: readonly PhoneModel[]): string | undefined {
   return priced.reduce((top, row) => (row.best.score / row.best.cost! > top.best.score / top.best.cost! ? row : top)).model;
 }
 
-function Avatar({ provider, size }: { provider: ChartProvider; size: number }) {
-  const id = provider === "other" ? undefined : AVATAR[provider];
+function Avatar({ provider, size, pressed }: { provider: ChartProvider; size: number; pressed?: boolean }) {
   const radius = size > 20 ? "rounded-lg" : "rounded-[4px]";
-  return id ? (
-    <img src={botAvatarAssetPath(id)} alt="" width={size} height={size} draggable={false} className={cn("block shrink-0", radius)} style={{ width: size, height: size }} />
+  return provider !== "other" ? (
+    <span className={cn("flex shrink-0 items-center justify-center", radius)} style={{ width: size, height: size, ...(pressed && { "--color-ink": "var(--color-panel)" }) } as CSSProperties}>
+      <ProviderMark driverKind={DRIVER[provider]} size={size * 0.75} />
+    </span>
   ) : (
     <span aria-hidden className={cn("block shrink-0", radius)} style={{ width: size, height: size, background: color(provider) }} />
   );
 }
 
-/** A lab's logo in a round badge, for charts; clip is a circle clipPath in objectBoundingBox units. */
-export function Badge({ provider, r, clip }: { provider: ChartProvider; r: number; clip: string }) {
-  const id = provider === "other" ? undefined : AVATAR[provider];
-  return (
-    <>
-      <circle r={r + 1.5} style={{ fill: "var(--color-panel)" }} />
-      {id ? (
-        <image href={botAvatarAssetPath(id)} x={-r} y={-r} width={r * 2} height={r * 2} clipPath={`url(#${clip})`} preserveAspectRatio="xMidYMid slice" />
-      ) : (
-        <circle r={r} style={{ fill: color(provider) }} />
-      )}
-      <circle r={r} fill="none" strokeWidth={1.25} style={{ stroke: color(provider) }} />
-    </>
+export function PhoneBadge({ provider, r }: { provider: ChartProvider; r: number }) {
+  const size = r * 1.5;
+  return provider === "other" ? (
+    <circle r={r} style={{ fill: color(provider) }} />
+  ) : (
+    <g transform={`translate(${-size / 2} ${-size / 2})`}>
+      <ProviderMark driverKind={DRIVER[provider]} size={size} />
+    </g>
   );
 }
 
@@ -159,7 +155,7 @@ export function ProviderChips({ providers, value, onChange, t }: { providers: Ch
           onClick={() => onChange(value === provider ? null : provider)}
           className={cn(chip, "pl-1.5 pr-2.5", value === provider ? on : "border-hairline text-ink")}
         >
-          <Avatar provider={provider} size={16} />
+          <Avatar provider={provider} size={16} pressed={value === provider} />
           <span aria-hidden className="size-2.5 shrink-0 rounded-full" style={{ background: color(provider) }} />
           {provider === "other" ? t("modelIndex.provider.other") : PROVIDER_NAME[provider]}
         </button>
@@ -515,9 +511,6 @@ export function PhoneChart({
         </button>
         <svg ref={svgRef} width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block overflow-visible" role="group" aria-label={title}>
           <defs>
-            <clipPath id={clip} clipPathUnits="objectBoundingBox">
-              <circle cx={0.5} cy={0.5} r={0.46} />
-            </clipPath>
             <linearGradient id={`${clip}-best`} x1="0" y1="0" x2="1" y2="1">
               <stop offset="0" style={{ stopColor: "var(--color-ink)", stopOpacity: 0.085 }} />
               <stop offset="1" style={{ stopColor: "var(--color-ink)", stopOpacity: 0.02 }} />
@@ -576,7 +569,7 @@ export function PhoneChart({
             return (
               <g key={`dot-${row.model}`} data-mi-dot={row.model} transform={`translate(${at.x.toFixed(1)} ${at.y.toFixed(1)})`}>
                 <g pointerEvents="none" opacity={line && row !== line ? 0.3 : undefined}>
-                  <Badge provider={row.provider} r={BADGE} clip={clip} />
+                  <PhoneBadge provider={row.provider} r={BADGE} />
                 </g>
                 <circle
                   r={14}

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type SyntheticEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Maximize, Minimize } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { holdVideoKeys } from "@/lib/video-keys";
 
 function canFullscreenWrapper(): boolean {
   return (
@@ -10,14 +11,6 @@ function canFullscreenWrapper(): boolean {
     Boolean(document.fullscreenEnabled) &&
     typeof HTMLElement.prototype.requestFullscreen === "function"
   );
-}
-
-// Chromium keeps focus in the seek bar after a scrub and it swallows Space; refocusing the video restores play/pause.
-function refocusAfterSeek(event: SyntheticEvent<HTMLVideoElement>) {
-  const video = event.currentTarget;
-  if (document.activeElement !== video) return;
-  video.blur();
-  video.focus({ preventScroll: true });
 }
 
 const VIDEO = "max-h-96 max-w-full rounded-lg border border-hairline/30";
@@ -33,6 +26,7 @@ export function PhoneVideo({ src }: { src: string }) {
     if (document.fullscreenElement === wrapper.current) void document.exitFullscreen().catch(() => undefined);
   };
   useBackLayer(full, exit);
+  useEffect(() => holdVideoKeys(video.current!), []);
 
   useEffect(() => {
     if (!available) return;
@@ -62,7 +56,6 @@ export function PhoneVideo({ src }: { src: string }) {
       controlsList={available ? "nofullscreen" : undefined}
       preload="metadata"
       playsInline
-      onSeeked={refocusAfterSeek}
       data-phone-media="video"
       // Android Chromium draws nofullscreen as a greyed button instead of hiding it.
       className={cn(full ? "h-full w-full object-contain" : VIDEO, available && "[&::-webkit-media-controls-fullscreen-button]:hidden")}

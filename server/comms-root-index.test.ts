@@ -124,7 +124,7 @@ it("classifies accepted starts using server options and the accepted message key
   expect(run(rootForStart, "peer", { commsDepth: 1 }, 1, message)).toBeNull();
 });
 
-it.each(["folded", "queued"])("adopts every human at the production %s fold and keeps captured roots", (name) => {
+it.each([["folded", "store.activePath(threadId).slice(-folded.length)"], ["queued", "store.pathTail(threadId, queued.length)"]])("adopts every human at the production %s fold and keeps captured roots", (_name, expression) => {
   const store = new Store(() => ({ instanceId: "claude", model: "fake" }));
   const bot = store.createBot();
   const threadId = bot.threadId;
@@ -136,7 +136,7 @@ it.each(["folded", "queued"])("adopts every human at the production %s fold and 
   queueSteeredMessage(bot.id, threadId, "first", { sendId: "fold-first-00001" });
   queueSteeredMessage(bot.id, threadId, "last", { sendId: "fold-last-000001" });
   const folded = foldQueuedSends(store, bot.id, threadId, mark);
-  const loop = nodes(ts.isForOfStatement).find((node) => node.expression.getText(source) === `store.activePath(threadId).slice(-${name}.length)`)!;
+  const loop = nodes(ts.isForOfStatement).find((node) => node.expression.getText(source) === expression)!;
   expect(loop).toBeTruthy();
   const script = ts.transpileModule(loop.getText(source), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const run = new Function("scope", `with (scope) { ${script}; return rootId; }`);

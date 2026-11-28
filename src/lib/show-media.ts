@@ -27,8 +27,6 @@ export interface MediaFile {
   size?: number;
   /** who sent it, in a room */
   sender?: string;
-  /** served without byte ranges, so a clip's first frame would cost the whole file */
-  whole?: boolean;
 }
 
 const VIDEO = /\.(mp4|m4v|mov|webm|mkv|avi)$/i;
@@ -71,7 +69,7 @@ export function roomMedia(threadId: string, roomId: string, files: ReadonlyArray
   return files.map((file) => {
     if (isRoomPicture(file)) return { key: file.id, name: file.name, at: file.at, src: roomFileUrl(base, file, true), image: true };
     const src = roomFileUrl(base, file, false);
-    return { key: file.id, name: file.name, at: file.at, src, size: file.bytes, sender: file.sender, video: file.type.startsWith("video/") || undefined, whole: true,
-      tap: { threadId, path: file.name, src } };
+    return { key: file.id, name: file.name, at: file.at, src, size: file.bytes, sender: file.sender, video: file.type.startsWith("video/") || undefined,
+      tap: { threadId, path: file.name, src, type: file.type } };
   });
 }

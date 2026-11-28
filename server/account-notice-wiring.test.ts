@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 
 import { createAccountNotices } from "./account-notice.ts";
 import { rootForStart } from "./comms-root.ts";
+import { guestTurnInput } from "./drivers/turn-access.ts";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 function section(from: string, to: string): string {
@@ -54,7 +55,7 @@ function turnScope(accountNotices: ReturnType<typeof createAccountNotices>, disp
     paneNotes: ["Pane note: ATLAS-1 finished."], paneNoteIds: [], paneTokens: 0, modelContextWindow: 200_000, newestPaneNoteId: "n1",
     mailForTurn: () => [], routineCards: [], recallNotes: [], currentPrompt: "hello", messages: [], skipTranscript: new Set(), task: {},
     routineCardsSinceLastUserTurn: () => [], quickAnswers: [], callLines: [], closedAsk: [], quickAnswersSinceLastUserTurn: () => [], roomEchoes: [], roomEchoesSinceLastUserTurn: () => [], turnOpts: {}, replaysTranscript: false, recycleDeferred: false, seed: {}, systemSeed: null,
-    markMailRead: vi.fn(), markPaneMailRead: vi.fn(),
+    markMailRead: vi.fn(), markPaneMailRead: vi.fn(), askNotes: [], closes: { notes: () => [] },
   };
 }
 
@@ -87,6 +88,7 @@ it("delivers a pending note on a room-member turn", async () => {
     dispatchAdapterTurn: (_threadId: string, send: () => Promise<unknown>) => Promise.resolve().then(send),
     isUnattended: () => false, turnCwdByThread: new Map(), memberTurnSelection: () => ({}), bindInterruptedTurn: vi.fn(), markMailRead: vi.fn(),
     store: {}, liveTurnIdByThread: new Map(), reply: { claim: () => false }, finish: vi.fn(), usageStats: { capturing: () => false },
+    askPrs: { closing: vi.fn() }, closes: { ids: [] }, guestTurnInput, stampShownAsks: vi.fn(), roomContext: "",
   };
   await runRoom(scope);
   await settle();

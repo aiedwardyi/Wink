@@ -7,6 +7,7 @@ import { useChatPreview } from "@/lib/chat-preview";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { useStore, type Bot, type Message, type TaskResumePacket } from "@/state/store";
 import { readContextCompaction } from "../../shared/context-compaction";
+import { DockCard } from "./DockCard";
 
 function savedAge(
   updatedAt: number,
@@ -127,40 +128,47 @@ export function TaskRecoveryCard({
       flushReason: packet.flushReason,
     });
   }, [bot.busy, bot.id, busy, dispatch, packet, preview]);
-  if (!isTaskRecoveryVisible(
+  const visible = isTaskRecoveryVisible(
     packet,
     busy ?? bot.busy,
     packet ? state.dismissedTaskRecovery[packet.threadId] : undefined,
-  )) return null;
+  );
+  const dismiss = () => {
+    if (packet) dispatch({
+      type: "dismissTaskRecovery",
+      botId: bot.id,
+      threadId: packet.threadId,
+      updatedAt: packet.updatedAt,
+      flushReason: packet.flushReason,
+    });
+  };
   return (
-    <TaskRecoveryStrip
-      packet={packet}
-      turns={turns}
-      resuming={resuming}
-      resumeError={resumeError}
-      onResume={() => {
-        const gen = settleGen.current;
-        setResuming(true);
-        setResumeError(null);
-        dispatch({
-          type: "resumeTask",
-          botId: bot.id,
-          threadId: packet.threadId,
-          onSettled: (error, pending) => {
-            if (gen !== settleGen.current) return;
-            setResuming(pending === true);
-            if (error) setResumeError(error);
-          },
-        });
-      }}
-      onDismiss={() => dispatch({
-        type: "dismissTaskRecovery",
-        botId: bot.id,
-        threadId: packet.threadId,
-        updatedAt: packet.updatedAt,
-        flushReason: packet.flushReason,
-      })}
-    />
+    <DockCard open={visible} onDismiss={dismiss}>
+      {visible && (
+        <TaskRecoveryStrip
+          packet={packet}
+          turns={turns}
+          resuming={resuming}
+          resumeError={resumeError}
+          onResume={() => {
+            const gen = settleGen.current;
+            setResuming(true);
+            setResumeError(null);
+            dispatch({
+              type: "resumeTask",
+              botId: bot.id,
+              threadId: packet.threadId,
+              onSettled: (error, pending) => {
+                if (gen !== settleGen.current) return;
+                setResuming(pending === true);
+                if (error) setResumeError(error);
+              },
+            });
+          }}
+          onDismiss={dismiss}
+        />
+      )}
+    </DockCard>
   );
 }
 

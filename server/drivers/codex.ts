@@ -35,7 +35,7 @@ import type {
   RuntimeEventListener,
   SendTurnInput,
 } from "../contracts.ts";
-import { newEventId, newId } from "../contracts.ts";
+import { cliNotFound, newEventId, newId } from "../contracts.ts";
 import {
   awaitDyingAppServers,
   codexHome,
@@ -217,6 +217,9 @@ type AppServer = {
 const appServerAlive = (server: AppServer) =>
   server.child.exitCode === null && server.child.signalCode === null && !server.child.stdin.destroyed && !server.child.stdout.destroyed;
 
+/** Codex tools that run commands or open files and pages anywhere on the PC (a multi_agent helper takes local_image paths). */
+export const READ_ONLY_FEATURES_OFF = ["shell_tool", "unified_exec", "code_mode", "view_image", "browser_use", "in_app_browser", "computer_use", "multi_agent", "multi_agent_v2"];
+
 // Only a Wink setting overrides; otherwise the user's own codex config decides.
 // untrusted asks before any edit or command that is not read-only.
 function codexPolicy(fullAuto: boolean, turn: AccessTurn) {
@@ -233,11 +236,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
   metadata: { displayName: "Codex", supportsMultipleInstances: true },
   install: {
     command: {
-      darwin: "npm install -g @openai/codex",
-      linux: "npm install -g @openai/codex",
-      win32: "npm install -g @openai/codex",
+      darwin: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+      linux: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+      // The official standalone installer: no Node, no admin.
+      win32: "irm https://chatgpt.com/codex/install.ps1 | iex",
     },
-    needsNode: true,
     docsUrl: "https://github.com/openai/codex",
     signInCommand: "codex login",
     login: { args: ["login"], deviceArgs: ["login", "--device-auth"], authHosts: ["auth.openai.com"] },
@@ -298,6 +301,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     }
     const active = new Map<string, Turn>();
     const lastThread = new Map<string, { cwd: string; model: string | undefined; cursor: string }>();
+    /** codex thread id -> started read-only */
+    const readOnlyThreads = new Map<string, boolean>();
     const incarnation = input.incarnation ?? newId();
     const warmKey = (threadId: string) => ({ engine: DRIVER_KIND, instanceId, threadId });
     const captured = (threadId: string) => ({ generation: input.account?.generation ?? warmPool.generation(warmKey(threadId)), incarnation, identity: "" });
@@ -393,7 +398,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           mountMcpServer(appServerArgs, env, "openmausbot_connectors", turn.integrations.composio);
         }
         if (turn.integrations?.agents) {
-          mountMcpServer(appServerArgs, env, "agents", experimentalAgents(turn.integrations.agents), AGENTS_TOOL_TIMEOUT_SEC);
+          // an Ask card can only name call_wink_tool, so Ask and read-only turns keep the 11 tools direct
+          mountMcpServer(appServerArgs, env, "agents", experimentalAgents(turn.integrations.agents, turn.approval !== "ask" && !turn.readOnly), AGENTS_TOOL_TIMEOUT_SEC);
         }
         if (turn.integrations?.computer) {
           const proxyEnv = computerProxyEnv(turn.integrations.computer);
@@ -974,16 +980,21 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         let resumeFailed = false;
         // Ask must reach the person; otherwise the user's own approvals_reviewer decides.
         const approvalsReviewer = approvalPolicy === "untrusted" ? "user" : undefined;
-        // read-only: every MCP server but Wink's read-only agents proxy, every plugin (they bring their own servers,
+        // read-only: every MCP server but Wink's read-only agents proxy when this turn mounts it, every plugin (they bring their own servers,
         // computer use among them), apps and the owner's hooks are off, so no per-tool approval of the user's applies
         const mcpOff: Record<string, false> = {};
         if (turn.readOnly && !warm) {
           const read = await request("config/read", {});
-          for (const name of Object.keys(read?.config?.mcp_servers ?? {})) if (name !== "agents") mcpOff[`mcp_servers.${name}.enabled`] = false;
+          for (const name of Object.keys(read?.config?.mcp_servers ?? {})) if (name !== "agents" || !turn.integrations?.agents) mcpOff[`mcp_servers.${name}.enabled`] = false;
           for (const id of Object.keys(read?.config?.plugins ?? {})) mcpOff[`plugins.${id}.enabled`] = false;
           Object.assign(mcpOff, { "features.apps": false, "features.remote_plugin": false, "features.hooks": false });
+          // the read-only sandbox fences writes, not reads, and untrusted runs cat or Get-Content unasked: no tool reads past the folder
+          Object.assign(mcpOff, Object.fromEntries(READ_ONLY_FEATURES_OFF.map((name) => [`features.${name}`, false])));
         }
-        if (cursor && !warm) {
+        // a resumed thread keeps the tools it started with (a read-only resume still offers multi_agent): an access change starts fresh
+        const sameAccess = (readOnlyThreads.get(cursor ?? "") ?? false) === (turn.readOnly === true);
+        if (cursor && !warm && !sameAccess) resumeFailed = true;
+        if (cursor && !warm && sameAccess) {
           try {
             const resumed = await request("thread/resume", { threadId: cursor, approvalPolicy, approvalsReviewer, sandbox, ...(turn.readOnly && { config: mcpOff }) });
             codexThreadId = resumed?.thread?.id ?? cursor;
@@ -1009,9 +1020,26 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           codexThreadId = started?.thread?.id ?? null;
           startedModel = started?.model ?? null;
         }
-        if (codexThreadId) lastThread.set(threadId, { cwd: turn.cwd ?? homedir(), model: turn.model, cursor: codexThreadId });
+        if (codexThreadId) {
+          lastThread.set(threadId, { cwd: turn.cwd ?? homedir(), model: turn.model, cursor: codexThreadId });
+          readOnlyThreads.set(codexThreadId, turn.readOnly === true);
+        }
         emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: startedModel ?? turn.model ?? null });
         let prompt = resumeFailed ? (turn.resumeFallback?.text ?? turn.text) : turn.text;
+        const replay = turn.nativeReplayPrefix;
+        if (!cursor && replay && prompt.startsWith(replay)) {
+          try {
+            await request("thread/inject_items", {
+              threadId: codexThreadId,
+              items: [{ type: "message", role: "user", content: [{ type: "input_text", text: replay.trimEnd() }] }],
+            });
+            trace?.delivered("native-history", () => ({ history: replay.trimEnd() }));
+            prompt = prompt.slice(replay.length);
+          } catch (error) {
+            // A transport failure leaves the injection outcome unknown.
+            if (typeof (error as { code?: number }).code !== "number") throw error;
+          }
+        }
         if (cursor && !resumeFailed && turn.systemUpdate) {
           // older CLIs lack inject_items; the diff then stays in the prompt
           try {
@@ -1118,7 +1146,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         resolve(err ? null : stdout.trim()),
       );
     });
-    if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found`, cliMissing: true };
+    if (!version) return cliNotFound(config.cli);
     const force = opts?.rescan || opts?.refresh;
     const authenticated = input.account ? (await accountStatus(force)).authenticated && engineAccount.type === "chatgpt" : await signedIn(force);
     if (input.account) admitted = authenticated === true;

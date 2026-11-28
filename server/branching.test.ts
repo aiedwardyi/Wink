@@ -9,13 +9,13 @@
 //
 // Same POSIX gating as comms.test.ts (the fake CLI is a shebang script).
 import type { ChildProcess } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -78,7 +78,7 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
   beforeAll(async () => {
     chmodSync(FAKE_CLI, 0o755);
     chmodSync(FAKE_CODEX_CLI, 0o755);
-    home = mkdtempSync(join(tmpdir(), "omb-branch-test-"));
+    home = createFixtureHome("omb-branch-test-");
     fakeCodexDump = join(home, "fake-codex-dump.json");
     fakeHangDump = join(home, "fake-hang-dump.json");
     mkdirSync(join(home, ".orbit"), { recursive: true });
@@ -136,7 +136,7 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
 
   afterAll(async () => {
     await waitForExit(child, { signal: "SIGTERM" });
-    await removeTempDir(home);
+    removeTestData(home);
   });
 
   it(
@@ -149,12 +149,6 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
 
       // turn 1 settles on the original branch
       expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "original question" })).status).toBe(202);
-      const afterSend = await getBot(created.id);
-      const quiz = afterSend.messages.find(
-        (m: { kind: string; card?: { requestId?: string; dismissed?: boolean } }) =>
-          m.kind === "options" && !m.card?.requestId,
-      );
-      expect(quiz?.card?.dismissed).toBe(true);
       await waitFor(async () => {
         const b = await getBot(created.id);
         return !b.busy && b.messages.some((m: Msg) => m.role === "bot" && m.kind === "text" && m.text?.includes("fake acp"));

@@ -22,11 +22,10 @@ export const CALL_SPEED = { min: 0.7, max: 1.3, step: 0.1 } as const;
 export type CallPrefs = { voice?: LiveVoice; speed?: number; style?: CallStyle; language?: "en" | "ko" };
 // Gemini Live speaks near -17 LUFS; this brings it to about -20, calm beside speech in other apps. Every style plays at this one level.
 export const OUTPUT_GAIN = 0.7;
-// Live has no rate, pitch or energy field, so a style is how the voice is told to speak, at its own pitch-kept pace; volume is the device's own slider.
 // Told "slowly" or "quickly", Live keeps its pace (day-1117 clips: 256 vs 237 wpm), so the pace is played, not asked for.
-export const STYLE_PACE: Record<CallStyle, number> = { calm: 0.88, normal: 1, lively: 1.1 };
-export function callPace(prefs: Pick<CallPrefs, "speed" | "style">): number {
-  const pace = (prefs.speed ?? 1) * STYLE_PACE[prefs.style ?? "normal"];
+// The menu no longer offers a style; one saved as calm or lively is ignored: every call speaks Normal.
+export function callPace(prefs: Pick<CallPrefs, "speed">): number {
+  const pace = prefs.speed ?? 1;
   return Math.round(Math.min(CALL_SPEED.max, Math.max(CALL_SPEED.min, pace)) * 100) / 100;
 }
 export const STYLE_LINES: Record<CallStyle, string> = {
@@ -42,6 +41,10 @@ export function liveGeneration(voice: LiveVoice = LIVE_VOICE) {
 export const LIVE_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
 
 export const CALL_ID = /^c-[0-9a-f]{12}$/;
+
+/** Who answers a 1:1 call: the Gemini voice with its own brief, or the bot itself with the voice only reading its replies. */
+export const CALL_ANSWERS = ["gemini", "bot"] as const;
+export type CallAnswer = (typeof CALL_ANSWERS)[number];
 
 /** `voice` marks the voice's speech, `notice` the app's own line in the voice's place (never sent to the bot), `order` a confirmed work order, `ask` a quick ask. A call's first row gets `ms` on hang-up, and `summary` when one came back. */
 export type CallTag = { id: string; voice?: true; notice?: true; unheard?: true; order?: true; ask?: true; ms?: number; summary?: string };
@@ -84,12 +87,16 @@ export const LIVE_TOOLS = [
   },
   {
     name: "ask",
-    description: "Ask about anything not in YOUR NOTES, RECENT CHAT or [Wink] lines (status, files, results, times). No yes needed; the result says sent, queued or not sent, and the answer comes back as a [Wink] line. Anything that changes something is propose_work, even phrased as a question (\"Can you restart it?\").",
+    description: "Ask the bot to check facts you cannot verify, including incomplete task context. No yes needed; the result says sent, queued or not sent, and the answer comes back as a [Wink] line. Anything that changes something is propose_work, even phrased as a question (\"Can you restart it?\").",
     parameters: {
       type: "OBJECT",
       properties: { question: { type: "STRING", description: "The question in the person's words and language, e.g. \"When do the eval loops finish?\"" } },
       required: ["question"],
     },
+  },
+  {
+    name: "task_context",
+    description: "Read the bot's current task record before answering about work, readiness, blockers or what the person needs to do. Read-only, no confirmation needed.",
   },
 ];
 

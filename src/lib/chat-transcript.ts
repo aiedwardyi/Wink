@@ -44,10 +44,10 @@ export function messageVisible(message: Message, options: ChatTranscriptOptions)
       return Boolean(message.connector);
     case "options":
       if (message.card?.requestId && message.card.tool) return true;
-      if (shouldHideOnboardingCard(message, options.transcript)) return false;
+      if (shouldHideOnboardingCard(message)) return false;
       return Boolean(message.card);
     case "routine.run":
-      return true;
+      return !message.routineRun?.wake;
     case "activity":
       return Boolean(
         message.tool?.name.startsWith("error:") || activityVisibleInChat(message, options.showActivities ?? options.showToolCalls),

@@ -39,6 +39,7 @@ async function fakeBridge() {
     if (m[2] === "stream") {
       if (req.headers.authorization !== `Bearer ${terminalReadGrant(TOKEN, m[1]!)}`) return reply(401, { error: "Unauthorized" });
       if (parsed.searchParams.get("sessionId") === "gone") return reply(409, { error: "Unknown terminal" });
+      if (parsed.searchParams.get("main") === "1") return reply(409, { error: "No active terminal for this bot" });
       res.writeHead(200, { "content-type": "application/x-ndjson" });
       res.write(`${JSON.stringify(SNAPSHOT)}\n`);
       viewers.add(res);
@@ -111,6 +112,13 @@ async function openStream(url: string, headers: Record<string, string> = {}) {
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("live terminal stream", () => {
+  it("forwards main-only attach and preserves the missing-main response", async () => {
+    const { base } = await setup();
+    const stream = await openStream(`${base}/api/bots/bot-1/terminal/live?main=1`);
+    expect(stream.res.status).toBe(409);
+    expect(await stream.res.json()).toEqual({ error: "No active terminal for this bot" });
+  });
+
   it("sends the snapshot first, then output in order with the seq as the event id", async () => {
     const { bridge, base } = await setup();
     const stream = await openStream(`${base}/api/bots/bot-1/terminal/live?sessionId=s1`);

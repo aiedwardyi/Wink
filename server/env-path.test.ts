@@ -3,9 +3,10 @@
 // when the process itself started with a bare GUI PATH.
 import { execFile } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testHome } from "./testing/test-home.ts";
 
 import { augmentedPath, resetPathCache, resetPathCacheForTests, splitCliString, toWslPath, windowsKnownDirs } from "./env-path.ts";
 import * as paths from "./env-path.ts";
@@ -21,7 +22,7 @@ describe("augmentedPath", () => {
   });
 
   it("reuses the disk scan at boot and finds installs and removals in one refresh", async () => {
-    const bin = join(homedir(), "cached-bin");
+    const bin = join(testHome(), "cached-bin");
     mkdirSync(bin, { recursive: true });
     process.env.OMB_EXTRA_PATH = bin;
     const name = "first-send-cache-probe";
@@ -60,7 +61,7 @@ describe("augmentedPath", () => {
 
   posixIt("includes nvm bin dirs from the home dir, newest node first", () => {
     // setup.ts points homedir at a temp dir, so this is hermetic
-    const nvm = join(homedir(), ".nvm", "versions", "node");
+    const nvm = join(testHome(), ".nvm", "versions", "node");
     mkdirSync(join(nvm, "v9.0.0", "bin"), { recursive: true });
     mkdirSync(join(nvm, "v24.2.0", "bin"), { recursive: true });
     resetPathCacheForTests();
@@ -75,14 +76,14 @@ describe("augmentedPath", () => {
   });
 
   posixIt("includes a user npm prefix at ~/.npm-global/bin", () => {
-    const npmGlobal = join(homedir(), ".npm-global", "bin");
+    const npmGlobal = join(testHome(), ".npm-global", "bin");
     mkdirSync(npmGlobal, { recursive: true });
     resetPathCacheForTests();
     expect(augmentedPath().split(delimiter)).toContain(npmGlobal);
   });
 
   posixIt("makes a CLI in a known install dir spawnable despite a bare PATH", async () => {
-    const bin = join(homedir(), ".local", "bin");
+    const bin = join(testHome(), ".local", "bin");
     mkdirSync(bin, { recursive: true });
     const fake = join(bin, "omb-fake-cli");
     writeFileSync(fake, "#!/bin/sh\necho found-me\n");
@@ -101,9 +102,24 @@ describe("augmentedPath", () => {
     expect(stdout.trim()).toBe("found-me");
   });
 
+  posixIt("finds every native installer's CLI installed after launch", async () => {
+    resetPathCacheForTests();
+    augmentedPath();
+    // Names no host has installed, so a CLI already on this machine's PATH cannot be the first hit.
+    const installs = [["wink-late-claude", ".local"], ["wink-late-codex", ".local"], ["wink-late-agy", ".local"], ["wink-late-muse", ".local"], ["wink-late-grok", ".grok"]] as const;
+    const files = installs.map(([name, dir]) => join(testHome(), dir, "bin", name));
+    for (const file of files) {
+      mkdirSync(join(file, ".."), { recursive: true });
+      writeFileSync(file, "#!/bin/sh\n");
+      chmodSync(file, 0o755);
+    }
+    await paths.refreshPathCache(installs.map(([name]) => name));
+    expect(installs.map(([name]) => paths.findCliCandidates(name)[0])).toEqual(files);
+  });
+
   posixIt("keeps the last login-shell PATH available during a rescan", async () => {
-    const shell = join(homedir(), "fake-login-shell");
-    const rcOnlyBin = join(homedir(), "rc-only", "bin");
+    const shell = join(testHome(), "fake-login-shell");
+    const rcOnlyBin = join(testHome(), "rc-only", "bin");
     writeFileSync(shell, `#!/bin/sh\nprintf '__OMB_PATH__%s' '${rcOnlyBin}'\n`);
     chmodSync(shell, 0o755);
 
@@ -132,7 +148,7 @@ describe("augmentedPath", () => {
     resetPathCacheForTests();
     const parts = augmentedPath().split(delimiter);
     // temp home: .volta was never created, so it must not appear
-    expect(parts).not.toContain(join(homedir(), ".volta", "bin"));
+    expect(parts).not.toContain(join(testHome(), ".volta", "bin"));
   });
 
   it.skipIf(process.platform !== "win32")("finds Antigravity installed after launch", () => {
@@ -158,6 +174,13 @@ describe("windowsKnownDirs", () => {
     const dirs = windowsKnownDirs();
     expect(dirs.length).toBeGreaterThan(0);
     expect(dirs[0]).toMatch(/system32$/i);
+  });
+
+  it("finds Codex where its standalone installer puts it", () => {
+    vi.stubEnv("LOCALAPPDATA", "C:\\Users\\tester\\AppData\\Local");
+    try {
+      expect(windowsKnownDirs()).toContain(join("C:\\Users\\tester\\AppData\\Local", "Programs", "OpenAI", "Codex", "bin"));
+    } finally { vi.unstubAllEnvs(); }
   });
 });
 
@@ -381,7 +404,7 @@ describe("resolveCli with wrapper commands", () => {
   });
 
   posixIt("keeps an EXISTING unquoted spaced path whole — what the candidates list emits", () => {
-    const bin = join(homedir(), ".local", "bin");
+    const bin = join(testHome(), ".local", "bin");
     mkdirSync(bin, { recursive: true });
     // simulate "/Applications/My Tools/claude": a real file at a spaced path
     const spacedDir = join(bin, "omb space dir");

@@ -115,11 +115,11 @@ describe("account removal references", () => {
     }
     f.request.mockResolvedValue(Response.json({ count: 0, unknown: 0, generations: {} }));
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(f.accounts.get(f.account.id)).toMatchObject({
-      state: authenticated ? "ready" : "stopped", generation: f.account.generation + 1,
-    });
+    expect(f.accounts.get(f.account.id)).toEqual(authenticated
+      ? { ...f.account, state: "ready", identity: "changed", generation: f.account.generation + 1 }
+      : { ...f.account, state: "stopped" });
     expect(f.registry.accountBlocked(f.account.id)).toBe(!authenticated);
-    expect(f.invalidate).toHaveBeenCalledExactlyOnceWith(f.account.id);
+    expect(f.invalidate.mock.calls).toEqual(authenticated ? [[f.account.id]] : []);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -129,7 +129,7 @@ describe("account removal references", () => {
     if (state === "pane") f.request.mockResolvedValue(Response.json({ count: 1, unknown: 0, generations: { "0": 1 } }));
     if (state === "unknown") f.request.mockResolvedValue(Response.json({ count: 0, unknown: 1, generations: {} }));
     if (state === "unreachable") f.request.mockRejectedValue(new Error("unreachable fixture"));
-    await expect(f.controller.signIn("codex")).rejects.toThrow(state === "pane" ? "active work" : "Terminal host is unreachable");
+    await expect(f.controller.signIn("codex", false, "pc:")).rejects.toThrow(state === "pane" ? "active work" : "Terminal host is unreachable");
     expect(start).not.toHaveBeenCalled();
     expect(f.registry.accountBlocked("codex")).toBe(false);
   });
@@ -176,7 +176,7 @@ describe("account removal references", () => {
     if (state === "pane") f.request.mockResolvedValue(Response.json({ count: 1, unknown: 0, generations: { [f.account.generation]: 1 } }));
     if (state === "unknown") f.request.mockResolvedValue(Response.json({ count: 0, unknown: 1, generations: {} }));
     if (state === "unreachable") f.request.mockRejectedValue(new Error("unreachable fixture"));
-    await expect(f.controller.signIn(f.account.id)).rejects.toThrow(state === "pane" ? "active work" : "Terminal host is unreachable");
+    await expect(f.controller.signIn(f.account.id, false, "pc:")).rejects.toThrow(state === "pane" ? "active work" : "Terminal host is unreachable");
     expect(start).not.toHaveBeenCalled();
     expect(f.accounts.get(f.account.id)).toEqual(f.account);
     expect(f.registry.accountBlocked(f.account.id)).toBe(false);
@@ -198,7 +198,7 @@ describe("account removal references", () => {
     let raw = "";
     const req = Object.assign(Readable.from(["{}"]), { headers: { "content-type": "application/json" } }) as unknown as IncomingMessage;
     const res = { writeHead: (value: number) => { status = value; }, setHeader: () => {}, end: (value: string) => { raw = value; } } as unknown as ServerResponse;
-    await createAccountRoutes(f.controller, f.registry)(req, res, "POST", `/api/instances/${encodeURIComponent(f.account.id)}/sign-in`);
+    await createAccountRoutes(f.controller, f.registry)(req, res, "POST", `/api/instances/${encodeURIComponent(f.account.id)}/sign-in`, "pc:");
     expect(status).toBe(409);
     expect(JSON.parse(raw)).toEqual({ error: expect.stringContaining(message), code });
   });

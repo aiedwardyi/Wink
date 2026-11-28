@@ -86,6 +86,22 @@ export async function openBlankTerminal(platform = process.platform, run = execF
   return false;
 }
 
+// An installer can download for a minute before its first line; say what is coming first.
+const INSTALL_NAMES = { claudeAgent: "Claude Code", codex: "Codex", antigravityAgent: "Gemini (Antigravity)", grokAgent: "Grok", museAgent: "Meta Muse" };
+const installingLine = (driverKind) => `Installing ${INSTALL_NAMES[driverKind] ?? "the engine"}. This can take 1-2 minutes...`;
+
+/** Terminal opens at 80x24, which hides agy's sign-in code box below the fold. */
+function openMacTerminal(script, run) {
+  return launch("osascript", [
+    "-e", 'tell application "Terminal"',
+    "-e", `set signIn to do script ${JSON.stringify(script)}`,
+    "-e", "activate",
+    "-e", "set number of columns of signIn to 120",
+    "-e", "set number of rows of signIn to 40",
+    "-e", "end tell",
+  ], undefined, run);
+}
+
 export async function openSignInTerminal({ command, driverKind }, platform = process.platform, run = execFile) {
   const agy = driverKind === "antigravityAgent";
   if (platform === "win32") {
@@ -93,8 +109,7 @@ export async function openSignInTerminal({ command, driverKind }, platform = pro
     return launch("cmd.exe", ["/c", "start", "", "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true }, run);
   }
   if (platform === "darwin") {
-    const script = `${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${command}`;
-    return launch("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(script)}`, "-e", 'tell application "Terminal" to activate'], undefined, run);
+    return openMacTerminal(`${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${command}`, run);
   }
   return false;
 }
@@ -104,23 +119,30 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
   const agy = driverKind === "antigravityAgent";
   if (platform === "win32") {
     const refreshPath = "$env:Path=$env:Path+';'+[Environment]::GetEnvironmentVariable('Path', 'Machine')+';'+[Environment]::GetEnvironmentVariable('Path', 'User')";
+    const signInEnv = agy ? "$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; "
+      : driverKind === "claudeAgent" ? "$env:Path=(Join-Path $HOME '.local/bin')+';'+$env:Path; " : "";
+    // The Codex installer otherwise ends on a "Start Codex now?" prompt the sign-in step would wait behind.
+    const installEnv = driverKind === "codex" ? "$env:CODEX_NON_INTERACTIVE='1'; " : "";
     return [
       "$ErrorActionPreference='Stop'",
+      `Write-Host '${installingLine(driverKind)}'`,
       ...(needsNode && /^\s*npm(?:\s|$)/.test(command) ? [
         refreshPath,
         "if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {",
-        "winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements",
-        "if (-not $? -or $LASTEXITCODE -ne 0) { return }",
+        "$node = $false; try { winget install -e --id OpenJS.NodeJS.LTS --source winget --accept-source-agreements --accept-package-agreements; $node = $LASTEXITCODE -eq 0 } catch {}",
+        `if (-not $node) { Write-Host "Node.js didn't install. Install Node.js LTS from https://nodejs.org, then try the install again in Wink."; return }`,
         refreshPath,
         "}",
       ] : []),
-      `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`$ErrorActionPreference='Stop'\n${command}`, "utf16le").toString("base64")}`,
-      "if ($LASTEXITCODE -ne 0) { return }",
+      `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`$ErrorActionPreference='Stop'\n${installEnv}${command}`, "utf16le").toString("base64")}`,
+      `if ($LASTEXITCODE -ne 0) { Write-Host "The install didn't finish. See the error above, then try the install again in Wink."; return }`,
       refreshPath,
-      ...(signIn ? [`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`${agy ? "$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; " : ""}${signIn}`, "utf16le").toString("base64")}`] : []),
+      ...(signIn ? [`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`${signInEnv}${signIn}`, "utf16le").toString("base64")}`] : []),
     ].join("\n");
   }
-  return signIn ? `{\n${command}\n} && ${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${signIn}` : command;
+  // Native installers only edit rc files, which this already-open shell has read.
+  const path = 'export PATH="$HOME/.local/bin:$HOME/.grok/bin:$PATH"';
+  return `echo '${installingLine(driverKind)}'\n${signIn ? `{\n${command}\n} && ${path} && ${agy ? "AGY_CLI_DISABLE_AUTO_UPDATE=true " : ""}${signIn}` : command}`;
 }
 
 export async function openInstallTerminal(install, platform = process.platform, run = execFile) {
@@ -128,7 +150,7 @@ export async function openInstallTerminal(install, platform = process.platform, 
     return launch("cmd.exe", ["/c", "start", "", "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-EncodedCommand", Buffer.from(buildInstallScript(install, platform), "utf16le").toString("base64")], { windowsHide: true }, run);
   }
   if (platform === "darwin") {
-    return launch("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(buildInstallScript(install, platform))}`, "-e", 'tell application "Terminal" to activate'], undefined, run);
+    return openMacTerminal(buildInstallScript(install, platform), run);
   }
   return false;
 }

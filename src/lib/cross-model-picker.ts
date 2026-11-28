@@ -16,12 +16,12 @@ const ENGINES = [
 
 const MODELS = new Map<string, string[]>(Object.entries({
   claudeAgent: ["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
-  codex: ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"],
+  codex: ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-terra", "gpt-6-luna"],
   grokAgent: ["grok-4.7", "grok-4.6"],
   museAgent: ["muse-spark-1.3", "muse-spark-1.3-contributor", "muse-ember-1.0"],
 }));
 const GEMINI_VERSIONS = ["3.8"];
-const GEMINI_4 = [["gemini-4-carbon", "Gemini 4 Carbon"], ["gemini-4-argon", "Gemini 4 Argon"], ["gemini-4-hydrogen", "Gemini 4 Hydrogen"]] as const;
+const GEMINI_4 = [["gemini-4-carbon", "Gemini 4 Carbon"], ["gemini-4-neon", "Gemini 4 Neon"], ["gemini-4-hydrogen", "Gemini 4 Hydrogen"]] as const;
 
 /** Every model the picker grid offers; Gemini ids drop their -high/-medium/-low suffix. */
 export const PICKER_MODEL_IDS: readonly string[] = [
@@ -71,7 +71,7 @@ export function pickerRows(instances: InstanceInfo[], current: ModelSelection, p
     if (instance.driverKind === "antigravityAgent") {
       cells = [
         ...GEMINI_4.flatMap(([id, label]) => {
-          const options = catalog.filter((option) => new RegExp(`^${id.replace(/\./g, "\\.")}-(high|medium|low)$`).test(option.id));
+          const options = catalog.filter((option) => new RegExp(`^${id.replace(/\./g, "\\.")}-(xhigh|high|medium|low)$`).test(option.id));
           return options.length ? [{ label, options }] : [];
         }),
         ...GEMINI_VERSIONS.flatMap((version) => {
@@ -86,8 +86,8 @@ export function pickerRows(instances: InstanceInfo[], current: ModelSelection, p
     for (const selection of [current, preview]) {
       if (instance.instanceId !== selection.instanceId || !selection.model || cells.some((cell) => cell.options.some((option) => option.id === selection.model))) continue;
       const option = instance.models.options.find((option) => option.id === selection.model) ?? { id: selection.model, label: selection.model };
-      const family = instance.driverKind === "antigravityAgent" ? option.id.match(/^(gemini-.+)-(high|medium|low)$/)?.[1] : undefined;
-      const variants = family ? catalog.filter((model) => model.id.replace(/-(high|medium|low)$/, "") === family) : [];
+      const family = instance.driverKind === "antigravityAgent" ? option.id.match(/^(gemini-.+)-(xhigh|high|medium|low)$/)?.[1] : undefined;
+      const variants = family ? catalog.filter((model) => model.id.replace(/-(xhigh|high|medium|low)$/, "") === family) : [];
       const options = variants.some((model) => model.id === selection.model) ? variants : [option];
       cells.push({ label: option.label, options, offList: true });
     }
@@ -108,7 +108,7 @@ export type PickerEffort = { id: string; label: string; model?: string; effort?:
 export function pickerEfforts(row: PickerRow, cell: PickerCell): PickerEffort[] {
   if (row.instance.driverKind === "antigravityAgent") {
     if (cell.options.length < 2) return [];
-    return ["low", "medium", "high"].flatMap((tier) => cell.options
+    return ["low", "medium", "high", "xhigh"].flatMap((tier) => cell.options
       .filter((option) => option.id.endsWith(`-${tier}`))
       .map((option) => ({ id: option.id, label: tier, model: option.id })));
   }
@@ -159,12 +159,12 @@ export function movePicker(rows: PickerRow[], current: ModelSelection, key: stri
   if (key === "ArrowUp" || key === "ArrowDown") {
     const direction = key === "ArrowUp" ? -1 : 1;
     const target = models[(index + direction + models.length) % models.length]!;
-    const tier = row.instance.driverKind === "antigravityAgent" ? current.model.match(/-(low|medium|high)$/)?.[0] : undefined;
+    const tier = row.instance.driverKind === "antigravityAgent" ? current.model.match(/-(low|medium|high|xhigh)$/)?.[0] : undefined;
     const option = (tier && target.cell.options.find((option) => option.id.endsWith(tier))) || target.cell.options[0]!;
     // Antigravity encodes effort in the model id with no selection.effort, so
     // a bare jump would lose it: carry the tier across when the target speaks
     // effort. Antigravity targets keep their id-encoded tiers effort-free.
-    const encoded: ModelSelection["effort"] = tier === "-low" ? "low" : tier === "-medium" ? "medium" : tier === "-high" ? "high" : undefined;
+    const encoded = tier?.slice(1) as ModelSelection["effort"];
     const previous = !current.effort && encoded && target.instance.driverKind !== "antigravityAgent"
       ? { ...current, effort: encoded }
       : current;

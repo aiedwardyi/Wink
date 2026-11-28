@@ -16,6 +16,7 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, extname, join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
+import { resolveDataDir } from "./data-dir.ts";
 
 /** nvm keeps every node version's bin dir separately; newest first so a
  * CLI installed under the latest node wins. */
@@ -69,6 +70,7 @@ export function windowsKnownDirs(): string[] {
     join(appData, "npm"), // npm -g shims: claude, codex
     join(process.env.ProgramFiles ?? "C:\\Program Files", "nodejs"), // Node installer: runs those shims
     join(localAppData, "Programs", "muse"), // Meta Muse native launcher
+    join(localAppData, "Programs", "OpenAI", "Codex", "bin"), // Codex standalone installer
     join(home, ".grok", "bin"), // x.ai installer
     join(localAppData, "agy", "bin"), // Antigravity installer
     join(home, ".local", "bin"), // claude native installer
@@ -96,7 +98,7 @@ export function preferCli(name: string, file: string | null): void {
 }
 
 function pathCacheFile(): string {
-  return join(process.env.OMB_DATA_DIR ?? join(homedir(), ".orbit"), "path-cache.json");
+  return join(resolveDataDir("server/env-path.ts"), "path-cache.json");
 }
 
 function pathCacheKey(): string {
@@ -166,8 +168,8 @@ export async function refreshPathCache(names: readonly string[]): Promise<void> 
     candidates.set(name, found);
     windowsFiles.set(name, file);
   }
+  const file = pathCacheFile();
   try {
-    const file = pathCacheFile();
     mkdirSync(dirname(file), { recursive: true });
     writeFileAtomic(file, JSON.stringify({ key, path, loginShellPath, entries }), { mode: 0o600 });
   } catch {}

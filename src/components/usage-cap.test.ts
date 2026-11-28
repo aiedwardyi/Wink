@@ -9,24 +9,29 @@ import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard } from "@/lib/usage-board";
 import type { UsageBoardState } from "@/lib/usage-board-client";
 
-const h = vi.hoisted(() => ({ state: null as unknown as UsageBoardState, layout: "B", reduce: true }));
+const h = vi.hoisted(() => ({ state: null as unknown as UsageBoardState, layout: "B", reduce: true, api: vi.fn() }));
 vi.mock("@/lib/use-usage-board", () => ({ useUsageBoard: () => h.state }));
 vi.mock("@/lib/use-visible-clock", () => ({ useVisibleClock: () => usageBoardNow }));
-vi.mock("@/lib/use-phone-swipe", () => ({ useIsPhone: () => true }));
-vi.mock("@/lib/phone-swipe", () => ({ reducedMotion: () => h.reduce }));
+vi.mock("@/lib/use-phone-swipe", async (original) => ({ ...await original<typeof import("@/lib/use-phone-swipe")>(), useIsPhone: () => true }));
+vi.mock("@/lib/phone-swipe", async (original) => ({ ...await original<typeof import("@/lib/phone-swipe")>(), reducedMotion: () => h.reduce }));
 vi.mock("@/lib/skins", () => ({ useSkin: () => "github-dimmed", isTerminalSkin: () => false }));
-vi.mock("@/state/store", () => ({ useStore: () => ({ state: { instances: [] }, dispatch: vi.fn(), refreshInstances: vi.fn() }) }));
+vi.mock("@/state/store", () => ({ api: h.api, useStore: () => ({ state: { instances: [] }, dispatch: vi.fn(), refreshInstances: vi.fn() }) }));
 vi.mock("./usage-layout", async (original) => ({ ...await original<typeof import("./usage-layout")>(), get USAGE_LAYOUT() { return h.layout; } }));
 vi.mock("@/lib/usage-board-client", async (original) => ({
   ...await original<typeof import("@/lib/usage-board-client")>(),
-  requestMain: vi.fn((base: string, id: string) => { h.state.board!.engines.find((each) => each.base === base)!.mainId = id; }),
+  requestMain: vi.fn((base: string, id: string) => {
+    if (h.state.pending[base]) return;
+    h.state = { ...h.state, pending: { ...h.state.pending, [base]: { target: id, from: h.state.board!.engines.find((each) => each.base === base)!.mainId, after: null } } };
+  }),
 }));
 
 import { I18nProvider, persistPreference } from "@/lib/i18n";
+import { usageOrderHost } from "@/lib/usage-order.test-host";
 import { UsageDesk } from "./UsageDesk";
 import { UsageQuickView } from "./UsageQuickView";
 
 const KEY = "openmausbot.usageAccountsOpen.v1";
+let wink: ReturnType<typeof usageOrderHost>;
 let root: Root;
 let host: HTMLDivElement;
 let board: UsageBoard;
@@ -46,6 +51,12 @@ const click = async (node: HTMLElement | null) => {
   expect(node).toBeTruthy();
   await act(async () => { node!.click(); });
 };
+async function settle(saved = true, base = "claude") {
+  const { [base]: wait, ...pending } = h.state.pending;
+  if (saved) engine(base).mainId = wait!.target;
+  h.state = { ...h.state, pending, failed: saved ? h.state.failed : new Set([base]) };
+  await render();
+}
 async function reopen() {
   await act(async () => root.unmount());
   root = createRoot(host);
@@ -60,6 +71,9 @@ beforeEach(() => {
   h.reduce = true;
   board = structuredClone(usageBoardFixture);
   h.state = { board, status: "ready", pending: {}, failed: new Set() };
+  wink = usageOrderHost();
+  wink.open();
+  h.api.mockReset().mockImplementation((path: string, init?: RequestInit) => wink.answer(path, init) ?? Promise.resolve({}));
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -104,16 +118,83 @@ describe("Usage account cap", () => {
     expect(button()?.textContent).toBe("Show 5 more");
     await click(section().querySelector<HTMLButtonElement>("[data-use]"));
     await render();
+    await settle();
     expect(rows()).toEqual(initial);
     await click(button());
     expect(rows()).toEqual(ids());
     await click(section().querySelector<HTMLButtonElement>(`[data-account-row="${ids()[7]}"] [data-use]`));
     await render();
+    await settle();
     expect(rows()).toEqual(ids());
     await click(button());
     expect(rows()).toEqual([ids()[0], ids()[1], ids()[7]]);
     await reopen();
     expect(rows()).toEqual([ids()[0], ids()[1], ids()[7]]);
+  });
+
+  it("picks again when the board moves Main on its own, as after a cached board's old Main", async () => {
+    accounts(5, "claude", 5);
+    await render();
+    expect(rows()).toEqual([ids()[0], ids()[1], ids()[4]]);
+    engine().mainId = ids()[0]!;
+    await render();
+    expect(rows()).toEqual(ids().slice(0, 3));
+  });
+
+  it("follows a saved order changed in another view", async () => {
+    accounts(5);
+    const [a, b, c, d, e] = ids();
+    wink.push({ claude: [a!, b!, e!, c!, d!] });
+    await render();
+    expect(rows()).toEqual([a, b, e]);
+    await act(async () => { wink.push({ claude: [a!, b!, c!, d!, e!] }); });
+    expect(rows()).toEqual([a, b, c]);
+  });
+
+  it("picks again when another view moves an unchanged low Main to the top", async () => {
+    accounts(6, "claude", 6);
+    const [a, b, c, d, e, f] = ids();
+    await render();
+    expect(rows()).toEqual([a, b, f]);
+    await act(async () => { wink.push({ claude: [f!, a!, b!, c!, d!, e!] }); });
+    expect(rows()).toEqual([f, a, b]);
+    engine().accounts[0] = { ...engine().accounts[0]! };
+    board.revision++;
+    await render();
+    expect(rows()).toEqual([f, a, b]);
+  });
+
+  it("keeps the former Main after Use when a second Use is pressed while the first save waits", async () => {
+    accounts(6, "claude", 6);
+    const [a, b, , , , f] = ids();
+    await render();
+    await click(section().querySelector<HTMLButtonElement>(`[data-account-row="${a}"] [data-use]`));
+    await render();
+    await click(section().querySelector<HTMLButtonElement>(`[data-account-row="${b}"] [data-use]`));
+    await render();
+    await settle();
+    expect(engine().mainId).toBe(a);
+    expect(rows()).toEqual([a, b, f]);
+  });
+
+  it("picks again when the board moves Main to a row whose Use was refused", async () => {
+    accounts(6, "claude", 6);
+    const [a, b, c] = ids();
+    await render();
+    await click(section().querySelector<HTMLButtonElement>(`[data-account-row="${a}"] [data-use]`));
+    await render();
+    await settle(false);
+    engine().mainId = a!;
+    await render();
+    expect(rows()).toEqual([a, b, c]);
+  });
+
+  it("keeps the shown rows through a collapsed reorder past a low Main", async () => {
+    accounts(6, "claude", 6);
+    const [a, b, , , , f] = ids();
+    await render();
+    await act(async () => { section().querySelector(`[data-account-row="${b}"]`)!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true })); });
+    expect(rows()).toEqual([a, f, b]);
   });
 
   it("remembers each engine across reopening and keeps another engine closed", async () => {
@@ -207,6 +288,48 @@ describe("motion", () => {
       expect(part?.hasAttribute("data-closing")).toBe(true);
       expect(part?.hasAttribute("inert")).toBe(true);
     }
+  });
+
+  it.each(["touch", "mouse"] as const)("a %s press on Close whose click lands beside it: touch closes once, mouse stays open", async (pointerType) => {
+    const anchor = document.createElement("button");
+    host.append(anchor);
+    anchor.getBoundingClientRect = () => ({ top: 700, left: 24, right: 300, bottom: 730, width: 276, height: 30, x: 24, y: 700, toJSON: () => ({}) });
+    const onClose = vi.fn();
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageQuickView, {
+      engine: engine(), account: engine().accounts[0]!, board, state: h.state, anchor: { current: anchor }, onClose,
+    }))));
+    // A refresh grew the view mid-tap: the finger went down on Close, the click hit the title the view slid under it.
+    document.querySelector("[data-quick-close]")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType }));
+    await act(async () => { document.querySelector<HTMLElement>("[data-engine-name]")!.click(); });
+    expect(onClose).toHaveBeenCalledTimes(pointerType === "touch" ? 1 : 0);
+    await act(async () => { document.querySelector<HTMLElement>("[data-engine-name]")!.click(); });
+    expect(onClose).toHaveBeenCalledTimes(pointerType === "touch" ? 1 : 0);
+    // A press the browser took over for a scroll sends no click; a later click is not Close's.
+    const close = document.querySelector("[data-quick-close]");
+    close?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType }));
+    close?.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerType }));
+    await act(async () => { document.querySelector<HTMLElement>("[data-engine-name]")!.click(); });
+    expect(onClose).toHaveBeenCalledTimes(pointerType === "touch" ? 1 : 0);
+  });
+
+  it("closes on an upward swipe from its header", async () => {
+    const anchor = document.createElement("button");
+    host.append(anchor);
+    anchor.getBoundingClientRect = () => ({ top: 700, left: 24, right: 300, bottom: 730, width: 276, height: 30, x: 24, y: 700, toJSON: () => ({}) });
+    const onClose = vi.fn();
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageQuickView, {
+      engine: engine(), account: engine().accounts[0]!, board, state: h.state, anchor: { current: anchor }, onClose,
+    }))));
+    const head = document.querySelector("[data-engine-name]")!;
+    [500, 490, 420, 340].forEach((y, index) => {
+      const event = new Event(index ? "touchmove" : "touchstart", { bubbles: true, cancelable: true });
+      Object.defineProperties(event, { touches: { value: [{ clientX: 100, clientY: y }] }, timeStamp: { value: index * 16 } });
+      head.dispatchEvent(event);
+    });
+    const end = new Event("touchend", { bubbles: true, cancelable: true });
+    Object.defineProperties(end, { touches: { value: [] }, timeStamp: { value: 64 } });
+    await act(async () => { head.dispatchEvent(end); });
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("fades the desk in when the board arrives after loading, not when it is already there", async () => {

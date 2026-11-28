@@ -28,6 +28,7 @@ const mount = async (props: { rows?: boolean; code?: boolean } = {}) => {
   size(el(".map-code"), { clientHeight: 300 });
   const heights = new Map([[el(".map-top"), 200], [el(".map-flow-rows"), 170], [el(".map-flow-row"), 36]]);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return { height: heights.get(this) ?? 0 } as DOMRect; });
+  return heights;
 };
 const drag = (line: HTMLElement, from: number, to: number) => act(async () => {
   line.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 1, clientY: from }));
@@ -119,13 +120,144 @@ it("restores the saved sizes when the Map opens", async () => {
   expect(share(el(".map-pane"), "--map-rows")).toBe("12.5%");
 });
 
-it("leaves the Git rows alone when the code view line moves", async () => {
+it("moves the tree and the code view line when no Git rows sit between them", async () => {
   localStorage.setItem("omb-map-rows", "12.5");
   await mount({ rows: false });
+  el(".map-flow-rows").remove();
   expect(share(el(".map-pane"), "--map-rows")).toBe("");
   await drag(codeLine(), 100, 900);
   expect(share(el(".map-top"), "--map-split")).toBe("380px");
   await drop(codeLine());
   expect(share(el(".map-pane"), "--map-rows")).toBe("");
   expect(localStorage.getItem("omb-map-rows")).toBe("12.5");
+});
+
+it("drags the line above the code between the Git rows and the code, and leaves the tree alone", async () => {
+  await mount();
+  await drag(codeLine(), 500, 530);
+  expect(share(el(".map-flow-rows"), "--map-rows")).toBe("200px");
+  expect(share(el(".map-top"), "--map-split")).toBe("");
+  await drop(codeLine());
+  expect(share(el(".map-pane"), "--map-rows")).toBe("20.0%");
+  expect(share(el(".map-flow-rows"), "--map-rows")).toBe("");
+  expect(share(el(".map-top"), "--map-split")).toBe("");
+  expect([localStorage.getItem("omb-map-rows"), localStorage.getItem("omb-map-split")]).toEqual(["20.0", null]);
+});
+
+it("keeps one Git row and never grows the Git rows past what they hold or the code view's rest", async () => {
+  await mount();
+  await drag(codeLine(), 500, 900);
+  expect(share(el(".map-flow-rows"), "--map-rows")).toBe("240px");
+  await drop(codeLine());
+  await drag(codeLine(), 900, -900);
+  expect(share(el(".map-flow-rows"), "--map-rows")).toBe("48px");
+  await drop(codeLine());
+  size(el(".map-code"), { clientHeight: 150 });
+  size(el(".map-flow-list"), { scrollHeight: 2000, clientHeight: 158 });
+  await drag(codeLine(), 0, 900);
+  expect(share(el(".map-flow-rows"), "--map-rows")).toBe("200px");
+  expect(share(el(".map-top"), "--map-split")).toBe("");
+});
+
+it("moves the code view line with the arrow keys without touching the tree", async () => {
+  await mount();
+  await key(codeLine(), "ArrowDown");
+  expect([share(el(".map-pane"), "--map-rows"), share(el(".map-top"), "--map-split")]).toEqual(["19.4%", ""]);
+  await key(codeLine(), "ArrowUp");
+  expect(share(el(".map-pane"), "--map-rows")).toBe("14.6%");
+  expect(localStorage.getItem("omb-map-split")).toBe(null);
+});
+
+it("moves the tree from either line when the Git rows hold one row and have no give", async () => {
+  await mount();
+  size(el(".map-flow-list"), { scrollHeight: 36, clientHeight: 36 });
+  await drag(codeLine(), 500, 600);
+  expect([share(el(".map-top"), "--map-split"), share(el(".map-flow-rows"), "--map-rows")]).toEqual(["300px", ""]);
+  await drop(codeLine());
+  expect([localStorage.getItem("omb-map-split"), localStorage.getItem("omb-map-rows")]).toEqual(["30.0", null]);
+  await drag(codeLine(), 600, -300);
+  expect(share(el(".map-top"), "--map-split")).toBe("96px");
+  await drop(codeLine());
+  await drag(rowsLine(), 100, 200);
+  expect(share(el(".map-top"), "--map-split")).toBe("300px");
+  await drop(rowsLine());
+  await drag(rowsLine(), 200, -300);
+  expect(share(el(".map-top"), "--map-split")).toBe("96px");
+  expect(localStorage.getItem("omb-map-rows")).toBe(null);
+});
+
+it("lets the top line shrink the tree when all the Git rows already show", async () => {
+  await mount();
+  size(el(".map-flow-list"), { scrollHeight: 158, clientHeight: 158 });
+  await drag(rowsLine(), 100, -300);
+  expect([share(el(".map-top"), "--map-split"), share(el(".map-flow-rows"), "--map-rows")]).toEqual(["96px", ""]);
+});
+
+it("saves nothing for an arrow key on a line that cannot move", async () => {
+  await mount();
+  size(el(".map-code"), { clientHeight: 100 });
+  await key(codeLine(), "ArrowDown");
+  expect([localStorage.getItem("omb-map-rows"), localStorage.getItem("omb-map-split")]).toEqual([null, null]);
+  expect(share(el(".map-pane"), "--map-rows")).toBe("");
+});
+
+it("does not remember the filled height of Git rows that have no code view below", async () => {
+  await mount();
+  el(".map-code").remove();
+  codeLine().remove();
+  await drag(rowsLine(), 100, 150);
+  await drop(rowsLine());
+  expect([localStorage.getItem("omb-map-split"), localStorage.getItem("omb-map-rows")]).toEqual(["25.0", null]);
+});
+
+it("never moves the tree from the code view line while the Git rows can grow or shrink", async () => {
+  await mount();
+  size(el(".map-flow-list"), { scrollHeight: 158, clientHeight: 158 });
+  await drag(codeLine(), 500, 560);
+  expect([share(el(".map-top"), "--map-split"), share(el(".map-flow-rows"), "--map-rows")]).toEqual(["", ""]);
+  await drop(codeLine());
+  await key(codeLine(), "ArrowDown");
+  expect([localStorage.getItem("omb-map-split"), localStorage.getItem("omb-map-rows")]).toEqual([null, null]);
+  size(el(".map-flow-list"), { scrollHeight: 228, clientHeight: 36 });
+  await drag(codeLine(), 500, 440);
+  expect([share(el(".map-top"), "--map-split"), share(el(".map-flow-rows"), "--map-rows")]).toEqual(["", ""]);
+  await drop(codeLine());
+  expect(localStorage.getItem("omb-map-split")).toBe(null);
+});
+
+it("grows the tree back into the free room after shrinking it with one Git row and no code view", async () => {
+  const heights = await mount();
+  el(".map-code").remove();
+  codeLine().remove();
+  size(el(".map-flow-list"), { scrollHeight: 36, clientHeight: 36, offsetHeight: 36 });
+  size(el(".map-flow-rows"), { clientHeight: 400 });
+  await drag(rowsLine(), 300, 100);
+  await drop(rowsLine());
+  expect(localStorage.getItem("omb-map-split")).toBe("9.6");
+  heights.set(el(".map-top"), 96);
+  size(el(".map-flow-rows"), { clientHeight: 504 });
+  await drag(rowsLine(), 100, 300);
+  await drop(rowsLine());
+  expect([share(el(".map-top"), "--map-split"), localStorage.getItem("omb-map-split"), localStorage.getItem("omb-map-rows")]).toEqual(["29.6%", "29.6", null]);
+});
+
+it.each([false, true])("leaves the tree at its saved share when a code view line drag comes back past its start (last frame ran: %s)", async last => {
+  localStorage.setItem("omb-map-split", "30");
+  await mount();
+  size(el(".map-flow-list"), { scrollHeight: 158, clientHeight: 158 });
+  await drag(codeLine(), 500, 560);
+  await act(async () => { codeLine().dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 1, clientY: 480 })); if (last) for (const frame of frames.splice(0)) frame(0); });
+  await drop(codeLine());
+  expect([share(el(".map-top"), "--map-split"), localStorage.getItem("omb-map-split"), localStorage.getItem("omb-map-rows")]).toEqual(["30%", "30", "15.0"]);
+});
+
+it("hands the tree back its saved share when a one-row drag ends where it began", async () => {
+  localStorage.setItem("omb-map-split", "30");
+  await mount();
+  size(el(".map-flow-list"), { scrollHeight: 36, clientHeight: 36 });
+  await drag(codeLine(), 500, 560);
+  expect(share(el(".map-top"), "--map-split")).toBe("260px");
+  await act(async () => { codeLine().dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 1, clientY: 500 })); for (const frame of frames.splice(0)) frame(0); });
+  await drop(codeLine());
+  expect([share(el(".map-top"), "--map-split"), localStorage.getItem("omb-map-split")]).toEqual(["30%", "30"]);
 });

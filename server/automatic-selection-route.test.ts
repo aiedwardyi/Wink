@@ -1,21 +1,17 @@
 import type { ChildProcess } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { createTempDirs, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
+import { createFixtureHome } from "./testing/test-home.ts";
 import { freePortBlock } from "./testing/ports.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
 
-const temps = createTempDirs();
-afterAll(() => temps.remove());
-
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
-const STUB = pathToFileURL(join(SERVER_DIR, "testing", "stub-oauth-usage.mjs")).href;
 const selectionSchema = z.object({ instanceId: z.string().min(1), model: z.string().min(1), mode: z.literal("automatic") });
 const botSchema = z.object({ id: z.string(), busy: z.boolean(), modelSelection: selectionSchema });
 const createdSchema = z.object({ bot: botSchema });
@@ -46,7 +42,9 @@ const api = async (method: string, path: string, body?: typeof manifest | typeof
 };
 const createBot = async () => createdSchema.parse(await api("POST", "/api/bots")).bot;
 const prime = async (first = 100, second = 0) => {
-  writeFileSync(join(home, "usage.json"), JSON.stringify({ "Bearer first": first, "Bearer second": second }));
+  for (const [instanceId, used] of [["first", first], ["second", second]] as const) {
+    writeFileSync(join(home, `${instanceId}.usage.json`), JSON.stringify({ rate_limits_available: true, rate_limits: { five_hour: null, seven_day: { utilization: used, resets_at: null } } }));
+  }
   for (const instanceId of ["first", "second"]) {
     const result = z.object({ report: z.object({ windows: z.array(z.object({ usedPercent: z.number() })) }) }).parse(
       await api("POST", `/api/usage/refresh/${instanceId}`),
@@ -57,22 +55,23 @@ const prime = async (first = 100, second = 0) => {
 
 beforeEach(async () => {
   port = await freePortBlock([0, 1], 24_100, 2_000);
-  home = temps.make(join(tmpdir(), "omb-automatic-selection-"));
+  home = createFixtureHome("omb-automatic-selection-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(join(home, "calls.txt"), "");
   writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({
     instances: Object.fromEntries(["first", "second"].map((instanceId) => [instanceId, {
       driver: "claudeAgent", config: { cli: FAKE_CLI },
-      environment: { FAKE_CLAUDE_MODE: "happy", CLAUDE_CODE_OAUTH_TOKEN: instanceId },
+      environment: { FAKE_CLAUDE_MODE: "happy", CLAUDE_CODE_OAUTH_TOKEN: "fixture-oauth", CLAUDE_CONFIG_DIR: join(home, instanceId),
+        FAKE_CLAUDE_GET_USAGE: join(home, `${instanceId}.usage.json`) },
     }])),
   }));
   const env: NodeJS.ProcessEnv = {
     HOME: home, USERPROFILE: home, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1),
-    FAKE_USAGE_REPORTS: join(home, "usage.json"), FAKE_USAGE_CALLS: join(home, "calls.txt"),
+    FAKE_USAGE_CALLS: join(home, "calls.txt"),
   };
   if (process.env.PATH) env.PATH = process.env.PATH;
   if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
-  child = spawn(process.execPath, ["--import", STUB, join(SERVER_DIR, "index.ts")], { cwd: join(SERVER_DIR, ".."), env, windowsHide: true });
+  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], { cwd: join(SERVER_DIR, ".."), env, windowsHide: true });
   let stderr = "";
   child.stderr?.on("data", (chunk) => { stderr += chunk; });
   const deadline = Date.now() + 20_000;

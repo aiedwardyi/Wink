@@ -29,6 +29,7 @@ Lint `back`: a button with a left chevron or arrow (icon or ‹ text) that is no
 | `useSettingsSwipe` | src/lib/use-settings-swipe.ts | Swipe back from a pushed page on a phone. |
 | `animate-fade-in` backdrop, `animate-pop-in` card, `usePresence` to close | src/lib/use-presence.ts | Sheets and floating cards (CreateBotSheet). |
 | `Fold` | src/components/Fold.tsx | Expand and collapse in place. |
+| `<DockCard open onDismiss id>` | src/components/DockCard.tsx | A card docked above the message box (question, approval, task recovery, sign-in). On a phone it opens and closes like the call settings sheet, and one with an x also closes on a swipe down. |
 
 ## Dialogs
 
@@ -63,6 +64,8 @@ Lint `button`: a button with `bg-accent` and `text-accent-ink` but not `PRIMARY_
 - Press and fade come from one base rule in `src/motion.css`: every button dips to `scale: 0.97` while pressed, and every hover fades on `--motion-fast` with `--ease-standard`. Reduced motion makes both instant.
 - Don't give a button its own `transition-*` or `active:` class, and make anything clickable a `<button>`; `pnpm check:ui-kit` fails both.
 
+Lint `row`: a full-width, left-aligned row (`w-full text-left`) with a `hover:bg-raised/*` other than `/50`.
+
 ## Tooltips
 
 | Part | File | When |
@@ -90,6 +93,7 @@ Lint `button`: a button with `bg-accent` and `text-accent-ink` but not `PRIMARY_
 | `ReactionChips` | src/components/Reactions.tsx | Reactions on a message. |
 | `RoomToolChip` | src/components/GroupView.tsx | A tool in a room header. |
 | `WorkerChip` | src/components/WorkerRows.tsx | A worker's status. |
+| `DEMO_CHIP` | src/lib/chip-style.ts | The label on an example that shows until the user's own content replaces it (Map, Timeline). |
 
 A new chip starts from the nearest one by job.
 

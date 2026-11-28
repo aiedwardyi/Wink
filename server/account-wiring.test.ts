@@ -49,7 +49,7 @@ async function wired(main = "claude") {
   const broadcast = vi.fn();
   const scope = {
     createUsageBoard, createUsageHistory: (path: string) => createUsageHistory(path, { schedule: () => {} }), DATA_DIR: dir,
-    accounts, accountNames, registry: { accountBlocked: () => false }, providerSnapshots: new Map(),
+    accounts, accountNames, registry: { accountBlocked: () => false, accountStopped: () => false, accountChecking: () => false }, providerSnapshots: new Map(),
     instanceConfigs: () => ({ claude: { driver: "claudeAgent" }, muse: { driver: "museAgent" } }), cfg: {},
     rateLimitsByInstance: new Map(), liveWorkerRuns: async () => ({ known: false, reason: "no-host" }), terminalBridgeAccess: null,
     store: { bots: [{ id: "atlas", name: "Atlas", modelSelection: { instanceId: "claude" } }] }, broadcast,
@@ -109,7 +109,7 @@ it("tracks room and continuation turns on their captured accounts", async () => 
   const room = section("        accountNote.commit();\n        releaseStarting();", "\n      })\n      .catch((err) => {");
   for (const block of [oneToOne, room]) expect(block).toContain("boardTurnStarted(bot.id, threadId, started.turnId);");
   const settle = section("  if (event.turnId) {\n    if (settleMail(", "\n  drainQueuedSends();");
-  expect(settle).toContain("usageBoard.turnSettled(event.turnId);");
+  expect(settle).toContain("usageBoard.turnSettled(event.turnId, event.ok);");
 
   const s = await wired();
   s.providerReload.current = () => ({ instanceId: "acct_studio", account: { generation: 3 } });

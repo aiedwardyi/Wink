@@ -26,12 +26,14 @@ import { baseAccount } from "../../worker-resume.ts";
 import { describeSpawnFailure, execCli, killCliTree, setCliPriority, spawnCli } from "../../procs.ts";
 import { captureToolDetail } from "../../tool-detail.ts";
 import { decodeInjectId, LOCAL_HOSTS } from "../local-inject.ts";
+import { experimentalAgents } from "../tool-catalog.ts";
 import type { CliText, CliTextContext } from "../cli-text.ts";
 import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } from "../../wsl-gate.ts";
 import { inputDigest } from "../../repeat-detector.ts";
 import { guardInput } from "../../auto-approve.ts";
 import { startTurnTimer } from "../../turn-timing.ts";
 import { exhaustedWindow, grokRateLimitWindows, isConfirmedNonUsage, usageLimitFromError } from "../rate-limits.ts";
+import { billingThrottle } from "./billing-throttle.ts";
 
 const LOCAL_HOST_KEY_ENVS = [
   ...new Set(LOCAL_HOSTS.map((host) => host.apiKeyEnv).filter((key): key is string => Boolean(key))),
@@ -122,7 +124,7 @@ import type {
   PrepareTurn,
   ProviderErrorCode,
 } from "../../contracts.ts";
-import { newEventId, newId } from "../../contracts.ts";
+import { cliNotFound, newEventId, newId } from "../../contracts.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
 import { augmentedPath, toWslPath } from "../../env-path.ts";
 
@@ -446,6 +448,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const active = new Map<string, Turn>();
       const systemHeld = systemLedger(false, instanceId);
       const billingStops = new Set<() => void>();
+      const billing = billingThrottle();
       const pool = support.warmPool ?? sharedWarmPool;
       const incarnation = input.incarnation ?? newId();
       const keyFor = (threadId: string) => ({ engine: DRIVER_KIND, instanceId, threadId });
@@ -532,7 +535,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const servers: AcpMcpServer[] = [];
         const acpEnv = (env: Record<string, string>) =>
           Object.entries(env).map(([name, value]) => ({ name, value: String(value) }));
-        const agents = turn.integrations?.agents;
+        // Off by default: Grok already searches MCP tools itself; ORBIT_WINK_TOOL_CATALOG=1 opts in
+        const agents = turn.integrations?.agents && experimentalAgents(turn.integrations.agents);
         if (agents) {
           servers.push({ name: "agents", command: agents.command, args: agents.args, env: acpEnv(agents.env) });
         }
@@ -1076,12 +1080,13 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               stopReason: canceledBeforePrompt ? "cancelled" : stopReason, cost: null,
               ...(state.promptAccepted ? { promptAccepted: true } : {}), ...promptReport });
           };
-          if (readBilling && support.billingMethod) {
+          const claim = readBilling && support.billingMethod ? billing.take(`${captured.generation}:${captured.identity}`) : null;
+          if (claim && support.billingMethod) {
             billingStops.add(stop);
             void request(support.billingMethod, {}, INIT_TIMEOUT).then((result) => {
               const windows = grokRateLimitWindows(result);
               if (windows.length > 0) emit({ ...base(threadId, turnId), type: "account.rate-limits.updated", windows });
-            }).catch(() => {}).then(finish);
+            }).catch(() => claim.release()).then(finish);
           } else finish();
         };
 
@@ -1491,7 +1496,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           const gated = support.wslProbeWrapper !== undefined && !wslProbeAllowed();
           const probed = await resolveCli(env);
           if (!probed && gated) return lastSnapshot ?? { state: "unavailable", reason: wslBlockedReason(support.displayName) };
-          if (!probed) return { state: "unavailable", reason: `\`${effectiveCli()}\` CLI not found` };
+          if (!probed) return cliNotFound(effectiveCli());
           const authenticated = await support.isAuthenticated(env, config);
           lastCapture = authenticated ? capture() : null;
           if (input.account) admitted = authenticated === true;

@@ -260,7 +260,7 @@ if (!bootReport || bootReport.error || !Array.isArray(bootReport.rows?.receipts)
   process.exit(1);
 }
 
-if (!tailReport || tailReport.error || tailReport.id !== 1 || !Array.isArray(tailReport.tail?.messages)) {
+if (!tailReport || tailReport.error || tailReport.id !== 1 || !Array.isArray(tailReport.value?.messages)) {
   console.error("the packaged cold-thread-worker.js did not load and reply inside the packaged server dir:");
   console.error(JSON.stringify(tailReport, null, 2));
   process.exit(1);

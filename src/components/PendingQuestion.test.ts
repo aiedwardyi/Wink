@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import type { Message } from "@/state/store";
@@ -14,15 +14,16 @@ let root: ReturnType<typeof createRoot> | undefined;
 let host: HTMLDivElement;
 const onPick = vi.fn();
 const onDismiss = vi.fn();
+const onJump = vi.fn();
 const message = (id: string, options = ["Analytics", "Models"]): Message => ({ id, at: 1, role: "bot", kind: "options",
   card: { title: "Question", subtitle: "Which design should we review first?", options, askUser: true, staysOpen: true } });
 
-async function render(id: string, options?: string[]) {
+async function render(id: string, options?: string[], jump?: () => void) {
   if (!root) {
     host = document.body.appendChild(document.createElement("div"));
     root = createRoot(host);
   }
-  await act(async () => root!.render(createElement(PendingQuestionPanel, { message: message(id, options), askerName: "Wink", count: 1, onPick, onDismiss })));
+  await act(async () => root!.render(createElement(PendingQuestionPanel, { message: message(id, options), askerName: "Wink", count: 1, onPick, onDismiss, onJump: jump })));
 }
 
 const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
@@ -59,11 +60,14 @@ const size = (cls: string, name: string, variant = "") => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  window.getSelection()?.removeAllRanges();
   if (root) await act(async () => root!.unmount());
   host?.remove();
   root = undefined;
   onPick.mockClear();
   onDismiss.mockClear();
+  onJump.mockClear();
   applyLocale("en");
 });
 
@@ -210,60 +214,63 @@ describe("question folding", () => {
     await settle();
     expect(pill()?.getAttribute("aria-label")).toContain("질문 펼치기");
     expect(pill()?.textContent).toContain("Wink");
-    expect(button("질문 숨기기")).not.toBeNull();
+    expect(button("질문 닫기")).not.toBeNull();
     expect(host.querySelector("[data-row-choices]")?.textContent).toContain("Analytics");
     await open();
     expect(pill()).toBeNull();
   });
 
-  it("counts every choice the row has no room for in one +N pill that opens the card", async () => {
-    // happy-dom has no layout: each shown pill is 100px wide in a 250px space
-    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
-      return this.matches("[data-row-choices]") ? this.querySelectorAll("button:not([hidden])").length * 100 : 0;
-    });
-    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
-      return this.matches("[data-row-choices]") ? 250 : 0;
-    });
+  describe("the row's choices, all or none", () => {
+    let room = 0;
+    const watchers: { fit: () => void; target: Element }[] = [];
+    const shown = () => {
+      const list = host.querySelector<HTMLElement>("[data-row-choices]");
+      return list && !list.hidden ? [...list.querySelectorAll<HTMLButtonElement>("button:not([hidden])")].map((chip) => chip.textContent) : [];
+    };
     const options = ["Yes, both", "Only the open speed", "Change it"];
-    await render("fold-more", options);
-    await fold();
-    const pills = [...host.querySelectorAll<HTMLButtonElement>("[data-row-choices] button")].filter((pill) => !pill.hidden);
-    const more = pills.find((pill) => /^\+\d+$/.test(pill.textContent ?? ""));
-    const shown = pills.filter((pill) => pill !== more).map((pill) => pill.textContent);
-    expect(shown).toEqual(["Yes, both"]);
-    expect(more?.textContent).toBe("+2");
-    expect(more?.getAttribute("aria-label")).toBe("2 more choices");
-    expect(more?.className).toBe(pills[0].className);
-    await press(more!, 1);
-    await settle();
-    expect(pill()).toBeNull();
-    expect([...host.querySelectorAll("[data-term-choices] button")].map((choice) => choice.textContent)).toEqual(options);
-    expect(onPick).not.toHaveBeenCalled();
-  });
 
-  it.each([["en", "1 more choice"], ["ko", "선택지 1개 더 보기"]] as const)("names one cut choice in the singular in %s", async (locale, label) => {
-    applyLocale(locale);
-    // the +N pill is narrower than a choice, so cutting one choice makes room
-    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
-      if (!this.matches("[data-row-choices]")) return 0;
-      return [...this.querySelectorAll("button:not([hidden])")].reduce((width, chip) => width + (chip.textContent?.startsWith("+") ? 40 : 100), 0);
+    beforeEach(() => {
+      // happy-dom has no layout: a chip is 8px a character, in room px
+      vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
+        if (!this.matches("[data-row-choices]")) return 0;
+        return [...this.querySelectorAll("button:not([hidden])")].reduce((width, chip) => width + 8 * (chip.textContent?.length ?? 0), 0);
+      });
+      vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+        return this.matches("[data-row-choices]") ? room : 0;
+      });
+      watchers.length = 0;
+      vi.stubGlobal("ResizeObserver", class {
+        constructor(private fit: () => void) {}
+        observe(target: Element) { watchers.push({ fit: this.fit, target }); }
+        disconnect() {}
+      });
     });
-    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
-      return this.matches("[data-row-choices]") ? 250 : 0;
-    });
-    await render(`fold-one-more-${locale}`, ["Yes, both", "Only the open speed", "Change it"]);
-    await act(async () => button(locale === "ko" ? "질문 접기" : "Fold question").click());
-    await settle();
-    const more = [...host.querySelectorAll<HTMLButtonElement>("[data-row-choices] button")].find((chip) => !chip.hidden && chip.textContent === "+1");
-    expect(more?.getAttribute("aria-label")).toBe(label);
-    expect(more?.title).toBe(label);
-  });
 
-  it("shows no +N pill when every choice fits", async () => {
-    await render("fold-all-fit", ["Yes, both", "Only the open speed", "Change it"]);
-    await fold();
-    const pills = [...host.querySelectorAll<HTMLButtonElement>("[data-row-choices] button")].filter((pill) => !pill.hidden);
-    expect(pills.map((pill) => pill.textContent)).toEqual(["Yes, both", "Only the open speed", "Change it"]);
+    it("shows every choice when all fit, and nothing else", async () => {
+      room = 400;
+      await render("row-all-fit", options);
+      await fold();
+      expect(shown()).toEqual(options);
+      expect([...host.querySelectorAll("[data-row-choices] button")].map((chip) => chip.textContent)).toEqual(options);
+    });
+
+    it.each([["one", 280], ["several", 100]] as const)("shows no choice when %s would not fit", async (_, width) => {
+      room = width;
+      await render(`row-cut-${width}`, options);
+      await fold();
+      expect(shown()).toEqual([]);
+      expect(pill()?.textContent).toContain("Which design");
+    });
+
+    it("brings every choice back when the row widens", async () => {
+      room = 280;
+      await render("row-widen", options);
+      await fold();
+      expect(shown()).toEqual([]);
+      room = 400;
+      await act(async () => { for (const { fit, target } of watchers) if (target.querySelector(":scope > [data-row-choices]")) fit(); });
+      expect(shown()).toEqual(options);
+    });
   });
 
   it("moves focus between the row and the card only for the keyboard, so a click never inherits a focus ring", async () => {
@@ -280,5 +287,70 @@ describe("question folding", () => {
     await press(pill()!, 0);
     await settle();
     expect(document.activeElement).toBe(button("Fold question"));
+  });
+});
+
+describe("jumping to the question's message", () => {
+  const body = () => host.querySelector<HTMLElement>("[data-question-body]")!;
+
+  it("jumps on a tap of the question text and nowhere else", async () => {
+    await render("jump-tap", undefined, onJump);
+    expect(body().className).toContain("cursor-pointer");
+    await press(body(), 1);
+    expect(onJump).toHaveBeenCalledTimes(1);
+    await press(button("Fold question"), 1);
+    await settle();
+    await press(host.querySelector("[data-question-row] button[aria-expanded]")!, 1);
+    await settle();
+    await press(host.querySelector("[data-term-choices] button")!, 1);
+    await press(button("Dismiss question"), 1);
+    expect(onJump).toHaveBeenCalledTimes(1);
+    expect(onPick).toHaveBeenCalledWith("Analytics");
+  });
+
+  it("does not jump while the person is selecting the question text", async () => {
+    await render("jump-select", undefined, onJump);
+    window.getSelection()!.selectAllChildren(body());
+    await press(body(), 1);
+    expect(onJump).not.toHaveBeenCalled();
+  });
+
+  const key = (target: Element, name: string) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })); });
+
+  it("jumps on Enter or Space from the focused question text, and on no other key", async () => {
+    await render("jump-keys", undefined, onJump);
+    await key(body(), "Enter");
+    await key(body(), " ");
+    expect(onJump).toHaveBeenCalledTimes(2);
+    await key(body(), "a");
+    await key(body(), "ArrowDown");
+    expect(onJump).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves Space to scroll a long question, and leaves keys from the choices alone", async () => {
+    await render("jump-keys-long", undefined, onJump);
+    Object.defineProperty(body(), "scrollHeight", { configurable: true, value: 400 });
+    Object.defineProperty(body(), "clientHeight", { configurable: true, value: 100 });
+    const space = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    await act(async () => { body().dispatchEvent(space); });
+    expect(onJump).not.toHaveBeenCalled();
+    expect(space.defaultPrevented).toBe(false);
+    await key(host.querySelector("[data-term-choices] button")!, "Enter");
+    expect(onJump).not.toHaveBeenCalled();
+  });
+
+  it("does not jump by key while the person is selecting the question text", async () => {
+    await render("jump-keys-select", undefined, onJump);
+    window.getSelection()!.selectAllChildren(body());
+    await key(body(), "Enter");
+    expect(onJump).not.toHaveBeenCalled();
+  });
+
+  it("is plain text when there is no message to jump to", async () => {
+    await render("jump-none");
+    expect(body().className).not.toContain("cursor-pointer");
+    await press(body(), 1);
+    await key(body(), "Enter");
+    expect(onJump).not.toHaveBeenCalled();
   });
 });

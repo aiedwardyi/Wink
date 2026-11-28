@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
+import { en } from "@/lib/i18n-catalog";
+import { noteMemoryFrame } from "@/lib/memory-clean-events";
 import { MOTION_LARGE_MS, MOTION_MODERATE_MS } from "@/lib/motion";
 import { SWIPE_MOTION_MS } from "@/lib/phone-swipe";
 import { Presence } from "@/lib/use-presence";
@@ -60,7 +62,10 @@ const write = (value: string) => act(async () => {
   box()!.dispatchEvent(new Event("input", { bubbles: true }));
 });
 const fileRow = () => [...host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((each) => each.textContent?.includes("Memory File"))!;
-const editFile = () => fileRow().closest("section")!.querySelector<HTMLButtonElement>("button.mm-action")!;
+const startEditing = async () => {
+  await act(async () => fold("long").click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".mm-fold button")].find((each) => each.textContent === "Edit")!.click());
+};
 const closes = () => dispatch.mock.calls.filter(([action]) => action.type === "toggleSettings");
 
 function Harness({ of = bot }: { of?: Bot }) {
@@ -314,6 +319,47 @@ describe("Bot details tab swipe", () => {
 });
 
 describe("Memory tab on return", () => {
+  it("refreshes an open Memory page after its bot's peer sync lands", async () => {
+    let latest = "- Uses Windows";
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((url, init) => String(url) === `/api/bots/${bot.id}/memory` && !init?.method
+      ? Promise.resolve(Response.json({ text: latest, truncated: false, revision: latest, topics: [] }))
+      : answer(url, init));
+    const sync = (botId: string) => {
+      const frame = { kind: "memory.changed", botId };
+      return act(async () => noteMemoryFrame(frame, { hydrated: true, bots: [bot] }));
+    };
+    await open();
+    await toMemory();
+    await startEditing();
+    expect(box()!.value).toBe(latest);
+    latest = "- Uses Linux";
+    await sync("other-bot");
+    expect(box()!.value).toBe("- Uses Windows");
+    await sync(bot.id);
+    expect(box()!.value).toBe(latest);
+
+    await write("- My unsaved edit");
+    latest = "- Uses macOS";
+    await sync(bot.id);
+    expect(box()!.value).toBe("- My unsaved edit");
+    expect(puts).toEqual([]);
+  });
+
+  it("shows the existing error toast when an unmount save conflicts", async () => {
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((url, init) => init?.method === "PUT"
+      ? Promise.resolve(Response.json({ error: "conflict", text: "- New peer notes", revision: "peer" }, { status: 409 }))
+      : answer(url, init));
+    await open();
+    await toMemory();
+    await startEditing();
+    await write("- My unsaved edit");
+    await act(async () => root.render(null));
+    expect(dispatch).toHaveBeenCalledWith({ type: "error", message: en["bot.memoryConflict"] });
+    expect(localStorage.getItem(`omb-memory-draft:${bot.id}`)).toContain("My unsaved edit");
+  });
+
   it("closes the Memory File and the open kinds when you leave", async () => {
     await open();
     await toMemory();
@@ -330,8 +376,7 @@ describe("Memory tab on return", () => {
   it("saves typed text the moment you leave", async () => {
     await open();
     await toMemory();
-    await act(async () => fileRow().click());
-    await act(async () => editFile().click());
+    await startEditing();
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), "- Uses Linux");
       box()!.dispatchEvent(new Event("input", { bubbles: true }));
@@ -345,8 +390,7 @@ describe("Memory tab on return", () => {
   it("shows the Memory File save state in its own header, not the page corner", async () => {
     await open();
     await toMemory();
-    await act(async () => fileRow().click());
-    await act(async () => editFile().click());
+    await startEditing();
     await write("- Uses Linux");
     expect(fileRow().parentElement!.querySelector('[data-save-state="saving"]')!.textContent).toBe("Saving…");
     expect(fileRow().querySelector("[data-save-state]")).toBeNull();
@@ -413,8 +457,7 @@ describe("Memory tab on a phone whose memory read never answers", () => {
     });
     await open();
     await toMemory();
-    await act(async () => fileRow().click());
-    await act(async () => editFile().click());
+    await startEditing();
     await write("- Uses Linux");
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(puts).toEqual(["- Uses Linux"]);
@@ -431,6 +474,86 @@ describe("Memory tab on a phone whose memory read never answers", () => {
     await open();
     await toMemory();
     expect(map()!.querySelector(".mm-failed")!.textContent).toContain("Couldn't load memory.");
+  });
+});
+
+describe("Memory page on a slow read", () => {
+  it("paints the last read at once and the fresh read replaces it", async () => {
+    width(1440);
+    await open();
+    await toMemory();
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    const held: (() => void)[] = [];
+    vi.mocked(fetch).mockImplementation((url, init) => String(url) !== `/api/bots/${bot.id}/memory` || init?.method
+      ? answer(url, init)
+      : new Promise((done) => held.push(() => done(new Response(JSON.stringify({ text: "- Uses Windows\n- Drinks tea", truncated: false, revision: "fresh", topics: [{ name: "prefs.md", bytes: 3 }] }))))));
+    const count = (kind: string) => fold(kind).querySelector(".mm-count b")!.textContent;
+    await open();
+    await toMemory();
+    expect(held.length).toBeGreaterThan(0);
+    expect([count("long"), count("knowledge")]).toEqual(["1", "2"]);
+    expect(host.querySelector(".mm")!.textContent).toContain("Uses Windows");
+    await act(async () => { for (const each of held) each(); });
+    await settle();
+    expect([count("long"), count("knowledge")]).toEqual(["2", "1"]);
+  });
+});
+
+describe("kept copy follows this page's saves", () => {
+  const count = (kind: string) => fold(kind).querySelector(".mm-count b")!.textContent;
+  const mm = () => host.querySelector(".mm")?.textContent ?? null;
+  const remount = async () => { await act(async () => root.unmount()); root = createRoot(host); };
+  const reply = (text: string) => new Response(JSON.stringify({ text, truncated: false, revision: "rev:" + text, topics: [] }));
+  const of = (id: string): Bot => ({ ...bot, id, threadId: "t-" + id, name: id });
+
+  it("paints the saved text on the next open, not the text from before the save", async () => {
+    width(1440);
+    const me = of("f1a");
+    await open(me);
+    await toMemory();
+    expect(mm()).toContain("Uses Windows");
+    await startEditing();
+    await write("- Uses Linux");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(puts).toEqual(["- Uses Linux"]);
+    await remount();
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    const held: (() => void)[] = [];
+    vi.mocked(fetch).mockImplementation((url, init) => String(url) !== "/api/bots/f1a/memory" || init?.method ? answer(url, init) : new Promise((done) => held.push(() => done(reply("- Uses Linux")))));
+    await open(me);
+    await toMemory();
+    expect(held.length).toBeGreaterThan(0);
+    expect(mm()).toContain("Uses Linux");
+    expect(mm()).not.toContain("Uses Windows");
+  });
+
+  it("keeps a deleted and saved line gone on the next open", async () => {
+    width(1440);
+    const me = of("f1b");
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    let saved = "- Keep this\n- Forget this";
+    const held: (() => void)[] = [];
+    let hold = false;
+    vi.mocked(fetch).mockImplementation((url, init) => {
+      if (String(url) !== "/api/bots/f1b/memory") return answer(url, init);
+      if (init?.method === "PUT") { saved = JSON.parse(String(init.body)).text; return answer(url, init); }
+      return hold ? new Promise((done) => held.push(() => done(reply(saved)))) : Promise.resolve(reply(saved));
+    });
+    await open(me);
+    await toMemory();
+    expect(count("long")).toBe("2");
+    await startEditing();
+    await write("- Keep this");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(saved).toBe("- Keep this");
+    await remount();
+    hold = true;
+    await open(me);
+    await toMemory();
+    expect(held.length).toBeGreaterThan(0);
+    expect(count("long")).toBe("1");
   });
 });
 
@@ -560,6 +683,13 @@ describe("Long-Term and Knowledge sheets", () => {
     expect(sheet("long")!.hasAttribute("data-leaving")).toBe(true);
     expect(sheet("muscle")!.textContent).toContain("Nothing yet.");
     expect(fold("muscle").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("gives the Memory File sheet no Edit control", async () => {
+    await wide();
+    await act(async () => fileRow().click());
+    expect(sheet("file")).not.toBeNull();
+    expect(sheet("file")!.querySelector("button.mm-action")).toBeNull();
   });
 
   it("shows the same save state beside Done when you edit Long-Term", async () => {

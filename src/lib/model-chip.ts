@@ -14,7 +14,7 @@ export function catalogModelLabel(
  * renders effort separately, so the parenthesized tier is stripped here.
  * Non-tier parens ("Auto (recommended)") are kept verbatim. */
 function stripTierParen(label: string): string {
-  return label.replace(/\s+\((high|medium|low)\)\s*$/i, "").trim() || label;
+  return label.replace(/\s+\((xhigh|high|medium|low)\)\s*$/i, "").trim() || label;
 }
 
 /** Chip copy is the live engine/model. Automatic is a picker mode, not a name.
@@ -160,6 +160,7 @@ const FAMILY_ACCENTS = {
 
 const DRIVER_FAMILIES = new Map<string, keyof typeof FAMILY_ACCENTS>([
   ["codex", "gpt"],
+  ["grok", "grok"],
   ["grokAgent", "grok"],
   ["antigravityAgent", "gemini"],
   ["geminiAgent", "gemini"],

@@ -9,6 +9,7 @@ import { LiveCall } from "@/lib/live-call/controller";
 import { initialDesktopCapabilities } from "@/lib/desktop";
 import type { LiveEvents } from "@/lib/live-call/engine";
 
+import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
 import { CallHostSlot } from "./CallSlots";
 import { ChatView } from "./ChatView";
 import * as desktop from "./DesktopCapabilities";
@@ -59,7 +60,7 @@ const posts: string[] = [];
 const fetchImpl = async (input: RequestInfo | URL) => {
   const path = String(input);
   posts.push(path);
-  if (path === "/api/config") return fakes.config ? fakes.config() : Response.json({ gemini: { configured: false } });
+  if (path === "/api/config") return fakes.config ? fakes.config() : Response.json({ gemini: { configured: false }, features: { voiceCalls: true } });
   if (path.endsWith("/call/token") && fakes.token) return fakes.token();
   if (path.endsWith("/call/token")) return Response.json({ callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" });
   if (path.endsWith("/messages")) return fakes.messages?.() ?? Response.json({ ok: true }, { status: 202 });
@@ -71,7 +72,7 @@ async function saveKey(configured = true) {
   fakes.key = true;
   await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "qa:1" }), lastEventId: "qa:1" }));
   await vi.waitFor(() => expect(posts.some((path) => path.startsWith("/api/bots?"))).toBe(true));
-  await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", gemini: { configured } }), lastEventId: "qa:2" }));
+  await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "config", cursor: "qa:2", gemini: { configured }, features: { voiceCalls: true } }), lastEventId: "qa:2" }));
 }
 
 async function mount(key = false, mic = true) {
@@ -219,6 +220,49 @@ describe("call button in the message box", () => {
     }
   });
 
+  it("puts the call settings gear before Call, opens the menu, and hides it while typing", async () => {
+    const { host, unmount } = await mount();
+    try {
+      const gear = button(frame(host), "Call settings")!;
+      expect(gear.title).toBe("Call settings");
+      expect(gear.compareDocumentPosition(button(frame(host), "Call Atlas")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
+      await act(async () => gear.click());
+      expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
+      expect(tokens()).toBe(0);
+      await act(async () => gear.click());
+      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
+      await type(host, "hi");
+      expect(button(host, "Call settings")).toBeNull();
+      await type(host, "");
+      expect(button(host, "Call settings")).not.toBeNull();
+      await connect(host);
+      expect(tokens()).toBe(1);
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("uses the same gear in the message box as in the call, without changing the row height", async () => {
+    const rem = (className: string, prefix: string) => Number(className.match(new RegExp(`(?:^| )${prefix}(-?\\d+)(?: |$)`))?.[1] ?? 0);
+    const phone = (el: HTMLElement) => (rem(el.className, "max-md:size-") || rem(el.className, "size-")) - 2 * rem(el.className, "max-md:-my-");
+    const { host, unmount } = await mount();
+    try {
+      const gear = button(frame(host), "Call settings")!;
+      expect(rem(gear.className, "max-md:size-")).toBe(10);
+      await type(host, "hi");
+      const send = button(frame(host), "Send message")!;
+      expect(phone(gear)).toBe(phone(send));
+      await type(host, "");
+      await connect(host);
+      const live = button(frame(host), "Call settings")!;
+      expect(rem(live.className, "size-")).toBe(rem(gear.className, "size-"));
+      expect(rem(live.className, "max-md:size-")).toBe(10);
+    } finally {
+      await unmount();
+    }
+  });
+
   it("labels Call in Korean", async () => {
     applyLocale("ko");
     const { host, unmount } = await mount();
@@ -261,7 +305,7 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("shows the call settings gear that opens the small menu, and a right-click on End still does", async () => {
+  it("shows the call settings gear that opens the small menu, and a right-click on End opens nothing", async () => {
     const { host, unmount } = await mount();
     try {
       await connect(host);
@@ -271,6 +315,7 @@ describe("live call in the message box", () => {
       expect(gear.compareDocumentPosition(button(frame(host), "End")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       await act(async () => gear.click());
       const small = document.querySelector<HTMLElement>("[data-call-settings-menu]")!;
+      await act(async () => small.querySelector<HTMLElement>("[data-call-more]")!.click());
       expect(small.querySelector('input[aria-label="Speed"]')).not.toBeNull();
       expect(frame(host).querySelector("[data-call-box]")).not.toBeNull();
       await act(async () => small.click());
@@ -280,18 +325,63 @@ describe("live call in the message box", () => {
         gear.click();
       });
       await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
-      const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
-      await act(async () => button(frame(host), "End")!.dispatchEvent(right));
-      expect(right.defaultPrevented).toBe(true);
-      const menu = document.querySelector<HTMLElement>("[data-call-settings-menu]")!;
-      expect(menu.querySelector('input[aria-label="Speed"]')).not.toBeNull();
-      expect(parseFloat(menu.style.width)).toBeLessThanOrEqual(400);
-      expect(frame(host).querySelector("[data-call-box]")).not.toBeNull();
-      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
-      await vi.waitFor(() => expect(document.querySelector("[data-call-settings-menu]")).toBeNull());
+      await act(async () => void button(frame(host), "End")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 })));
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
       await act(async () => button(frame(host), "End")!.click());
       await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
     } finally {
+      await unmount();
+    }
+  });
+
+  it("c-93117b5a76ea a tap on End while the call menu is open ends the call", async () => {
+    const { host, unmount } = await mount();
+    try {
+      await connect(host);
+      await act(async () => button(frame(host), "Call settings")!.click());
+      expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
+      const end = button(frame(host), "End")!;
+      const touch = (type: string) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: 10, clientY: 10 }] });
+        end.dispatchEvent(event);
+      };
+      await act(async () => {
+        touch("touchstart");
+        touch("touchend");
+        end.click();
+      });
+      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("c-93117b5a76ea a hold on End ends the call and opens no settings", async () => {
+    const { host, unmount } = await mount();
+    try {
+      await connect(host);
+      const end = button(frame(host), "End")!;
+      const touch = (type: string) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: 10, clientY: 10 }] });
+        end.dispatchEvent(event);
+        return event;
+      };
+      vi.useFakeTimers();
+      let lift: Event;
+      await act(async () => {
+        touch("touchstart");
+        vi.advanceTimersByTime(LONG_PRESS_MS);
+        lift = touch("touchend");
+      });
+      vi.useRealTimers();
+      expect(document.querySelector("[data-call-settings-menu]")).toBeNull();
+      expect(lift!.defaultPrevented).toBe(false);
+      await act(async () => end.click());
+      await vi.waitFor(() => expect(frame(host).querySelector("[data-call-box]")).toBeNull());
+    } finally {
+      vi.useRealTimers();
       await unmount();
     }
   });
@@ -307,7 +397,7 @@ describe("live call in the message box", () => {
     const { host, unmount } = await mount();
     try {
       await connect(host);
-      await act(async () => button(frame(host), "End")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+      await act(async () => button(frame(host), "Call settings")!.click());
       expect(document.querySelector("[data-call-settings-menu]")).not.toBeNull();
       expect(layers.size).toBe(1);
       await act(async () => [...layers.values()][0]!());
@@ -334,6 +424,7 @@ describe("live call in the message box", () => {
       expect(frame(first.host).querySelector("[data-call-caption]")?.textContent).toBe("AtlasThe one where sign-in loops back?");
       expect(first.host.querySelector<HTMLTextAreaElement>("textarea[data-orbit-composer]")?.value).toBe("also check the reset email");
       await act(async () => button(frame(first.host), "Call settings")!.click());
+      await act(async () => document.querySelector<HTMLElement>("[data-call-more]")!.click());
       const toggle = button(document.body, "Captions")!;
       expect(toggle.getAttribute("role")).toBe("switch");
       expect(toggle.getAttribute("aria-checked")).toBe("true");
@@ -581,22 +672,11 @@ describe("live call in the message box", () => {
     }
   });
 
-  it("waits for config and Start call before the first mic or token request", async () => {
+  it("waits for Start call before the first mic or token request", async () => {
     const start = vi.spyOn(LiveCall.prototype, "start");
-    let finish!: (response: Response) => void;
-    const config = new Promise<Response>((resolve) => { finish = resolve; });
-    fakes.config = () => config;
-    const { host, unmount } = await mount();
+    const { host, unmount } = await mount(true);
     try {
       await act(async () => button(host, "Call Atlas")!.click());
-      await vi.waitFor(() => expect(host.querySelector("[data-live-call]")).not.toBeNull());
-      expect(start).not.toHaveBeenCalled();
-      expect(tokens()).toBe(0);
-      expect(fakes.capture).not.toHaveBeenCalled();
-      fakes.key = true;
-      await act(async () => fakes.sse!.onmessage?.({ data: JSON.stringify({ kind: "hello", resumed: false, cursor: "qa:1" }), lastEventId: "qa:1" }));
-      await vi.waitFor(() => expect(posts).toContain("/api/config"));
-      await act(async () => finish(Response.json({ gemini: { configured: true } })));
       await vi.waitFor(() => expect(intro()).not.toBeNull());
       expect(start).not.toHaveBeenCalled();
       expect(tokens()).toBe(0);
@@ -607,7 +687,6 @@ describe("live call in the message box", () => {
       expect(tokens()).toBe(1);
       expect(fakes.capture).toHaveBeenCalledTimes(1);
     } finally {
-      finish(Response.json({ gemini: { configured: true } }));
       await unmount();
     }
   });

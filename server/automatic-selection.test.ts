@@ -115,7 +115,7 @@ describe("resolveAutomaticSelection", () => {
   });
 
   it.each([
-    ["codex", "gpt-6-astra", "low"],
+    ["codex", "gpt-6.2-astra", "low"],
     ["codex", "gpt-6.1-terra", "medium"],
     ["grokAgent", "grok-4.6", "high"],
   ])("gives a new bot the %s default effort", (driverKind, defaultModel, effort) => {

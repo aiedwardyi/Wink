@@ -4,25 +4,32 @@ import { z } from "zod";
 import { AccountError, isInstanceId } from "./accounts.ts";
 import type { AccountLifecycle } from "./account-lifecycle.ts";
 import { AccountNameError, type AccountNames } from "./account-names.ts";
+import { LoginBusyError, logSignInRefusal, SIGNED_IN_ELSEWHERE } from "./engine-login.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { shownLogin } from "../shared/usage-identity.ts";
 
 const signInSchema = z.object({ device: z.boolean().optional() }).strict();
 const addSchema = signInSchema.extend({ of: z.string().refine(isInstanceId) });
-const removalSchema = z.object({ destinationId: z.string().refine(isInstanceId).optional() }).strict();
+// `login` is the sign-in the client's row showed (shownLogin): a different one there now is not the client's to end.
+const removalSchema = z.object({ destinationId: z.string().refine(isInstanceId).optional(), login: z.string().nullable().optional() }).strict();
 const codeSchema = z.object({ generation: z.number().int().positive(), code: z.string().min(1).max(4096).refine((code) => !/[^!-~]/.test(code)) }).strict();
 const nameSchema = z.object({ nickname: z.string().nullable() }).strict();
 
-export function createAccountRoutes(lifecycle: AccountLifecycle, registry: ProviderRegistry, deps: { names?: AccountNames; onNamesChanged?: () => void } = {}) {
-  return async (req: IncomingMessage, res: ServerResponse, method: string, path: string): Promise<boolean> => {
+export function createAccountRoutes(lifecycle: AccountLifecycle, registry: ProviderRegistry, deps: {
+  names?: AccountNames; onNamesChanged?: () => void;
+  /** The saved Usage order (#2218), by engine base. */
+  usageOrder?: () => Record<string, string[]> | undefined;
+} = {}) {
+  /** `owner` names the requesting session (signInOwner); only the session that started a sign-in may answer or cancel it. */
+  return async (req: IncomingMessage, res: ServerResponse, method: string, path: string, owner: string): Promise<boolean> => {
     const route = /^\/api\/accounts(?:\/([^/]+)(?:\/(sign-in\/code|sign-in|sign-out|default|destination))?)?$/.exec(path);
     const nameRoute = deps.names && /^\/api\/accounts\/([^/]+)\/name$/.exec(path);
     const legacy = /^\/api\/instances\/([^/]+)\/(sign-in|sign-out)$/.exec(path);
-    const managed = legacy && (lifecycle.accounts.get(legacy[1]) || lifecycle.accounts.drains[legacy[1]] || lifecycle.accounts.snapshot.some((row) => row.of === legacy[1])
-      || (legacy[2] === "sign-in" && registry.accountBlocked(legacy[1])));
-    if (!route && !managed && !nameRoute) return false;
+    if (!route && !legacy && !nameRoute) return false;
     const id = nameRoute?.[1] ?? route?.[1] ?? legacy?.[1];
     const action = route?.[2] ?? legacy?.[2];
+    const signIn = action === "sign-in" || action === "sign-in/code" || (!id && method === "POST");
     try {
       if (nameRoute) {
         if (method !== "POST") json(res, 405, { error: "Unsupported account operation" });
@@ -46,19 +53,23 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
       }
       if (id && !isInstanceId(id)) throw new AccountError("Invalid account id", 400);
       if (id && action === "sign-in" && method === "GET") {
-        const result = legacy ? registry.signIn(id) : lifecycle.signInResult(id) ?? (lifecycle.accounts.list().some((row) => row.id === id) ? { state: registry.logins.state(id), ...registry.logins.capture(id) } : null);
+        const result = legacy ? registry.signIn(id) : lifecycle.signInResult(id, owner) ?? (lifecycle.accounts.list().some((row) => row.id === id) ? { state: registry.logins.state(id), ...registry.signInCapture(id, owner) } : null);
         if (!result) throw new AccountError("Unknown account", 404);
         json(res, 200, result);
       } else if (id && action === "sign-in/code" && method === "POST") {
-        if (!lifecycle.accounts.get(id) || registry.get(id)?.driverKind !== "claudeAgent") throw new AccountError("Unknown managed Claude account", 404);
+        if (!registry.get(id)) throw new AccountError("Unknown engine", 404);
         const parsed = codeSchema.safeParse(await body(req));
         if (!parsed.success) throw new AccountError("A login generation and one code are required", 400);
+        if (!registry.logins.owns(id, owner)) throw new AccountError(SIGNED_IN_ELSEWHERE, 403, "sign-in-elsewhere");
         if (!registry.logins.submit(id, parsed.data.generation, parsed.data.code)) throw new AccountError("This sign-in is no longer waiting for a code", 409);
         json(res, 200, {});
       } else if (id && action === "destination" && method === "GET") {
         if (!lifecycle.bots) throw new AccountError("Bot account routing is unavailable", 503);
         const instances = await registry.describeCached();
-        const destination = lifecycle.accounts.list().find((account) => {
+        // Main goes to the first ready account in the order Usage and Connections show.
+        const order = deps.usageOrder?.()?.[lifecycle.accounts.get(id)?.of ?? id] ?? [];
+        const rank = (accountId: string) => order.includes(accountId) ? order.indexOf(accountId) : order.length;
+        const destination = lifecycle.accounts.list().sort((a, b) => rank(a.id) - rank(b.id)).find((account) => {
           const instance = instances.find((row) => row.instanceId === account.id);
           if (instance?.snapshot.state !== "available" || instance.snapshot.authenticated !== true) return false;
           try { lifecycle.bots!.destination(id, account.id); return true; }
@@ -73,9 +84,9 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
         json(res, 200, { accounts: accounts.map((account) => {
           const instance = instances.find((row) => row.instanceId === account.id);
           const named = deps.names?.get(account.id);
-          return { ...account, ...(!account.error && lifecycle.accounts.isDefault(account.id) ? { default: true } : {}), snapshot: account.error ? { state: "unavailable", reason: account.error } : instance?.snapshot, loginState: instance?.loginState, loginError: instance?.loginError,
+          return { ...account, ...(!account.error && lifecycle.accounts.isDefault(account.id) ? { default: true } : {}), snapshot: account.error ? { state: "unavailable", reason: account.error } : instance?.snapshot, loginState: instance?.loginState, loginOpensBrowser: instance?.loginOpensBrowser, loginError: instance?.loginError,
             ...(named ? { number: named.number, nickname: named.nickname, name: named.name } : {}),
-            state: account.existing && registry.accountBlocked(account.id) ? "stopped" : account.state,
+            state: account.existing && registry.accountStopped(account.id) ? "stopped" : account.state,
             models: instance?.models, effortLevels: instance?.capabilities.effortLevels,
             ...(lifecycle.accounts.drains[account.id] ? { drain: lifecycle.accounts.drains[account.id] } : {}),
           };
@@ -83,7 +94,7 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
       } else if (!id && method === "POST") {
         const parsed = addSchema.safeParse(await body(req));
         if (!parsed.success) throw new AccountError("An engine base id and optional device flag are required", 400);
-        json(res, 200, await lifecycle.add(parsed.data.of, parsed.data.device));
+        json(res, 200, await lifecycle.add(parsed.data.of, parsed.data.device === true, owner));
       } else if (id && action === "default" && method === "POST") {
         json(res, 200, await lifecycle.useForBots(id).catch((error) => {
           console.warn(`accounts: Main switch to ${id} refused (${(error as { code?: string }).code ?? "error"}): ${error instanceof Error ? error.message : String(error)}`);
@@ -92,15 +103,26 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
       } else if (id && action === "sign-in" && method === "POST") {
         const parsed = signInSchema.safeParse(await body(req));
         if (!parsed.success) throw new AccountError("device must be a boolean", 400);
-        json(res, 200, await lifecycle.signIn(id, parsed.data.device));
-      } else if (id && action === "sign-in" && method === "DELETE") json(res, 200, await lifecycle.cancel(id));
+        json(res, 200, await lifecycle.signIn(id, parsed.data.device === true, owner));
+      } else if (id && action === "sign-in" && method === "DELETE") {
+        json(res, 200, await lifecycle.cancel(id, { owner, generation: registry.logins.generation(id) }));
+      }
       else if (id && ((action === "sign-out" && method === "POST") || (!action && method === "DELETE"))) {
         const parsed = removalSchema.safeParse(method === "POST" ? await body(req) : {});
         if (!parsed.success) throw new AccountError("destinationId must name an account", 400);
-        json(res, 200, await lifecycle.remove(id, parsed.data.destinationId));
-      } else json(res, 405, { error: "Unsupported account operation" });
+        if (parsed.data.login !== undefined) {
+          await registry.recheck(id);
+          const now = (await registry.describeCached()).find((row) => row.instanceId === id)?.snapshot;
+          if (shownLogin(now ?? {}) !== parsed.data.login) throw new AccountError("This account's sign-in changed since it was shown", 409, "login-changed");
+        }
+        json(res, 200, await lifecycle.remove(id, parsed.data.destinationId, { owner, generation: registry.logins.generation(id) }));
+      } else {
+        if (signIn) logSignInRefusal(405);
+        json(res, 405, { error: "Unsupported account operation" });
+      }
     } catch (error) {
       const status = error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : 500;
+      if (signIn) logSignInRefusal(status, error instanceof AccountError || error instanceof LoginBusyError ? error.code : undefined);
       if (nameRoute) json(res, status, error instanceof AccountNameError ? { error: error.message, code: error.code } : status === 400 ? { error: "Invalid nickname", code: "invalid-character" } : { error: "Account operation failed" });
       else if (status < 500 || error instanceof AccountError) json(res, status, { error: (error as Error).message, code: (error as { code?: unknown }).code, bot: (error as { bot?: unknown }).bot });
       else json(res, status, { error: "Account operation failed" });

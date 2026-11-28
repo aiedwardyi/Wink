@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -95,6 +95,7 @@ describe("account cache generations", () => {
     const snapshot = vi.fn(async () => ({ state: "available" as const, authenticated: true }));
     driver.create = async (input) => ({ ...await create(input), account: input.account, snapshot });
     const configs = { [account.id]: { driver: "codex", account } };
+    mkdirSync(join(account.home, "state"), { recursive: true });
     const first = new ProviderRegistry([driver], { cacheDir: DATA_DIR });
     await first.load(configs);
     await first.describe();

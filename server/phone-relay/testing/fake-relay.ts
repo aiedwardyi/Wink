@@ -102,6 +102,8 @@ export class FakeRelay extends EventEmitter {
   eabAnswer: ((body: string) => EnrollAnswer) | null = null;
   readonly eabBodies: string[] = [];
   lookups = 0;
+  /** More bases phones reach PCs on, as a relay with oldBases routes them. */
+  otherBases: string[] = [];
   private server: Server | null = null;
   private readonly controls = new Map<string, Control>();
   private readonly idle = new Map<string, TLSSocket[]>();
@@ -233,7 +235,8 @@ export class FakeRelay extends EventEmitter {
         this.relayTls.emit("connection", new SpliceStream(socket, buf));
         return;
       }
-      const label = labelFromHost(info.sni, this.base);
+      const sni = info.sni;
+      const label = [this.base, ...this.otherBases].map((base) => labelFromHost(sni, base)).find((found) => found !== null) ?? null;
       if (!label || !this.controls.has(label)) {
         this.record("phone:unrouted");
         return socket.destroy();

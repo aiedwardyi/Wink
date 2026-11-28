@@ -169,7 +169,8 @@ export type RuntimeEvent = RuntimeEventBase &
     // `usageLimit` marks the expected one: the account spent its
     // subscription window. `resetsAt` is epoch ms, null when unreported.
     // `signedOut` marks a confirmed sign-out of this account (Claude and Codex only).
-    | { type: "runtime.error"; message: string; setup?: boolean; signIn?: boolean; signedOut?: boolean; folder?: string; usageLimit?: { resetsAt: number | null; model?: boolean } }
+    // `paymentDue` marks a subscription the CLI refuses until it is paid (Claude only).
+    | { type: "runtime.error"; message: string; setup?: boolean; signIn?: boolean; signedOut?: boolean; paymentDue?: boolean; folder?: string; usageLimit?: { resetsAt: number | null; model?: boolean } }
   );
 
 /** One subscription usage window (a 5-hour session, a week) as the provider
@@ -182,6 +183,8 @@ export interface RateLimitWindow {
   usedPercent: number;
   resetsAt: number | null;
   windowMinutes?: number;
+  /** Spent in its most used pool while another pool of the same window still has room (Antigravity). */
+  otherPoolLeft?: boolean;
 }
 
 export type RuntimeEventListener = (event: RuntimeEvent) => void;
@@ -208,7 +211,9 @@ export interface SendTurnInput {
   resumeCursor?: unknown;
   /** Portable prompt used only when a remembered provider session cannot load. */
   resumeFallback?: { text: string };
-  /** A team room ask: its native session ends with the turn. */
+  /** Prefix also carried in text for Codex app-servers without native injection. */
+  nativeReplayPrefix?: string;
+  /** A room turn: its native session ends with the turn. */
   hosted?: true;
   /** Prior turns for transcript-replay providers (API-backed drivers). */
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
@@ -220,6 +225,8 @@ export interface SendTurnInput {
   approval?: "ask" | "auto";
   /** No file edits or shell, whatever the approval mode. Only for drivers with capabilities.readOnlyTurns. */
   readOnly?: true;
+  /** A read-only turn on the owner's own words (a room side lane): Claude still attaches the files its @paths name. */
+  ownerText?: true;
   /** A person is present for this turn. Only then does background work it
    * starts keep Auto approvals for desktop control after it settles. */
   attended?: boolean;
@@ -275,7 +282,7 @@ export type PrepareTurn = Pick<SendTurnInput, "threadId" | "model" | "effort" | 
   captured: import("./drivers/warm-pool.ts").Captured;
 };
 
-/** The focused bot's thread and settings; Claude re-opens that thread's closed session only while they still match it.
+/** The focused bot's thread and settings; Claude re-opens that thread's closed session on them.
  *  `fresh` is the spawn shape of a thread whose next turn starts a new session; Claude starts it ahead of Send. */
 export type PrepareFocus = Pick<SendTurnInput, "threadId" | "model" | "effort" | "approval"> & {
   fresh?: Pick<SendTurnInput, "integrations" | "cwd" | "leanStartup">;
@@ -438,7 +445,7 @@ export interface EngineInstall {
   /** Interactive sign-in run after installing, when install isn't enough. */
   signInCommand?: string;
   /** A printed URL with `?code=` is kept only on `authHosts` (device links). */
-  login?: { args: string[]; deviceArgs?: string[]; env?: Record<string, string>; authHosts?: string[] };
+  login?: { args: string[]; deviceArgs?: string[]; deviceEnv?: Record<string, string>; env?: Record<string, string>; authHosts?: string[] };
   logout?: string[];
   /** `command` needs npm on PATH, so the UI can say so when Node is absent. */
   needsNode?: boolean;
@@ -464,6 +471,7 @@ export interface ModelCatalog {
 
 export interface DriverCreateInput<Config> {
   account?: import("./account-policy.ts").AccountContext;
+  deferAccountAuth?: boolean;
   instanceId: InstanceId;
   /** registry.incarnation(instanceId) for this instance; Captured.incarnation must equal it. Absent outside the registry (tests): the driver mints its own. */
   incarnation?: string;
@@ -512,6 +520,12 @@ export interface ProviderInstance {
   /** Refresh a live catalog without recreating the provider instance. */
   readonly refreshModels?: () => Promise<void>;
   loginConfig?(): { cli: string; env: Record<string, string | undefined> };
+  /** When CLI logout fails, returns whether the fallback finished signing out. */
+  signOutWithoutCli?(failure: import("./engine-login.ts").LoginCapture["error"]): Promise<boolean>;
+  /** A sign-in is starting. Resolves when it can proceed, with a callback for its outcome. */
+  signingIn?(): Promise<(succeeded: boolean) => void>;
+  /** Its logout command succeeded: whatever sign-out was still pending is done. */
+  signedOutByCli?(): void;
   readonly adapter: ProviderAdapter;
   /** `rescan` = the user asked (Check again, saved a CLI): probes that
    * would start WSL are allowed to, where a passive refresh may not.
@@ -519,7 +533,7 @@ export interface ProviderInstance {
   snapshot(opts?: { rescan?: boolean; refresh?: boolean }): Promise<ProviderSnapshot>;
   /** Cheap one-shot text call (upstream TextGeneration) — titles, summaries. */
   /** `ephemeral` asks the CLI not to keep a session transcript, `lean` to skip the owner's customizations, where it can. */
-  generateText?(prompt: string, opts?: { timeoutMs?: number; signal?: AbortSignal; ephemeral?: boolean; lean?: boolean; model?: string; onUsage?: UsageObserver }): Promise<string>;
+  generateText?(prompt: string, opts?: { timeoutMs?: number; signal?: AbortSignal; ephemeral?: boolean; lean?: boolean; model?: string; fallbackModel?: string; onUsage?: UsageObserver }): Promise<string>;
   /** the model and default deadline generateText runs on, for telemetry */
   readonly textModel?: string;
   readonly textTimeoutMs?: number;
@@ -564,5 +578,7 @@ export interface ProviderDriver<Config = unknown> {
 export type AnyProviderDriver = ProviderDriver<any>;
 
 let eventCounter = 0;
+// Usage reads cliMissing as Not Installed, so every driver builds this one snapshot.
+export const cliNotFound = (cli: string): ProviderSnapshot => ({ state: "unavailable", reason: `\`${cli}\` CLI not found`, cliMissing: true });
 export const newEventId = () => `ev-${Date.now().toString(36)}-${(eventCounter++).toString(36)}`;
 export const newId = () => crypto.randomUUID();

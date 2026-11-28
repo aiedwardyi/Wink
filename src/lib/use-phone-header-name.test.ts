@@ -12,8 +12,9 @@ let nameWidth = 120;
 let phone = true;
 let crowded: "cluster" | "child" | null = null;
 let chipWidth = 132;
+let toggleAt: number | null = null;
 
-function Harness({ botName = "A long bot name" }: { botName?: string }) {
+function Harness({ botName = "A long bot name", toggle = false, exact = false }: { botName?: string; toggle?: boolean; exact?: boolean }) {
   const cluster = useRef<HTMLDivElement>(null);
   const name = useRef<HTMLButtonElement>(null);
   usePhoneHeaderNameFloor(cluster, name, botName, false);
@@ -21,12 +22,15 @@ function Harness({ botName = "A long bot name" }: { botName?: string }) {
     createElement("div", { ref: cluster, "data-cluster": true },
       createElement("button", { "data-avatar": true }),
       createElement("button", { ref: name, "data-name": true }, botName),
+      exact && createElement("span", { "data-crown": true }),
     ),
     createElement("div", { "data-controls": true },
+      exact && createElement("button", { "data-keep-going": true }),
       createElement("button", { "data-chip": true },
         createElement("span", { "data-model-label": true }, "Opus 5.5"),
         createElement("span", { "data-model-effort": true }, "Max"),
       ),
+      toggle && createElement("button", { "data-toggle": true }),
     ),
   );
 }
@@ -39,6 +43,7 @@ beforeEach(() => {
   phone = true;
   crowded = null;
   chipWidth = 132;
+  toggleAt = null;
   const matchMedia = window.matchMedia.bind(window);
   vi.spyOn(window, "matchMedia").mockImplementation(query => {
     const media = matchMedia(query);
@@ -57,12 +62,17 @@ beforeEach(() => {
       const controls = this.hasAttribute("data-controls") ? this : this.parentElement;
       left = overlaps && !controls?.style.columnGap ? 150 : 260;
       width = this.hasAttribute("data-chip") ? chipWidth : 132;
+      // With a toggle after it, a chip that may shrink ends 4px before the toggle; one pinned at max-content keeps its full width.
+      if (toggleAt !== null && this.hasAttribute("data-chip") && this.style.minWidth !== "max-content") width = Math.max(Number.parseFloat(this.style.minWidth) || 0, toggleAt - 4 - left);
     }
+    else if (this.hasAttribute("data-crown")) { left = 150; width = 14; }
+    else if (this.hasAttribute("data-keep-going")) { left = 222; width = 30; }
+    else if (this.hasAttribute("data-toggle")) { left = toggleAt ?? 362; width = 30; }
     else if (this.hasAttribute("data-model-label")) {
       const room = host.querySelector<HTMLElement>("[data-controls]")?.style.columnGap && compactAvailable ? compactAvailable : available;
       left = 392 - room;
       width = this.style.display === "none" ? 0 : this.style.minWidth === "max-content" ? 80 : Math.min(40, room);
-    } else if (this.hasAttribute("data-model-effort")) { left = 370; width = this.style.display === "none" ? 0 : 30; }
+    } else if (this.hasAttribute("data-model-effort")) { width = this.style.display === "none" ? 0 : 30; left = host.querySelector<HTMLElement>("[data-chip]")!.getBoundingClientRect().right - width; }
     return { x: left, y: 0, left, right: left + width, top: 0, bottom: 30, width, height: 30, toJSON() {} };
   });
   vi.spyOn(Range.prototype, "getBoundingClientRect").mockImplementation(function (this: Range) {
@@ -132,6 +142,36 @@ it("never writes a negative min-width when the chip is narrower than its label",
   expect(host.querySelector<HTMLElement>("[data-model-label]")!.style.textOverflow).toBe("ellipsis");
   expect(host.querySelector<HTMLElement>("[data-chip]")!.style.minWidth).toBe("max-content");
   expect(host.querySelector<HTMLElement>("[data-controls]")!.style.minWidth).toBe("");
+});
+
+it("keeps the model chip and its effort word clear of the side pane toggle", async () => {
+  toggleAt = 330;
+  available = 100;
+  await act(async () => root.render(createElement(Harness, { toggle: true })));
+  const chip = host.querySelector<HTMLElement>("[data-chip]")!.getBoundingClientRect();
+  const toggle = host.querySelector<HTMLElement>("[data-toggle]")!.getBoundingClientRect();
+  expect(chip.right).toBeLessThanOrEqual(toggle.left);
+  expect(host.querySelector<HTMLElement>("[data-model-effort]")!.getBoundingClientRect().right).toBeLessThanOrEqual(toggle.left);
+  expect(host.querySelector<HTMLElement>("[data-model-label]")!.style.textOverflow).toBe("ellipsis");
+});
+
+it("does not settle on a chip that spills under the toggle when the label itself fits", async () => {
+  toggleAt = 330;
+  available = 100;
+  await act(async () => root.render(createElement(Harness, { toggle: true })));
+  const chip = host.querySelector<HTMLElement>("[data-chip]")!.getBoundingClientRect();
+  expect(chip.right).toBeLessThanOrEqual(host.querySelector<HTMLElement>("[data-toggle]")!.getBoundingClientRect().left);
+});
+
+it("keeps every control clear of the toggle for a chief with Agentic Mode on", async () => {
+  toggleAt = 330;
+  available = 100;
+  await act(async () => root.render(createElement(Harness, { toggle: true, exact: true })));
+  const rect = (selector: string) => host.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+  expect(rect("[data-crown]").right).toBeLessThanOrEqual(rect("[data-keep-going]").left);
+  expect(rect("[data-keep-going]").right).toBeLessThanOrEqual(rect("[data-chip]").left);
+  expect(rect("[data-chip]").right).toBeLessThanOrEqual(rect("[data-toggle]").left);
+  expect(rect("[data-model-effort]").right).toBeLessThanOrEqual(rect("[data-toggle]").left);
 });
 
 it("leaves desktop sizing alone", async () => {

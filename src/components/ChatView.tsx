@@ -24,7 +24,6 @@ import {
 import {
   api,
   useStore,
-  useStreaming,
   formatTime,
   openNotificationTarget,
   shownModelSelection,
@@ -34,8 +33,9 @@ import {
   type InstanceInfo,
   type Message,
 } from "@/state/store";
-import { EngineSetup, needsCli, needsSignIn, setupErrorAction } from "./EngineSetup";
+import { EngineSetup, needsCli, setupErrorAction } from "./EngineSetup";
 import { AccountSignInCard, SignedInCard, SignInCard } from "./SignInCard";
+import { DockCard } from "./DockCard";
 import { BotAvatar } from "./Avatar";
 import { TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -47,13 +47,16 @@ import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { showChatHeaderFind } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
-import { composerIsBusy, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
-import { picturedReplies } from "@/lib/show-pane";
+import { composerIsBusy, inSendOrder, queuedSendIds, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
+import { paneLeadsToMedia, picturedReplies } from "@/lib/show-pane";
 import { liveActivityLabel } from "@/lib/live-activity";
+import { warmMedia } from "@/lib/media-index";
 import { useNoReply } from "@/lib/no-reply";
 import { useNoReplySwitch } from "@/lib/no-reply-switch";
-import { buffersForTurn, currentTurnId, hydrationTurnThread, turnPhase, turnStageLabel } from "@/lib/turn-stage";
+import { hydrationTurnThread, turnPhase, turnStageLabel } from "@/lib/turn-stage";
+import { useLiveReply, useThreadTurn } from "@/lib/thread-stream";
 import { Bubble, bubbleBot, versionProps } from "./ChatBubble";
+import { ImportMemoryCard, useImportOffer } from "./ImportMemoryCard";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { AskUserRecord } from "./AskUserRecord";
 import { FolderFix } from "./FolderFix";
@@ -67,7 +70,7 @@ import { TurnRail } from "./TurnRail";
 import { ReconnectingCue } from "./ReconnectingCue";
 import { ConnectorCard } from "./ConnectorCard";
 import { SecretRequestCard } from "./SecretRequestCard";
-import { ShowPaneButton } from "./ShowPaneButton";
+import { paneWorkers, ShowPaneButton } from "./ShowPaneButton";
 import { hasRoutineExecutionTask, RoutineRunCard } from "./RoutineRunCard";
 import { WorkerRow, useWorkerRows, type ShownRun } from "./WorkerRows";
 import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
@@ -77,7 +80,7 @@ import { ModelPicker } from "./ModelPicker";
 import { DeviceTag } from "./DeviceSwitcher";
 import { RenameTitle } from "./RenameTitle";
 import { ReactionChips } from "./Reactions";
-import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, messageMenuProps, type MessageMenuRequest } from "./MessageMenu";
+import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, messageMenuProps, type MessageMenuRequest, type MessageMenuTarget } from "./MessageMenu";
 import { CallOverlay } from "./CallView";
 import { useCallControls } from "./CallControls";
 import { CallCard } from "./CallCard";
@@ -91,6 +94,7 @@ import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, 
 import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
 import { chatTranscriptRows, messageVisible } from "@/lib/chat-transcript";
 import { isShownMessage } from "@/lib/shown-message";
+import { importOfferId } from "@/lib/import-links";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { MemoryCleanSave } from "./MemoryTidyLine";
 import { MemorySaveRun } from "./MemorySaveChip";
@@ -98,7 +102,7 @@ import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
 import { useOlderOnScroll } from "@/lib/use-older-on-scroll";
-import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
+import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, isBottomFollowScroll, newestBelowView, onStopFollow, restoreTranscriptScroll, scrollToFollowBottom, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { CHAT_PEEK_WINDOW_SIZE, ChatPeekPart, peekRows, useChatPeekRows, useChatPeekSettled, useChatPreview } from "@/lib/chat-preview";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -114,6 +118,7 @@ import {
 } from "@/lib/transcript-window";
 import { timelineEvents } from "@/lib/taskTimeline";
 import { useReplyDraft } from "@/lib/drafts";
+import { useReplyFocus, useReplyTargetInView } from "@/lib/reply-focus";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { usageAccount } from "@/lib/accounts";
 import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
@@ -341,7 +346,7 @@ function CommChip({ message, comm, threadId, onMessageMenu }: { message: Message
   return (
     <div {...menuProps} tabIndex={-1}>
       {chip}
-      <PeerMessageBody text={message.text} />
+      <PeerMessageBody text={message.text} short />
       {threadId && <ReactionChips threadId={threadId} message={message} corner="left" className="static mt-1 ml-3 max-w-full translate-y-0" />}
     </div>
   );
@@ -610,6 +615,7 @@ const MessagesList = memo(function MessagesList({
   livePanes,
   onCall,
   hidden,
+  queuedActions,
 }: {
   bot: Bot;
   messages: Message[];
@@ -634,6 +640,7 @@ const MessagesList = memo(function MessagesList({
   livePanes: Set<string> | null;
   onCall: boolean;
   hidden: boolean;
+  queuedActions: (queueId: string) => MessageMenuTarget["queued"];
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -642,7 +649,7 @@ const MessagesList = memo(function MessagesList({
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
   const shownRows = useChatPeekRows();
-  const streamingMessage = shownRows ? streamingRow : null;
+  const streamingMessage = useLiveReply(shownRows ? streamingRow : null, bot.threadId);
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
   // Fold finished tool chips into runs, so a stretch of them cannot bury
   // what the bot actually said. Hidden unless Settings → Tool calls is on.
@@ -687,10 +694,10 @@ const MessagesList = memo(function MessagesList({
     }
     return quickAsks;
   }, [transcript]);
-  const peerReplies = useMemo(() => {
+  const { replies: peerReplies, pending: pendingPeerReply } = useMemo(() => {
     const replies = new Map<string, NonNullable<Message["comm"]>>();
     let comm: Message["comm"];
-    for (const message of streamingMessage ? [...transcript, streamingMessage] : transcript) {
+    for (const message of transcript) {
       if (message.role === "user") comm = message.from ? message.comm : undefined;
       else if (message.kind === "text" && isShownMessage(message) && message.text?.trim()) {
         // a stamped reply labels itself; either way the ask is answered once
@@ -698,9 +705,11 @@ const MessagesList = memo(function MessagesList({
         comm = undefined;
       }
     }
-    return replies;
-  }, [transcript, streamingMessage]);
-  const pictured = useMemo(() => picturedReplies(streamingMessage ? [...transcript, streamingMessage] : transcript), [transcript, streamingMessage]);
+    return { replies, pending: comm };
+  }, [transcript]);
+  const streamedPeerReply = streamingMessage?.text?.trim() ? pendingPeerReply : undefined;
+  const { pictured, tailPictures } = useMemo(() => picturedReplies(transcript), [transcript]);
+  const idleAfterOnboarding = useMemo(() => transcriptIdleAfterOnboarding(transcript), [transcript]);
   // the first user text after each bot reply, for its option chips
   const laterAnswers = useMemo(() => {
     const answers = new Map<string, string>();
@@ -713,6 +722,10 @@ const MessagesList = memo(function MessagesList({
     }
     return answers;
   }, [transcript]);
+  const importOffer = useMemo(() => importOfferId(transcript), [transcript]);
+  // the import row is for a chat with nothing in it yet; a quiz older builds seeded never shows, so it does not count
+  const empty = useMemo(() => transcript.every(shouldHideOnboardingCard), [transcript]);
+  const importRow = useImportOffer(bot.id, empty);
   const bubble = bubbleBot(bot);
   const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
   // A live call holds its first row; an ended one moves to its last spoken line, after what was sent during it.
@@ -731,9 +744,17 @@ const MessagesList = memo(function MessagesList({
   const focusedId = focus && !focus.consumed && focus.threadId === bot.threadId ? focus.messageId : null;
   // the current find hit shows even when the tool-call setting hides its row
   const findCurrent = useFindCurrentId();
+  const dockTarget = dock ? items.findLast((item, i) => rows[i].visible && item.kind === "message" && item.message.role === "bot" && item.message.kind === "text" && !isVoiceLine(item.message)) : undefined;
+  const slots = new Set<string>();
   return (
     <>
-      {transcriptIdleAfterOnboarding(transcript) && !bot.busy && (
+      {importRow.offer && (
+        <div data-import-row className="contents">
+          <DaySeparator at={bot.tasks?.find((task) => task.threadId === bot.threadId)?.createdAt ?? bot.createdAt ?? Date.now()} />
+          <ImportMemoryCard key={bot.threadId} botId={bot.id} onClose={importRow.close} />
+        </div>
+      )}
+      {idleAfterOnboarding && !bot.busy && importRow.offer === false && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
           <BotAvatar bot={bot} state="idle" size={64} motion="none" motionKey={0} />
           <RenameTitle
@@ -782,6 +803,8 @@ const MessagesList = memo(function MessagesList({
         const m = item.message;
         const callId = m.call?.id;
         const callHere = callId && callAt.get(callId) === m.id;
+        const streaming = m === streamingMessage;
+        const replyComm = stampedReplyComm(m) ?? (streaming ? streamedPeerReply : peerReplies.get(m.id));
         const row = isVoiceLine(m) ? null : (() => {
           switch (m.kind) {
             case "compaction":
@@ -808,7 +831,7 @@ const MessagesList = memo(function MessagesList({
                   />
                 );
               }
-              if (shouldHideOnboardingCard(m, transcript)) return null;
+              if (shouldHideOnboardingCard(m)) return null;
               return <OptionCard botId={bot.id} message={m} />;
             case "routine.run": {
               const executionThreadId = m.routineRun?.executionThreadId;
@@ -875,14 +898,17 @@ const MessagesList = memo(function MessagesList({
                   laterAnswer={laterAnswers.get(m.id)}
                   editing={editingId === m.id}
                   isLastBotText={m.id === lastBotTextId}
-                  streaming={m === streamingMessage}
-                  pictured={pictured.has(m.id)}
-                  dock={dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
+                  streaming={streaming}
+                  pictured={streaming ? tailPictures.has(m.from?.botId ?? "") : pictured.has(m.id)}
+                  peerReply={Boolean(replyComm)}
+                  importOffer={m.id === importOffer}
+                  dock={dockTarget === item && dock?.slot === replySlot(bot.threadId, m, transcript) ? dock : undefined}
                   onStartEdit={onStartEdit}
                   onCancelEdit={onCancelEdit}
                   onSubmitEdit={onSubmitEdit}
                   onRegenerate={m.id === lastBotTextId ? onRegenerate : undefined}
                   replyTarget={m.replyToId ? bot.messages.find((candidate) => candidate.id === m.replyToId) : quickAsks.get(m.id)}
+                  queuedActions={m.placeholder && state.pendingQueued[bot.threadId]?.some((entry) => entry.queueId === m.id) ? queuedActions(m.id) : undefined}
                   onReply={onReply}
                   onMessageMenu={onMessageMenu}
                 />
@@ -891,8 +917,10 @@ const MessagesList = memo(function MessagesList({
         })();
         // a call line that opens a day keeps the divider, now that the card may sit further down
         if (!row && !callHere && !(callId && newDay)) return null;
-        const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
-        const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
+        const slot = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : null;
+        const fallbackKey = slot ? m.id : m.sendId ?? m.id;
+        const key = slot && !slots.has(slot) ? slot : fallbackKey;
+        slots.add(key);
         return (
           <div key={key} className="contents" data-mid={row ? m.id : undefined} data-settled={i < items.length - 1 ? "" : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
             {newDay && <DaySeparator at={m.at} />}
@@ -924,10 +952,11 @@ export function PinnedBanner({
   onUnpin: () => void;
 }) {
   const { t } = useI18n();
+  const held = useMemo(() => pinnedId ? messages.find((m) => m.id === pinnedId) : undefined, [messages, pinnedId]);
   const pinned = useThreadMessage(
     bot.threadId,
     bot.hasMore ? pinnedId : undefined,
-    messages.find((m) => m.id === pinnedId),
+    held,
   );
   if (!pinned || pinned.kind !== "text") return null;
   const sender =
@@ -959,7 +988,7 @@ export function PinnedBanner({
   );
 }
 
-export const ChatView = memo(function ChatView({ bot, hidden = false, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
+export const ChatView = memo(function ChatView({ bot, hidden = false, focusComposerBlocked = false, findBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; findBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
   const preview = useChatPreview();
   const peekSettled = useChatPeekSettled();
   const phone = useIsPhone();
@@ -979,7 +1008,6 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     focusComposerOnActivation({ composer: composerInputRef.current });
   }, []);
 
-  const stream = useStreaming();
   const since = turnOrigin(bot.threadId);
   const provisioning = state.provisioning[bot.id];
   const activeTask = bot.tasks?.find((task) => task.threadId === bot.threadId);
@@ -1003,11 +1031,13 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   });
   const find = useSearchFindSeed(bot.threadId, !preview);
   const findOpen = find.findOpen;
-  const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
+  const { replyTo, selectReply: pickReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
     bot.threadId,
     `bot:${bot.id}:${bot.threadId}`,
     bot.messages,
   );
+  const selectReply = useReplyFocus(pickReply, scrollRef);
+  useReplyTargetInView(scrollRef, replyTo?.id);
   // Profile patches sync the pin to other devices.
   const togglePin = (message: Message) => {
     dispatch({
@@ -1027,7 +1057,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   useEffect(() => preview ? undefined : endSelectMode, [bot.threadId, preview]);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
-      if (focusComposerBlocked || preview) return;
+      if (findBlocked || preview) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         find.openFind();
@@ -1035,13 +1065,17 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     };
     window.addEventListener("keydown", onFind);
     return () => window.removeEventListener("keydown", onFind);
-  }, [find.openFind, focusComposerBlocked, preview]);
+  }, [find.openFind, findBlocked, preview]);
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const accepted = state.acceptedSends[bot.threadId];
   const pending = state.pendingQueued[bot.threadId];
   const canonicalMessages = visibleMessages(bot);
-  const messages = useMemo(() => withAcceptedMessages(canonicalMessages, accepted, pending), [canonicalMessages, accepted, pending]);
+  const canSteer = engine?.capabilities?.queueing === true;
+  const messages = useMemo(
+    () => inSendOrder(withAcceptedMessages(canonicalMessages, accepted, pending), queuedSendIds(accepted, pending, canSteer)),
+    [canonicalMessages, accepted, pending, canSteer],
+  );
 
   // Windowed transcript: only a tail of the thread mounts (screenshots make
   // full threads DOM-heavy). The boundary is anchored per bot+task; a
@@ -1050,12 +1084,35 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   // lastUserMessage, working dots) stays computed from the FULL list.
   const transcriptKey = `${bot.id}:${bot.threadId}`;
   // an old jump shows its own window; the live pages below keep taking arrivals
-  const jump = useJumpWindow(dispatch, transcriptKey, bot.threadId, bot.messages, bot.activeLeafId, state.olderPatches[bot.threadId], state.snapshots);
-  const shown = jump.messages ?? messages;
+  const jump = useJumpWindow(dispatch, transcriptKey, bot.threadId, bot.messages, bot.activeLeafId, state.olderPatches[bot.threadId], state.snapshots, state.focusMessage);
+  const shown = useMemo(() => (jump.messages ? inSendOrder(jump.messages) : messages), [jump.messages, messages]);
   const runs = useMemo(() => workerRuns(messages), [messages]);
   const sessionKey = runs.map((run) => run.sessionId).filter(Boolean).sort().join("\n");
   const livePanes = useLivePanes(bot.id, !preview && (runs.length > 0 || (state.terminalPanes[bot.id]?.length ?? 0) > 0), paneLabelsKey(state.terminalPanes[bot.id]), sessionKey, dispatch, runs);
   const workers = useMemo(() => runs.map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })), [runs, livePanes, bot.id]);
+  const paneMap = listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle";
+  const paneSource = { name: bot.name, runs: workers, livePanes, paneLabels: lastLabels.get(bot.id), waitForLive: livePanes === null && window.ogb?.terminal != null, onOpenTerminalPane, onOpenTerminal };
+  const paneWorkerTab = paneWorkers(paneSource);
+  // The side pane opens on Media, which waits for the whole chat's list: ask once the page is idle, with no turn live and nothing typed, only when the button would open Media.
+  useEffect(() => {
+    if (preview || hidden || bot.busy || !window.requestIdleCallback) return;
+    const box = composerInputRef.current;
+    let idle: number | undefined;
+    // the pick and the draft are read when idle, since neither re-renders this view
+    const ask = () => {
+      if (idle !== undefined || box?.value) return;
+      idle = window.requestIdleCallback(() => {
+        idle = undefined;
+        if (!box?.value && paneLeadsToMedia(bot.threadId, paneMap, paneWorkerTab)) warmMedia(bot.threadId);
+      });
+    };
+    ask();
+    box?.addEventListener("input", ask);
+    return () => {
+      box?.removeEventListener("input", ask);
+      if (idle !== undefined) window.cancelIdleCallback(idle);
+    };
+  }, [bot.threadId, bot.busy, preview, hidden, paneMap, paneWorkerTab]);
   const rowWorkers = useMemo(() => jump.messages ? workerRuns(messages, jump.messages).map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })) : workers, [messages, jump.messages, livePanes, workers, bot.id]);
   const skin = useSkin();
   const scene = sceneOf(skin);
@@ -1148,7 +1205,6 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   useLayoutEffect(() => {
     windowAnchor.current = { id: windowedMessages[0]?.id, index: startIndex };
   });
-  const canSteer = engine?.capabilities?.queueing === true;
   const { listed, queued } = useMemo(
     () => splitQueuedSends(windowedMessages, accepted, pending, canSteer),
     [canSteer, windowedMessages, accepted, pending],
@@ -1177,6 +1233,9 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     followRef.current = next;
     setFollow(next);
   }, []);
+  // older rows mounting above a box mid-scroll would leave it short of view
+  const [revealing, setRevealing] = useState(false);
+  useEffect(() => onStopFollow(scrollRef.current, () => { setBottomFollow(false); setRevealing(true); }, () => setRevealing(false)), [setBottomFollow]);
 
   // one message at a time may be in edit mode
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1245,16 +1304,21 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
   // Stream buffers belong to the canonical tail, never an optimistic send.
   const lastMessage = canonicalMessages.at(-1);
   const whatsNewAnchor = useWhatsNewAnchor();
-  const live = buffersForTurn(stream, bot.threadId, lastMessage?.id);
-  const streaming = live.streaming;
-  const reasoning = live.reasoning;
+  const turn = useThreadTurn(bot.threadId, lastMessage?.id);
   // Stage transitions (Preparing -> Waiting -> Reconnecting) swap presence
   // content while messages, buffers and busy stay put, so the pin watches it.
-  const turnSignal = stream.signal[bot.threadId];
-  const reveal = stream.reveal?.[bot.threadId];
+  const turnSignal = turn.signal;
+  // a held send keeps Send now and Cancel wherever it draws
+  const queuedActions = useCallback((queueId: string): MessageMenuTarget["queued"] => ({
+    // Send now steers this chat's running turn; a preparing turn, or one in a room, has nothing to steer into.
+    sendNow: turnSignal !== "preparing" && pending?.some((entry) => entry.queueId === queueId && entry.sendId && (entry.reason === "sync" || (canSteer && turnSignal !== undefined)))
+      ? () => dispatch({ type: "sendQueuedNow", botId: bot.id, threadId: bot.threadId, queueId })
+      : undefined,
+    cancel: () => dispatch({ type: "cancelQueued", botId: bot.id, threadId: bot.threadId, queueId }),
+  }), [bot.id, bot.threadId, canSteer, dispatch, pending, turnSignal]);
   const toolInFlight = lastMessage?.kind === "activity" && lastMessage.tool?.ok === undefined;
-  const phase = turnPhase({ signal: stream.signal[bot.threadId], lastMessage, messages: canonicalMessages, streaming, reasoning });
-  const noReply = useNoReply(phase === "waiting" ? `${bot.threadId}:${currentTurnId(stream, bot.threadId, lastMessage?.id)}:${stream.heard?.[bot.threadId] ?? 0}` : null, engine?.driverKind);
+  const phase = turnPhase({ signal: turn.signal, lastMessage, messages: canonicalMessages, streaming: turn.streaming, reasoning: turn.reasoning });
+  const noReply = useNoReply(phase === "waiting" ? `${bot.threadId}:${turn.turnId}:${turn.heard}` : null, engine?.driverKind);
   const modelSwitch = useNoReplySwitch(bot, lastUserMessage?.id, turnSignal !== undefined);
   const activityLabel = turnStageLabel(
     phase,
@@ -1262,23 +1326,22 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     busyRetryLabel(lastMessage),
     noReply?.label,
   );
-  const waiting = modelSwitch.active || !reveal?.ended && turnPresenceWaiting({
+  const waiting = modelSwitch.active || !turn.ended && turnPresenceWaiting({
     busy: hydrationTurnThread(bot, state.groups) === bot.threadId,
     turnActive: turnSignal !== undefined,
     activity: bot.activity,
     lastMessage,
     accepted: state.acceptedSends[bot.threadId],
   });
-  const streamingMessage = useMemo<Message | null>(() => (waiting || reveal?.ended) && streaming ? {
+  const streamingMessage = useMemo<Message | null>(() => (waiting || turn.ended) && turn.replying ? {
     id: `stream:${bot.threadId}:${lastMessage?.id ?? ""}`,
     parentId: lastMessage?.id,
     role: "bot",
     kind: "text",
-    text: streaming,
+    text: "",
     at: lastMessage?.at ?? 0,
     placeholder: true,
-    streamWhole: reveal?.whole,
-  } : null, [waiting, streaming, reveal, bot.threadId, lastMessage?.id, lastMessage?.at]);
+  } : null, [waiting, turn.ended, turn.replying, bot.threadId, lastMessage?.id, lastMessage?.at]);
   const liveTail = laterCount === 0 && !jump.messages;
   const listedStreaming = liveTail ? streamingMessage : null;
 
@@ -1344,7 +1407,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     if (targetIndex < 0) {
       if (bot.hasMore && requestedFocus.current !== focus.nonce) {
         requestedFocus.current = focus.nonce;
-        openJump(focus.messageId);
+        openJump(focus.messageId, focus.nonce);
       }
       return;
     }
@@ -1389,8 +1452,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     pinFrame.current = 0;
     const el = scrollRef.current;
     if (!el || !followRef.current) return;
-    el.scrollTo({ top: el.scrollHeight });
-    previousScrollTop.current = el.scrollTop;
+    previousScrollTop.current = scrollToFollowBottom(el);
   }, []);
   useLayoutEffect(() => {
     if (transcriptWindow.size !== undefined) pinBottom();
@@ -1483,7 +1545,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
       if (end !== null) setTranscriptWindow((w) => (w.end === null || end < w.end ? { ...w, end } : w));
     },
   });
-  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && (!phone || !follow), follow, showEarlier);
+  const olderRow = useOlderOnScroll(scrollRef, `${head}:${startIndex}`, !preview && !jump.pending && !revealing && (!phone || !follow), follow, showEarlier);
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1509,6 +1571,10 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     const el = scrollRef.current;
     return !el || el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_FOLLOW_THRESHOLD;
   };
+  // every gesture back at the end resumes here, so a revealing box holds follow off until the reader scrolls the chat
+  const resumeFollow = (back: boolean) => {
+    if (back && !revealing && !jump.messages && laterCount === 0) setBottomFollow(true);
+  };
   // a transcript too short to scroll has no scrollback to read, so an upward swipe there keeps follow
   const breakFollow = () => {
     const el = scrollRef.current;
@@ -1527,7 +1593,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     if (deltaY < 0) breakFollow();
     else {
       advanceLater(deltaY > 0);
-      if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
+      resumeFollow(atEnd());
     }
   };
   const latestShown = Boolean(jump.messages || laterCount > 0 || (!follow && newestBelow));
@@ -1632,7 +1698,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           )}
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
 
-          <ShowPaneButton threadId={bot.threadId} map={listedRuns(workers, livePanes).some((shown) => shown.state === "working" || shown.state === "waiting") ? "live" : "idle"} workers={{ name: bot.name, runs: workers, livePanes, paneLabels: lastLabels.get(bot.id), waitForLive: livePanes === null && window.ogb?.terminal != null, onOpenTerminalPane, onOpenTerminal }} />
+          <ShowPaneButton threadId={bot.threadId} map={paneMap} workers={paneSource} />
           </ChatPeekPart>
         </div>
       </div>
@@ -1753,12 +1819,13 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
           if (y > touchY.current + 4) reaching.current = true;
           else {
             advanceLater(y < touchY.current - 4);
-            if (!jump.messages && laterCount === 0 && atEnd()) setBottomFollow(true);
+            resumeFollow(atEnd());
           }
         }}
         onTouchEnd={() => (reaching.current = false)}
         onTouchCancel={() => (reaching.current = false)}
-        onScroll={() => {
+        onScroll={(e) => {
+          isBottomFollowScroll(e.nativeEvent);
           const el = scrollRef.current;
           if (!el) return;
           const scrollTop = el.scrollTop;
@@ -1772,7 +1839,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             distanceFromBottom: el.scrollHeight - scrollTop - el.clientHeight,
           });
           previousScrollTop.current = scrollTop;
-          if (resume && !jump.messages && laterCount === 0) setBottomFollow(true);
+          resumeFollow(resume);
           measure();
         }}
         onClick={(e) => {
@@ -1791,7 +1858,8 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
         <div
           ref={contentRef}
           className={cn("flex w-full flex-col gap-3 px-5", CHAT_COLUMN_CLASS)}
-          style={{ paddingBottom: TRANSCRIPT_GAP }}
+          // staged rows land oldest first and the window grows once they settle, so painting them sooner shows the peek away from its bottom
+          style={{ paddingBottom: TRANSCRIPT_GAP, visibility: peekSettled ? undefined : "hidden" }}
           role="log"
           aria-live="polite"
           aria-label={t("chat.conversationAria", { name: bot.name })}
@@ -1828,6 +1896,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
             workers={rowWorkers}
             livePanes={livePanes}
             onCall={onLiveCall}
+            queuedActions={queuedActions}
             hidden={hidden}
           />
           {!whatsNewAnchor && <WhatsNewSlot hidden={hidden} last={lastMessage?.id} thread={bot.threadId} />}
@@ -1882,13 +1951,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
                 isLastBotText={false}
                 sendsNext={sendsNext && index === 0}
                 sendsAfterSync={pending?.some((entry) => entry.queueId === m.id && entry.reason === "sync")}
-                queuedActions={{
-                  // Send now steers this chat's running turn; a preparing turn, or one in a room, has nothing to steer into.
-                  sendNow: turnSignal !== "preparing" && pending?.some((entry) => entry.queueId === m.id && entry.sendId && (entry.reason === "sync" || (canSteer && turnSignal !== undefined)))
-                    ? () => dispatch({ type: "sendQueuedNow", botId: bot.id, threadId: bot.threadId, queueId: m.id })
-                    : undefined,
-                  cancel: () => dispatch({ type: "cancelQueued", botId: bot.id, threadId: bot.threadId, queueId: m.id }),
-                }}
+                queuedActions={queuedActions(m.id)}
                 onStartEdit={startEdit}
                 onCancelEdit={cancelEdit}
                 onSubmitEdit={submitEdit}
@@ -1931,9 +1994,9 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
         <ChatPeekPart part="composer">
         {calls.bar}
         {!preview && <CallWidgetSlot className="px-3 pb-2 md:hidden" />}
-        {signInEngine && !bot.busy && needsSignIn(signInEngine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn) && (
-          <div className="px-5 pb-2"><SignInCard instance={signInEngine} help={t("chat.signInHelp", { name: bot.name })} /></div>
-        )}
+        <DockCard open={Boolean(signInEngine && !bot.busy && signInEngine.snapshot.authenticated === false && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn))}>
+          {signInEngine && <div className="px-5 pb-2"><SignInCard instance={signInEngine} help={t("chat.signInHelp", { name: bot.name })} /></div>}
+        </DockCard>
         <TaskRecoveryCard
           key={`${bot.id}:${activeTask?.threadId ?? bot.threadId}`}
           bot={bot}

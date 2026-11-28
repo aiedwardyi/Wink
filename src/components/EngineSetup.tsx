@@ -1,10 +1,10 @@
 // A focused setup card shared by onboarding, the model picker, and runtime
 // errors. The command has one inline copy action and one primary next step;
 // unusable model lists stay out of the way until the engine is ready.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Copy, Download, ExternalLink, LogIn, TerminalSquare } from "lucide-react";
 import { api, useEngineLoginRefresh, type EngineInstall, type InstanceInfo } from "@/state/store";
-import { isPhone } from "@/lib/phone-swipe";
+import { engineSignInFlow, signsInElsewhere } from "@/lib/devices-setup";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
@@ -216,49 +216,62 @@ export function CommandRow({ command, actionLabel, signInInstanceId, installInst
 
 const DIDNT_FINISH: MessageKey = "engines.didntFinish";
 
+function loginFailure(instance: InstanceInfo): MessageKey {
+  return instance.loginError === "update_offline" ? "engines.updateOffline" : instance.loginError === "update_failed" ? "engines.updateFailed" : DIDNT_FINISH;
+}
+
 function refusal(error: unknown): MessageKey {
   const code = (error as { code?: unknown } | null)?.code;
   return code === "account-busy" ? "engines.signInBusy" : code === "login-busy" ? "engines.signInOther"
     : code === "host-unknown" ? "engines.signInHostUnknown" : DIDNT_FINISH;
 }
 
+type SignInCapture = { url?: string; code?: string; inputGeneration?: number };
+
+// A phone or another PC's window cannot finish a sign-in whose browser opened on the PC, so it offers Sign In instead.
+const joinable = (instance: InstanceInfo) => instance.loginState === "pending" && !(instance.loginOpensBrowser && signsInElsewhere());
+
 export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: InstanceInfo) => void) {
   const [current, setCurrent] = useState(instance);
-  const [waiting, setWaiting] = useState(instance.loginState === "pending");
-  const [failed, setFailed] = useState<MessageKey | false>(instance.loginState === "failed" && DIDNT_FINISH);
-  const [capture, setCapture] = useState(instance.loginCapture ?? {});
-  const [copyFallback, setCopyFallback] = useState(false);
+  const [waiting, setWaiting] = useState(joinable(instance));
+  const [failed, setFailed] = useState<MessageKey | false>(instance.loginState === "failed" && loginFailure(instance));
+  const [capture, setCapture] = useState<SignInCapture>({});
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const cancelled = useRef(false);
   const [loginCode, setLoginCode] = useState("");
-  const phone = !window.ogb && isPhone();
-  const external = instance.driverKind === "antigravityAgent";
-  const login = instance.install?.login;
-  const computerOnly = phone && (external || !login?.deviceArgs);
-  // Same argv both ways is a device-only flow (Muse): nothing opens on desktop either.
-  const deviceFlow = phone || Boolean(login?.deviceArgs && login.deviceArgs.length === login.args.length && login.deviceArgs.every((arg, i) => arg === login.args[i]));
+  const { device, computerOnly, deviceFlow } = engineSignInFlow(instance.install?.login);
   const connected = accountReady(current);
   const path = `/api/instances/${encodeURIComponent(instance.instanceId)}/sign-in`;
+  // Shared rows never carry a sign-in's link, code or paste prompt: the server hands them only to the tab that started it.
+  const loadCapture = () => {
+    const request = generation.current;
+    void api(`/api/accounts/${encodeURIComponent(instance.instanceId)}/sign-in`).then(({ url, code, inputGeneration }: SignInCapture) => {
+      if (request === generation.current && !cancelled.current) setCapture({ url, code, inputGeneration });
+    }, () => {});
+  };
 
   useEffect(() => { setLoginCode(""); }, [capture.inputGeneration]);
 
   useEffect(() => {
-    setWaiting(instance.loginState === "pending");
-    setFailed(instance.loginState === "failed" && DIDNT_FINISH);
-    setCapture(instance.loginCapture ?? {});
-    setCopyFallback(false);
+    setWaiting(joinable(instance));
+    setFailed(instance.loginState === "failed" && loginFailure(instance));
+    setCapture({});
     setBusy(false);
     cancelled.current = false;
+    if (joinable(instance)) loadCapture();
     return () => { generation.current += 1; };
   }, [instance.instanceId]);
   useEffect(() => {
     setCurrent(instance);
-    if (instance.loginState === "pending" && !cancelled.current) {
+    if (joinable(instance) && !cancelled.current && !waiting) {
       setWaiting(true);
-      setCapture(instance.loginCapture ?? {});
+      loadCapture();
     }
-    if (accountReady(instance)) setWaiting(false);
+    if (accountReady(instance) || (instance.loginState === "pending" && !joinable(instance))) {
+      setWaiting(false);
+      setCapture({});
+    }
   }, [instance]);
 
   useEngineLoginRefresh(waiting, (instances) => {
@@ -266,10 +279,11 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     const next = instances.find((row) => row.instanceId === instance.instanceId);
     if (!next) return;
     setCurrent(next);
-    setCapture(next.loginCapture ?? {});
+    if (joinable(next)) loadCapture();
+    else setCapture({});
     onUpdated?.(next);
     if (accountReady(next)) { setWaiting(false); setFailed(false); }
-    else if (next.loginState !== "pending") { setWaiting(false); setFailed(next.loginState !== "cancelled" && DIDNT_FINISH); }
+    else if (!joinable(next)) { setWaiting(false); setFailed(next.loginState !== "pending" && next.loginState !== "cancelled" && loginFailure(next)); }
   });
 
   const start = async () => {
@@ -281,23 +295,12 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     setWaiting(true);
     setFailed(false);
     setCapture({});
-    setCopyFallback(false);
     let started = false;
     try {
-      const result = await api(path, { method: "POST", body: JSON.stringify({ device: phone }) });
+      const result = await api(path, { method: "POST", body: JSON.stringify({ device }) });
       started = true;
       if (request !== generation.current) return;
       setCapture(result);
-      if (external) {
-        const opened = await window.ogb?.openEngineSignIn?.(instance.instanceId);
-        if (request !== generation.current) return;
-        if (opened === "copied" || opened === undefined) {
-          setCopyFallback(true);
-          if (opened === undefined && instance.install?.signInCommand) {
-            await navigator.clipboard?.writeText(instance.install.signInCommand).catch(() => {});
-          }
-        }
-      }
     } catch (error) {
       if (request !== generation.current) return;
       setWaiting(false);
@@ -319,7 +322,10 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
       if (request !== generation.current) return;
       setWaiting(false);
       setCapture({});
-    } catch { if (request === generation.current) setFailed(DIDNT_FINISH); }
+    } catch (error) {
+      // Another device's or tab's sign-in: this one can't answer it, but its own Sign In replaces it.
+      if (request === generation.current && !(error instanceof Error && "code" in error && error.code === "sign-in-elsewhere")) setFailed(DIDNT_FINISH);
+    }
     finally { if (request === generation.current) setBusy(false); }
   };
   const submitCode = async () => {
@@ -332,26 +338,39 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
         method: "POST", body: JSON.stringify({ code: loginCode, generation: capture.inputGeneration }),
       });
       if (request === generation.current) setLoginCode("");
-    } catch { if (request === generation.current) setFailed(DIDNT_FINISH); }
+    } catch (error) {
+      if (request !== generation.current) return;
+      if (!(error instanceof Error && "code" in error && error.code === "sign-in-elsewhere")) setFailed(DIDNT_FINISH);
+      else {
+        cancelled.current = true;
+        setWaiting(false);
+        setCapture({});
+        setLoginCode("");
+      }
+    }
     finally { if (request === generation.current) setBusy(false); }
   };
   const loading = !waiting && current.snapshot.authenticated === undefined && !current.snapshot.authChecked && !current.loginState;
-  return { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode };
+  return { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, busy, loginCode, setLoginCode, start, cancel, submitCode };
 }
 
-export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName, forceSignIn = false, lineInTitle = false }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: string; buttonClassName?: string; forceSignIn?: boolean; lineInTitle?: boolean }) {
+export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName, forceSignIn = false, lineInTitle = false, row, note }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: ReactNode; buttonClassName?: string; forceSignIn?: boolean; lineInTitle?: boolean; row?: (end: ReactNode) => ReactNode; note?: ReactNode }) {
   const { t } = useI18n();
-  const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
-  if (connected) return <span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>;
+  const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
+  const connectedLine = <span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>;
+  if (connected) return row ? row(connectedLine) : connectedLine;
   if (!forceSignIn && loading) return null;
-  if (computerOnly) return <span data-computer-only="" className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
+  const computerLine = <span data-computer-only="" className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
+  if (computerOnly) return row ? row(computerLine) : computerLine;
   // The card shows this line under its title while the code row is open.
-  const browserLine = lineInTitle && waiting && !copyFallback && !capture.code && Boolean(capture.inputGeneration);
+  const browserLine = lineInTitle && waiting && !capture.code && Boolean(capture.inputGeneration);
+  const openLink = capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className={row ? "font-normal text-ink-secondary hover:text-ink hover:underline" : "text-ink underline"}>{deviceFlow ? t("engines.openLink") : t("engines.openAgain")}</a>;
+  const cancelButton = <button type="button" onClick={() => void cancel()} disabled={busy} className={row ? "hover:underline disabled:opacity-50" : "text-ink underline disabled:opacity-50"}>{t("engines.cancel")}</button>;
   return (
-    <div aria-live="polite" data-sign-in-open={waiting || failed ? "" : undefined} data-sign-in-code={browserLine ? "" : undefined} className="flex min-w-0 flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">
+    <div aria-live="polite" data-sign-in-open={waiting || failed ? "" : undefined} data-sign-in-code={browserLine ? "" : undefined} className={`flex min-w-0 flex-col gap-1.5 break-keep text-[12px] text-ink-secondary ${row ? "items-center" : "items-end"}`}>
       {waiting ? <>
-        {!browserLine && <span>{copyFallback ? t("engine.pasteAndEnter") : capture.code ? t("engines.enterCode") : t("engines.finishInBrowser")}</span>}
-        {copyFallback && <code className="select-all break-all font-mono text-ink">{instance.install?.signInCommand}</code>}
+        {row?.(<>{openLink}{cancelButton}</>)}
+        {!browserLine && (!row || capture.code) && <span>{capture.code ? t("engines.enterCode") : t("engines.finishInBrowser")}</span>}
         {capture.code && <code className="select-all break-all font-mono text-[14px] text-ink">{capture.code}</code>}
         {capture.inputGeneration && <form className="flex max-w-full flex-wrap justify-end gap-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
           <input type="password" value={loginCode} onInput={(event) => setLoginCode(event.currentTarget.value)}
@@ -359,12 +378,13 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
             className="min-h-11 w-60 min-w-0 max-w-full rounded border border-hairline bg-control px-2 text-ink" />
           <button type="submit" disabled={busy || !loginCode} className="min-h-11 text-ink underline disabled:opacity-50">{t("accounts.submitCode")}</button>
         </form>}
-        <div className="flex flex-wrap justify-end gap-3">
-          {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className="text-ink underline">{deviceFlow ? t("engines.openLink") : t("engines.openAgain")}</a>}
-          <button type="button" onClick={() => void cancel()} disabled={busy} className="text-ink underline disabled:opacity-50">{t("engines.cancel")}</button>
-        </div>
+        {!row && <div className="flex flex-wrap justify-end gap-3">
+          {openLink}
+          {cancelButton}
+        </div>}
       </> : <button type="button" data-sign-in="" disabled={busy} onClick={() => void start()} className={buttonClassName ?? "rounded-lg bg-control px-3 py-2 font-medium text-ink hover:bg-raised-hover"}>{buttonLabel ?? t("engines.signIn")}</button>}
       {failed && <span>{t(failed)}</span>}
+      {!waiting && note}
     </div>
   );
 }

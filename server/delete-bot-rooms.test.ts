@@ -1,10 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { removeTestData, testHome } from "./testing/test-home.ts";
 import { removeRotatingLog } from "./rotating-log.ts";
+import { createWarmPool } from "./drivers/warm-pool.ts";
 
 // deleteBotFully and removeSyncedBots are private to index.ts, which these
 // tests must not boot; their wiring is pinned on source, same idiom as chief-of-staff.test.ts.
@@ -17,10 +19,9 @@ const fn = (name: string) => {
 let home: string;
 
 async function freshStore() {
-  home = mkdtempSync(join(tmpdir(), "omb-delete-bot-rooms-"));
+  home = mkdtempSync(join(testHome(), "omb-delete-bot-rooms-"));
   vi.resetModules();
-  vi.stubEnv("HOME", home);
-  vi.stubEnv("USERPROFILE", home);
+  vi.stubEnv("OMB_DATA_DIR", join(home, ".orbit"));
   const { Store, roomResponders } = await import("./store.ts");
   return { store: new Store(() => ({ instanceId: "claude", model: "m" })), roomResponders };
 }
@@ -29,7 +30,7 @@ afterEach(async () => {
   const { closeMessageDb } = await import("./message-db.ts");
   closeMessageDb();
   vi.unstubAllEnvs();
-  rmSync(home, { recursive: true, force: true });
+  if (home) removeTestData(home);
 });
 
 describe("deleting a bot that leads a room", () => {
@@ -81,6 +82,22 @@ describe("deleting a bot that leads a room", () => {
 });
 
 describe("deleteBotFully", () => {
+  const noop = () => {};
+  const deleteWith = (overrides: Record<string, unknown>) => {
+    const deps = {
+      botAccounts: { instance: () => undefined },
+      registry: { get: () => undefined }, store: { groups: [], deleteBot: noop },
+      stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop }, webhooks: { disableForBot: noop },
+      lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,
+      computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes: { forgetBot: noop }, accountNotices: { forget: noop }, limitWaits: { cancel: noop },
+      perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(), warmPool: { retire: noop },
+      EVENTS_DIR: "", NATIVE_DIR: "", join, removeRotatingLog: noop,
+      ...overrides,
+    };
+    const javascript = ts.transpileModule(`${fn("stopBotWork")}\n}\n${fn("deleteBotFully")}\n}`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+    return new Function(...Object.keys(deps), `${javascript}\nreturn deleteBotFully;`)(...Object.values(deps));
+  };
+
   it("is the path a delete synced from another PC takes", async () => {
     expect(fn("removeSyncedBots")).toContain("await deleteBotFully(bot);");
     expect(fn("deleteBotFully")).toContain("store.deleteBot(bot.id);");
@@ -104,28 +121,92 @@ describe("deleteBotFully", () => {
     expect(body.indexOf("store.deleteBot(bot.id);")).toBeGreaterThan(stopped);
   });
 
+  it("retires a warm child its bot started on an engine it has since left", async () => {
+    const warmPool = createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+    const lease = warmPool.reserve({ engine: "antigravityAgent", instanceId: "gemini", threadId: "t1" }, "fp", { generation: 0, incarnation: "i", identity: "" }, "speculative");
+    if (typeof lease === "string") throw new Error(lease);
+    const close = vi.fn(async () => {});
+    lease.attach({ session: { kind: "fresh" }, alive: () => true, close });
+    lease.ready();
+    const deleteBotFully = deleteWith({ warmPool });
+
+    await deleteBotFully({ id: "bot-1", threadId: "t1", modelSelection: { instanceId: "codex" }, tasks: [] });
+
+    expect(close).toHaveBeenCalledOnce();
+    // the standby its last turn starts at exit is refused
+    expect(warmPool.generation(lease.key)).toBe(1);
+  });
+
   it("removes the event logs of every task, not just the open one", async () => {
-    home = mkdtempSync(join(tmpdir(), "omb-delete-bot-logs-"));
+    home = mkdtempSync(join(testHome(), "omb-delete-bot-logs-"));
     const dirs = ["events", "native"].map((name) => join(home, name));
     for (const dir of dirs) {
       mkdirSync(dir);
       for (const threadId of ["t1", "t2"]) writeFileSync(join(dir, `${threadId}.ndjson`), "{}");
     }
-    const noop = () => {};
-    const deps = {
-      botAccounts: { instance: () => undefined },
-      registry: { get: () => undefined }, store: { groups: [], deleteBot: noop },
-      stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop }, webhooks: { disableForBot: noop },
-      lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,
-      computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes: { forgetBot: noop }, accountNotices: { forget: noop }, limitWaits: { cancel: noop },
-      perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(),
-      EVENTS_DIR: dirs[0], NATIVE_DIR: dirs[1], join, removeRotatingLog,
-    };
-    const javascript = ts.transpileModule(`${fn("stopBotWork")}\n}\n${fn("deleteBotFully")}\n}`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
-    const deleteBotFully = new Function(...Object.keys(deps), `${javascript}\nreturn deleteBotFully;`)(...Object.values(deps));
+    const deleteBotFully = deleteWith({ EVENTS_DIR: dirs[0], NATIVE_DIR: dirs[1], removeRotatingLog });
 
     await deleteBotFully({ id: "bot-1", threadId: "t1", modelSelection: { instanceId: "claude" }, tasks: [{ threadId: "t1" }, { threadId: "t2" }] });
 
     for (const dir of dirs) expect(["t1", "t2"].map((threadId) => existsSync(join(dir, `${threadId}.ndjson`)))).toEqual([false, false]);
+  });
+});
+
+describe("a Gemini standby whose chat or room has ended", () => {
+  const gemini = { instanceId: "gemini", model: "gemini-4-neon" };
+  const codex = { instanceId: "codex", model: "gpt-5" };
+  // the owner index.ts registers, with each bot's own pick for its account
+  const ownerOf = (store: unknown) => {
+    const source = index.match(/warmPool\.setOwner\("antigravityAgent", (.+)\);\n/)?.[1];
+    if (!source) throw new Error("index.ts registers no Gemini owner");
+    return new Function("store", "botAccounts", `return ${source};`)(store, { instance: (bot: { modelSelection: { instanceId: string } }) => ({ instanceId: bot.modelSelection.instanceId }) });
+  };
+  const key = (threadId: string) => ({ engine: "antigravityAgent", instanceId: "gemini", threadId });
+  const captured = { generation: 0, incarnation: "i", identity: "" };
+
+  it.each([
+    ["bot delete", async (store: any, bot: any) => { store.deleteBot(bot.id); }],
+    ["room delete", async (store: any, _bot: any, room: any) => { store.deleteGroup(room.id); }],
+    ["engine pick", async (store: any, bot: any) => { store.patchBot(bot.id, { modelSelection: codex }); }],
+    ["room member's engine pick", async (store: any, bot: any) => { store.patchBot(bot.id, { modelSelection: codex }); }],
+    ["archive", async (store: any, bot: any) => { store.patchBot(bot.id, { hidden: true }); }],
+    ["room member's archive", async (store: any, bot: any) => { store.patchBot(bot.id, { hidden: true }); }],
+    ["mid-reply pick", async (store: any, bot: any) => {
+      store.patchBot(bot.id, { pendingModelSelection: codex });
+      store.patchBot(bot.id, { modelSelection: codex, pendingModelSelection: undefined });
+    }],
+    ["quit", async (_store: any, _bot: any, _room: any, pool: any) => { await pool.closeAll("exit", { final: true }); }],
+  ])("leaves no slot held after %s", async (path, exit) => {
+    const { store } = await freshStore();
+    const pool = createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+    pool.setOwner("antigravityAgent", ownerOf(store));
+    const children: Array<ReturnType<typeof vi.fn>> = [];
+    const stale = [store.createBot({ modelSelection: gemini }), store.createBot({ modelSelection: gemini })].map((bot) => {
+      const room = store.createGroup(bot.name, [bot.id]);
+      const threadId = path.startsWith("room") ? room.threadId : bot.threadId;
+      const lease = pool.reserve(key(threadId), "fp", captured, "speculative");
+      if (typeof lease === "string") throw new Error(lease);
+      const close = vi.fn(async () => {});
+      lease.attach({ session: { kind: "fresh" }, alive: () => true, close });
+      lease.ready();
+      children.push(close);
+      return { bot, room, lease, threadId };
+    });
+    // a pick held for a running turn lands at settle, then the exiting child asks for a standby
+    if (path === "mid-reply pick") for (const { lease, threadId } of stale) expect(pool.take(key(threadId), "fp", captured, null)).toEqual({ hit: lease });
+    for (const { bot, room } of stale) await exit(store, bot, room, pool);
+    if (path === "mid-reply pick") {
+      for (const { lease, threadId } of stale) {
+        lease.release("used");
+        expect(pool.reserve(key(threadId), "fp", captured, "speculative")).toBe("denied");
+      }
+    }
+
+    const next = store.createBot({ modelSelection: gemini });
+    const lease = pool.reserve(key(next.threadId), "fp", captured, "speculative");
+    if (path === "quit") expect(lease).toBe("denied");
+    else expect(typeof lease).toBe("object");
+    for (const close of children) expect(close).toHaveBeenCalledOnce();
+    await expect.poll(() => pool.stats().byEngine.antigravityAgent ?? 0).toBe(path === "quit" ? 0 : 1);
   });
 });

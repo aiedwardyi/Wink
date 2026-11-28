@@ -42,6 +42,7 @@ describe("chat errors", () => {
     try {
       applyLocale("ko");
       expect(chatBannerError(new Error("Claude isn't installed or isn't answering on this PC."))).toBe("이 PC에서 Claude 설치를 찾지 못했거나 응답이 없어요.");
+      expect(chatBannerError(new Error("Grok isn't installed or isn't answering on this PC."))).toBe("이 PC에서 Grok 설치를 찾지 못했거나 응답이 없어요.");
       expect(chatBannerError(new Error("This account's sign-in isn't confirmed yet."))).toBe("이 계정의 로그인이 아직 확인되지 않았어요.");
     } finally {
       applyLocale("en");

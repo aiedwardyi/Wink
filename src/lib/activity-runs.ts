@@ -90,7 +90,7 @@ interface ServerLine {
   re: RegExp;
   pick: (m: RegExpExecArray) => [MessageKey, Record<string, string | number>];
   /** fixed English the server must keep writing, in `file`; the drift guard scans for it */
-  file: "comms-notice.ts" | "comms-visibility.ts" | "delegations.ts" | "peer-reply-publication.ts" | "index.ts" | "one-mind.ts" | "drivers/antigravity.ts" | "drivers/retry.ts";
+  file: "comms-notice.ts" | "comms-visibility.ts" | "delegations.ts" | "peer-reply-publication.ts" | "index.ts" | "one-mind.ts" | "drivers/antigravity.ts" | "drivers/retry.ts" | "../shared/replaced-models.ts";
   needles: string[];
 }
 
@@ -160,10 +160,11 @@ export const SERVER_LINES: ServerLine[] = [
   { re: /^Delegated turn completed$/, pick: () => ["chat.delegation.turnCompleted", {}], file: "peer-reply-publication.ts", needles: ["Delegated turn completed"] },
   { re: /^interrupted by a restart$/, pick: () => ["chat.delegation.interrupted", {}], file: "delegations.ts", needles: ["interrupted by a restart"] },
   {
-    re: /^@(.+?) finished task (\S+) in ([\s\S]+)$/,
-    pick: (m) => ["chat.delegation.finishedInRoom", { name: m[1], id: m[2], room: m[3] }],
+    // stored rows say "finished task <id> in"; new ones "finished a task in"
+    re: /^@(.+?) finished (?:a task|task \S+) in ([\s\S]+)$/,
+    pick: (m) => ["chat.delegation.finishedInRoom", { name: m[1], room: m[2] }],
     file: "peer-reply-publication.ts",
-    needles: [" finished task ", " in ${room.name}"],
+    needles: [" finished a task in ${room.name}"],
   },
   {
     re: /^(?:Agentic Mode paused: two tries made no progress|Keep going paused: two tries in a row made no progress on the approved steps)$/,
@@ -201,6 +202,12 @@ export const SERVER_LINES: ServerLine[] = [
     pick: () => ["chat.comms.unavailable", {}],
     file: "comms-notice.ts",
     needles: ["Bot messaging paused. Send a message to reset it."],
+  },
+  {
+    re: /^(\S.*?) was replaced by (\S.*)$/,
+    pick: (m) => ["chat.modelReplaced", { from: m[1], to: m[2] }],
+    file: "../shared/replaced-models.ts",
+    needles: [" was replaced by "],
   },
 ];
 

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,10 +9,51 @@ import { foldPeerQueuedSends } from "./peer-user-reply.ts";
 import { isSendCancelled, queueMark, queueSteeredMessage, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
 import { currentTurnTrace, traceClaimedTurn } from "./turn-timing.ts";
+import { DATA_DIR } from "./config.ts";
+import { ClaudeDriver } from "./drivers/claude.ts";
+import { ProviderRegistry } from "./harness/registry.ts";
+import * as procs from "./procs.ts";
 
 afterEach(() => vi.useRealTimers());
 
 describe("startup timing", () => {
+  it("finishes boot registry loading before four saved Claude accounts answer auth", async () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const load = source.slice(source.indexOf('await startupTiming.track("registry"'), source.indexOf("const bundledSkills"));
+    const registry = new ProviderRegistry([ClaudeDriver]);
+    const configs = Object.fromEntries(Array.from({ length: 4 }, (_, index) => {
+      const id = `startup-test-${index}`;
+      return [id, { driver: ClaudeDriver.driverKind, account: { id, of: "claude", home: join(DATA_DIR, id), generation: 1 } }];
+    }));
+    const answers: Array<() => void> = [];
+    const auth = vi.spyOn(procs, "execCli").mockImplementation((_cli, _args, options, callback) => {
+      answers.push(() => callback(null, JSON.stringify({ loggedIn: true, email: "startup@example.test", authMethod: "claude.ai", configDirectory: options.account?.home })));
+    });
+    const version = vi.spyOn(procs, "cliVersion").mockImplementation((_cli, _options, callback) => callback("1.0.0"));
+    const serving = vi.fn();
+    const loaded = (runInNewContext(`(async () => { ${load} })()`, {
+      startupTiming: createStartupTiming({ write: () => {} }), registry, instanceConfigs: () => configs, cfg: {}, accounts: { snapshot: [] },
+    }) as Promise<void>).then(serving);
+    try {
+      await new Promise(setImmediate);
+      expect(serving).toHaveBeenCalledOnce();
+      expect(auth).not.toHaveBeenCalled();
+      expect(Object.keys(configs).every((id) => !registry.accountAvailable(id))).toBe(true);
+      const snapshots = Promise.all(registry.instances().map((instance) => instance.snapshot({ refresh: true })));
+      expect(auth).not.toHaveBeenCalled();
+      await new Promise(setImmediate);
+      expect(auth).toHaveBeenCalledTimes(4);
+      answers.splice(0).forEach((answer) => answer());
+      expect((await snapshots).map((snapshot) => snapshot.authenticated)).toEqual([true, true, true, true]);
+    } finally {
+      answers.splice(0).forEach((answer) => answer());
+      await loaded;
+      await registry.disposeAll();
+      auth.mockRestore();
+      version.mockRestore();
+    }
+  });
+
   it("holds background work until paint and logs once after it settles", async () => {
     let now = 0;
     let finish!: () => void;
@@ -254,7 +296,7 @@ describe("startup timing", () => {
     expect(workerLaunchResponse).toHaveBeenCalledOnce();
   });
 
-  it.each(["none", "restored", "failed"])("answers instance discovery after accounts settle without waiting for refresh: %s", async (accounts) => {
+  it.each([["cached", "none"], ["cached", "restoring"], ["refresh", "restored"], ["refresh", "failed"]])("answers a %s instance read while accounts are %s, a refresh only once they settle", async (probe, accounts) => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const start = source.indexOf('if (method === "GET" && path === "/api/instances")');
     const statement = source.slice(start, source.indexOf("// ── app config", start));
@@ -269,23 +311,23 @@ describe("startup timing", () => {
     startupTiming.afterPaint("probes", () => new Promise<void>((resolve) => { release = resolve; }));
     const describeInstances = vi.fn(async (_probe: string) => []);
     const pending = runInNewContext(`(async () => { ${statement} })()`, {
-      method: "GET", path: "/api/instances", startupTiming, url: new URL("http://localhost/api/instances"),
+      method: "GET", path: "/api/instances", startupTiming, url: new URL(`http://localhost/api/instances${probe === "refresh" ? "?refresh=1" : ""}`),
       describeInstances, instanceChecks: { describe: () => describeInstances("cached") }, resetPathCache() {}, withRateLimits: (value: unknown) => value,
       rememberAutomaticAvailability() {}, json() {}, res: {},
       botAccounts: { pickerInstances: (value: unknown) => value, accountInstances: (value: unknown) => value },
     }) as Promise<void>;
     try {
       await new Promise(setImmediate);
-      if (accounts === "none") expect(describeInstances).toHaveBeenCalledExactlyOnceWith("cached");
-      else expect(describeInstances).not.toHaveBeenCalled();
-      startupTiming.paint();
-      await Promise.resolve();
-      if (accounts !== "none") {
+      if (probe === "cached") expect(describeInstances).toHaveBeenCalledExactlyOnceWith("cached");
+      else {
+        expect(describeInstances).not.toHaveBeenCalled();
+        startupTiming.paint();
+        await Promise.resolve();
         expect(describeInstances).not.toHaveBeenCalled();
         restore();
+        await new Promise(setImmediate);
+        expect(describeInstances).toHaveBeenCalledExactlyOnceWith("refresh");
       }
-      await new Promise(setImmediate);
-      expect(describeInstances).toHaveBeenCalledExactlyOnceWith("cached");
       await pending;
     } finally {
       startupTiming.paint();

@@ -10,6 +10,7 @@ import { gfm } from "micromark-extension-gfm";
 
 import { cardFile } from "../shared/file-cards.ts";
 import { windowsPathLinks } from "../shared/windows-path-links.ts";
+import { byteRange } from "./byte-range.ts";
 import { apiRequestAuthorized } from "./remote-access.ts";
 import { roomTaskThreads } from "./rooms/joined.ts";
 
@@ -61,7 +62,8 @@ export interface ServeLinkedFileOptions {
   /** The phone a page's grant is minted for; this PC when unset. */
   holder?: string;
   threadId: string;
-  messages: readonly LinkedMessage[];
+  /** Every message that may link `target`; more is fine, the text is checked here. */
+  messages(target: string): Iterable<LinkedMessage>;
   deviceId: string;
   writerDeviceId(messageId: string): string | null;
   rootsFor(message: LinkedMessage): readonly string[];
@@ -280,7 +282,7 @@ function linkingMessages(options: ServeLinkedFileOptions, target: string, folder
   const forms = nameForms(target);
   const hits: { id: string; roots: readonly string[] }[] = [];
   const attached = !folder && (options.own || mediaType(target)?.startsWith("image/"));
-  for (const message of options.messages) {
+  for (const message of options.messages(target)) {
     // A picture the user attached by path shows on its own file chip.
     if (attached && message.role === "user" && attachedFiles(message.text ?? "").some((path) => samePath(path, target))) {
       hits.push({ id: message.id, roots: [] });
@@ -295,25 +297,6 @@ function linkingMessages(options: ServeLinkedFileOptions, target: string, folder
     hits.push({ id: message.id, roots });
   }
   return hits;
-}
-
-function byteRange(header: string | undefined, size: number): { start: number; end: number } | "all" | "bad" {
-  if (!header) return "all";
-  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
-  if (!match || size <= 0) return "bad";
-  let start: number;
-  let end: number;
-  if (match[1] === "" && match[2] !== "") {
-    const suffix = Number(match[2]);
-    if (!Number.isInteger(suffix) || suffix <= 0) return "bad";
-    start = Math.max(0, size - suffix);
-    end = size - 1;
-  } else if (match[1] !== "") {
-    start = Number(match[1]);
-    end = match[2] === "" ? size - 1 : Number(match[2]);
-  } else return "bad";
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start >= size || end < start) return "bad";
-  return { start, end: Math.min(end, size - 1) };
 }
 
 function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, size: number, mime: string, attachment = false, scope?: string): void {

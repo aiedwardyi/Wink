@@ -15,6 +15,8 @@ import { peerAllowKey } from "./peer-approval-key.ts";
 import { applyResolvedProjectFolder } from "./project-folder.ts";
 import { composeUserTurnPrompt } from "./replies.ts";
 import { _resetSteerQueue, drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
+import { closeJoinedDb, roomTaskThreads, setMyRoomBotTurn } from "./rooms/joined.ts";
+import { asksNudge } from "./task-asks.ts";
 import { agentRoster, Store, titleFromMessage, type BotRecord, type StoreChange } from "./store.ts";
 import { nextWinkAvatar } from "../shared/bot-avatar.ts";
 import * as taskState from "./task-state.ts";
@@ -23,7 +25,9 @@ import { buildResumeFallback, engineIsFresh } from "./turn-context.ts";
 import { workspaceDir } from "./workspace.ts";
 import { readContextCompaction } from "../shared/context-compaction.ts";
 import { RETIRED_GEMINI_FLASH_IDS } from "../shared/model-selection.ts";
+import { REPLACED_MODELS, replacedModelMoves, type ReplacedModel } from "../shared/replaced-models.ts";
 import { reactionMarkKeys } from "../shared/reactions.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 
@@ -49,9 +53,12 @@ const taskPacket = (
   ...overrides,
 });
 
+// what older builds seeded into a new chat; old chats still hold it
+const OLD_QUIZ = { title: "What do you mostly want help with?", subtitle: "Pick whatever's closest; we can always expand from there.", options: ["Work & projects", "Writing & research", "Life admin", "A bit of everything"] };
+
 describe("Store", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("tool detail survives completion folding and a database restart without a planted key", async () => {
@@ -146,23 +153,19 @@ describe("Store", () => {
     expect(source).toContain("return flagShownImage(redactBotAuthored(message));");
   });
 
-  it("createBot seeds an onboarding card without a fake chat bubble", () => {
+  it("createBot starts an empty chat: no starter quiz, no fake chat bubble", () => {
     const store = new Store(selection);
     const bot = store.createBot();
 
-    const messages = store.messagesFor(bot.threadId);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({ role: "bot", kind: "options" });
-    expect(messages[0].card?.options.length).toBeGreaterThan(1);
-    expect(messages.some((message) => message.kind === "text")).toBe(false);
-    expect(JSON.stringify(messages)).not.toMatch(/I'll handle|Nice to meet you|first piece of work/);
+    expect(store.messagesFor(bot.threadId)).toEqual([]);
+    expect(new Store(selection).messagesFor(bot.threadId)).toEqual([]);
     expect(bot.modelSelection).toEqual(selection());
   });
 
   it("a typed message hides the first-run quiz but leaves an ask_user question for the client to settle", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const quiz = store.messagesFor(bot.threadId)[0];
+    const quiz = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: OLD_QUIZ });
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Hi" });
     const ask = store.appendMessage(bot.threadId, {
       role: "bot",
@@ -226,7 +229,7 @@ describe("Store", () => {
   it("dismisses the onboarding quiz when the user talks, and leaves live asks", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const quiz = store.messagesFor(bot.threadId)[0]!;
+    const quiz = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: OLD_QUIZ });
     expect(quiz.card?.dismissed).toBeUndefined();
 
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
@@ -608,7 +611,7 @@ describe("Store", () => {
   it("patchMessage merges card patches and returns null for unknown ids", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const card = store.messagesFor(bot.threadId)[0]!;
+    const card = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: OLD_QUIZ });
 
     const patched = store.patchMessage(bot.threadId, card.id, {
       card: { ...card.card!, answered: "Work & projects" },
@@ -742,6 +745,43 @@ describe("Store", () => {
     copy.goal = "mutated outside the store";
     expect(store.taskPacket(bot.threadId)?.goal).toBe("Prepare the weekly report");
     expect(new Store(selection).taskPacket(bot.threadId)).toEqual(saved);
+  });
+
+  it("gives a new chat the open asks from the bot's other chats", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const asks = [
+      { id: "A1", ask: "make the header smaller on phone", status: "open" as const, at: 100, changedAt: 100 },
+      { id: "A2", ask: "add dark mode to settings", status: "done" as const, at: 100, changedAt: 100 },
+    ];
+    const first = bot.threadId;
+    store.writeTaskPacket(taskPacket(bot.id, first, { asks, lastAskId: 2 }));
+    const task = store.createTask(bot.id, "New chat")!;
+    expect(store.taskPacket(task.threadId)).toBeNull();
+    const elsewhere = store.otherChatAsks(bot.id, task.threadId, new Set());
+    expect(elsewhere.map((ask) => ask.ask)).toEqual(["make the header smaller on phone"]);
+    expect(asksNudge(undefined, 200, "what's left?", elsewhere)).toContain("make the header smaller on phone");
+    expect(store.otherChatAsks(bot.id, first, new Set())).toEqual([]);
+  });
+
+  it("keeps the owner's asks out of a joined room turn and room asks out of the owner's chats", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const owner = [{ id: "A1", ask: "renew the visa for the Lisbon trip", status: "open" as const, at: 100, changedAt: 100 }];
+    store.writeTaskPacket(taskPacket(bot.id, bot.threadId, { asks: owner, lastAskId: 1 }));
+    const room = store.createTask(bot.id, "Design sync", false)!;
+    store.writeTaskPacket(taskPacket(bot.id, room.threadId, { asks: [{ id: "A1", ask: "Sam wants the deck by Friday", status: "open", at: 100, changedAt: 100 }], lastAskId: 1 }));
+    const chat = store.createTask(bot.id, "New chat")!;
+    mkdirSync(DATA_DIR, { recursive: true });
+    try {
+      setMyRoomBotTurn("r1", "tb-AAAAAAAAAAAAAAAA", room.threadId, 0);
+      const inRoom = (text: string) => asksNudge(store.taskPacket(room.threadId)?.asks, 200, text, store.otherChatAsks(bot.id, room.threadId, roomTaskThreads()));
+      for (const said of ["status", "has anyone been to Lisbon for the visa?"]) expect(inRoom(said)).not.toContain("visa");
+      expect(store.otherChatAsks(bot.id, chat.threadId, roomTaskThreads()).map((ask) => ask.ask)).toEqual(["renew the visa for the Lisbon trip"]);
+    } finally {
+      closeJoinedDb();
+    }
+    expect(readFileSync(new URL("./index.ts", import.meta.url), "utf8")).toContain("store.otherChatAsks(bot.id, threadId, notOwnerChats())");
   });
 
   it("stages a send's task packet for every reader and settles it after dispatch", () => {
@@ -1128,6 +1168,34 @@ describe("Store", () => {
     expect(reloaded.bot(other.id)?.modelSelection.model).toBe("gemini-3.7-flash-high");
   });
 
+  const moveReplaced = (store: Store, engine: ReplacedModel["engine"], instanceId: string) => {
+    for (const { from, to, resetSession } of replacedModelMoves(engine)) store.renameModel([instanceId], from, to, resetSession ? { resetSession } : {});
+  };
+
+  it("moves a bot saved on any replaced Codex model to its current one and keeps its effort", () => {
+    const store = new Store(selection);
+    const saved = [["gpt-6-sol", "gpt-6.2-sol", "low"], ["gpt-6.1-sol", "gpt-6.2-sol", "high"], ["gpt-6-astra", "gpt-6.2-astra", "xhigh"], ["gpt-5.6-terra", "gpt-6.1-terra", "medium"]] as const;
+    const bots = saved.map(([model, , effort]) => store.createBot({ modelSelection: { instanceId: "codex", model, effort } }));
+
+    moveReplaced(store, "codex", "codex");
+
+    const reloaded = new Store(selection);
+    expect(bots.map((bot) => reloaded.bot(bot.id)?.modelSelection)).toEqual(saved.map(([, model, effort]) => ({ instanceId: "codex", model, effort })));
+  });
+
+  it("a new replaced-models row moves a saved bot with no other code change", () => {
+    const rows = REPLACED_MODELS as ReplacedModel[];
+    rows.push({ engine: "codex", from: "old-x", to: "new-x", fromLabel: "Old X", toLabel: "New X" });
+    try {
+      const store = new Store(selection);
+      const bot = store.createBot({ modelSelection: { instanceId: "codex", model: "old-x", effort: "high" } });
+      moveReplaced(store, "codex", "codex");
+      expect(new Store(selection).bot(bot.id)?.modelSelection).toEqual({ instanceId: "codex", model: "new-x", effort: "high" });
+    } finally {
+      rows.pop();
+    }
+  });
+
   it("renameModel resets migrated Codex sessions and keeps Claude sessions", () => {
     const store = new Store(selection);
     const codex = store.createBot({ modelSelection: { instanceId: "codex", model: "gpt-5.6-terra" } });
@@ -1234,10 +1302,11 @@ describe("Store", () => {
   it("chains appended messages and keeps the newest as active leaf", () => {
     const store = new Store(selection);
     const bot = store.createBot();
+    const greeting = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "hello" });
     const user = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
 
     const messages = store.messagesFor(bot.threadId);
-    expect(user.parentId).toBe(messages[0].id); // follows the onboarding card
+    expect(user.parentId).toBe(greeting.id);
     expect(store.activeLeaf(bot.threadId)).toBe(user.id);
     expect(store.activePath(bot.threadId).map((m) => m.id)).toEqual(messages.map((m) => m.id));
   });
@@ -1518,7 +1587,8 @@ describe("Store", () => {
   it("deleteBot removes the bot and its durable transcript", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    // the transcript is durable — a fresh Store sees the seeded messages
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
+    // the transcript is durable: a fresh Store sees it
     expect(new Store(selection).messagesFor(bot.threadId).length).toBeGreaterThan(0);
 
     expect(store.deleteBot(bot.id)).toBe(true);
@@ -1547,7 +1617,7 @@ describe("Store", () => {
 
 describe("Store change stream", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   const record = (store: Store) => {
@@ -1570,7 +1640,7 @@ describe("Store change stream", () => {
   it("emits a card patch after a user message hides the onboarding quiz", () => {
     const store = new Store(selection);
     const bot = store.createBot();
-    const quiz = store.messagesFor(bot.threadId)[0]!;
+    const quiz = store.appendMessage(bot.threadId, { role: "bot", kind: "options", card: OLD_QUIZ });
     const events = record(store);
     const m = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "hi" });
     expect(events.map((event) => event.type)).toEqual(["message", "message.patch"]);
@@ -1582,13 +1652,11 @@ describe("Store change stream", () => {
     });
   });
 
-  it("announces a new bot before its onboarding messages", () => {
+  it("announces a new bot with no seeded message", () => {
     const store = new Store(selection);
     const events = record(store);
     const bot = store.createBot();
-    expect(events.map((event) => event.type)).toEqual(["bot", "message"]);
-    expect(events[0]).toEqual({ type: "bot", botId: bot.id });
-    expect(events.slice(1).every((event) => event.threadId === bot.threadId)).toBe(true);
+    expect(events).toEqual([{ type: "bot", botId: bot.id }]);
   });
 
   it("every message-tree write emits a message or thread event", () => {
@@ -1696,7 +1764,7 @@ describe("Store change stream", () => {
 
 describe("Store bot activity state", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("derives busy from activity, so every existing busy reader keeps working", () => {
@@ -1742,7 +1810,7 @@ describe("Store model picked mid-reply", () => {
   const next: ModelSelection = { instanceId: "codex", model: "gpt-6-sol", mode: "pinned" };
 
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     _resetSteerQueue();
   });
 
@@ -1805,7 +1873,7 @@ describe("Store model picked mid-reply", () => {
 
 describe("Store redacts bot-authored secrets on write", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("masks a key in bot text, tools and cards — but never in what the user typed", () => {
@@ -1960,7 +2028,7 @@ describe("Store redacts bot-authored secrets on write", () => {
 
 describe("Store task usage", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("banks each turn's tokens and cost on the task, counting turns", () => {
@@ -2012,7 +2080,7 @@ describe("Store task usage", () => {
 
 describe("Store task working folder", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("pins the bot's folder onto a task on its first turn, and never again", () => {
@@ -2122,7 +2190,7 @@ describe("Store task working folder", () => {
 
 describe("Store remembered project folder", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("remembers a resolved project per bot without turning it into a pin", () => {
@@ -2135,6 +2203,13 @@ describe("Store remembered project folder", () => {
 
     store.patchBot(bot.id, { cwd: "/tmp/pinned" });
     expect(store.pinTaskCwd(bot.id, bot.threadId, store.bot(bot.id)?.lastProjectCwd)).toBe("/tmp/pinned");
+  });
+
+  it("keeps the repos a bot learned across a restart", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.rememberRepos(bot.id, ["aiedwardyi/wink"]);
+    expect(new Store(selection).bot(bot.id)?.knownRepos).toEqual(["aiedwardyi/wink"]);
   });
 
   it("lets a new unpinned task start in the remembered folder", () => {
@@ -2254,7 +2329,7 @@ describe("Store remembered project folder", () => {
 
 describe("Store room working folder", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
 
   it("pins the room's folder on its first turn, and never again", () => {
@@ -2289,7 +2364,7 @@ describe("Store room working folder", () => {
 
 describe("Store task working folder — cloud runs", () => {
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
   });
   it("a cloud run pins the default so the bot's host folder never shows for that task", () => {
     const store = new Store(selection);
