@@ -1140,19 +1140,34 @@ describe("SPEED4 warm session reuse (fake CLI)", () => {
     expect(rpc.filter((m) => m === "initialize").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("preserves billing across warm reuse", async () => {
+  it("reads billing at most once a minute across warm reuse", async () => {
     process.env.FAKE_ACP_BILLING_END = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
-    await createWarm("happy");
-    const t1 = await instance.adapter.sendTurn({ threadId: "t-bill", text: "one" });
-    await recorder.until((e) => e.type === "turn.completed" && e.turnId === t1.turnId);
-    await recorder.until((e) => e.type === "account.rate-limits.updated");
-    const sessionId = sessionIdFor(t1.turnId);
-    const t2 = await instance.adapter.sendTurn({ threadId: "t-bill", text: "two", resumeCursor: sessionId });
-    await recorder.until((e) => e.type === "turn.completed" && e.turnId === t2.turnId);
-    // Second billing update for the follow-up turn.
-    await recorder.until(
-      (e) => e.type === "account.rate-limits.updated" && e.turnId === t2.turnId,
-    );
+    process.env.FAKE_ACP_RPC_DUMP = join(scratch, "bill-rpc.json");
+    writeFileSync(process.env.FAKE_ACP_RPC_DUMP, "[]");
+    const realNow = Date.now.bind(Date);
+    let skew = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    try {
+      await createWarm("happy");
+      const billed = (turnId: string) => recorder.events.some((e) => e.type === "account.rate-limits.updated" && e.turnId === turnId);
+      const turn = async (text: string, resumeCursor?: string) => {
+        const { turnId } = await instance.adapter.sendTurn({ threadId: "t-bill", text, resumeCursor });
+        await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+        return turnId;
+      };
+      const t1 = await turn("one");
+      expect(billed(t1)).toBe(true);
+      const sessionId = sessionIdFor(t1);
+      const t2 = await turn("two", sessionId);
+      expect(billed(t2)).toBe(false);
+      expect((await settledRpc()).filter((m) => m === "_x.ai/billing")).toHaveLength(1);
+      skew = 60_000;
+      const t3 = await turn("three", sessionId);
+      expect(billed(t3)).toBe(true);
+      expect((await settledRpc()).filter((m) => m === "_x.ai/billing")).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("preserves permission asks on a warm follow-up", async () => {
