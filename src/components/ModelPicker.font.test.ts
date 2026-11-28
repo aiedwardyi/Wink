@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 
 // The picker draws over the chat, so it takes the skin's own face. A family named here that the app does not bundle
@@ -6,18 +6,25 @@ import { expect, it } from "vitest";
 const GENERIC = new Set(["serif", "sans-serif", "monospace", "system-ui", "ui-sans-serif", "ui-monospace", "cursive", "fantasy", "math", "emoji"]);
 const css = (path: string) => readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 const bundled = new Set([...css("src/styles.css").matchAll(/@font-face\s*\{[^}]*font-family:\s*["']?([^"';]+)["']?\s*;/g)].map(([, family]) => family.trim()));
-const rules = [...css("src/components/ModelPicker.css").matchAll(/([^{};]*)\{([^{}]*)\}/g)].map(([, selector, body]) => ({ selector: selector.trim(), body }));
-const families = rules.flatMap(({ selector, body }) => [...body.matchAll(/(?:^|;)\s*font-family:\s*([^;]+)/g)].map(([, value]) => ({ selector, value: value.trim() })));
+// Every picker stylesheet: the model picker, its style popover, the quick picker, and any picker added later.
+const pickerCss = readdirSync("src/components").filter(name => /Picker.*\.css$/.test(name)).map(name => `src/components/${name}`);
+const rules = (path: string) => [...css(path).matchAll(/([^{};]*)\{([^{}]*)\}/g)].map(([, selector, body]) => ({ selector: selector.trim(), body }));
+// `font-family: ...` and the `font: [style] size[/line] family` shorthand both name families.
+const families = pickerCss.flatMap(path => rules(path).flatMap(({ selector, body }) => [
+  ...[...body.matchAll(/(?:^|;)\s*font-family:\s*([^;]+)/g)].map(([, value]) => value.trim()),
+  ...[...body.matchAll(/(?:^|;)\s*font:\s*(?:[\w.-]+\s+)*?[\d.]+(?:px|rem|em)(?:\/[\d.]+(?:px|rem|em)?)?\s+([^;]+)/g)].map(([, value]) => value.trim()),
+].map(value => ({ path, selector, value }))));
 
 it("draws the model picker in the skin's font", () => {
-  expect(families.find(({ selector }) => selector === ".model-cross-dialog")?.value).toBe("var(--font-sans)");
+  expect(families.find(({ path, selector }) => path.endsWith("ModelPicker.css") && selector === ".model-cross-dialog")?.value).toBe("var(--font-sans)");
 });
 
-it("names no font the app does not bundle in the model picker", () => {
+it("names no font the app does not bundle in any picker stylesheet", () => {
   expect(bundled.has("Geist")).toBe(true);
-  const missing = families.flatMap(({ selector, value }) => /^(var\(--font-[\w-]+\)|inherit)$/.test(value) ? [] : value.split(",")
+  expect(pickerCss).toEqual(expect.arrayContaining(["src/components/ModelPicker.css", "src/components/PickerStyleStrip.css", "src/components/QuickModelPicker.css"]));
+  const missing = families.flatMap(({ path, selector, value }) => /^(var\(--[\w-]+\)|inherit)$/.test(value) ? [] : value.split(",")
     .map(name => name.trim().replace(/^["']|["']$/g, ""))
     .filter(name => !GENERIC.has(name) && !bundled.has(name))
-    .map(name => `${selector}: ${name} is not bundled, use var(--font-sans)`));
+    .map(name => `${path} ${selector}: ${name} is not bundled, use var(--font-sans)`));
   expect(missing).toEqual([]);
 });
