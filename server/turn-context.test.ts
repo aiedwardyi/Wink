@@ -431,7 +431,7 @@ describe("asks in the task record", () => {
     ],
   };
   const lines = "- A1 waiting-for-user needs verdict 11-08: Review the model picker PR\n- A3 building 11-12: Fix the login redirect";
-  const verdict = "[Wink asks list - 2 open, 1 needs a verdict: no ref and no change in 3+ days, so build, park or close it yourself, and ask the user about at most 3 at a time.";
+  const verdict = "[Wink asks list - 2 open, 1 needs a verdict: no ref and no change in 3+ days, or waiting on the user that long, so check whether the user already did their part, then build, park or close it yourself, and ask the user about at most 3 at a time.";
   const stale = `${verdict}]\n${lines}`;
   const listed = `${verdict} Build any summary or status from this list.]\n${lines}`;
   const plain = { text: "thanks", transcript, rewound: false, fresh: false, replaysNatively: false };

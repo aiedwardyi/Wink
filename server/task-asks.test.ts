@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addQuestionAsk, answerQuestionAsk, ASK_VERDICT_MS, asksBlock, asksNudge, fileLeftovers, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, rotatedAsks, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
+import { addQuestionAsk, answerQuestionAsk, ASK_VERDICT_MS, asksBlock, asksNudge, fileLeftovers, isStatusTurn, MAX_STATUS_ASKS_BYTES, mergeTaskAsks, rotatedAsks, shownVerdicts, TASK_ASKS_PROMPT, type TaskAsk } from "./task-asks.ts";
 import { taskRecordBlock } from "./turn-context.ts";
 
 const HOUR = 60 * 60 * 1000;
@@ -162,14 +162,124 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
     expect(block).toContain(`- A1 ${status} 11-12`);
     expect(asksNudge([fresh], NOW, "thanks")).toBe("");
     expect(listed(asksNudge([fresh, due], NOW, "thanks"))).toEqual([`- A2 ${status} needs verdict 11-12: ask number 2`]);
-    expect(asksNudge([ask(3, { status, ref: "PR #3", changedAt: 0 })], NOW, "thanks")).toBe("");
   });
 
-  it("keeps the verdict nudge on an engine's own ask worded as a question, and spares only a filed leftover", () => {
+  it("flags a waiting-for-user ask with a ref and no change for 3 days, to check whether the user already did their part", () => {
+    const waiting = ask(1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY });
+    expect(listed(asksNudge([waiting], NOW, "thanks"))).toEqual(["- A1 waiting-for-user needs verdict 11-12: ask number 1 (VM ready)"]);
+    expect(asksBlock([waiting], NOW)).toContain("1 needs a verdict: no ref and no change in 3+ days, or waiting on the user that long, so check whether the user already did their part, then build, park or close it yourself");
+  });
+
+  it("never flags a fresh waiting ask, an open or building ask with a ref, or a parked one", () => {
+    for (const quiet of [
+      ask(1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 2 * DAY }),
+      ask(2, { status: "building", ref: "PR #3", changedAt: 0 }),
+      ask(3, { ref: "PR #4", changedAt: 0 }),
+      ask(4, { ref: "VM ready", until: NOW + DAY, changedAt: 0 }),
+    ]) expect(asksNudge([quiet], NOW, "thanks"), quiet.id).toBe("");
+  });
+
+  it("brings the newest asks waiting on the user to a typed reply, so a bare done reaches the one they finished", () => {
+    const vm = ask(1, { ask: "Set up the teacher VM", status: "waiting-for-user", ref: "VM ready; his logins", changedAt: NOW - 2 * DAY });
+    expect(asksNudge([vm], NOW, "done", [], true).split("\n")).toEqual([
+      "[Wink asks waiting on the user - 1 open, newest first. If this message finishes or answers one, update it by ID and go on; otherwise leave them alone and do not nag.]",
+      "- A1 waiting-for-user 11-12: Set up the teacher VM (VM ready; his logins)",
+    ]);
+    expect(asksNudge([vm], NOW, "done")).toBe("");
+    expect(asksNudge([vm], NOW, "status?", [], true)).not.toContain("waiting on the user -");
+    const many = Array.from({ length: 30 }, (_, index) => ask(index + 1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - DAY + index }));
+    expect(asksNudge(many, NOW, "done", [], true).split("\n").slice(1)).toEqual(["- A30 waiting-for-user 11-12: ask number 30 (VM ready)", "- A29 waiting-for-user 11-12: ask number 29 (VM ready)", "- A28 waiting-for-user 11-12: ask number 28 (VM ready)", "- +27 more waiting on the user; a status question lists them"]);
+  });
+
+  it("shows at most 3 stale waiting asks for a verdict on an ordinary turn, a full list too, and every one on a status question", () => {
+    const many = Array.from({ length: 30 }, (_, index) => ask(index + 1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY }));
+    for (const typed of [false, true]) {
+      const block = asksNudge(many, NOW, "thanks", [], typed);
+      expect(listed(block).filter((line) => line.includes("needs verdict"))).toEqual(["- A1 waiting-for-user needs verdict 11-12: ask number 1 (VM ready)", "- A2 waiting-for-user needs verdict 11-12: ask number 2 (VM ready)", "- A3 waiting-for-user needs verdict 11-12: ask number 3 (VM ready)"]);
+      expect(block).toContain("30 need a verdict");
+      expect(block).toContain(" 27 more show on a status question.");
+      expect(listed(block)).toHaveLength(typed ? 6 : 3);
+    }
+    expect(listed(asksNudge(many, NOW, "status?"))).toHaveLength(30);
+    const full = listed(taskRecordBlock(record(many), 6_000, { now: NOW }));
+    expect([full.length, full.filter((line) => line.includes("needs verdict")).length], "a compacted turn's full list").toEqual([30, 3]);
+    const stale = Array.from({ length: 5 }, (_, index) => ask(index + 1, { changedAt: NOW - 4 * DAY }));
+    expect(listed(asksNudge(stale, NOW, "thanks"))).toHaveLength(5);
+  });
+
+  it("names a stale waiting ask the verdict rows held back, by its words or its ref, without a fourth verdict", () => {
+    const many = Array.from({ length: 30 }, (_, index) => ask(index + 1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY + index }));
+    many[3] = ask(4, { ask: "Set up the amber satellite", status: "waiting-for-user", ref: "zircon observatory", changedAt: NOW - 4 * DAY + 3 });
+    const plain = Array.from({ length: 5 }, (_, index) => ask(index + 31, { changedAt: NOW - 4 * DAY }));
+    for (const text of ["amber satellite done", "zircon observatory done"]) {
+      for (const asks of [many, [...many, ...plain]]) {
+        const rows = listed(asksNudge(asks, NOW, text, [], true));
+        expect(rows, text).toContain("- A4 waiting-for-user 11-12: Set up the amber satellite (zircon observatory)");
+        expect(rows.filter((line) => line.includes("waiting-for-user needs verdict")).map((line) => line.split(" ")[1]), text).toEqual(["A1", "A2", "A3"]);
+        expect(rows.filter((line) => line.includes("open needs verdict")), text).toHaveLength(asks.length - many.length);
+      }
+    }
+  });
+
+  it("names an ask the verdict budget left out", () => {
+    const old = Array.from({ length: 550 }, (_, index) => ask(index + 1, { ask: "가".repeat(80), changedAt: NOW - 4 * DAY }));
+    const waits = [551, 552, 553, 554].map((id) => ask(id, { ask: id === 551 ? "Set up the amber satellite" : `wait ${id}`, status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY }));
+    const sent = asksNudge([...old, ...waits], NOW, "amber satellite done", [], true);
+    expect(sent).not.toContain("- A551 waiting-for-user needs verdict");
+    expect(listed(sent)).toContain("- A551 waiting-for-user 11-12: Set up the amber satellite (VM ready)");
+  });
+
+  it("lets a ref add a name match but never take away a title's", () => {
+    const asks = [ask(1, { ask: "Set up the amber satellite" }), ...[2, 3, 4].map((id) => ask(id, { ref: "amber satellite" }))];
+    expect(listed(asksNudge(asks, NOW, "amber satellite done"))).toEqual(["- A1 open 11-12: Set up the amber satellite"]);
+  });
+
+  it("keeps question cards and promises moved to waiting out of the waiting rows", () => {
+    const vm = ask(1, { ask: "Set up the teacher VM", status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 2 * DAY });
+    const moved = [2, 3, 4].map((id) => ask(id, { status: "waiting-for-user", kind: id === 4 ? "promise" : "question" }));
+    expect(asksNudge([vm, ...moved], NOW, "done", [], true).split("\n")).toEqual([
+      "[Wink asks waiting on the user - 1 open, newest first. If this message finishes or answers one, update it by ID and go on; otherwise leave them alone and do not nag.]",
+      "- A1 waiting-for-user 11-12: Set up the teacher VM (VM ready)",
+    ]);
+  });
+
+  it("picks the rows once per turn, so 20,000 waiting asks render quickly", () => {
+    const asks = Array.from({ length: 20_000 }, (_, index) => ask(index + 1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY + index }));
+    const start = performance.now();
+    expect(listed(asksNudge(asks, NOW, "thanks", [], true))).toHaveLength(6);
+    expect(performance.now() - start).toBeLessThan(1_000);
+  });
+
+  it("moves on to the least recently shown stale waiting asks, so daily typed turns reach all 30 before one repeats", () => {
+    let asks = Array.from({ length: 30 }, (_, index) => ask(index + 1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY + index }));
+    const verdicts = (sent: string) => listed(sent).filter((line) => line.includes("needs verdict")).map((line) => line.split(" ")[1]);
+    expect(shownVerdicts(asks, asksNudge(asks, NOW, "done", [], true)), "never the passive rows A30, A29, A28").toEqual(["A1", "A2", "A3"]);
+    const turns: string[][] = [];
+    for (let turn = 0; turn < 12; turn++) {
+      const now = NOW + turn * DAY;
+      const sent = asksNudge(asks, now, ["thanks", "hello", "sounds good", "nice", "got it"][turn % 5]!, [], true);
+      turns.push(verdicts(sent));
+      const ids = shownVerdicts(asks, sent);
+      asks = asks.map((item) => ids.includes(item.id) ? { ...item, shown: now } : item);
+    }
+    expect(turns.slice(0, 10).flat()).toEqual(asks.map((item) => item.id));
+    expect(turns.slice(10)).toEqual([["A1", "A2", "A3"], ["A4", "A5", "A6"]]);
+  });
+
+
+  it("keeps a building ask with a ref and a parked one out of a typed reply", () => {
+    for (const quiet of [ask(1, { status: "building", ref: "PR #3", changedAt: 0 }), ask(2, { ref: "VM ready", until: NOW + DAY, changedAt: 0 })]) {
+      expect(asksNudge([quiet], NOW, "done", [], true), quiet.id).toBe("");
+    }
+  });
+
+  it("keeps the verdict nudge on an engine's own ask worded as a question, and spares a filed leftover only while unchecked", () => {
     const own = ask(1, { ask: "Could you fix the login redirect?", changedAt: NOW - ASK_VERDICT_MS });
     expect(listed(asksNudge([own], NOW, "thanks"))).toEqual(["- A1 open needs verdict 11-12: Could you fix the login redirect?"]);
     const filed = fileLeftovers({ asks: [], lastAskId: 0 }, [{ ask: "Could you fix the login redirect?" }], NOW - ASK_VERDICT_MS)!.asks[0]!;
     expect(asksBlock([{ ...filed, shown: NOW - ASK_VERDICT_MS }], NOW)).not.toContain("needs verdict");
+    const waiting = saved(mergeTaskAsks({ asks: [filed], lastAskId: 1 }, [{ id: "A1", status: "waiting-for-user", ref: "APK on the drive" }], NOW - ASK_VERDICT_MS)).asks;
+    expect(listed(asksNudge(waiting, NOW, "done", [], true))).toEqual(["- A1 waiting-for-user needs verdict 11-09: Could you fix the login redirect? (APK on the drive)"]);
   });
 
   it("never takes a path in another case for a repeat of an ask filed without a key", () => {
@@ -307,6 +417,11 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
       expect(tokens(header)).toBeLessThanOrEqual(45);
     });
 
+    it("names an ask by the words in its ref too", () => {
+      const vm = ask(1, { ask: "Tell me when the setup is finished", status: "waiting-for-user", ref: "VM ready; his logins" });
+      expect(listed(asksNudge([vm, ask(2)], NOW, "logins finished"))).toEqual(["- A1 waiting-for-user 11-12: Tell me when the setup is finished (VM ready; his logins)"]);
+    });
+
     it("names at most 3 asks in about 100 tokens, and never on a word many asks share", () => {
       const asks = [
         ...["alpha bravo one", "alpha bravo two", "alpha bravo three"].map((words, index) => ask(index + 1, { ask: `ship the ${words} header` })),
@@ -385,9 +500,9 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
     });
 
     it("tells every bot the list is whole, how to park, that repeats merge and how to judge an old ask", () => {
-      expect(TASK_ASKS_PROMPT).toContain("Wink lists every open ask in a fresh session and on a status question, otherwise the asks the user's words name, and merges a repeat into the ask it matches.");
+      expect(TASK_ASKS_PROMPT).toContain("Wink lists every open ask in a fresh session and on a status question, otherwise the asks the user's words name and, on a message the user typed, the newest asks waiting on them, and merges a repeat into the ask it matches.");
       expect(TASK_ASKS_PROMPT).toContain("Park an ask with until when it waits on a date.");
-      expect(TASK_ASKS_PROMPT).toContain("An ask with no ref and no change in 3 days needs your verdict: build it (helper or time), park it or close it yourself, and ask the user about at most 3 at a time.");
+      expect(TASK_ASKS_PROMPT).toContain("An ask with no ref, or waiting on the user, and no change in 3 days needs your verdict: build it (helper or time), park it or close it yourself, and ask the user about at most 3 at a time.");
       expect(TASK_ASKS_PROMPT).not.toMatch(/6\+? hours|raise them with the user now/);
     });
   });

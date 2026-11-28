@@ -100,6 +100,7 @@ export const KEPT_LIMITS: Limits = {
   "server/task-asks.ts": {
     MAX_STATUS_ASKS_BYTES: "Crash: bots see every open ask, so the turn must still fit the model's input; past this size the least recently shown go first and the header counts the rest for the next turn. Nothing is refused or dropped.",
     MAX_LISTED_PROMISES: "Runaway loop: every open row rides each later turn and asks the engine to check it, so a narrated turn's 60 \"I'll\" lines would add 60 rows to every turn. Past it the rest ride as their IDs on one line; each keeps its own row, and a status question lists them all.",
+    MAX_LISTED_WAITING: "Runaway loop: a waiting ask needs the user, so 30 of them would put 30 rows on every turn and ask about each; past it the rest ride as one count line, and a status question lists them all.",
   },
   "server/team-library.ts": { MAX_CATALOG_BYTES: OUTSIDER, MAX_MANIFEST_BYTES: OUTSIDER },
   "server/thread-events.ts": { MAX_LIMIT: FILE, MAX_TAIL_BYTES: FILE },

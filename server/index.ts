@@ -285,7 +285,7 @@ import {
   type RecoveryFlushReason,
 } from "./task-recovery-flush.ts";
 import "../shared/task-resume.ts";
-import { ASKS_LIST, asksNudge, fileLeftovers, isStatusTurn, MORE_PROMISES, rotatedAsks, TASK_ASKS_PROMPT, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
+import { ASKS_LIST, asksNudge, fileLeftovers, isStatusTurn, MORE_PROMISES, rotatedAsks, shownVerdicts, TASK_ASKS_PROMPT, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
 import "./task-state.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { sweepDroppedAsks } from "./task-dropped.ts";
@@ -3075,21 +3075,29 @@ function persistTaskPacket(packet: TaskResumePacket, opts?: { staged?: boolean }
   }
 }
 
+// Thread → the waiting asks its dispatched turn carries verdict rows for; a launch can fail after sendTurn returns, so they rest only once it landed
+const sentVerdicts = new Map<string, { turnId: string; ids: string[] }>();
+
 // a list past MAX_STATUS_ASKS_BYTES shows the least recently shown first next time; a leftover no turn showed yet rides until one does
-function stampShownAsks(threadId: string, sent: string): void {
+function stampShownAsks(threadId: string, sent: string, turnId: string | undefined): void {
   const record = taskPacketForWrite(threadId);
   const now = Date.now();
   const more = sent.split("\n").filter((line) => line.includes(MORE_PROMISES)).join(" ");
   const left = record?.asks?.filter((ask) => ask.shown === 0 && (sent.includes(`- ${ask.id} `) || new RegExp(`\\b${ask.id}\\b`).test(more))).map((ask) => ask.id) ?? [];
   const ids = [...(record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) ?? [] : []), ...left];
+  sentVerdicts.set(threadId, { turnId: turnId ?? "", ids: shownVerdicts(record?.asks, sent) });
   if (record && ids.length) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
-// a close saves once the turn that showed its line landed, and never over the bot's own edit in that turn
+// a close saves, and a waiting ask's verdict row rests, once the turn that showed it landed; a close never over the bot's own edit in that turn
 function saveLandedCloses(threadId: string, turnId: string | undefined, landed: boolean): void {
   const record = taskPacketForWrite(threadId);
   const ids = askPrs.landed(threadId, turnId ?? "", landed, record?.asks);
-  if (record && ids.length) persistTaskPacket({ ...record, asks: withClosed(record.asks, ids, Date.now()) });
+  const sent = sentVerdicts.get(threadId)?.turnId === (turnId ?? "") ? sentVerdicts.get(threadId) : undefined;
+  if (sent) sentVerdicts.delete(threadId);
+  const rested = new Set(landed ? sent?.ids : []);
+  const now = Date.now();
+  if (record && (ids.length || rested.size)) persistTaskPacket({ ...record, asks: withClosed(record.asks, ids, now).map((ask) => rested.has(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
 // a building ask whose ref PRs all merged shows as done on this turn, with a line; the store keeps it building until the turn lands
@@ -6000,7 +6008,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     contextCapped: compactedThisTurn || resumeSessionUnseeded(seedInputs),
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
-    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, elsewhereAsks) : "",
+    asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, elsewhereAsks, turnStartedByUser(opts)) : "",
   });
   const resumeFallback = buildResumeFallback({
     driverKind: instance.driverKind,
@@ -6625,7 +6633,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
       // a leftover counts as shown once an engine took the prompt; a setup failure leaves it for the retry
-      stampShownAsks(threadId, turnText);
+      stampShownAsks(threadId, turnText, started.turnId);
       boardTurnStarted(bot.id, threadId, started.turnId);
       if (currentTurnEpoch(bot.id) !== epoch) return;
       if (started.turnId && settledTurnIdByThread.get(threadId) !== started.turnId) liveTurnIdByThread.set(threadId, started.turnId);
@@ -7343,6 +7351,8 @@ async function runClaimedGroupMemberTurn(
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
   if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   spoken.add(botId);
+  // a person typed the message this hop answers, as keepGoing reads it: no chained hop, routine, resume or connector line
+  const typed = hop === 0 && !cardContinuation;
   const userName = cfg.profile?.name?.trim() || "User";
   if (bot.busy && !lane) {
     return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId, authority, hands, chainAsk);
@@ -7457,13 +7467,12 @@ async function runClaimedGroupMemberTurn(
   }
   const roomMail = mailForTurn(store, threadId, [], modelContextWindow);
   const roomContext = [
-    prepared.compacted && durableTaskRecordText ? durableTaskRecordText : asksNudge(taskRecord?.asks, Date.now(), latestUser?.text ?? "") || null,
+    prepared.compacted && durableTaskRecordText ? durableTaskRecordText : asksNudge(taskRecord?.asks, Date.now(), latestUser?.text ?? "", [], typed) || null,
     prepared.transcript.map((message) => replayMessageText(message, instance.driverKind, bot.id, selection.model)).join("\n"),
     ...roomMail.map((part) => inertMentions(part.text)),
     ...memberClosedAskNotes(store.activePath(threadId), bot.id),
     ...closes.notes(Boolean(prepared.compacted && durableTaskRecordText)),
   ].filter((value) => value !== null).join("\n\n");
-  stampShownAsks(threadId, roomContext);
   // One turn per bot at a time, across BOTH engines. Without this a bot
   // could run its 1:1 turn and a room turn concurrently, creating two provider
   // processes, interleaved token spend, and an interrupt that only ever
@@ -7706,6 +7715,7 @@ async function runClaimedGroupMemberTurn(
         bindInterruptedTurn(threadId, started.turnId, turnKey, epoch);
         askPrs.closing(threadId, started.turnId ?? "", closes.ids);
         markMailRead(store, threadId, roomMail, started.turnId ?? "");
+        stampShownAsks(threadId, roomContext, started.turnId);
         accountNote.commit();
         releaseStarting();
         boardTurnStarted(bot.id, threadId, started.turnId);

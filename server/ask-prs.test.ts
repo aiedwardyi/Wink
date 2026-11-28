@@ -494,7 +494,7 @@ describe("a closing turn in index.ts", () => {
     expect(notes[0]).toContain("...askNotes,");
     expect(source).toContain("  const askNotes = closes.notes(");
     expect(notes[1]).toContain("...closes.notes(true)");
-    const room = source.slice(source.indexOf("  const roomContext = ["), source.indexOf("  stampShownAsks(threadId, roomContext);"));
+    const room = source.slice(source.indexOf("  const roomContext = ["), source.indexOf("  stampShownAsks(threadId, roomContext, started.turnId);"));
     expect(room).toContain("...closes.notes(");
   });
 
@@ -549,8 +549,8 @@ describe("a closing turn in index.ts", () => {
 
   it("stamps a 1:1 turn's leftovers shown only once an engine took the prompt, so a setup failure leaves them for the retry", () => {
     const source = index();
-    const stamp = source.indexOf("  stampShownAsks(threadId, turnText);");
-    expect(source.split("stampShownAsks(threadId, turnText);")).toHaveLength(2);
+    const stamp = source.indexOf("  stampShownAsks(threadId, turnText, started.turnId);");
+    expect(source.split("stampShownAsks(threadId, turnText, started.turnId);")).toHaveLength(2);
     expect(stamp).toBeGreaterThan(source.indexOf("return live.adapter.sendTurn({"));
     expect(source.lastIndexOf("store.markReactionsDelivered(bot.id, threadId, reactionsSeen);", stamp)).toBeGreaterThan(source.indexOf("return live.adapter.sendTurn({"));
   });
