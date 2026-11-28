@@ -51,6 +51,9 @@ export function registerEngineInstall(ipcMain, { trusted, server, copy, fetch = 
   // The install window writes the marker when a step fails; the row's probe asks here.
   ipcMain.handle("engine:install-failed", async (event, instanceId) => {
     check(event, instanceId);
-    return existsSync(marker(instanceId));
+    const failed = existsSync(marker(instanceId));
+    // A failed window offers Try Again, so it must not wait out the repeat-tap window.
+    if (failed && !(inFlight.get(instanceId) instanceof Promise)) inFlight.delete(instanceId);
+    return failed;
   });
 }

@@ -49,6 +49,11 @@ describe("engine install IPC", () => {
       vi.setSystemTime(Date.now() + 10000);
       expect(await d.call("codex")).toBe("running");
       expect(await d.failed("codex")).toBe(false);
+      writeFileSync(d.marker("codex"), "failed");
+      expect(await d.failed("codex")).toBe(true);
+      expect(await d.call("codex")).toBe("running");
+      expect(d.open).toHaveBeenCalledTimes(3);
+      expect(await d.failed("codex")).toBe(false);
       await expect(d.failed("../codex")).rejects.toThrow("Invalid engine id");
       const untrusted = setup(false);
       await expect(untrusted.failed("codex")).rejects.toThrow("Untrusted install caller");
