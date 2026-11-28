@@ -19,10 +19,10 @@ describe("model picker look preference", () => {
     expect(pickerLook(skin)).toBe(look);
   });
 
-  it.each(["ledger", "wink-day", "atelier"] as const)("shows Dark on the light %s skin in Wink, Wink Day's dark pair", async (skin) => {
+  it.each(["ledger", "wink-day", "atelier"] as const)("shows Dark on the light %s skin in Wink Black", async (skin) => {
     vi.stubGlobal("localStorage", { getItem: () => null });
     const { pickerLookSkin } = await import("./picker-look");
-    expect(pickerLookSkin(skin, "dark")).toBe("wink");
+    expect(pickerLookSkin(skin, "dark")).toBe("wink-black");
     expect(pickerLookSkin("precision", "dark")).toBeUndefined();
     expect(pickerLookSkin("mono-hud", "dark")).toBe("precision");
   });
