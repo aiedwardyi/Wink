@@ -52,6 +52,7 @@ export const KEPT_LIMITS: Limits = {
     "room name must be at most": BODY,
     "section must be at most": BODY,
   },
+  "server/import-memory-pin.ts": { MAX_PINS: STATE },
   "server/index.ts": {
     MAX_COMMS_DEPTH: "Runaway loop: the bot-to-bot reply-loop guard; a peer turn cannot ask or delegate another hop.",
     "voice utterances are limited to": BODY,

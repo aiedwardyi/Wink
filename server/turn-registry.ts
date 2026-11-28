@@ -8,6 +8,8 @@ export interface LiveTurn {
   docFix?: string;
   /** A typed user turn with the terminal mounted: a big plan saved in it gets the helper hint. */
   helperHint?: boolean;
+  /** The per-turn rule opened import_memory saving when it was dispatched. */
+  importMemory?: boolean;
 }
 
 type TurnStart = Omit<LiveTurn, "nowWatch" | "rootId"> & { rootId?: string | null };

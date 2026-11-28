@@ -187,7 +187,7 @@ const rig = async (engine: "grok" | "muse" = "grok") => {
       rewound: false, recovering: rec.recovering, unsettled: rec.unsettled, recoveryLatestUserText: rec.recoveryLatestUserText,
       opts, cfg: {}, reactions: {}, guestSessions: ref.sessions, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, modelContextWindow: 200_000, closes: { notes: () => [] },
       taskRecord: rec.taskRecord ?? undefined, durableTaskRecordText: rec.durableTaskRecordText,
-      providerReload: { started: () => instance }, aboutYouPrompt: () => "", roomTaskThreads: () => new Set([threadId]), notOwnerChats: () => new Set(), privateWorkspace: false, opensHostFiles: () => false,
+      providerReload: { started: () => instance }, aboutYouPrompt: () => "", roomTaskThreads: () => new Set([threadId]), notOwnerChats: () => new Set(), importPins: { forTurn: () => false }, privateWorkspace: false, opensHostFiles: () => false,
       accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
       paneNoteTurnThreads: new Set(), routineTurnThreads: new Set(),
       persona: "You are Pete.", cwd: project, projectFolderPrompt: () => "", projectNotesPrompt: () => "",
