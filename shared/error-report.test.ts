@@ -11,14 +11,19 @@ it("reconstructs a payload without accepting producer metadata", () => {
   for (const code of ERROR_CODES) expect(validErrorReport({ ...report, code })).toBe(true);
 });
 
-it("keeps only an error class name and an app bundle frame from the input", () => {
+it("keeps only a built-in error name and a shipped chunk frame from the input", () => {
+  const chunks = new Set(["index-AbC_12.js"]);
   const input = { process: "renderer", code: "UNKNOWN_ERROR", site: ERROR_SITES.rendererError, errorName: "TypeError", frame: "index-AbC_12.js:1:2345", message: "비밀 대화" };
-  const report = makeErrorReport(input, context)!;
+  const report = makeErrorReport(input, { ...context, chunks })!;
   expect(report).toMatchObject({ schema: 2, errorName: "TypeError", frame: "index-AbC_12.js:1:2345" });
   expect("message" in report).toBe(false);
-  for (const errorName of ["비밀 대화", "secret token", "C:\\Users\\minsu", "Error: 민수", "secret-token-123"]) expect(makeErrorReport({ ...input, errorName }, context)!.errorName).toBe("");
-  for (const frame of ["C:\\사용자\\민수\\비밀.txt:1:2", "/home/minsu/a.js:1:2", "https://evil.test/a.js:1:2", "index.js", "../x.js:1:2", "비밀 대화.js:1:2", "a.js:1:2 secret"]) expect(makeErrorReport({ ...input, frame }, context)!.frame).toBe("");
-  for (const patch of [{ errorName: "비밀" }, { frame: "/home/minsu/a.js:1:2" }, { schema: 1 }, { frame: 4 }]) expect(validErrorReport({ ...report, ...patch })).toBe(false);
+  for (const errorName of ["비밀 대화", "secret token", "C:\\Users\\minsu", "Error: 민수", "secret-token-123", "MinsuDiaryError", "SecretPlanException"]) expect(makeErrorReport({ ...input, errorName }, { ...context, chunks })!.errorName).toBe("");
+  for (const errorName of ["Error", "TypeError", "AggregateError", "DOMException", "AbortError", "NotAllowedError"]) expect(makeErrorReport({ ...input, errorName }, { ...context, chunks })!.errorName).toBe(errorName);
+  for (const frame of ["C:\\사용자\\민수\\비밀.txt:1:2", "/home/minsu/a.js:1:2", "https://evil.test/a.js:1:2", "index.js", "../x.js:1:2", "비밀 대화.js:1:2", "a.js:1:2 secret", "minsu-diary.js:1:2", "index-AbC_12.js:1:2 secret"]) expect(makeErrorReport({ ...input, frame }, { ...context, chunks })!.frame).toBe("");
+  expect(makeErrorReport(input, context)!.frame).toBe("");
+  for (const patch of [{ errorName: "비밀" }, { errorName: "MinsuDiaryError" }, { frame: "/home/minsu/a.js:1:2" }, { frame: "minsu-diary.js:1:2" }, { schema: 1 }, { frame: 4 }]) expect(validErrorReport({ ...report, ...patch }, chunks)).toBe(false);
+  expect(validErrorReport(report, chunks)).toBe(true);
+  expect(validErrorReport(report)).toBe(false);
 });
 
 it.each([

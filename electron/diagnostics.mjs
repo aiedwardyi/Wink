@@ -83,6 +83,9 @@ export function decodeLogTail(buffer, truncated = false) {
   return { tail: complete.toString("utf8"), bytes: complete.length };
 }
 
+// Renderer error lines quote page text, so they stay in the local log only.
+const RENDERER_DETAIL = /^\[[^\]]*\] renderer (?:error|rejection) /;
+
 const APP_INFO_KEYS = ["version", "platform", "arch", "electron", "node", "packaged", "uptimeSeconds"];
 
 // A config summary entry is publishable only when it carries no credential:
@@ -138,7 +141,7 @@ export function buildDiagnosticsReport({
   lines.push("");
   lines.push(logTail && logTail.trim() ? "## Server log tail — known credential patterns auto-masked" : "## Server log tail");
   if (logTail && logTail.trim()) {
-    for (const line of redactSecretsInLine(logTail).split(/\r?\n/)) lines.push(line);
+    for (const line of redactSecretsInLine(logTail).split(/\r?\n/)) if (!RENDERER_DETAIL.test(line)) lines.push(line);
   } else {
     lines.push("(server log unavailable)");
   }

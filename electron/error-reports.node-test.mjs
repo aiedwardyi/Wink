@@ -32,7 +32,7 @@ async function fixture(t, options = {}) {
   });
   await new Promise((resolve) => receiver.listen(0, "127.0.0.1", resolve));
   let time = Date.UTC(2026, 9, 28, 1, 23, 45);
-  const config = { userData: dir, dsn: `http://public@127.0.0.1:${receiver.address().port}/1`, build: "1.0.212", platform: "win32", arch: "x64", now: () => time, uptime: () => 100, ...options };
+  const config = { userData: dir, dsn: `http://public@127.0.0.1:${receiver.address().port}/1`, build: "1.0.212", platform: "win32", arch: "x64", now: () => time, uptime: () => 100, chunks: CHUNKS, ...options };
   const reporters = [];
   const open = () => {
     const reporter = createErrorReports(config);
@@ -50,6 +50,7 @@ async function fixture(t, options = {}) {
 }
 
 const failure = { process: "renderer", code: "UNKNOWN_ERROR", site: 1 };
+const CHUNKS = new Set(["index-AbC_12.js", "vendor-Xy.js"]);
 
 const source = (file) => fs.readFileSync(new URL(file, import.meta.url), "utf8");
 
@@ -761,7 +762,7 @@ test("renderer errors log one local line and report only the error name and app 
   const { frame, owner } = trustedOwner();
   const handlers = new Map();
   const lines = [];
-  registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, f.reporter, () => owner, () => "http://127.0.0.1:9311", { log: (line) => lines.push(line), build: "1.0.212", uptime: () => 42.5 });
+  registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, f.reporter, () => owner, () => "http://127.0.0.1:9311", { log: (line) => lines.push(line), build: "1.0.212", uptime: () => 42.5, chunks: CHUNKS });
   const capture = (site, detail) => handlers.get("error-reports:capture")({ sender: owner, senderFrame: frame }, site, detail);
   const message = `${privateText[5]} ${privateText[2]}\n    at http://127.0.0.1:9311/assets/secret-plan.js:9:9`;
   const stack = `TypeError: ${message}\n    at https://evil.test/assets/other.js:7:7\n    at render (http://127.0.0.1:9311/assets/index-AbC_12.js:1:2345)\n    at http://127.0.0.1:9311/assets/vendor-Xy.js:3:4`;
@@ -795,11 +796,88 @@ test("renderer error log lines stop after a cap so an error loop cannot fill the
   const handlers = new Map();
   const lines = [];
   registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, { capture() {} }, () => owner, () => "http://127.0.0.1:9311", { log: (line) => lines.push(line), build: "1.0.212" });
-  for (let i = 0; i < 150; i++) handlers.get("error-reports:capture")({ sender: owner, senderFrame: frame }, 1, { name: "Error", message: "loop", stack: "Error: loop" });
-  assert.equal(lines.length, 101);
-  assert.match(lines[100], /not logged/);
+  for (let i = 0; i < 150; i++) handlers.get("error-reports:capture")({ sender: owner, senderFrame: frame }, 1, { name: "Error".repeat(100000), message: "loop", stack: "Error: loop" });
+  assert.equal(lines.length, 100);
+  assert.match(lines[99], /not logged/);
+  for (const line of lines) assert.ok(line.length <= 12000, String(line.length));
 });
 
 test("main wires renderer error lines into the local log", () => {
   assert.match(source("./main.mjs"), /registerErrorReportIpc\(ipcMain, errorReports, [^\n]*\{ log: slog, build: [^\n]*\}\);/);
+});
+
+test("renderer reports keep only built-in error names and frames in chunks this build ships", async (t) => {
+  const { registerErrorReportIpc } = await import("./error-report-capture.mjs");
+  const f = await fixture(t);
+  const { frame, owner } = trustedOwner();
+  const handlers = new Map();
+  const inputs = [];
+  const reports = { capture: (input) => { inputs.push(input); f.reporter.capture(input); } };
+  registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, reports, () => owner, () => "http://127.0.0.1:9311", { chunks: CHUNKS });
+  f.reporter.setConsent(true);
+  const capture = (name, url) => handlers.get("error-reports:capture")({ sender: owner, senderFrame: frame }, 1, { name, message: "x", stack: `${name}: x\n    at render (${url}:1:2)` });
+  class DiaryError extends Error {}
+  DiaryError.prototype.name = "MinsuDiaryError";
+  const names = [new DiaryError("x").name, "SecretPlanException", "C:\\Users\\minsu\\SecretError", privateText[5], "Error: 민수"];
+  for (const name of names) capture(name, "http://127.0.0.1:9311/assets/index-AbC_12.js");
+  const urls = ["blob:http://127.0.0.1:9311/index-AbC_12.js", "blob:http://127.0.0.1:9311/3f0c5a1e-4b2d-4c3e-9f1a-2b3c4d5e6f70", "http://127.0.0.1:9311/assets/minsu-diary.js", "http://127.0.0.1:9311/minsu/index-AbC_12.js", "file:///C:/Users/minsu/index-AbC_12.js", "data:text/javascript,index-AbC_12.js", "chrome-extension://abcdef/assets/index-AbC_12.js", "https://evil.test/assets/index-AbC_12.js"];
+  for (const url of urls) capture("TypeError", url);
+  for (const name of ["TypeError", "AbortError", "DOMException", "NotAllowedError"]) capture(name, "http://127.0.0.1:9311/assets/vendor-Xy.js");
+  assert.deepEqual(inputs.map((input) => input.frame), [...names.map(() => "index-AbC_12.js:1:2"), ...urls.map(() => ""), ...Array(4).fill("vendor-Xy.js:1:2")]);
+  f.reporter.stop();
+  assert.deepEqual(f.queue().records.map(({ report }) => [report.errorName, report.frame, report.count]), [["", "index-AbC_12.js:1:2", names.length], ["TypeError", "", urls.length], ["TypeError", "vendor-Xy.js:1:2", 1], ["AbortError", "vendor-Xy.js:1:2", 1], ["DOMException", "vendor-Xy.js:1:2", 1], ["NotAllowedError", "vendor-Xy.js:1:2", 1]]);
+  const reopened = f.open();
+  for (let i = 0; i < 5; i++) await reopened.flush();
+  assert.equal(f.received.length, 5);
+  const bytes = JSON.stringify(f.received);
+  for (const text of ["Minsu", "minsu", "SecretPlan", privateText[5], "민수", "blob", "3f0c5a1e", "evil.test", "abcdef"]) assert.equal(bytes.includes(text), false, text);
+});
+
+test("a hand-written queue entry with a crafted error name or frame never sends", async (t) => {
+  const f = await fixture(t);
+  f.reporter.setConsent(true);
+  f.reporter.capture({ ...failure, errorName: "TypeError", frame: "index-AbC_12.js:1:2" });
+  f.reporter.stop();
+  const [record] = f.queue().records;
+  assert.deepEqual([record.report.errorName, record.report.frame], ["TypeError", "index-AbC_12.js:1:2"]);
+  const crafted = [{ errorName: "MinsuDiaryError" }, { errorName: "SecretPlanException" }, { frame: "minsu-diary.js:1:2" }, { frame: "secret_plan.mjs:3:4" }];
+  const records = crafted.map((patch, i) => ({ ...record, report: { ...record.report, ...patch, reportId: String(i).repeat(32) } }));
+  fs.writeFileSync(path.join(f.dir, "error-report-queue.json"), JSON.stringify({ records: [...records, record] }));
+  const reopened = f.open();
+  await reopened.flush();
+  await reopened.flush();
+  assert.deepEqual(f.received.map((request) => JSON.parse(request.body).event_id), [record.report.reportId]);
+});
+
+test("Export Diagnostics leaves out renderer error lines and keeps the rest of the log", async () => {
+  const { registerErrorReportIpc } = await import("./error-report-capture.mjs");
+  const { buildDiagnosticsReport } = await import("./diagnostics.mjs");
+  const { frame, owner } = trustedOwner();
+  const handlers = new Map();
+  const lines = ["[2026-11-28T00:00:00.000Z] harness ready port=8799"];
+  registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, { capture() {} }, () => owner, () => "http://127.0.0.1:9311", { log: (line) => lines.push(`[2026-11-28T00:00:01.000Z] ${line}`), build: "1.0.212", chunks: CHUNKS });
+  const capture = (site, detail) => handlers.get("error-reports:capture")({ sender: owner, senderFrame: frame }, site, detail);
+  capture(1, { name: "TypeError", message: privateText[5], stack: `TypeError: ${privateText[5]}\n    at http://127.0.0.1:9311/assets/index-AbC_12.js:1:2` });
+  capture(2, { name: "", message: privateText[2], stack: "" });
+  assert.equal(lines.length, 3);
+  const report = buildDiagnosticsReport({ logTail: lines.join("\n") });
+  assert.ok(report.includes("harness ready port=8799"));
+  for (const text of [privateText[5], privateText[2], "renderer error", "renderer rejection"]) assert.equal(report.includes(text), false, text);
+});
+
+test("shipped chunks are the JavaScript files in the packaged UI's assets folder", async (t) => {
+  const { shippedChunks } = await import("./error-report-capture.mjs");
+  const ui = fs.mkdtempSync(path.join(scratch, "ui-"));
+  t.after(() => fs.rmSync(ui, { recursive: true, force: true }));
+  assert.deepEqual([...shippedChunks(ui)], []);
+  fs.mkdirSync(path.join(ui, "assets"));
+  for (const name of ["index-AbC_12.js", "pdf.worker-Q1.mjs", "index-AbC_12.css", "font-Z9.woff2"]) fs.writeFileSync(path.join(ui, "assets", name), "");
+  assert.deepEqual([...shippedChunks(ui)].sort(), ["index-AbC_12.js", "pdf.worker-Q1.mjs"]);
+});
+
+test("main checks renderer frames and queued reports against the same shipped chunks", () => {
+  const main = source("./main.mjs");
+  assert.match(main, /const rendererChunks = app\.isPackaged \? shippedChunks\(path\.join\(process\.resourcesPath, "ui"\)\) : new Set\(\);/);
+  assert.match(main, /createErrorReports\(\{[^\n]*chunks: rendererChunks \}\);/);
+  assert.match(main, /registerErrorReportIpc\(ipcMain, [^\n]*chunks: rendererChunks \}\);/);
 });

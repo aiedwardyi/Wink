@@ -1,8 +1,11 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { ERROR_SITES } from "../shared/error-report.mjs";
 import { trustedTerminalSender } from "./terminal-host.mjs";
 
 const LOG_LINES = 100;
+const LINE_CHARS = 12_000;
 // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Renderer error detail crosses the IPC boundary.
 const text = (value) => typeof value === "string" ? value : "";
 
@@ -12,19 +15,29 @@ function framesOf({ name, message, stack }) {
   return stack.startsWith(header) ? stack.slice(header.length) : null;
 }
 
-export function rendererFrame(error, origin) {
+export function shippedChunks(uiDir) {
+  try {
+    return new Set(fs.readdirSync(path.join(uiDir, "assets")).filter((name) => /\.m?js$/.test(name)));
+  } catch {
+    return new Set();
+  }
+}
+
+export function rendererFrame(error, origin, chunks) {
   for (const line of (framesOf(error) ?? "").split("\n")) {
     const match = /^\s+at (?:.*\()?(\S+):(\d+):(\d+)\)?$/.exec(line);
     if (!match) continue;
     try {
       const url = new URL(match[1]);
-      if (url.origin === origin) return `${url.pathname.split("/").pop()}:${match[2]}:${match[3]}`;
+      const name = url.pathname.split("/").pop();
+      // The whole href, not the origin: a blob: URL shares the page's origin.
+      if (url.href === `${origin}/assets/${name}` && chunks.has(name)) return `${name}:${match[2]}:${match[3]}`;
     } catch {}
   }
   return "";
 }
 
-export function registerErrorReportIpc(ipc, reports, owner, origin, { log = () => {}, build = "", uptime = process.uptime } = {}) {
+export function registerErrorReportIpc(ipc, reports, owner, origin, { log = () => {}, build = "", uptime = process.uptime, chunks = new Set() } = {}) {
   let logged = 0;
   const authorize = (event) => {
     if (!trustedTerminalSender(event, owner(), origin())) throw new Error("Untrusted error report caller");
@@ -35,11 +48,11 @@ export function registerErrorReportIpc(ipc, reports, owner, origin, { log = () =
     if (!trustedTerminalSender(event, owner(), origin())) return;
     if (site !== ERROR_SITES.rendererError && site !== ERROR_SITES.rendererRejection) return;
     const error = { name: text(detail?.name), message: text(detail?.message), stack: text(detail?.stack) };
-    const frame = rendererFrame(error, origin());
-    if (logged < LOG_LINES) {
+    const frame = rendererFrame(error, origin(), chunks);
+    if (logged < LOG_LINES - 1) {
       const stack = (framesOf(error) ?? error.stack).trim();
-      log(`renderer ${site === ERROR_SITES.rendererError ? "error" : "rejection"} build=${build} uptime=${uptime().toFixed(1)}s name=${error.name} frame=${frame} message=${error.message.slice(0, 2000)} stack=${stack.slice(0, 8000)}`.replace(/\s*\n\s*/g, " | "));
-    } else if (logged === LOG_LINES) log("renderer errors past this point are not logged until restart");
+      log(`renderer ${site === ERROR_SITES.rendererError ? "error" : "rejection"} build=${build} uptime=${uptime().toFixed(1)}s name=${error.name} frame=${frame} message=${error.message.slice(0, 2000)} stack=${stack.slice(0, 8000)}`.replace(/\s*\n\s*/g, " | ").slice(0, LINE_CHARS));
+    } else if (logged === LOG_LINES - 1) log("renderer errors past this point are not logged until restart");
     logged += 1;
     reports.capture({ process: "renderer", code: "UNKNOWN_ERROR", site, errorName: error.name, frame });
   });
