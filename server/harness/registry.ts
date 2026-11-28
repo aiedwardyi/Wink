@@ -52,6 +52,20 @@ interface Probe {
   models?: ModelCatalog;
 }
 
+// The last confirmed sign-in: a check that could not tell (a timeout, a missing CLI) never changes it. Cleared with the probe, so a new account starts unconfirmed.
+class Probes extends Map<InstanceId, Probe> {
+  private confirmed = new Map<InstanceId, boolean>();
+  override set(id: InstanceId, probe: Probe) {
+    const { state, authenticated } = probe.snapshot;
+    if (authenticated !== undefined) this.confirmed.set(id, authenticated);
+    else if (state === "available" && this.confirmed.has(id)) probe.snapshot = { ...probe.snapshot, authenticated: this.confirmed.get(id) };
+    return super.set(id, probe);
+  }
+  override delete(id: InstanceId) { this.confirmed.delete(id); return super.delete(id); }
+  override clear() { this.confirmed.clear(); super.clear(); }
+  signedIn(id: InstanceId) { return this.confirmed.get(id); }
+}
+
 const CHECKING: Probe = { snapshot: { state: "checking" }, cliCandidates: [] };
 // Settled: a stopped account offers Sign In instead of waiting on a check that never runs.
 const BLOCKED: Probe = { snapshot: { state: "unavailable", authChecked: true }, cliCandidates: [] };
@@ -115,7 +129,7 @@ export class ProviderRegistry {
   private cliByInstance = new Map<InstanceId, string>();
   private modelRefreshAt = new Map<InstanceId, number>();
   private modelRefreshInFlight = new Map<InstanceId, Promise<void>>();
-  private probed = new Map<InstanceId, Probe>();
+  private probed = new Probes();
   private blockedChecks = new Map<InstanceId, Probe>();
   private probing = new Map<InstanceId, Promise<Probe>>();
   private probedListeners = new Set<(instanceId: InstanceId) => void>();
@@ -327,6 +341,7 @@ export class ProviderRegistry {
   }
   // An account under a check never shows an earlier probe: its sign-in may have changed since.
   private known(id: string) { return this.checkingAccounts.has(id) ? CHECKING : this.blockedChecks.get(id) ?? this.probed.get(id); }
+  signedIn(id: string) { return this.probed.signedIn(id); }
   cliMissing(id: string) { return this.probed.get(id)?.snapshot.cliMissing === true; }
   async retryAccount(id: string) {
     const entry = this.byId.get(id);
@@ -793,6 +808,9 @@ export class ProviderRegistry {
     const snapshot = { ...probe.snapshot };
     delete snapshot.accountIdentity;
     delete snapshot.accountAuthenticated;
+    // Every row shows the last confirmed sign-in, whatever this check found of the CLI.
+    const confirmed = probe === this.probed.get(entry.instanceId) ? this.probed.signedIn(entry.instanceId) : undefined;
+    if (snapshot.authenticated === undefined && confirmed !== undefined) snapshot.authenticated = confirmed;
     if (entry.shadow) {
       return {
         instanceId: entry.instanceId,

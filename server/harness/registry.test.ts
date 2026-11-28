@@ -714,7 +714,7 @@ describe("ProviderRegistry", () => {
 
     registry.get("a")!.snapshot = async () => ({ state: "unavailable", reason: "removed since launch" });
     await registry.describe({ refresh: true });
-    expect((await registry.describeCached())[0].snapshot).toEqual({ state: "unavailable", reason: "removed since launch" });
+    expect((await registry.describeCached())[0].snapshot).toEqual({ state: "unavailable", reason: "removed since launch", authenticated: true });
     registry.get("a")!.snapshot = async () => ({ state: "available", version: "newly installed" });
     await registry.describe({ refresh: true });
     expect((await registry.describeCached())[0].snapshot.version).toBe("newly installed");
