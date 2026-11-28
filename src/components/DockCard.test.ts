@@ -141,6 +141,23 @@ it("springs back from a short slow pull", async () => {
   expect(dock()!.style.translate).toBe("0 0");
 });
 
+it("springs back to rest when a second finger comes down mid-drag", async () => {
+  screen(true);
+  const onDismiss = vi.fn();
+  await render(true, { onDismiss });
+  await pull(dock()!, 80, 200, true);
+  await act(async () => {
+    const event = new Event("touchstart", { bubbles: true, cancelable: true });
+    Object.defineProperties(event, { touches: { value: [{ clientX: 100, clientY: 180 }, { clientX: 200, clientY: 180 }] }, timeStamp: { value: 250 } });
+    dock()!.dispatchEvent(event);
+  });
+  expect(dock()!.style.transition).toBe(`translate ${SWIPE_MOTION_MS}ms ${SWIPE_SPRING}`);
+  expect(dock()!.style.translate).toBe("0 0");
+  await vi.waitFor(() => expect(dock()!.hasAttribute("data-sheet-moving")).toBe(false));
+  expect(dock()!.style.translate).toBe("");
+  expect(onDismiss).not.toHaveBeenCalled();
+});
+
 it("never swipes without onDismiss", async () => {
   screen(true);
   await render(true);

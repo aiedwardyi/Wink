@@ -437,6 +437,8 @@ export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boo
     };
     const onStart = (e: TouchEvent) => {
       if (leaving) return;
+      // a second finger lets go of the drag, so the sheet springs home as a release would take it
+      if (drag?.pulling && e.touches.length > 1) spring(0, clear);
       drag = null;
       const touch = e.touches[0];
       if (e.touches.length !== 1 || !touch || !(e.target instanceof Element)) return;
