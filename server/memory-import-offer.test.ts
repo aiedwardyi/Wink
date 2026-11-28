@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { aboutYouRoutes, aboutYouSources, ABOUT_YOU_MAX_PASTE } from "./about-you.ts";
+import { aboutYouRoutes, aboutYouSources, ABOUT_YOU_MAX_PASTE, declineImport } from "./about-you.ts";
 import { DATA_DIR } from "./config.ts";
 import { importMemoryPins } from "./import-memory-pin.ts";
 import { importMemoryRoute, importMemoryTool, noteSendLocale, type ImportMemoryDeps } from "./memory-import-offer.ts";
@@ -102,6 +102,28 @@ describe("import_memory saves through the Settings path", () => {
     const chat = [typed("hi"), reply("hello"), typed("- Call me Dana.\n- I grow tomatoes.\nSource: ChatGPT")];
     expect((await call({}, chat)).text).toContain("Saved facts:\n- Call me Dana.\n- I grow tomatoes.");
     expect((await call({}, chat)).text).toContain("Settings > Import Memory still works");
+  });
+
+  it("writes nothing when the offer closes while the request body is still arriving", async () => {
+    const chat = [typed(paste)];
+    let open = true;
+    for (const close of [() => declineImport(), () => { open = false; }]) {
+      removeTestData(dir);
+      open = true;
+      const body = new Readable({ read() {} });
+      let raw = "";
+      const res = { writeHead: () => {}, setHeader: () => {}, end: (text: string) => { raw = text; } } as unknown as ServerResponse;
+      const done = importMemoryRoute(Object.assign(body, { headers: {} }) as unknown as IncomingMessage, res, {
+        caller: () => ({ botId: "b1", threadId: "t1" }), ownerChat: () => true, messages: () => chat, open: () => open,
+      });
+      await new Promise((r) => setImmediate(r));
+      close();
+      body.push("{}");
+      body.push(null);
+      await done;
+      expect(JSON.parse(raw).text).toContain("Settings > Import Memory still works");
+      expect(aboutYouSources()).toEqual([]);
+    }
   });
 
   it("lists only the saved facts, never a flagged line", async () => {

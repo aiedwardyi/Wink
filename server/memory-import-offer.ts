@@ -71,9 +71,9 @@ export async function importMemoryRoute(req: IncomingMessage, res: ServerRespons
   if (!source) return json(res, 403, { error: "unknown sender" });
   // a room holds other people's text: only the owner's own chat may write their memory
   if (!deps.ownerChat(source)) return json(res, 403, { error: `${IMPORT_MEMORY_TOOL} works only in the user's own chat with you` });
-  // Settings now, not at turn start: a save or decline there mid-turn closes it
-  if (!deps.open(source) || !offerOpen()) return json(res, 200, { text: CLOSED });
   const body = await readBody(req);
+  // Settings now, not at turn start, and after the body: no await may sit between this check and the write
+  if (!deps.open(source) || !offerOpen()) return json(res, 200, { text: CLOSED });
   if (body?.decline === true) {
     declineImport();
     return json(res, 200, { text: "Saved: no bot offers this again. Settings > Import Memory still works." });
