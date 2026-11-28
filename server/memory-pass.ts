@@ -668,10 +668,6 @@ function questionKey(question: string, held: (key: string) => boolean): string {
   return held(middle) ? `${chars.slice(0, KEY_MAX - 3).join("").trimEnd()}...` : middle;
 }
 
-// what userTyping leaves of answerPrefix: the quote, or nothing once a long quote was cut
-const ANSWER_PREFIX = /^Re: (?:“[^\n]*”)?[ \t]*\n/;
-const tapAnswer = (source: UserLine) => source.text.replace(ANSWER_PREFIX, "").trim();
-
 type CardNote = { key: string; over: string[]; binding: PickBinding; replaces?: string };
 // one message can answer two cards
 const cardLine = (source: UserLine) => `${source.id}\n${source.questionId}`;
@@ -687,7 +683,7 @@ function cardAnswers(sources: UserLine[], noted: Map<string, CardNote>, archived
   const keys = new Map<string, string>();
   return sources.flatMap((source) => {
     const question = source.question?.replace(/\s+/g, " ").trim();
-    const said = tapAnswer(source);
+    const said = source.text.trim();
     // the option replyTurns read off the card itself, else the user's words as typed
     const picked = source.choice ?? said;
     // screened on the value filed too: a letter's option was not in the typed text

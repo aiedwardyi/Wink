@@ -564,6 +564,20 @@ describe("every way to answer a card files it under that card", () => {
     expect(`${prompt}\n`).toContain(`): ${filed}\n`);
   });
 
+  it.each([false, true])("keeps a typed answer opening with its own Re: line whole after restart (earlier card %s)", async (earlier) => {
+    const { ask, send, settle, answeredBy, restarted } = setup();
+    const card = ask("What subject and reply should I send?", []);
+    if (earlier) ask("Which shade should the example use?", ["Blue", "Green"]);
+    const words = "Re: “Friday’s canary”\nWait for my sign-off.";
+    const reply = send(earlier ? `${answerPrefix(card)}${words}` : words);
+    expect(answeredBy(card)).toBe(reply.id);
+    await settle();
+    const { prompt, picks } = await restarted();
+    const filed = words.replace(/\s+/g, " ");
+    expect(picks.map(({ picked, said, questionId }) => [picked, said, questionId])).toEqual([[filed, filed, card.id]]);
+    expect(`${prompt}\n`).toContain(`): ${filed}\n`);
+  });
+
   it.each([
     { intro: "Delivery choices were A) Pickup or B) Courier.", question: "Which material should we order: A) Cedar or B) Balsa?", words: "the second one", filed: "B - Balsa", quoted: false },
     { intro: "Finish: A) Matte or B) Gloss.", question: "Which environment should the preview use?", words: "Staging", filed: "Staging", quoted: false },
