@@ -2,6 +2,21 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.309] - 2026-11-28
+
+### Fixed
+- Muse keeps its chat after a restart.
+- A new chat's 4th message answers faster.
+- When you say you're done, the bot picks the waiting task back up.
+- Videos in group chats play in place.
+- On the phone, a swipe down closes the call settings menu.
+- On the phone, a swipe down closes a question card or task strip, the same as its X.
+- Swiping between chats shows the next chat's latest messages the whole way.
+- Right-click save keeps the picture's file name.
+- Question choices show only when they all fit on one line.
+- Key cards update when a shared key is saved.
+- Grok replies finish a bit sooner.
+
 ## [1.0.308] - 2026-11-28
 
 ### Fixed
