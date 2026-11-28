@@ -150,7 +150,7 @@ export const PROMPT_WORDING: Limits = {
     "next useful action, at most 300 characters": TOKENS,
     "Current blockers, at most 10": TOKENS,
     "At most 300 characters.": TOKENS,
-    "task created, at most 20": TOKENS,
+    "working folder, at most 20": TOKENS,
     "file path, at most 500 characters": TOKENS,
     "few words, at most 80 characters": TOKENS,
     "points to, at most 80 characters": TOKENS,
