@@ -350,6 +350,7 @@ import { createMemoryPass } from "./memory-pass.ts";
 import { createMemorySleep } from "./memory-sleep.ts";
 import { createDreamLive } from "./dream-live.ts";
 import { aboutYouPrompt, aboutYouRoutes } from "./about-you.ts";
+import { importMemoryPins } from "./import-memory-pin.ts";
 import { importMemoryRoute, importMemoryTool } from "./memory-import-offer.ts";
 import { goalRoute } from "./goal-route.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
@@ -707,6 +708,7 @@ googleAccount.onIdToken(googlePhotoChanged);
  * is high-entropy and loopback-only, so a timing oracle is a long shot —
  * but the compare costs nothing to make safe. */
 const commsCallers = new CommsCallers();
+const importPins = importMemoryPins();
 function authorizedComms(header: string | string[] | undefined, path: string): boolean {
   return commsCallers.allows(header, path, bootToken);
 }
@@ -5951,7 +5953,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   };
   const reactionsSeen = userTurnReactionKeys(turnOpts);
   const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
-    ? importMemoryTool(activeMessages)
+    ? importPins.forTurn(threadId, instanceId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, importMemoryTool(activeMessages))
     : false;
   const currentPrompt = [composeUserTurnPrompt(text, turnOpts), ...folded].join("\n\n");
   let { notes: paneNotes, newestId: newestPaneNoteId, ids: paneNoteIds, tokens: paneTokens } = paneNotesForTurn(
@@ -8767,6 +8769,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           caller: (header) => commsCallers.resolve(header),
           ownerChat: ({ botId, threadId }) => { const bot = store.bot(botId); return Boolean(bot && ownerChats(bot, notOwnerChats()).includes(threadId)); },
           messages: (threadId) => store.activePath(threadId),
+          open: (threadId) => importPins.open(threadId),
         });
         for (const bot of store.bots) void memoryLookup.refresh(bot.id);
         return;

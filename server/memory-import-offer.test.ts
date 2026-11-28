@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { aboutYouRoutes, aboutYouSources, ABOUT_YOU_MAX_PASTE } from "./about-you.ts";
 import { DATA_DIR } from "./config.ts";
+import { importMemoryPins } from "./import-memory-pin.ts";
 import { importMemoryRoute, importMemoryTool, noteSendLocale, type ImportMemoryDeps } from "./memory-import-offer.ts";
 import type { Message } from "./store.ts";
 import { en } from "../src/lib/i18n-catalog.ts";
@@ -16,7 +17,7 @@ const typed = (text: string) => ({ role: "user", kind: "text", text }) as Messag
 const reply = (text: string) => ({ role: "bot", kind: "text", text }) as Message;
 const paste = ["- The user is Dana Park; call her Dana.", "- Speaks Korean and English.", "Source: ChatGPT"].join("\n");
 
-async function call(body: object, chat: Message[], ownerChat = true) {
+async function call(body: object, chat: Message[], ownerChat = true, open: ImportMemoryDeps["open"] = () => true) {
   let status = 0;
   let raw = "";
   const res = { writeHead: (code: number) => { status = code; }, setHeader: () => {}, end: (text: string) => { raw = text; } } as unknown as ServerResponse;
@@ -24,6 +25,7 @@ async function call(body: object, chat: Message[], ownerChat = true) {
     caller: () => ({ botId: "b1", threadId: "t1" }),
     ownerChat: () => ownerChat,
     messages: () => chat,
+    open,
     now: () => new Date(2026, 10, 19).getTime(),
   };
   await importMemoryRoute(Object.assign(Readable.from([JSON.stringify(body)]), { headers: {} }) as unknown as IncomingMessage, res, deps);
@@ -58,6 +60,17 @@ describe("import_memory tool for a new chat", () => {
   it("stays on for the first 3 typed messages only", () => {
     expect(importMemoryTool([typed("hi"), reply("hello"), typed(paste)])).toBe(true);
     expect(importMemoryTool([typed("a"), reply("b"), typed("c"), reply("d"), typed("e"), reply("f"), typed("g")])).toBe(false);
+  });
+
+  it("stays listed for the session that started with it, but saves only in the first 3 typed messages", async () => {
+    const pins = importMemoryPins();
+    const chat = [typed("hi")];
+    expect(pins.forTurn("t1", "claude", undefined, importMemoryTool(chat))).toBe(true);
+    chat.push(reply("hello"), typed("b"), reply("c"), typed("d"), reply("e"), typed(paste));
+    expect(pins.forTurn("t1", "claude", "s1", importMemoryTool(chat))).toBe(true);
+    expect((await call({}, chat, true, pins.open)).text).toContain("Settings > Import Memory still works");
+    expect(existsSync(join(dir, "MEMORY.md"))).toBe(false);
+    expect(pins.forTurn("t1", "claude", undefined, importMemoryTool(chat))).toBe(false);
   });
 
   it("reads only the start of a heavy chat", () => {

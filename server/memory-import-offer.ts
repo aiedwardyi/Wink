@@ -37,6 +37,8 @@ export type ImportMemoryDeps = {
   caller: (header: string | string[] | undefined) => Caller | undefined;
   ownerChat: (caller: Caller) => boolean;
   messages: (threadId: string) => readonly Message[];
+  /** The chat's current turn opened the tool; a session can keep it listed past that. */
+  open: (threadId: string) => boolean;
   now?: () => number;
 };
 
@@ -54,6 +56,8 @@ function pastedAnswer(messages: readonly Message[]): string {
   return latest ?? "";
 }
 
+const CLOSED = "Import Memory saves from a new chat's first few messages only. Tell the user Settings > Import Memory still works.";
+
 // Only a save that added something earns the recap.
 const RECAP = {
   en: "Then tell them what you now know: up to 5 short bullets of the most specific things, fewer if the list has fewer. Use only from the saved facts list, add nothing.",
@@ -65,6 +69,7 @@ export async function importMemoryRoute(req: IncomingMessage, res: ServerRespons
   if (!source) return json(res, 403, { error: "unknown sender" });
   // a room holds other people's text: only the owner's own chat may write their memory
   if (!deps.ownerChat(source)) return json(res, 403, { error: `${IMPORT_MEMORY_TOOL} works only in the user's own chat with you` });
+  if (!deps.open(source.threadId)) return json(res, 200, { text: CLOSED });
   const body = await readBody(req);
   if (body?.decline === true) {
     declineImport();
