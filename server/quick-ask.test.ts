@@ -1296,21 +1296,26 @@ describe("a nudge while the person's question waits", () => {
     expect(h.steer.mock.calls[0]![1]).not.toMatch(/earlier question/);
   });
 
-  it.each(["hello?", "answer me??", "you there?", "sidekick?", "anyone?", "사이드킥 대답해", "sidekick answer", "sidekick answer me?"])("posts nothing for a nudge when nothing waits: %s", async (nudge) => {
-    const h = waiting({ consumed: true }, "fix the build");
-    mainAcks(h);
+  it.each(["hello?", "answer me??", "you there?", "sidekick?", "anyone?", "hey", "are you still there sidekick", "사이드킥 대답해", "sidekick answer", "sidekick answer me?"])("asks the helper a ping itself when nothing waits: %s", async (nudge) => {
+    const h = waiting({ result: { route: "answer", text: "I'm here.", ms: 1 } }, "fix the build");
     const sent = await h.send({ text: nudge });
-    expect(sent.data).toMatchObject({ steered: true });
-    expect(sent.data.quick).toBeUndefined();
-    expect(h.ask).not.toHaveBeenCalled();
-    expect(h.steer.mock.calls[0]![1]).toContain(nudge);
+    expect(sent.data).toMatchObject({ quick: true });
+    await h.settled();
+    expect(h.ask).toHaveBeenCalledOnce();
+    expect(h.ask).toHaveBeenCalledWith(expect.anything(), h.bot.threadId, expect.objectContaining({ text: nudge }));
+    expect(botLines(h)).toEqual(["I'm here."]);
   });
 
   it("takes no earlier nudge for the waiting question", async () => {
-    const h = waiting({ consumed: true }, "fix the build");
+    const h = waiting({ consumed: true, result: { route: "handoff", ms: 1 } }, "fix the build");
     mainAcks(h);
-    for (const nudge of ["hello?", "answer me??", "you there?", "sidekick answer me"]) expect((await h.send({ text: nudge })).data.quick).toBeUndefined();
-    expect(h.ask).not.toHaveBeenCalled();
+    for (const nudge of ["hello?", "answer me??", "you there?"]) {
+      await h.send({ text: nudge });
+      await h.settled();
+    }
+    expect((await h.send({ text: "sidekick answer me" })).data.quick).toBeUndefined();
+    expect(h.ask).toHaveBeenCalledTimes(3);
+    for (const [at, nudge] of ["hello?", "answer me??", "you there?"].entries()) expect(h.ask).toHaveBeenNthCalledWith(at + 1, expect.anything(), h.bot.threadId, expect.objectContaining({ text: nudge }));
   });
 
   it.each(["sidekick answer me", "hello?"])("starts no second helper for a nudge while one answers the waiting question: %s", async (second) => {
