@@ -3081,8 +3081,9 @@ function stampShownAsks(threadId: string, sent: string): void {
   const now = Date.now();
   const more = sent.split("\n").filter((line) => line.includes(MORE_PROMISES)).join(" ");
   const left = record?.asks?.filter((ask) => ask.shown === 0 && (sent.includes(`- ${ask.id} `) || new RegExp(`\\b${ask.id}\\b`).test(more))).map((ask) => ask.id) ?? [];
-  const ids = [...(record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) ?? [] : []), ...left, ...shownVerdicts(record?.asks, now, sent)];
-  if (record && ids.length) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => ids.includes(ask.id) ? { ...ask, shown: now } : ask) });
+  const ids = [...(record && sent.includes(ASKS_LIST) ? rotatedAsks(record.asks, now) ?? [] : []), ...left, ...shownVerdicts(record?.asks, sent)];
+  const stamped = new Set(ids);
+  if (record && ids.length) persistTaskPacket({ ...record, asks: record.asks!.map((ask) => stamped.has(ask.id) ? { ...ask, shown: now } : ask) });
 }
 
 // a close saves once the turn that showed its line landed, and never over the bot's own edit in that turn
@@ -7464,7 +7465,6 @@ async function runClaimedGroupMemberTurn(
     ...memberClosedAskNotes(store.activePath(threadId), bot.id),
     ...closes.notes(Boolean(prepared.compacted && durableTaskRecordText)),
   ].filter((value) => value !== null).join("\n\n");
-  stampShownAsks(threadId, roomContext);
   // One turn per bot at a time, across BOTH engines. Without this a bot
   // could run its 1:1 turn and a room turn concurrently, creating two provider
   // processes, interleaved token spend, and an interrupt that only ever
@@ -7707,6 +7707,7 @@ async function runClaimedGroupMemberTurn(
         bindInterruptedTurn(threadId, started.turnId, turnKey, epoch);
         askPrs.closing(threadId, started.turnId ?? "", closes.ids);
         markMailRead(store, threadId, roomMail, started.turnId ?? "");
+        stampShownAsks(threadId, roomContext);
         accountNote.commit();
         releaseStarting();
         boardTurnStarted(bot.id, threadId, started.turnId);

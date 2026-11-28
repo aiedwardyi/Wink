@@ -555,6 +555,13 @@ describe("a closing turn in index.ts", () => {
     expect(source.lastIndexOf("store.markReactionsDelivered(bot.id, threadId, reactionsSeen);", stamp)).toBeGreaterThan(source.indexOf("return live.adapter.sendTurn({"));
   });
 
+  it("stamps a room turn's rows shown only once an engine took the prompt", () => {
+    const source = index();
+    const stamp = source.indexOf("stampShownAsks(threadId, roomContext);");
+    expect(source.split("stampShownAsks(threadId, roomContext);")).toHaveLength(2);
+    expect(source.lastIndexOf("markMailRead(store, threadId, roomMail, started.turnId", stamp)).toBeGreaterThan(source.indexOf("return live.adapter.sendTurn(guestTurnInput({"));
+  });
+
   it("keeps the last turn's held question until an engine accepted the next prompt, so a failed start, even a late one, still carries it to a switch", () => {
     const source = index();
     const start = source.slice(source.indexOf("async function startClaimedTurn("), source.indexOf("async function startClaimedTurn(") + 60_000);

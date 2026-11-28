@@ -205,12 +205,47 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
     expect(listed(asksNudge(stale, NOW, "thanks"))).toHaveLength(5);
   });
 
-  it("names a stale waiting ask the verdict rows held back, by its words or its ref", () => {
+  it("names a stale waiting ask the verdict rows held back, by its words or its ref, without a fourth verdict", () => {
     const many = Array.from({ length: 30 }, (_, index) => ask(index + 1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY + index }));
     many[3] = ask(4, { ask: "Set up the amber satellite", status: "waiting-for-user", ref: "zircon observatory", changedAt: NOW - 4 * DAY + 3 });
+    const plain = Array.from({ length: 5 }, (_, index) => ask(index + 31, { changedAt: NOW - 4 * DAY }));
     for (const text of ["amber satellite done", "zircon observatory done"]) {
-      expect(listed(asksNudge(many, NOW, text, [], true)), text).toContain("- A4 waiting-for-user needs verdict 11-12: Set up the amber satellite (zircon observatory)");
+      for (const asks of [many, [...many, ...plain]]) {
+        const rows = listed(asksNudge(asks, NOW, text, [], true));
+        expect(rows, text).toContain("- A4 waiting-for-user 11-12: Set up the amber satellite (zircon observatory)");
+        expect(rows.filter((line) => line.includes("waiting-for-user needs verdict")).map((line) => line.split(" ")[1]), text).toEqual(["A1", "A2", "A3"]);
+        expect(rows.filter((line) => line.includes("open needs verdict")), text).toHaveLength(asks.length - many.length);
+      }
     }
+  });
+
+  it("names an ask the verdict budget left out", () => {
+    const old = Array.from({ length: 550 }, (_, index) => ask(index + 1, { ask: "가".repeat(80), changedAt: NOW - 4 * DAY }));
+    const waits = [551, 552, 553, 554].map((id) => ask(id, { ask: id === 551 ? "Set up the amber satellite" : `wait ${id}`, status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY }));
+    const sent = asksNudge([...old, ...waits], NOW, "amber satellite done", [], true);
+    expect(sent).not.toContain("- A551 waiting-for-user needs verdict");
+    expect(listed(sent)).toContain("- A551 waiting-for-user 11-12: Set up the amber satellite (VM ready)");
+  });
+
+  it("lets a ref add a name match but never take away a title's", () => {
+    const asks = [ask(1, { ask: "Set up the amber satellite" }), ...[2, 3, 4].map((id) => ask(id, { ref: "amber satellite" }))];
+    expect(listed(asksNudge(asks, NOW, "amber satellite done"))).toEqual(["- A1 open 11-12: Set up the amber satellite"]);
+  });
+
+  it("keeps question cards and promises moved to waiting out of the waiting rows", () => {
+    const vm = ask(1, { ask: "Set up the teacher VM", status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 2 * DAY });
+    const moved = [2, 3, 4].map((id) => ask(id, { status: "waiting-for-user", kind: id === 4 ? "promise" : "question" }));
+    expect(asksNudge([vm, ...moved], NOW, "done", [], true).split("\n")).toEqual([
+      "[Wink asks waiting on the user - 1 open, newest first. If this message finishes or answers one, update it by ID and go on; otherwise leave them alone and do not nag.]",
+      "- A1 waiting-for-user 11-12: Set up the teacher VM (VM ready)",
+    ]);
+  });
+
+  it("picks the rows once per turn, so 20,000 waiting asks render quickly", () => {
+    const asks = Array.from({ length: 20_000 }, (_, index) => ask(index + 1, { status: "waiting-for-user", ref: "VM ready", changedAt: NOW - 4 * DAY + index }));
+    const start = performance.now();
+    expect(listed(asksNudge(asks, NOW, "thanks", [], true))).toHaveLength(6);
+    expect(performance.now() - start).toBeLessThan(1_000);
   });
 
   it("moves on to the next stale waiting asks once a turn showed their verdict rows, and brings them back 3 days later", () => {
@@ -221,12 +256,12 @@ it("lists all 221 open asks on an ordinary turn, not the oldest five", () => {
       const now = NOW + turn * HOUR;
       const sent = asksNudge(asks, now, text, [], true);
       turns.push(verdicts(sent));
-      const ids = shownVerdicts(asks, now, sent);
+      const ids = shownVerdicts(asks, sent);
       asks = asks.map((item) => ids.includes(item.id) ? { ...item, shown: now } : item);
     }
     expect(turns).toEqual([["A1", "A2", "A3"], ["A4", "A5", "A6"], ["A7", "A8", "A9"], ["A10", "A11", "A12"], ["A13", "A14", "A15"]]);
     expect(verdicts(asksNudge(asks, NOW + ASK_VERDICT_MS, "thanks", [], true))).toEqual(["A1", "A2", "A3"]);
-    expect(shownVerdicts(asks, NOW, asksNudge(asks, NOW, "done", [], true)), "never the passive rows A30, A29, A28").toEqual(["A16", "A17", "A18"]);
+    expect(shownVerdicts(asks, asksNudge(asks, NOW, "done", [], true)), "never the passive rows A30, A29, A28").toEqual(["A16", "A17", "A18"]);
   });
 
   it("keeps a building ask with a ref and a parked one out of a typed reply", () => {
