@@ -424,9 +424,15 @@ describe("harness playbook", () => {
     );
   });
 
+  it("shows before/after pictures only when the view changed", () => {
+    expect(loadHarnessPlaybook().replace(/\s+/g, " ")).toContain(
+      'View every picture yourself before showing the user. Show a before/after pair only when the view changed; for an unchanged view write one line, "unchanged: <view>", instead of a pair.',
+    );
+  });
+
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(17702);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(17895);
   });
 
   it("fills the worktree path from the configured root", () => {

@@ -216,6 +216,9 @@ When a worker reports done, check its work yourself before anything moves:
 4. No full test suite or app server unless the repo's instructions allow it.
 5. Read the diff for the acceptance items. A report is a claim; proof is test output, pictures, clips. An
    unmet item fails even when the worker says it was already like that.
+   View every picture yourself before showing the user. Show a before/after pair
+   only when the view changed; for an unchanged view write one line, "unchanged:
+   <view>", instead of a pair.
 6. Run new regression tests on the base commit first. They must fail with the
    exact old bug.
 7. Check numeric claims yourself. Run old and new back to back so timeouts
