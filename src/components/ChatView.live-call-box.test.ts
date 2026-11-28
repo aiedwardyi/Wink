@@ -315,6 +315,7 @@ describe("live call in the message box", () => {
       expect(gear.compareDocumentPosition(button(frame(host), "End")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       await act(async () => gear.click());
       const small = document.querySelector<HTMLElement>("[data-call-settings-menu]")!;
+      await act(async () => small.querySelector<HTMLElement>("[data-call-more]")!.click());
       expect(small.querySelector('input[aria-label="Speed"]')).not.toBeNull();
       expect(frame(host).querySelector("[data-call-box]")).not.toBeNull();
       await act(async () => small.click());
@@ -423,6 +424,7 @@ describe("live call in the message box", () => {
       expect(frame(first.host).querySelector("[data-call-caption]")?.textContent).toBe("AtlasThe one where sign-in loops back?");
       expect(first.host.querySelector<HTMLTextAreaElement>("textarea[data-orbit-composer]")?.value).toBe("also check the reset email");
       await act(async () => button(frame(first.host), "Call settings")!.click());
+      await act(async () => document.querySelector<HTMLElement>("[data-call-more]")!.click());
       const toggle = button(document.body, "Captions")!;
       expect(toggle.getAttribute("role")).toBe("switch");
       expect(toggle.getAttribute("aria-checked")).toBe("true");

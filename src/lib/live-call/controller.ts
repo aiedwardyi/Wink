@@ -487,7 +487,7 @@ export class LiveCall {
   // Only a session that finished starting is replaced; one still connecting picks this up from its ready.
   private restyle() {
     if (!this.live || !this.prefs || !this.connected || this.ended) return;
-    const want = [this.prefs.voice ?? this.live.voice, this.prefs.style ?? "normal", this.prefs.language ?? (activeLocale() === "ko" ? "ko" : "en")].join();
+    const want = [this.prefs.voice ?? this.live.voice, "normal", this.prefs.language ?? (activeLocale() === "ko" ? "ko" : "en")].join();
     if (want === (this.picks ?? Object.values(this.live).join())) return;
     this.picks = want;
     void this.swap();

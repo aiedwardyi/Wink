@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Pause, Play, Settings } from "lucide-react";
+import { ChevronDown, Pause, Play, Settings } from "lucide-react";
 
 import { api, useStore, type Bot, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -9,6 +9,7 @@ import { useActiveCall } from "@/lib/live-call/active";
 import { setCallCaptions, useCallCaptions } from "@/lib/live-call/captions";
 import { voiceLabel } from "@/lib/live-call/voice-label";
 import { CALL_VOLUME, setCallVolume, useCallVolume } from "@/lib/live-call/volume";
+import { MENU_ITEM_HOVER } from "@/lib/menu-style";
 import { hapticTick } from "@/lib/phone-swipe";
 import { markCut } from "@/lib/scroll-cut";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -16,20 +17,22 @@ import { guardMenuTouch, useListMenuDismiss } from "@/lib/use-hold-menu";
 import { usePresence } from "@/lib/use-presence";
 import { useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
-import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallAnswer, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
+import { CALL_SPEED, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallAnswer, type CallPrefs, type LiveVoice } from "../../shared/live-call";
 import { BotAvatar } from "./Avatar";
 import { DetailsSwitch } from "./BotDetailsRows";
+import { Fold } from "./Fold";
 import { MENU_CLASS } from "./MessageMenu";
 import { SegmentedRow } from "./Segmented";
 import { AccountPicker } from "./UsageAccounts";
 
-const LABEL = "shrink-0 text-[14px] text-ink";
-const PILL = "rounded-[max(0px,calc(var(--radius-lg)_-_3px))]";
+const LABEL = "shrink-0 text-[14px] font-medium text-ink";
+const FEATURED_VOICES: readonly LiveVoice[] = LIVE_VOICES.slice(0, 3);
+const MORE_VOICES: readonly LiveVoice[] = LIVE_VOICES.slice(3);
 const SLIDER = cn(
   "h-8 min-w-0 flex-1 cursor-pointer appearance-none bg-transparent focus-visible:outline-none",
   "[&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-[linear-gradient(to_right,var(--color-accent)_var(--fill),color-mix(in_srgb,var(--color-ink)_14%,transparent)_var(--fill))]",
-  "[&::-webkit-slider-thumb]:-mt-1.5 [&::-webkit-slider-thumb]:size-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-md focus-visible:[&::-webkit-slider-thumb]:ring-2 focus-visible:[&::-webkit-slider-thumb]:ring-focus",
-  "[&::-moz-range-track]:h-2 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-ink/15 [&::-moz-range-progress]:h-2 [&::-moz-range-progress]:rounded-full [&::-moz-range-progress]:bg-accent [&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white",
+  "[&::-webkit-slider-thumb]:-mt-1.5 [&::-webkit-slider-thumb]:size-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:ring-1 [&::-webkit-slider-thumb]:ring-ink/15 focus-visible:[&::-webkit-slider-thumb]:ring-2 focus-visible:[&::-webkit-slider-thumb]:ring-focus",
+  "[&::-moz-range-track]:h-2 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-ink/15 [&::-moz-range-progress]:h-2 [&::-moz-range-progress]:rounded-full [&::-moz-range-progress]:bg-accent [&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:ring-1 [&::-moz-range-thumb]:ring-ink/15",
 );
 const LANGUAGES = [{ id: "en", name: "English" }, { id: "ko", name: "한국어" }] as const;
 
@@ -39,14 +42,13 @@ function useCallPrefs(bot: Bot) {
   return {
     voice: call?.voice ?? state.config?.liveCall?.voice ?? LIVE_VOICE,
     speed: call?.speed ?? 1,
-    style: call?.style ?? "normal",
     language: call?.language,
     set: (change: CallPrefs) => dispatch({ type: "updateBot", botId: bot.id, patch: { call: { ...call, ...change } } }),
   };
 }
 
 /** No preview during a call: it would play into the open mic, and a pick is heard on the next words anyway. */
-function usePreview(language: "en" | "ko", speed: number, style: CallStyle): { playing: LiveVoice | null; preview?: (name: LiveVoice) => void } {
+function usePreview(language: "en" | "ko", speed: number): { playing: LiveVoice | null; preview?: (name: LiveVoice) => void } {
   const onCall = Boolean(useActiveCall());
   const [playing, setPlaying] = useState<LiveVoice | null>(null);
   const clip = useRef<HTMLAudioElement | null>(null);
@@ -59,7 +61,7 @@ function usePreview(language: "en" | "ko", speed: number, style: CallStyle): { p
   useEffect(() => () => clip.current?.pause(), []);
   // the call's own level and pitch-kept speed, so the sample sounds like the call
   const level = OUTPUT_GAIN * useCallVolume();
-  const pace = callPace({ speed, style });
+  const pace = callPace({ speed });
   useEffect(() => {
     if (!clip.current) return;
     clip.current.volume = level;
@@ -135,9 +137,49 @@ function CallAnswerRow() {
   );
 }
 
-/** Every voice as a card with its vibe and a preview; three rows show, and the cut-off fourth row and fade say the rest scroll. */
-export function VoiceGrid({ label, value, onPick, playing, preview, badge }: {
+function VoiceCard({ id, picked, compact, onPick, playing, preview, badge }: {
+  id: LiveVoice;
+  picked: boolean;
+  compact?: boolean;
+  onPick: (voice: LiveVoice) => void;
+  playing: LiveVoice | null;
+  preview?: (voice: LiveVoice) => void;
+  badge?: ReactNode;
+}) {
+  const { t } = useI18n();
+  const shown = voiceLabel(t, id);
+  return (
+    <div data-call-voice={id} className={cn("relative flex items-center rounded-lg ring-1", picked ? "bg-raised-hover ring-ink-secondary/40" : "ring-hairline hover:bg-raised-hover/50")}>
+      <button type="button" role="radio" aria-checked={picked} onClick={() => onPick(id)}
+        className={cn(
+          "flex w-full min-w-0 items-center rounded-lg text-left",
+          compact ? "min-h-9 gap-1.5 px-2 py-1.5 max-md:min-h-10" : "gap-2 px-2.5 py-2",
+          preview && (compact ? "pr-8" : "pr-9"),
+        )}>
+        {picked && badge && <span aria-hidden className="shrink-0">{badge}</span>}
+        {compact ? (
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{shown}</span>
+        ) : (
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="max-w-full truncate text-[13px] font-medium text-ink">{shown}</span>
+            <span className="max-w-full truncate text-[11.5px] text-ink-secondary">{t(`callVoice.vibe.${id}`)}</span>
+          </span>
+        )}
+      </button>
+      {preview && <button type="button" aria-label={t(playing === id ? "callVoice.stop" : "callVoice.play", { name: shown })} aria-pressed={playing === id}
+        onClick={() => preview(id)}
+        className="absolute right-1.5 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-full bg-ink/10 text-ink-secondary hover:text-ink max-md:size-7">
+        {playing === id ? <Pause size={11} aria-hidden className="fill-current" /> : <Play size={11} aria-hidden className="fill-current" />}
+      </button>}
+    </div>
+  );
+}
+
+/** Scrollable grid of voice cards with bottom fade while more voices sit below. */
+export function VoiceGrid({ label, voices = LIVE_VOICES, embedded, value, onPick, playing, preview, badge }: {
   label?: string;
+  voices?: readonly LiveVoice[];
+  embedded?: boolean;
   value: LiveVoice;
   onPick: (voice: LiveVoice) => void;
   playing: LiveVoice | null;
@@ -156,69 +198,81 @@ export function VoiceGrid({ label, value, onPick, playing, preview, badge }: {
     return () => watch.disconnect();
   }, []);
   return (
-    <div ref={grid} role="radiogroup" aria-label={label ?? t("callMenu.voice")} data-call-voices="" onScroll={(event) => markCut(event.currentTarget)}
-      className="-mx-1 mt-1 grid max-h-80 grid-cols-2 gap-2 overflow-y-auto overscroll-contain p-1 data-[cut]:[mask-image:linear-gradient(to_bottom,black_calc(100%-3rem),transparent)]">
-      {LIVE_VOICES.map((id) => {
-        const shown = voiceLabel(t, id);
-        const picked = id === value;
-        return (
-          <div key={id} data-call-voice={id} className={cn("relative rounded-xl ring-1", picked ? "bg-raised-hover ring-ink-secondary/40" : "ring-hairline hover:bg-raised-hover/50")}>
-            <button type="button" role="radio" aria-checked={picked} onClick={() => onPick(id)}
-              className="flex w-full min-w-0 flex-col items-start rounded-xl px-3 pb-2.5 pt-10 text-left">
-              <span className="max-w-full truncate text-[14px] font-medium text-ink">{shown}</span>
-              <span className="max-w-full truncate text-[12px] text-ink-secondary">{t(`callVoice.vibe.${id}`)}</span>
-            </button>
-            {picked && badge && <span aria-hidden className="pointer-events-none absolute left-3 top-2.5">{badge}</span>}
-            {preview && <button type="button" aria-label={t(playing === id ? "callVoice.stop" : "callVoice.play", { name: shown })} aria-pressed={playing === id}
-              onClick={() => preview(id)}
-              className="absolute right-2 top-2 grid size-7 place-items-center rounded-full bg-ink/10 text-ink-secondary hover:text-ink max-md:size-8">
-              {playing === id ? <Pause size={12} aria-hidden className="fill-current" /> : <Play size={12} aria-hidden className="fill-current" />}
-            </button>}
-          </div>
-        );
-      })}
+    <div ref={grid} role={embedded ? undefined : "radiogroup"} aria-label={embedded ? undefined : label ?? t("callMenu.voice")} data-call-voices="" onScroll={(event) => markCut(event.currentTarget)}
+      className="-mx-1 mt-1.5 grid max-h-52 grid-cols-2 gap-1.5 overflow-y-auto overscroll-contain p-1 data-[cut]:[mask-image:linear-gradient(to_bottom,black_calc(100%-2.5rem),transparent)]">
+      {voices.map((id) => (
+        <VoiceCard key={id} id={id} picked={id === value} onPick={onPick} playing={playing} preview={preview} badge={badge} />
+      ))}
     </div>
   );
 }
 
-/** The per-bot call panel: speed, volume (this device), style, voice and language. */
+/** Compact call panel: volume, answered by, and featured voices one tap away; all voices and extra controls fold open on demand. */
 export function CallSettings({ bot, language = true, className }: { bot: Bot; language?: boolean; className?: string }) {
   const { t, locale } = useI18n();
   const prefs = useCallPrefs(bot);
   const volume = useCallVolume();
   const captions = useCallCaptions();
-  const { playing, preview } = usePreview(prefs.language ?? (locale === "ko" ? "ko" : "en"), prefs.speed, prefs.style);
+  const { playing, preview } = usePreview(prefs.language ?? (locale === "ko" ? "ko" : "en"), prefs.speed);
+  const [voicesOpen, setVoicesOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const voicesId = useId();
+  const moreId = useId();
+  const badge = <BotAvatar bot={bot} state="happy" size={16} />;
+  // Keep a non-featured active voice visible while the full list is folded; avoid duplicating it once expanded.
+  const quickVoices = !voicesOpen && !FEATURED_VOICES.includes(prefs.voice)
+    ? [...FEATURED_VOICES, prefs.voice]
+    : FEATURED_VOICES;
   return (
     // tabIndex keeps a press on the panel from focusing the message box under it
-    <div data-call-settings="" tabIndex={-1} className={cn("flex flex-col gap-2 outline-none", className)}>
+    <div data-call-settings="" tabIndex={-1} className={cn("flex flex-col gap-2.5 outline-none", className)}>
       <CallAnswerRow />
-      <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
-        onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
       <Slider label={t("callMenu.volume")} value={volume} range={CALL_VOLUME} text={`${Math.round(volume * 100)}%`} onChange={setCallVolume} />
-      <div className="flex items-center justify-between gap-3 max-[379px]:gap-2">
-        <span className={LABEL}>{t("callMenu.style")}</span>
-        <div role="radiogroup" aria-label={t("callMenu.style")} className="flex gap-0.5 rounded-lg bg-inset p-[3px]">
-          {CALL_STYLES.map((style) => (
-            <button key={style} type="button" role="radio" aria-checked={style === prefs.style} onClick={() => prefs.set({ style })}
-              className={cn("px-2 py-0.5 text-[12px] font-medium max-md:min-h-8 max-[379px]:px-1.5", PILL,
-                style === prefs.style ? "bg-raised text-ink shadow-sm ring-1 ring-hairline/60" : "text-ink-secondary hover:text-ink")}>
-              {t(`callMenu.style.${style}`)}
-            </button>
-          ))}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className={LABEL}>{t("callMenu.voice")}</span>
+          <button type="button" data-call-voice-toggle="" aria-expanded={voicesOpen} aria-controls={voicesId} aria-label={t("callMenu.allVoices")}
+            onClick={() => setVoicesOpen((open) => !open)}
+            className={cn("-mr-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12.5px] font-medium text-ink-secondary hover:text-ink max-md:min-h-8", MENU_ITEM_HOVER)}>
+            <span>{t("callMenu.all")}</span>
+            <ChevronDown size={13} aria-hidden className={cn("shrink-0 transition-transform motion-reduce:transition-none", voicesOpen && "rotate-180")} />
+          </button>
         </div>
-        <div className="flex items-center gap-2 max-[379px]:gap-1.5">
-          <span className={LABEL}>{t("callMenu.captions")}</span>
-          <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
+        <div role="radiogroup" aria-label={t("callMenu.voice")} className="flex flex-col">
+          <div className={cn("grid gap-1.5", quickVoices.length === 4 ? "grid-cols-2" : "grid-cols-3")}>
+            {quickVoices.map((id) => (
+              <VoiceCard key={id} id={id} compact picked={id === prefs.voice} onPick={(voice) => prefs.set({ voice })} playing={playing} preview={preview} badge={badge} />
+            ))}
+          </div>
+          <Fold open={voicesOpen} id={voicesId}>
+            <VoiceGrid voices={MORE_VOICES} embedded value={prefs.voice} onPick={(voice) => prefs.set({ voice })} playing={playing} preview={preview} badge={badge} />
+          </Fold>
         </div>
       </div>
-      <VoiceGrid value={prefs.voice} onPick={(voice) => prefs.set({ voice })} playing={playing} preview={preview}
-        badge={<BotAvatar bot={bot} state="happy" size={20} />} />
-      {language && (
-        <div className="flex items-center justify-between gap-3">
-          <span className={LABEL}>{t("callMenu.language")}</span>
-          <CallLanguage bot={bot} />
-        </div>
-      )}
+      <div className="border-t border-hairline/40 pt-1">
+        <button type="button" data-call-more="" aria-expanded={moreOpen} aria-controls={moreId}
+          onClick={() => setMoreOpen((open) => !open)}
+          className={cn("-mx-1.5 flex w-[calc(100%+0.75rem)] items-center justify-between rounded-lg px-1.5 py-1.5 text-left max-md:min-h-10", MENU_ITEM_HOVER)}>
+          <span className={cn("text-[13.5px] font-medium", moreOpen ? "text-ink" : "text-ink-secondary")}>{t("callMenu.more")}</span>
+          <ChevronDown size={15} aria-hidden className={cn("shrink-0 text-ink-secondary transition-transform motion-reduce:transition-none", moreOpen && "rotate-180")} />
+        </button>
+        <Fold open={moreOpen} id={moreId}>
+          <div className="flex flex-col gap-2.5 pt-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className={LABEL}>{t("callMenu.captions")}</span>
+              <DetailsSwitch on={captions} label={t("callMenu.captions")} onToggle={() => setCallCaptions(!captions)} />
+            </div>
+            <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
+              onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
+            {language && (
+              <div className="flex items-center justify-between gap-3">
+                <span className={LABEL}>{t("callMenu.language")}</span>
+                <CallLanguage bot={bot} />
+              </div>
+            )}
+          </div>
+        </Fold>
+      </div>
     </div>
   );
 }
@@ -259,7 +313,8 @@ export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: R
   useListMenuDismiss(`[data-call-settings-menu], [role="menu"], [data-call-end]${tap ? ", [data-call-tap]" : ""}`, "[data-call-hold]", !at, close);
   useBackLayer(Boolean(at), close);
   const rect = shown.value;
-  const width = Math.min(360, window.innerWidth - 16);
+  const compact = window.innerWidth < 768;
+  const width = Math.min(compact ? 358 : 320, window.innerWidth - 16);
   return (
     <span ref={anchor} data-call-hold="" className="flex select-none [-webkit-touch-callout:none]"
       data-call-tap={tap || undefined}
@@ -299,7 +354,12 @@ export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: R
       {children}
       {shown.mounted && rect && createPortal(
         <div ref={panel} data-call-settings-menu="" role="dialog" aria-label={t("callMenu.open")} data-closing={shown.closing || undefined} inert={shown.closing}
-          style={{ width, left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)), bottom: window.innerHeight - rect.top + 8, maxHeight: rect.top - 16 }}
+          style={{
+            width,
+            left: compact ? Math.max(8, Math.round((window.innerWidth - width) / 2)) : Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
+            bottom: window.innerHeight - rect.top + 8,
+            maxHeight: rect.top - 16,
+          }}
           className={cn(MENU_CLASS, "origin-bottom-right overflow-y-auto p-3")}>
           <CallSettings bot={bot} />
         </div>,
