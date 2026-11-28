@@ -21,7 +21,6 @@ import { computerProxyEnv } from "../container-computer.ts";
 import { guardInput } from "../auto-approve.ts";
 import { describeSpawnFailure, execCli, spawnCli } from "../procs.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
-import { ridePath } from "../image-ride.ts";
 import { captureToolDetail } from "../tool-detail.ts";
 import { startTurnTrace, traceHelperCall, traceRuntimeEvent } from "../turn-timing.ts";
 import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
@@ -1058,10 +1057,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         nativeTurnId = null;
         state.turnRequested = true;
         trace?.delivered(resumeFailed ? "fallback-input" : "turn/start", () => ({ current_input: prompt }));
-        const ride = ridePath(prompt);
         const startedTurn = await request("turn/start", {
           threadId: codexThreadId,
-          input: [{ type: "text", text: prompt }, ...(ride ? [{ type: "localImage", path: ride }] : [])],
+          input: [{ type: "text", text: prompt }, ...(turn.image ? [{ type: "localImage", path: turn.image }] : [])],
           // Spread, not `effort: turn.effort ?? null`. Probed against
           // codex-cli 0.146.0: null is indistinguishable from an absent key
           // — both leave the thread's current effort alone, emitting no

@@ -18,6 +18,8 @@ const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
 // a real 1x1 PNG
 const FIXTURE = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=", "base64");
+// a second, different 1x1 PNG
+const SECOND = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
 let child: ChildProcess;
@@ -60,9 +62,10 @@ const say = async (id: string, text: string) => {
 const sent = (threadId: string) => readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line))
   .filter((line) => line.kind === "sendTurn" && line.input.threadId === threadId).map((line) => line.input.text as string);
 const agentsEnv = () => JSON.parse(readFileSync(claudeDump, "utf8")).mcpConfig.mcpServers.agents.env as Record<string, string>;
-const show = async (botId: string, threadId: string, token: string) => {
-  const shown = await api("POST", "/api/internal/show-image", { fromBotId: botId, fromThreadId: threadId, path: join(folder, "hero.png"), caption: "the new hero" }, { authorization: `Bearer ${token}` });
+const show = async (botId: string, threadId: string, token: string, caption = "the new hero") => {
+  const shown = await api("POST", "/api/internal/show-image", { fromBotId: botId, fromThreadId: threadId, path: join(folder, "hero.png"), caption }, { authorization: `Bearer ${token}` });
   expect(shown.status, JSON.stringify(shown.body)).toBe(201);
+  return shown.body as { url: string };
 };
 const images = (text: string) => {
   const content = claudeUserContent(text, join(home, ".orbit", "attachments"));
@@ -151,6 +154,41 @@ describe("a shown picture rides on the host's next message", () => {
     expect(local).toHaveLength(1);
     expect(sha(readFileSync(local[0].path))).toBe(sha(FIXTURE));
     expect(dirname(local[0].path)).toBe(join(home, ".orbit", "attachments"));
+  }, 60_000);
+
+  it.each([
+    ["a two-line caption", "First line\nSecond line", false],
+    ["the missing project notes notice after it", "one line", true],
+  ])("reaches Codex as a local image with %s", async (_case, caption, notes) => {
+    const bot = await newBot("claude", "claude-fake");
+    await say(bot.id, "make a hero");
+    await show(bot.id, bot.threadId, agentsEnv().OMB_COMMS_TOKEN!, caption);
+    const patch = { modelSelection: { instanceId: "codex", model: "gpt-6.1-sol" }, ...(notes ? { projectNotes: join(folder, "missing-notes.md") } : {}) };
+    expect((await api("PATCH", `/api/bots/${bot.id}`, patch)).status).toBe(200);
+    await say(bot.id, "inspect the drawing");
+    const input = JSON.parse(readFileSync(codexDump, "utf8")).calls.filter((call: any) => call.method === "turn/start").at(-1).params.input;
+    const prompt = input.find((item: any) => item.type === "text").text as string;
+    expect(prompt).toContain("inspect the drawing");
+    if (notes) expect(prompt.lastIndexOf("[Project notes check")).toBeGreaterThan(prompt.lastIndexOf("[The picture this message follows"));
+    const local = input.filter((item: any) => item.type === "localImage");
+    expect(local).toHaveLength(1);
+    expect(sha(readFileSync(local[0].path))).toBe(sha(FIXTURE));
+  }, 60_000);
+
+  it("goes text-only when the newest shown picture is gone, never to the older one", async () => {
+    const bot = await newBot("claude", "claude-fake");
+    await say(bot.id, "draw two drafts");
+    const token = agentsEnv().OMB_COMMS_TOKEN!;
+    await show(bot.id, bot.threadId, token, "first draft");
+    writeFileSync(join(folder, "hero.png"), SECOND);
+    const final = await show(bot.id, bot.threadId, token, "final draft");
+    writeFileSync(join(folder, "hero.png"), FIXTURE);
+    rmSync(join(home, ".orbit", "attachments", final.url.split("/").at(-1)!));
+    await say(bot.id, "describe the final draft");
+    const prompt = sent(bot.threadId).at(-1)!;
+    expect(prompt).toContain("describe the final draft");
+    expect(prompt).not.toContain("[The picture this message follows");
+    expect(images(prompt)).toEqual([]);
   }, 60_000);
 
   it("rides in a room on the host's message, for this bot's own picture", async () => {

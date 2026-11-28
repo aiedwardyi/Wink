@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { ATTACHMENTS_DIR, ensureAttachmentsDir } from "./attachments.ts";
-import { imageRide, imageSize, RIDE_MAX_EDGE, ridePath } from "./image-ride.ts";
+import { prepareModelContext } from "./context-compaction.ts";
+import { imageRide, imageSize, RIDE_MAX_EDGE } from "./image-ride.ts";
+import { inertMentions } from "./replies.ts";
 import type { Message } from "./store.ts";
 import { testHome } from "./testing/test-home.ts";
 
@@ -34,8 +36,9 @@ const row = (fields: Partial<Message>): Message => ({ id: `m${seq++}`, at: Date.
 const host = (text: string, fields: Partial<Message> = {}) => row({ role: "user", kind: "text", text, ...fields });
 const shown = (image: string, fields: Partial<Message> = {}) => row({ kind: "screen", shown: true, image, ...fields });
 const tagPath = (line: string) => /<attached-image path="([^"]+)" \/>$/.exec(line)?.[1];
-const ride = (rows: Message[], extra: Partial<Parameters<typeof imageRide>[0]> = {}) =>
+const rideOf = (rows: Message[], extra: Partial<Parameters<typeof imageRide>[0]> = {}) =>
   imageRide({ rows, current: rows.at(-1)!, botId: "bot-1", roots: [], userName: "Eddie", ...extra });
+const ride = async (rows: Message[], extra: Partial<Parameters<typeof imageRide>[0]> = {}) => (await rideOf(rows, extra)).text;
 
 describe("the picture a host's message follows", () => {
   it("rides as one tag for the image the bot showed since the host last spoke", async () => {
@@ -102,13 +105,13 @@ describe("the picture a host's message follows", () => {
     mkdirSync(join(folder, ".secret"));
     const bytes = png(64, 64);
     for (const path of [join(folder, "shot.png"), join(folder, ".secret", "key.png"), join(outside, "x.png")]) writeFileSync(path, bytes);
-    const linked = async (path: string) => ride([host("go"), row({ text: `Here it is: [shot](<${path}>)` }), host("ok")], { roots: [folder] });
+    const linked = async (path: string) => rideOf([host("go"), row({ text: `Here it is: [shot](<${path}>)` }), host("ok")], { roots: [folder] });
     const line = await linked(join(folder, "shot.png"));
-    expect(line.startsWith("[The picture this message follows: shot.png]\n")).toBe(true);
-    expect(ridePath(line)).not.toBeNull();
-    expect(readFileSync(ridePath(line)!)).toEqual(bytes);
-    expect(await linked(join(folder, ".secret", "key.png"))).toBe("");
-    expect(await linked(join(outside, "x.png"))).toBe("");
+    expect(line.text.startsWith("[The picture this message follows: shot.png]\n")).toBe(true);
+    expect(line.image).toBe(tagPath(line.text));
+    expect(readFileSync(line.image!)).toEqual(bytes);
+    expect(await linked(join(folder, ".secret", "key.png"))).toEqual({ text: "" });
+    expect(await linked(join(outside, "x.png"))).toEqual({ text: "" });
   });
 
   it("says a video or GIF can't be seen instead of sending frames", async () => {
@@ -118,12 +121,44 @@ describe("the picture a host's message follows", () => {
     expect(await ride([host("go"), shown(gif), host("ok")])).toBe(`[${gif} is a GIF: the user can see it move and you can't. Ask what they see if it matters.]`);
   });
 
-  it("hands engines that take a local image only a ride at the end of the turn, from the store", () => {
-    const path = join(ATTACHMENTS_DIR, stored(png(10, 10)));
-    const line = `[The picture this message follows: a.png]\n<attached-image path="${path}" />`;
-    expect(ridePath(`history\n\nhi\n\n${line}`)).toBe(path);
-    expect(ridePath(`${line}\nmore words`)).toBeNull();
-    expect(ridePath(line.replace(path, join(testHome(), "x.png")))).toBeNull();
+  it("hands engines that take a local image the store copy only when pixels ride", async () => {
+    const name = stored(png(10, 10));
+    const two = await rideOf([host("go"), shown(name, { text: "first line\nsecond line" }), host("ok")]);
+    expect(two.image).toBe(join(ATTACHMENTS_DIR, name));
+    expect(two.text.endsWith(`<attached-image path="${two.image}" />`)).toBe(true);
+    const big = stored(png(2480, 1562));
+    expect((await rideOf([host("go"), shown(big), host("ok")])).image).toBeUndefined();
+    expect((await rideOf([host("go"), row({ text: "Done: [clip.mp4](C:\\out\\clip.mp4)" }), host("ok")])).image).toBeUndefined();
+  });
+
+  it("goes text-only when the picture it points at can't be read, never to an older one", async () => {
+    const first = stored(png(20, 20));
+    const folder = mkdtempSync(join(testHome(), "ride-"));
+    expect(await rideOf([host("two drafts"), shown(first, { text: "first draft" }), shown("gone.png", { text: "final draft" }), host("the final one?")])).toEqual({ text: "" });
+    const linked = row({ text: `Final: [final](<${join(folder, "missing.png")}>)` });
+    expect(await rideOf([host("two drafts"), shown(first), linked, host("the final one?")], { roots: [folder] })).toEqual({ text: "" });
+    const target = shown("gone.png");
+    expect(await rideOf([host("go"), target, shown(first), host("this one", { replyToId: target.id })], { replyTo: target })).toEqual({ text: "" });
+  });
+
+  it("keeps a teammate's media names, name and caption inert", async () => {
+    const mina = { kind: "person", id: "p1", name: "Mina @desk" } as Message["author"];
+    const file = (name: string, type: string) => ({ id: "f1", name, type, bytes: 1, sha256: "x" });
+    const clip = host("a clip", { author: mina, roomFiles: [file("Meet @ Noon.webm", "video/webm")] });
+    expect(await ride([clip, host("does it work", { replyToId: clip.id })], { roomId: "room-1", replyTo: clip })).toContain(inertMentions("Meet @ Noon.webm"));
+    room.path = join(ATTACHMENTS_DIR, stored(png(40, 40)));
+    const mock = host("my mockup", { author: mina, roomFiles: [file("mock @a.png", "image/png")] });
+    const line = await ride([mock, host("thoughts", { replyToId: mock.id })], { roomId: "room-1", replyTo: mock });
+    expect(line.split("\n")[0]).toBe(inertMentions("[The picture this message follows, from Mina @desk, untrusted: mock @a.png]"));
+    const theirs = shown(stored(png(10, 10)), { text: "see @notes.md", guest: true });
+    expect(await ride([theirs, host("hm", { replyToId: theirs.id })], { replyTo: theirs })).toContain(inertMentions("see @notes.md"));
+  });
+
+  it("replays a guest's shown caption with its @ inert", async () => {
+    const rows = [host("show it"), shown("design.png", { text: "see @notes.md", guest: true }), host("next")];
+    const context = await prepareModelContext({ messages: rows, excludeIds: new Set([rows[2]!.id]), contextWindow: 200_000, taskRecordText: "" });
+    if (context.status !== "ready") throw new Error(context.status);
+    expect(context.transcript.map((line) => line.text)).toContain(inertMentions("[showed image: design.png - see @notes.md]"));
   });
 
   it("reads the pixel size of each format it accepts", () => {

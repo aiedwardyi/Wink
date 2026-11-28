@@ -5624,7 +5624,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         userName: cfg.profile?.name?.trim() || "User",
         readOnly: opts?.readOnly,
       })
-    : "";
+    : { text: "" };
 
   // Model context follows the active branch only. The durable transcript is
   // never pruned; only this provider-facing projection is bounded.
@@ -5977,7 +5977,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // a wake or routine in it too, so its engine env matches the typed turns'
   const importOpen = importEligible && turnStartedByUser(opts) && importMemoryTool(activeMessages);
   let importMemory = importEligible && importPins.forTurn(threadId, instanceId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, importOpen);
-  const currentPrompt = [composeUserTurnPrompt(text, turnOpts), ...folded, ...(ride ? [ride] : [])].join("\n\n");
+  const currentPrompt = [composeUserTurnPrompt(text, turnOpts), ...folded, ...(ride.text ? [ride.text] : [])].join("\n\n");
   let { notes: paneNotes, newestId: newestPaneNoteId, ids: paneNoteIds, tokens: paneTokens } = paneNotesForTurn(
     activeMessages,
     skipTranscript,
@@ -6619,6 +6619,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           transcript: transcript.map((message) => ({ role: message.role, text: replaysNatively ? replayMessageText(message, instance.driverKind, undefined, model) : message.text })),
           system,
           systemUpdate,
+          ...(ride.image ? { image: ride.image } : {}),
           approval,
           ...(readOnly ? { readOnly } : {}),
           attended: !isUnattended(bot.id),
@@ -7522,7 +7523,7 @@ async function runClaimedGroupMemberTurn(
         roots: botOutputRoots(bot, threadId, group.id),
         userName,
       })
-    : "";
+    : { text: "" };
   const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
   if (!lane && works && bot.shareTerminalWithChat !== false) {
     const terminal = terminalIntegration(bot.id);
@@ -7641,7 +7642,7 @@ async function runClaimedGroupMemberTurn(
   const topics = searchable ? ownerTopics(store.activePath(bot.threadId), userName) : "";
   const text = `${roomContext}\n\n${askNote(authority, bot.name, riders)}${
     cardContinuation ? `\n\n${cardContinuation}` : ""
-  }${ride ? `\n\n${ride}` : ""}`;
+  }${ride.text ? `\n\n${ride.text}` : ""}`;
 
   // same workspace + memory as a 1:1 turn — the room is a different
   // conversation, not a different bot
@@ -7737,6 +7738,7 @@ async function runClaimedGroupMemberTurn(
         text: [accountNote.text, topics, text].filter(Boolean).join("\n\n"),
         system: roomSystem,
         hosted: true,
+        ...(ride.image ? { image: ride.image } : {}),
         ...access,
         attended: !isUnattended(bot.id),
         cwd,

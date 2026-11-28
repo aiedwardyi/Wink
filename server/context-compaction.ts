@@ -4,7 +4,7 @@ import { endsNoteWindow, isWakeNote } from "./pane-wake.ts";
 import { mailReplayText } from "./mail.ts";
 import { delegationContext, delegationRollup } from "./delegation-context.ts";
 import { redactSecretsInText } from "./redact.ts";
-import { ENGINE_SUMMARY_PREFIX, inertMentions, replyExcerpt, transcriptText, typedByHost } from "./replies.ts";
+import { ENGINE_SUMMARY_PREFIX, inertMentions, lineWords, replyExcerpt, transcriptText, typedByHost } from "./replies.ts";
 import { TYPED_VALUES_HEADER, typedValueLines, typedValuesBlock, withoutTypedValues, type TypedLine } from "./typed-values.ts";
 import { goalLines, type PinnedGoal } from "./picks.ts";
 import type { Message, OptionCardData } from "./store.ts";
@@ -630,7 +630,7 @@ function replayUnits(
       const name = message.roomFiles?.[0]?.name ?? message.image;
       if (!name) return [];
       const caption = message.text?.trim();
-      const line = `[showed image: ${name}${caption ? ` - ${caption}` : ""}]`;
+      const line = lineWords(message, `[showed image: ${name}${caption ? ` - ${caption}` : ""}]`, includeSpeakers);
       const speaker = message.from?.name ?? "Bot";
       return [{ id: message.id, pathIndex, role: "assistant", text: redactSecretsInText(includeSpeakers ? `${speaker}: ${line}` : line), label: includeSpeakers ? "" : "Assistant: " }];
     }

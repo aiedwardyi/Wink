@@ -221,6 +221,8 @@ export interface SendTurnInput {
   system?: string;
   /** Codex only: trusted system diff prefix, separate from user text. */
   systemUpdate?: string;
+  /** The store copy of the picture this turn's text rides with, for engines that take a local image beside the text. */
+  image?: string;
   /** The bot's Ask for approval / Auto chip. Omitted keeps the driver's own mode. */
   approval?: "ask" | "auto";
   /** No file edits or shell, whatever the approval mode. Only for drivers with capabilities.readOnlyTurns. */

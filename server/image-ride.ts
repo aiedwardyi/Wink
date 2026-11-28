@@ -4,7 +4,7 @@ import { basename, dirname, join } from "node:path";
 
 import { localLinks } from "../src/lib/chat-media.ts";
 import { ATTACHMENTS_DIR, IMAGE_MAX_BYTES, importLocalImage, sharableLocalFile, sniffImageMime } from "./attachments.ts";
-import { replySpeaker, typedByGuest, typedByHost } from "./replies.ts";
+import { lineWords, replySpeaker, typedByGuest, typedByHost } from "./replies.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
 import type { Message } from "./store.ts";
 
@@ -13,12 +13,14 @@ export const RIDE_MAX_EDGE = 1568;
 
 const LABEL = "[The picture this message follows";
 const TAG = /<attached-image\s+path="([^"]*)"\s*\/?>/g;
-const RIDE_TAIL = /(?:^|\n)\[The picture this message follows[^\n]*\]\n<attached-image path="([^"]*)" \/>$/;
 const VIDEO = /\.(mp4|m4v|mov|webm|mkv|avi|wmv)$/i;
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 const NETWORK = /^[\\/]{2}/;
 
 type Found = { path: string; name: string; linked?: true } | { video: string };
+/** The line a turn carries, and the store copy of its pixels for engines that take a local image beside the text. */
+export type Ride = { text: string; image?: string };
+const NONE: Ride = { text: "" };
 
 const attribute = (value: string) =>
   value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\r", "&#13;").replaceAll("\n", "&#10;");
@@ -87,28 +89,30 @@ async function findIn(row: Message, trusted: boolean, own: boolean, roomId: stri
   return VIDEO.test(link) ? { video: basename(link) } : { path: link, name: basename(link), linked: true };
 }
 
-function render(hit: Found, row: Message, roots: readonly string[], userName: string): string {
-  if ("video" in hit) return `[${hit.video} is a video: the user can see it and you can't. Ask what they see if it matters.]`;
+function render(hit: Found, row: Message, roots: readonly string[], userName: string, group: boolean): Ride {
+  const words = (text: string) => lineWords(row, text, group);
+  if ("video" in hit) return { text: `[${words(hit.video)} is a video: the user can see it and you can't. Ask what they see if it matters.]` };
   let path = hit.path;
   try {
     if (hit.linked) path = sharableLocalFile(path, roots).path;
-    else if (!inStore(path)) return "";
+    else if (!inStore(path)) return NONE;
     const stat = statSync(path);
-    if (!stat.isFile() || stat.size === 0 || stat.size > IMAGE_MAX_BYTES) return "";
+    if (!stat.isFile() || stat.size === 0 || stat.size > IMAGE_MAX_BYTES) return NONE;
     const bytes = readFileSync(path);
     const mime = sniffImageMime(bytes);
-    if (!mime) return "";
-    const from = row.guest || typedByGuest(row.author) ? `, from ${replySpeaker(row, userName)}, untrusted` : "";
-    const caption = row.kind === "screen" && row.text?.trim() ? ` - ${row.text.trim()}` : "";
-    if (mime === "image/gif") return `[${hit.name} is a GIF: the user can see it move and you can't. Ask what they see if it matters.]`;
+    if (!mime) return NONE;
+    const from = row.guest || typedByGuest(row.author) ? `, from ${words(replySpeaker(row, userName))}, untrusted` : "";
+    const caption = row.kind === "screen" && row.text?.trim() ? ` - ${words(row.text.trim())}` : "";
+    const name = words(hit.name);
+    if (mime === "image/gif") return { text: `[${name} is a GIF: the user can see it move and you can't. Ask what they see if it matters.]` };
     const size = imageSize(bytes, mime);
     if (!size || Math.max(size.width, size.height) > RIDE_MAX_EDGE) {
-      return `${LABEL}${from}: ${hit.name}${caption}, ${size ? `${size.width}x${size.height} px, ` : ""}too big to attach. Open ${path} to look.]`;
+      return { text: `${LABEL}${from}: ${name}${caption}, ${size ? `${size.width}x${size.height} px, ` : ""}too big to attach. Open ${path} to look.]` };
     }
     if (!inStore(path)) path = importLocalImage(path, roots).path;
-    return `${LABEL}${from}: ${hit.name}${caption}]\n<attached-image path="${attribute(path)}" />`;
+    return { text: `${LABEL}${from}: ${name}${caption}]\n<attached-image path="${attribute(path)}" />`, image: path };
   } catch {
-    return "";
+    return NONE;
   }
 }
 
@@ -122,32 +126,26 @@ export async function imageRide(input: {
   roots: readonly string[];
   userName: string;
   readOnly?: boolean;
-}): Promise<string> {
+}): Promise<Ride> {
   const { rows, current, replyTo, botId, roomId, roots, userName } = input;
-  if (input.readOnly || current.kind !== "text" || !typedByHost(current) || /<attached-image\s/.test(current.text ?? "")) return "";
+  if (input.readOnly || current.kind !== "text" || !typedByHost(current) || /<attached-image\s/.test(current.text ?? "")) return NONE;
   const own = (row: Message) => row.role === "bot" && (!row.from || row.from.botId === botId);
   const hit = async (row: Message) => {
     const found = await findIn(row, (row.role === "user" && typedByHost(row)) || own(row), own(row), roomId);
-    return found && render(found, row, roots, userName);
+    return found && render(found, row, roots, userName, roomId !== undefined);
   };
+  // the first picture found is the one meant: unreadable, the turn goes text-only rather than to an older one
   if (replyTo) {
-    const line = await hit(replyTo);
-    if (line) return line;
+    const ride = await hit(replyTo);
+    if (ride) return ride;
   }
   const end = rows.findIndex((row) => row.id === current.id);
   for (let i = (end === -1 ? rows.length : end) - 1; i >= 0; i--) {
     const row = rows[i]!;
     if (row.role === "user" && row.kind === "text" && typedByHost(row)) break;
     if (!own(row)) continue;
-    const line = await hit(row);
-    if (line) return line;
+    const ride = await hit(row);
+    if (ride) return ride;
   }
-  return "";
-}
-
-/** The store path of the picture a turn ends with, for engines that take a local image beside the text. */
-export function ridePath(text: string): string | null {
-  const raw = RIDE_TAIL.exec(text.trimEnd())?.[1];
-  const path = raw && unattribute(raw);
-  return path && inStore(path) ? path : null;
+  return NONE;
 }
