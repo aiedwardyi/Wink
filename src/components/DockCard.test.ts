@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+import { SWIPE_MOTION_MS, SWIPE_SPRING } from "@/lib/phone-swipe";
 
 import { DockCard } from "./DockCard";
 
@@ -12,9 +17,9 @@ const screen = (phone: boolean, reduce = false) => vi.spyOn(window, "matchMedia"
 const render = (open: boolean, props: { id?: string; onDismiss?: () => void } = {}) =>
   act(async () => root.render(createElement(DockCard, { open, ...props, children: open ? createElement("p", null, props.id ?? "Question") : null })));
 const dock = () => host.querySelector<HTMLElement>("[data-dock-card]");
-// a finger pulled straight down, lifting where it stopped
-const pull = (target: Element, dy: number, ms = 200) => act(async () => {
-  for (const [type, y, at] of [["touchstart", 100, 0], ["touchmove", 100 + dy, ms / 2], ["touchend", 100 + dy, ms]] as const) {
+// a finger pulled straight down, lifting where it stopped unless it holds on
+const pull = (target: Element, dy: number, ms = 200, hold = false) => act(async () => {
+  for (const [type, y, at] of [["touchstart", 100, 0], ["touchmove", 100 + dy, ms / 2], ...hold ? [] : [["touchend", 100 + dy, ms] as const]] as const) {
     const event = new Event(type, { bubbles: true, cancelable: true });
     Object.defineProperties(event, {
       touches: { value: type === "touchend" ? [] : [{ clientX: 100, clientY: y }] },
@@ -75,25 +80,42 @@ it("closes at once with reduced motion", async () => {
   expect(dock()).toBeNull();
 });
 
-it("closes on a swipe down from where the finger let go, and the next card shows at rest", async () => {
+it("rides the finger over the message box, out of the tray's clip, while it is dragged", async () => {
   screen(true);
-  const onDismiss = vi.fn();
-  await render(true, { id: "a", onDismiss });
-  await pull(dock()!, 200);
-  expect(onDismiss).toHaveBeenCalledTimes(1);
-  expect(dock()!.style.translate).toBe("0 200px");
-  await render(true, { id: "b", onDismiss });
-  expect(dock()!.style.translate).toBe("");
+  await render(true, { onDismiss: vi.fn() });
+  await pull(dock()!, 80, 200, true);
+  expect(dock()!.style.translate).toBe("0 80px");
+  expect(dock()!.hasAttribute("data-sheet-moving")).toBe(true);
+  const motion = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../motion.css"), "utf8");
+  expect(motion).toMatch(/\[data-composer-tray\]:has\(\[data-dock-card\]\[data-sheet-moving\]\) \{\s*overflow: visible;/);
+  expect(motion).toMatch(/\[data-dock-card\]\[data-sheet-moving\] \{\s*position: relative;\s*z-index: 1;/);
 });
 
-it("fades out from where the finger let go when the swipe closes it", async () => {
+it("glides off the screen on the chat pages' spring before a swipe closes it, and the next card shows at rest", async () => {
   screen(true);
   const onDismiss = vi.fn();
   await render(true, { id: "a", onDismiss });
   await pull(dock()!, 200);
-  await render(false);
-  expect(dock()!.hasAttribute("data-closing")).toBe(true);
-  expect(dock()!.style.translate).toBe("0 200px");
+  expect(onDismiss).not.toHaveBeenCalled();
+  expect(dock()!.style.transition).toBe(`translate ${SWIPE_MOTION_MS}ms ${SWIPE_SPRING}`);
+  expect(dock()!.style.translate).toBe(`0 ${200 + window.innerHeight}px`);
+  await vi.waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+  await render(true, { id: "b", onDismiss });
+  expect(dock()!.style.translate).toBe("");
+  expect(dock()!.hasAttribute("data-sheet-moving")).toBe(false);
+});
+
+it("catches a spring back where it is when the finger comes down again", async () => {
+  screen(true);
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(300);
+  await render(true, { onDismiss: vi.fn() });
+  await pull(dock()!, 60, 600);
+  expect(dock()!.style.translate).toBe("0 0");
+  const computed = window.getComputedStyle;
+  vi.spyOn(window, "getComputedStyle").mockImplementation((el) => el === dock() ? new Proxy(computed(el), { get: (style, key) => key === "translate" ? "0px 30px" : style.getPropertyValue(String(key)) }) : computed(el));
+  await pull(dock()!, 10, 200, true);
+  expect(dock()!.style.transition).toBe("");
+  expect(dock()!.style.translate).toBe("0 40px");
 });
 
 it("springs back from a short slow pull", async () => {

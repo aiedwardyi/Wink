@@ -119,7 +119,7 @@ it.each([true, false])("only closes on a downward swipe at the top on phone=%s",
   expect(panel.dataset.closing).toBeUndefined();
   list.scrollTop = 0;
   const atTop = await swipe(list);
-  expect(panel.dataset.closing).toBe(phone ? "true" : undefined);
+  await vi.waitFor(() => expect(panel.dataset.closing).toBe(phone ? "true" : undefined));
   expect(atTop[1]!.defaultPrevented).toBe(phone);
   expect(onCall).not.toHaveBeenCalled();
 });

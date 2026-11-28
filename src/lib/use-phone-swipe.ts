@@ -398,7 +398,18 @@ export function useDrawerSwipe(open: boolean, side: SidebarSide, close: () => vo
 
 type SheetDrag = { x: number; y: number; lastY: number; lastT: number; velocity: number; pulling: boolean };
 
-/** Swipe down on the open bottom sheet in `sheetRef` (up with `up`) to close it through `close`. A list in it scrolls first: the sheet drags only from the list's end in that direction. */
+/** Puts a sheet a swipe moved back at rest at once. */
+export function clearSheetMotion(sheet: HTMLElement | null | undefined): void {
+  for (const key of ["translate", "transition", "will-change"]) sheet?.style.removeProperty(key);
+  sheet?.removeAttribute("data-sheet-moving");
+}
+
+/** Where a sheet's spring has it now, so a new touch catches it there. */
+function sheetOffset(sheet: HTMLElement): number {
+  return Number.parseFloat(getComputedStyle(sheet).translate?.split(" ")[1] ?? "") || 0;
+}
+
+/** Swipe down on the open bottom sheet in `sheetRef` (up with `up`) to close it through `close`. A list in it scrolls first: the sheet drags only from the list's end in that direction. It moves as a chat page does: with the finger, caught mid-spring by a new touch, and off the screen on the same spring before `close`. While it is off its rest place it carries data-sheet-moving. */
 export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boolean, close: () => void, up = false): void {
   const latest = useRef(close);
   useLayoutEffect(() => {
@@ -408,17 +419,24 @@ export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boo
   useEffect(() => {
     const sheet = sheetRef.current;
     if (!sheet || !open) return;
-    const clear = () => {
-      sheet.style.removeProperty("translate");
-      sheet.style.removeProperty("transition");
-    };
+    const clear = () => clearSheetMotion(sheet);
     // a reopen mid-close gets back the sheet a swipe let go of lower down
     clear();
     let drag: SheetDrag | null = null;
     let springTimer: ReturnType<typeof setTimeout> | undefined;
+    let leaving = false;
+    const move = (offset: number) => {
+      sheet.setAttribute("data-sheet-moving", "");
+      sheet.style.willChange = "translate";
+      sheet.style.translate = `0 ${offset}px`;
+    };
+    const spring = (to: number, done: () => void) => {
+      sheet.style.transition = `translate ${SWIPE_MOTION_MS}ms ${SWIPE_SPRING}`;
+      sheet.style.translate = to ? `0 ${to}px` : "0 0";
+      springTimer = setTimeout(done, SWIPE_MOTION_MS);
+    };
     const onStart = (e: TouchEvent) => {
-      clearTimeout(springTimer);
-      clear();
+      if (leaving) return;
       drag = null;
       const touch = e.touches[0];
       if (e.touches.length !== 1 || !touch || !(e.target instanceof Element)) return;
@@ -426,7 +444,12 @@ export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boo
       for (let node: Element | null = e.target; node && node !== sheet.parentElement; node = node.parentElement) {
         if (up ? node.scrollHeight - node.clientHeight - node.scrollTop > 1 && /auto|scroll/.test(getComputedStyle(node).overflowY) : node.scrollTop > 0) return;
       }
-      drag = { x: touch.clientX, y: touch.clientY, lastY: touch.clientY, lastT: e.timeStamp, velocity: 0, pulling: false };
+      // a spring on its way back is caught where it is, not snapped home
+      const caught = sheet.style.transition ? sheetOffset(sheet) : 0;
+      clearTimeout(springTimer);
+      clear();
+      if (caught) move(caught);
+      drag = { x: touch.clientX, y: touch.clientY - caught, lastY: touch.clientY, lastT: e.timeStamp, velocity: 0, pulling: caught !== 0 };
     };
     const onMove = (e: TouchEvent) => {
       const touch = e.touches[0];
@@ -447,7 +470,7 @@ export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boo
       if (dt > 0) drag.velocity = (touch.clientY - drag.lastY) / dt;
       drag.lastY = touch.clientY;
       drag.lastT = e.timeStamp;
-      if (drag.pulling && !reducedMotion()) sheet.style.translate = `0 ${up ? Math.min(0, dy) : Math.max(0, dy)}px`;
+      if (!reducedMotion()) move(up ? Math.min(0, dy) : Math.max(0, dy));
     };
     const finish = (commit: boolean, e: TouchEvent) => {
       const done = drag;
@@ -458,15 +481,24 @@ export function useSheetSwipe(sheetRef: RefObject<HTMLElement | null>, open: boo
       // a finger that stopped before lifting is no flick
       const velocity = e.timeStamp - done.lastT > FLICK_STILL_MS ? 0 : done.velocity;
       const sign = up ? -1 : 1;
-      if (commit && sheetSwipeCloses(sign * (done.lastY - done.y), sign * velocity, sheet.offsetHeight)) {
-        // the exit fade plays from where the finger let go
-        latest.current();
+      const closes = commit && sheetSwipeCloses(sign * (done.lastY - done.y), sign * velocity, sheet.offsetHeight);
+      if (reducedMotion()) {
+        if (closes) latest.current();
         return;
       }
-      if (reducedMotion()) return;
-      sheet.style.transition = `translate ${SWIPE_MOTION_MS}ms ${SWIPE_SPRING}`;
-      sheet.style.translate = "0 0";
-      springTimer = setTimeout(clear, SWIPE_MOTION_MS);
+      if (!closes) {
+        spring(0, clear);
+        return;
+      }
+      // like a chat page a swipe commits, the sheet keeps going off the screen before it closes
+      leaving = true;
+      const pulled = done.lastY - done.y;
+      const at = up ? Math.min(0, pulled) : Math.max(0, pulled);
+      const rect = sheet.getBoundingClientRect();
+      spring(up ? at - rect.bottom : at + window.innerHeight - rect.top, () => {
+        leaving = false;
+        latest.current();
+      });
     };
     const onEnd = (e: TouchEvent) => finish(true, e);
     const onCancel = (e: TouchEvent) => finish(false, e);

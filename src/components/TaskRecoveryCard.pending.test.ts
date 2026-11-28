@@ -93,8 +93,8 @@ describe("held task resume card", () => {
     const f = await mount();
     if (how === "x") await act(async () => f.host.querySelector<HTMLButtonElement>('[aria-label="Dismiss saved task reminder"]')!.click());
     else await pull(f.host.querySelector('[role="status"]')!, 200);
-    const posts = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith(`/tasks/${bot.threadId}/recovery`));
-    expect(posts.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ updatedAt: 1, flushReason: "stop" }]);
+    const posts = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith(`/tasks/${bot.threadId}/recovery`));
+    await vi.waitFor(() => expect(posts().map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ updatedAt: 1, flushReason: "stop" }]));
     expect(f.host.querySelector("[data-dock-card]")!.hasAttribute("data-closing")).toBe(true);
     await vi.waitFor(() => expect(f.host.querySelector('[role="status"]')).toBeNull());
   });

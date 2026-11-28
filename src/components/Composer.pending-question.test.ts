@@ -698,11 +698,12 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     if (form === "row") await shrink();
     await pull(form === "row" ? row()! : card()!, 200);
-    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]);
+    await vi.waitFor(() => expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]));
     expect(sent("POST", "/api/bots/asker/messages")).toEqual([]);
     await rerender({ bot: bot([{ ...question, card: { ...question.card!, dismissed: true } }]) });
     expect(pin()!.closest("[data-dock-card]")!.hasAttribute("data-closing")).toBe(true);
-    expect(pin()!.closest<HTMLElement>("[data-dock-card]")!.style.translate).toBe("0 200px");
+    // it glided off the screen before the dismiss, so its fade plays out of sight
+    expect(pin()!.closest<HTMLElement>("[data-dock-card]")!.style.translate).toBe(`0 ${200 + window.innerHeight}px`);
     await vi.waitFor(() => expect(pin()).toBeNull());
     expect(dot()).toBeNull();
   });

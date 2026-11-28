@@ -975,7 +975,7 @@ describe("WorkerChip", () => {
       try {
         const events = await drag(row, ys, ms);
         expect(events.at(-1)!.defaultPrevented).toBe(true);
-        expect(chip()!.getAttribute("aria-expanded")).toBe("false");
+        await vi.waitFor(() => expect(chip()!.getAttribute("aria-expanded")).toBe("false"));
         expect(sheet.isConnected).toBe(false);
       } finally {
         await unmount();
@@ -1009,7 +1009,7 @@ describe("WorkerChip", () => {
         expect(chip()!.getAttribute("aria-expanded")).toBe("true");
         list.scrollTop = 0;
         await drag(row, [300, 360, 420, 490], 200);
-        expect(chip()!.getAttribute("aria-expanded")).toBe("false");
+        await vi.waitFor(() => expect(chip()!.getAttribute("aria-expanded")).toBe("false"));
       } finally {
         await unmount();
       }
