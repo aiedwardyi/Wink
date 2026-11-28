@@ -1,17 +1,17 @@
 import { useCallback, useLayoutEffect, type RefObject } from "react";
 import { findRowSelector } from "./chat-find.js";
-import { composerNeedsTap, focusComposer, isDialogActive } from "./focus-composer.js";
+import { focusComposer, isDialogActive } from "./focus-composer.js";
 
 // The transcript's bottom edge at the Reply tap, before the reply strip shrinks it.
 const tapEdges = new WeakMap<HTMLElement, number>();
 
-// A phone opens the keyboard only for focus inside the tap, never from the Composer effect after render.
+// Focus inside the pick: a phone opens the keyboard only from the tap, and a repeat pick leaves replyTo unchanged so the Composer effect never reruns.
 export function useReplyFocus<T>(selectReply: (message: T) => void, scrollRef?: RefObject<HTMLElement | null>) {
   return useCallback((message: T) => {
     const scroller = scrollRef?.current;
     if (scroller) tapEdges.set(scroller, scroller.getBoundingClientRect().bottom);
     selectReply(message);
-    if (composerNeedsTap() && !isDialogActive(document)) focusComposer();
+    if (!isDialogActive(document)) focusComposer();
   }, [selectReply, scrollRef]);
 }
 
