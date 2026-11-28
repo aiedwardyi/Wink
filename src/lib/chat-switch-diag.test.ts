@@ -101,6 +101,18 @@ describe("dead tap catcher", () => {
     stop();
   });
 
+  it("ignores touch events that carry no touch lists", () => {
+    const { row, send, stop } = chat();
+    const errors: unknown[] = [];
+    const onError = (event: ErrorEvent) => errors.push(event.error);
+    window.addEventListener("error", onError);
+    for (const type of ["touchstart", "touchend"]) row.dispatchEvent(new Event(type, { bubbles: true }));
+    window.removeEventListener("error", onError);
+    expect(errors).toEqual([]);
+    expect(send).not.toHaveBeenCalled();
+    stop();
+  });
+
   it("re-arms after a live tap and ignores taps outside the chat", () => {
     const { row, send, stop } = chat();
     const drawer = document.createElement("aside");

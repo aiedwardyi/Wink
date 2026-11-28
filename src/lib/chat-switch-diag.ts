@@ -76,16 +76,17 @@ export function watchDeadTaps(zone: () => Element | null, send = postChatSwitch,
   };
   const onStart = (event: TouchEvent) => {
     settle();
-    const touch = event.touches[0];
+    // synthetic touch events can come without touch lists
+    const touch = event.touches?.[0];
     const root = zone();
-    start = event.touches.length === 1 && touch && root && event.target instanceof Node && root.contains(event.target) && phone()
+    start = event.touches?.length === 1 && touch && root && event.target instanceof Node && root.contains(event.target) && phone()
       ? { x: touch.clientX, y: touch.clientY, at: event.timeStamp, event }
       : null;
   };
   const onEnd = (event: TouchEvent) => {
     const began = start;
     start = null;
-    const touch = event.changedTouches[0];
+    const touch = event.changedTouches?.[0];
     if (!began || !touch || event.timeStamp - began.at > TAP_MAX_MS || Math.hypot(touch.clientX - began.x, touch.clientY - began.y) > TAP_SLOP) return;
     tap = { x: touch.clientX, y: touch.clientY, target: began.event.target, events: [began.event, event], live: false, timer: setTimeout(settle, TAP_SETTLE_MS) };
   };
