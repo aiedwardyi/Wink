@@ -195,4 +195,41 @@ describe("dead tap catcher", () => {
     expect(send).toHaveBeenCalledTimes(1);
     stop();
   });
+
+  function drawerSwitch(menu: Element, drawerRow: Element) {
+    tap(menu, true);
+    touch("touchstart", drawerRow);
+    touch("touchend", drawerRow);
+    drawerRow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    reportChatSwitch({ type: "select", id: "marketing" }, "wink", "marketing", vi.fn());
+    vi.advanceTimersByTime(700);
+    now += 700;
+  }
+
+  function drawer() {
+    const menu = document.createElement("button");
+    const drawerRow = document.createElement("button");
+    document.body.append(menu, drawerRow);
+    return { menu, drawerRow };
+  }
+
+  it("re-arms on a chat switch, so menu and drawer taps do not spend the line", () => {
+    const { row, send, stop } = chat();
+    const { menu, drawerRow } = drawer();
+    tap(row, true);
+    drawerSwitch(menu, drawerRow);
+    drawerSwitch(menu, drawerRow);
+    for (let i = 0; i < 3; i++) tap(row, false);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toMatchObject({ target: "p", taps: 3 });
+    stop();
+  });
+
+  it("logs nothing for rapid drawer switches alone", () => {
+    const { send, stop } = chat();
+    const { menu, drawerRow } = drawer();
+    for (let i = 0; i < 7; i++) drawerSwitch(menu, drawerRow);
+    expect(send).not.toHaveBeenCalled();
+    stop();
+  });
 });

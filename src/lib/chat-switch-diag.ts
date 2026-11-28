@@ -14,6 +14,7 @@ type Caller = { event?: string; trusted?: boolean; active?: boolean; caller: str
 const callers = new WeakMap<Action, Caller>();
 const reported = new WeakSet<Action>();
 let lastSwitch = 0;
+let switches = 0;
 
 /** At dispatch time, while the caller and its event are still on the stack. */
 export function noteDispatch(action: Action) {
@@ -32,6 +33,7 @@ export function reportChatSwitch(action: Action, from: string, to: string | unde
   if (reported.has(action)) return;
   reported.add(action);
   lastSwitch = performance.now();
+  switches++;
   send({
     from,
     // a delete that leaves no chat open still logs; the server requires "to"
@@ -55,14 +57,15 @@ const TAP_SETTLE_MS = 600;
 // a tap that stops a glide gets no click
 const GLIDE_STOP_MS = 150;
 
-type Tap = { x: number; y: number; target: EventTarget | null; events: Event[]; live: boolean; timer: ReturnType<typeof setTimeout> };
+type Tap = { x: number; y: number; target: EventTarget | null; events: Event[]; live: boolean; switches: number; timer: ReturnType<typeof setTimeout> };
 
 /** Phone only and log only: watches touches that start over `zone`'s box and changes nothing they do. */
 export function watchDeadTaps(zone: () => Element | null, send = postChatSwitch, phone = isPhone): () => void {
-  let start: { x: number; y: number; at: number; event: Event } | null = null;
+  let start: { x: number; y: number; at: number; event: Event; switches: number } | null = null;
   let tap: Tap | null = null;
   let dead = 0;
   let sent = false;
+  let armed = switches;
   let scrolled = -Infinity;
   // a layer over the chat, the bare column or stage box, or an inert page still gets the click
   const onPage = (node: EventTarget | null) => {
@@ -72,8 +75,15 @@ export function watchDeadTaps(zone: () => Element | null, send = postChatSwitch,
   const settle = () => {
     const done = tap;
     tap = null;
+    // a chat switch re-arms, so menu and drawer taps never spend the line before a freeze
+    if (armed !== switches) {
+      armed = switches;
+      dead = 0;
+      sent = false;
+    }
     if (!done) return;
     clearTimeout(done.timer);
+    if (done.switches !== switches) return;
     if (done.live) {
       dead = 0;
       sent = false;
@@ -90,7 +100,7 @@ export function watchDeadTaps(zone: () => Element | null, send = postChatSwitch,
     const box = zone()?.getBoundingClientRect();
     const over = touch && box && touch.clientX >= box.left && touch.clientX <= box.right && touch.clientY >= box.top && touch.clientY <= box.bottom;
     start = event.touches?.length === 1 && touch && over && phone()
-      ? { x: touch.clientX, y: touch.clientY, at: event.timeStamp, event }
+      ? { x: touch.clientX, y: touch.clientY, at: event.timeStamp, event, switches }
       : null;
   };
   const onEnd = (event: TouchEvent) => {
@@ -98,7 +108,7 @@ export function watchDeadTaps(zone: () => Element | null, send = postChatSwitch,
     start = null;
     const touch = event.changedTouches?.[0];
     if (!began || !touch || scrolled > began.at - GLIDE_STOP_MS || event.timeStamp - began.at > TAP_MAX_MS || Math.hypot(touch.clientX - began.x, touch.clientY - began.y) > TAP_SLOP) return;
-    tap = { x: touch.clientX, y: touch.clientY, target: began.event.target, events: [began.event, event], live: false, timer: setTimeout(settle, TAP_SETTLE_MS) };
+    tap = { x: touch.clientX, y: touch.clientY, target: began.event.target, events: [began.event, event], live: false, switches: began.switches, timer: setTimeout(settle, TAP_SETTLE_MS) };
   };
   const onLive = (event: Event) => {
     if (tap && onPage(event.target)) tap.live = true;
