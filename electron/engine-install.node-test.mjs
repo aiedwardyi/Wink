@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -36,14 +35,13 @@ for (const shell of ["powershell.exe", "pwsh.exe"]) {
           : scenario === "irm Codex install" ? "function Invoke-RestMethod { 'if ($env:CODEX_NON_INTERACTIVE -ne ''1'') { throw ''Start Codex now? [y/N]'' }; install' }\nirm https://chatgpt.com/codex/install.ps1 | iex"
           : scenario.startsWith("irm") ? `function Invoke-RestMethod { '${scenario === "irm failure" ? "Write-Error stub-failure" : "install"}' }\nirm https://stub.invalid/install.ps1 | iex`
             : npm ? "npm install -g stub" : "install";
-        const failMarker = join(dir, "it's failed.marker");
-        const script = terminal.buildInstallScript({ command, needsNode: true, signInCommand: claude ? "claude auth login" : "signin", driverKind: claude ? "claudeAgent" : "codex", failMarker }, "win32");
+        const script = terminal.buildInstallScript({ command, needsNode: true, signInCommand: claude ? "claude auth login" : "signin", driverKind: claude ? "claudeAgent" : "codex" }, "win32");
         // Keep PATH refresh on the stub tools.
         const powershell = join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0");
         const harness = `class Environment { static [string] GetEnvironmentVariable([string] $name, [string] $target) { return $env:WINK_TEST_PATH } }\n$env:Path=${quote(`${dir};${powershell}`)}\n& {\n${script}\n}\nWrite-Output 'parent-alive'`;
         const result = spawnSync(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(harness, "utf16le").toString("base64")], {
           encoding: "utf8", windowsHide: true, timeout: 30000,
-          env: { ...process.env, ...(claude ? { USERPROFILE: home, HOME: home } : {}), WINK_TEST_PATH: `${dir};${bin};${powershell}`, WINK_INSTALL_FAIL_MARKER: failMarker },
+          env: { ...process.env, ...(claude ? { USERPROFILE: home, HOME: home } : {}), WINK_TEST_PATH: `${dir};${bin};${powershell}` },
         });
         assert.ifError(result.error);
         const calls = (() => { try { return readFileSync(log, "utf8").trim().split(/\r?\n/); } catch { return []; } })();
@@ -58,38 +56,8 @@ for (const shell of ["powershell.exe", "pwsh.exe"]) {
         if (scenario === "installer exit") assert.match(result.stdout, /installer-output/);
         if (["winget failure", "winget missing"].includes(scenario)) assert.match(result.stdout, /Node\.js didn't install\..*https:\/\/nodejs\.org/);
         if (["failure", "installer exit"].includes(scenario)) assert.match(result.stdout, /The install didn't finish\./);
-        assert.equal(existsSync(failMarker), ["failure", "winget failure", "winget missing", "irm failure", "installer exit"].includes(scenario), "failure marker");
         if (scenario === "irm failure") assert.ok(result.stderr, "PowerShell error stays visible");
       } finally { rmSync(dir, { recursive: true, force: true }); }
     });
-  }
-}
-
-for (const shell of ["powershell.exe", "pwsh.exe"]) {
-  for (const name of ["ONeil", "O'Neil", "O\u2019Neil"]) {
-    for (const outcome of ["success", "failure"]) {
-      test(`${shell}: ${outcome} with profile ${name}`, { skip: process.platform !== "win32" }, async () => {
-        const dir = mkdtempSync(join(tmpdir(), "wink-engine-install-"));
-        try {
-          const failMarker = join(dir, name, "wink-install", "codex+attempt.failed");
-          mkdirSync(join(dir, name, "wink-install"), { recursive: true });
-          const command = outcome === "success" ? "Write-Output 'stub-install-ran'" : "Write-Output 'stub-install-ran'; Invoke-Expression 'exit 7'";
-          let launched;
-          const run = (executable, args, options) => {
-            launched = { args, options };
-            const child = new EventEmitter();
-            queueMicrotask(() => child.emit("spawn"));
-            return child;
-          };
-          assert.equal(await terminal.openInstallTerminal({ command, driverKind: "codex", failMarker }, "win32", run), true);
-          const result = spawnSync(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", launched.args.at(-1)], {
-            encoding: "utf8", windowsHide: true, timeout: 30000, env: launched.options.env ?? process.env,
-          });
-          assert.ifError(result.error);
-          assert.match(result.stdout, /stub-install-ran/, `${result.stdout}\n${result.stderr}`);
-          assert.equal(existsSync(failMarker), outcome === "failure", "failure marker");
-        } finally { rmSync(dir, { recursive: true, force: true }); }
-      });
-    }
   }
 }

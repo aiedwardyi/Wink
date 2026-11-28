@@ -52,7 +52,6 @@ test("successful terminal calls keep their arguments and result", async () => {
 for (const [name, channel, args] of [
   ["permOpenSettings", "perm:open-settings", ["mic"]],
   ["openEngineInstall", "engine:install", ["engine", true]],
-  ["engineInstallFailed", "engine:install-failed", ["engine"]],
   ["deviceWindow.open", "device-window:open", ["host", "device", "relay-host"]],
   ["openPeerFile", "desktop:open-peer-file", ["host", "thread", "C:/a.docx"]],
   ["readMediaImage", "desktop:read-media-image", ["https://images.example.test/a.png"]],

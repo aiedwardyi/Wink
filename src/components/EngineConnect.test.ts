@@ -10,10 +10,13 @@ import { NoEngines } from "./NoEngines";
 import { EngineConnect } from "./EngineConnect";
 import { PRIMARY_BUTTON } from "@/lib/button-style";
 import { landFold, spyReveal } from "./Fold.test-land";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { registerEngineInstall, type InstallHandler } from "../../electron/engine-install.mjs";
+import { openInstallTerminal } from "../../electron/terminal-launch.mjs";
 
 let instances: InstanceInfo[];
 let host: HTMLDivElement;
@@ -300,46 +303,27 @@ describe("first engine connection", () => {
     expect(host.textContent).toContain("Finish in the window that opened.");
   });
 
-  it("shows Didn't finish? once the install window reports a failed install", async () => {
-    let failed = false;
-    const engineInstallFailed = vi.fn(async () => failed);
-    Object.assign(window.ogb!, { engineInstallFailed });
-    await connect();
-    const row = () => host.querySelector('[data-engine-connect="codex"]')!;
-    await press(row());
-    await advance(5000);
-    expect(row().textContent).toContain("Finish in the window that opened.");
-    failed = true;
-    await advance(5000);
-    expect(row().textContent).not.toContain("Finish in the window that opened.");
-    expect(row().textContent).toContain("Didn't finish?");
-    expect(row().querySelector("button")!.textContent).toContain("Try Again");
-    expect(engineInstallFailed).toHaveBeenCalledWith("codex");
-    failed = false;
-    await press(row());
-    expect(row().textContent).toContain("Finish in the window that opened.");
-    await advance(5000);
-    expect(row().textContent).toContain("Finish in the window that opened.");
-  });
-
-  it("keeps probing after Open Again when the older install window fails late", async () => {
-    const temp = mkdtempSync(join(tmpdir(), "wink-overlap-"));
-    for (const key of ["TEMP", "TMP", "TMPDIR"]) vi.stubEnv(key, temp);
+  it.skipIf(process.platform !== "win32")("reaches Sign in on the next check when Open Again's window fails and the first window then installs", async () => {
+    const temp = mkdtempSync(join(tmpdir(), "wink-retry-fails-"));
+    vi.stubEnv("WINK_TEST_INSTALLED", join(temp, "codex.exe"));
     try {
       const handlers = new Map<string, InstallHandler>();
-      const windows: { failMarker: string }[] = [];
+      const windows: { script: string; env?: NodeJS.ProcessEnv }[] = [];
       registerEngineInstall({ handle: (channel, fn) => { handlers.set(channel, fn); } }, {
         trusted: () => true, server: () => ({ port: 1 }), copy: vi.fn(), blank: vi.fn(async () => false),
-        fetch: async () => ({ ok: true, json: async () => ({ driverKind: "codex", command: "install" }) }),
-        open: async (spec) => { windows.push(spec); return true; },
+        fetch: async () => ({ ok: true, json: async () => ({ driverKind: "codex", command: "stub" }) }),
+        // The first window installs; Open Again's window fails.
+        open: (spec) => openInstallTerminal({ ...spec, command: windows.length ? "Write-Output retry-stub-ran; exit 7" : "Set-Content -LiteralPath $env:WINK_TEST_INSTALLED -Value stub" }, "win32", (_file, args, options) => {
+          windows.push({ script: args.at(-1)!, env: options.env });
+          const child = new EventEmitter();
+          queueMicrotask(() => child.emit("spawn"));
+          return child;
+        }),
       });
-      Object.assign(window.ogb!, {
-        openEngineInstall: (id: string) => handlers.get("engine:install")!({}, id),
-        engineInstallFailed: (id: string) => handlers.get("engine:install-failed")!({}, id),
-      });
-      let installed = false;
+      const run = (index: number) => spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", windows[index]!.script], { encoding: "utf8", windowsHide: true, timeout: 30000, env: windows[index]!.env ?? process.env });
+      Object.assign(window.ogb!, { openEngineInstall: (id: string) => handlers.get("engine:install")!({}, id) });
       fetchMock.mockImplementation(async (url: string) => new Response(JSON.stringify(url === "/api/bots?messages=0" ? { bots: [] } : {
-        instances: instances.map((row) => row.instanceId === "codex" && installed ? { ...row, snapshot: { state: "available", authenticated: false } } : row),
+        instances: instances.map((row) => row.instanceId === "codex" && existsSync(process.env.WINK_TEST_INSTALLED!) ? { ...row, snapshot: { state: "available", authenticated: false } } : row),
       })));
       await connect();
       const row = () => host.querySelector('[data-engine-connect="codex"]')!;
@@ -347,11 +331,11 @@ describe("first engine connection", () => {
       await advance(11000);
       await press(row());
       expect(windows).toHaveLength(2);
-      writeFileSync(windows[0]!.failMarker, "failed");
+      const retry = run(1);
+      expect(retry.stdout).toContain("retry-stub-ran");
+      expect(retry.stdout).toContain("The install didn't finish.");
       await advance(5000);
-      expect(row().textContent).toContain("Finish in the window that opened.");
-      expect(existsSync(windows[0]!.failMarker)).toBe(false);
-      installed = true;
+      expect(run(0).status).toBe(0);
       await advance(5000);
       expect(row().textContent).toContain("Sign in to Codex");
     } finally {

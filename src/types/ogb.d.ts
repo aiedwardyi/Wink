@@ -160,8 +160,6 @@ declare global {
       openInstallTerminal?(command: string): Promise<boolean>;
       openEngineSignIn?(instanceId: string): Promise<"running" | "opened" | "copied">;
       openEngineInstall?(instanceId: string, installOnly?: true): Promise<"running" | "opened" | "copied">;
-      /** True once the install window for this engine reported a failed step. */
-      engineInstallFailed?(instanceId: string): Promise<boolean>;
       /** Opens an http(s) link in the user's default browser. */
       openExternal?(url: string): Promise<boolean>;
       /** Recolor the native window chrome for a skin; absent on older builds. */
