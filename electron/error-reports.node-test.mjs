@@ -756,27 +756,21 @@ const trustedOwner = () => {
   return { frame, owner: { mainFrame: frame, isDestroyed: () => false, getURL: () => frame.url } };
 };
 
-test("renderer errors log one local line and report only the error name and app bundle frame", async (t) => {
+test("renderer errors report only the error name and app bundle frame", async (t) => {
   const { registerErrorReportIpc } = await import("./error-report-capture.mjs");
   const f = await fixture(t);
   const { frame, owner } = trustedOwner();
   const handlers = new Map();
-  const lines = [];
-  registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, f.reporter, () => owner, () => "http://127.0.0.1:9311", { log: (line) => lines.push(line), build: "1.0.212", uptime: () => 42.5, chunks: CHUNKS });
+  registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, f.reporter, () => owner, () => "http://127.0.0.1:9311", { chunks: CHUNKS });
   const capture = (site, detail) => handlers.get("error-reports:capture")({ sender: owner, senderFrame: frame }, site, detail);
   const message = `${privateText[5]} ${privateText[2]}\n    at http://127.0.0.1:9311/assets/secret-plan.js:9:9`;
   const stack = `TypeError: ${message}\n    at https://evil.test/assets/other.js:7:7\n    at render (http://127.0.0.1:9311/assets/index-AbC_12.js:1:2345)\n    at http://127.0.0.1:9311/assets/vendor-Xy.js:3:4`;
   capture(1, { name: "TypeError", message, stack });
-  assert.equal(lines.length, 1);
-  for (const part of ["renderer error", "TypeError", privateText[5], privateText[2], "index-AbC_12.js:1:2345", "build=1.0.212", "uptime=42.5s"]) assert.ok(lines[0].includes(part), part);
-  assert.doesNotMatch(lines[0], /\n/);
   await f.reporter.flush();
   assert.equal(f.received.length, 0);
   f.reporter.setConsent(true);
   capture(1, { name: "TypeError", message, stack });
   capture(2, { name: "", message: privateText[6], stack: "" });
-  assert.equal(lines.length, 3);
-  assert.match(lines[2], /^renderer rejection build=1\.0\.212 uptime=42\.5s/);
   await f.reporter.flush();
   await f.reporter.flush();
   assert.equal(f.received.length, 2);
@@ -788,22 +782,6 @@ test("renderer errors log one local line and report only the error name and app 
   for (const text of [...privateText, "secret-plan", "evil.test", "vendor-Xy", "127.0.0.1:9311/"]) assert.equal(bytes.includes(text), false, text);
   assert.deepEqual(rejection.tags, { platform: "win32", arch: "x64", process: "renderer", site: "2" });
   assert.equal("fingerprint" in rejection, false);
-});
-
-test("renderer error log lines stop after a cap so an error loop cannot fill the disk", async () => {
-  const { registerErrorReportIpc } = await import("./error-report-capture.mjs");
-  const { frame, owner } = trustedOwner();
-  const handlers = new Map();
-  const lines = [];
-  registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, { capture() {} }, () => owner, () => "http://127.0.0.1:9311", { log: (line) => lines.push(line), build: "1.0.212" });
-  for (let i = 0; i < 150; i++) handlers.get("error-reports:capture")({ sender: owner, senderFrame: frame }, 1, { name: "Error".repeat(100000), message: "loop", stack: "Error: loop" });
-  assert.equal(lines.length, 100);
-  assert.match(lines[99], /not logged/);
-  for (const line of lines) assert.ok(line.length <= 12000, String(line.length));
-});
-
-test("main wires renderer error lines into the local log", () => {
-  assert.match(source("./main.mjs"), /registerErrorReportIpc\(ipcMain, errorReports, [^\n]*\{ log: slog, build: [^\n]*\}\);/);
 });
 
 test("renderer reports keep only built-in error names and frames in chunks this build ships", async (t) => {
@@ -847,22 +825,6 @@ test("a hand-written queue entry with a crafted error name or frame never sends"
   await reopened.flush();
   await reopened.flush();
   assert.deepEqual(f.received.map((request) => JSON.parse(request.body).event_id), [record.report.reportId]);
-});
-
-test("Export Diagnostics leaves out renderer error lines and keeps the rest of the log", async () => {
-  const { registerErrorReportIpc } = await import("./error-report-capture.mjs");
-  const { buildDiagnosticsReport } = await import("./diagnostics.mjs");
-  const { frame, owner } = trustedOwner();
-  const handlers = new Map();
-  const lines = ["[2026-11-28T00:00:00.000Z] harness ready port=8799"];
-  registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, { capture() {} }, () => owner, () => "http://127.0.0.1:9311", { log: (line) => lines.push(`[2026-11-28T00:00:01.000Z] ${line}`), build: "1.0.212", chunks: CHUNKS });
-  const capture = (site, detail) => handlers.get("error-reports:capture")({ sender: owner, senderFrame: frame }, site, detail);
-  capture(1, { name: "TypeError", message: privateText[5], stack: `TypeError: ${privateText[5]}\n    at http://127.0.0.1:9311/assets/index-AbC_12.js:1:2` });
-  capture(2, { name: "", message: privateText[2], stack: "" });
-  assert.equal(lines.length, 3);
-  const report = buildDiagnosticsReport({ logTail: lines.join("\n") });
-  assert.ok(report.includes("harness ready port=8799"));
-  for (const text of [privateText[5], privateText[2], "renderer error", "renderer rejection"]) assert.equal(report.includes(text), false, text);
 });
 
 test("shipped chunks are the JavaScript files in the packaged UI's assets folder", async (t) => {

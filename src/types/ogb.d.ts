@@ -215,7 +215,7 @@ declare global {
       exportDiagnostics?(): Promise<string | null>;
       errorReportConsent?(): Promise<boolean | null>;
       setErrorReportConsent?(enabled: boolean): Promise<boolean>;
-      /** Main writes the detail to the local log; a report keeps only the error name and bundle frame. */
+      /** A report keeps only the error name and bundle frame from the detail. */
       captureErrorReport?(site: number, detail: { name: string; message: string; stack: string }): void;
       /** Opens a local file in its default app, or reveals it when its
        * type could run. A relative link passes its bot folder as `base`,
