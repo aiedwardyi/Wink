@@ -177,7 +177,8 @@ describe("import_memory saves through the Settings path", () => {
 
   it("is offered and mounted only in the owner's own 1:1 turns", () => {
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    expect(index).toContain("turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)");
+    expect(index).toContain("!commsDepth && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)");
+    expect(index).toContain("importEligible && turnStartedByUser(opts) && importMemoryTool(activeMessages)");
     const mounts = index.split("\n").filter((line) => line.includes("agentsIntegration(bot.id"));
     expect(mounts.filter((line) => line.includes("importMemory")).map((line) => line.trim())).toEqual([
       "const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTool(store.activePathBack(bot.threadId), 1)) : undefined;",

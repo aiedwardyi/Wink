@@ -117,9 +117,8 @@ it("a routine on the owner's chat saves nothing from the typed message before it
   expect(routine.status).toBe(201);
   expect((await w.api("POST", `/api/routines/${routine.body.routine.id}/run`, {})).status).toBe(201);
   await w.replies(id, 2);
-  const turn = w.launches(id).at(-1)!;
-  expect(turn.OMB_IMPORT_MEMORY).toBeUndefined();
-  expect((await w.save(turn)).body.text).toBe(CLOSED);
+  // the routine may keep the session's listing; it never gets to save
+  expect((await w.save(w.launches(id).at(-1)!)).body.text).toBe(CLOSED);
   expect(await w.memory()).not.toContain("rail travel");
 }, 40_000);
 

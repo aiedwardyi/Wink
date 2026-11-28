@@ -5951,9 +5951,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ...reactions,
   };
   const reactionsSeen = userTurnReactionKeys(turnOpts);
-  const importEligible = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId);
-  // the per-turn rule decides saving (turnRegistry); the pin only keeps the tool listed for the session it started
-  const importOpen = importEligible && importMemoryTool(activeMessages);
+  const importEligible = !commsDepth && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId);
+  // the per-turn rule decides saving (turnRegistry); the pin only keeps the tool listed for the session it started,
+  // a wake or routine in it too, so its engine env matches the typed turns'
+  const importOpen = importEligible && turnStartedByUser(opts) && importMemoryTool(activeMessages);
   let importMemory = importEligible && importPins.forTurn(threadId, instanceId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, importOpen);
   const currentPrompt = [composeUserTurnPrompt(text, turnOpts), ...folded].join("\n\n");
   let { notes: paneNotes, newestId: newestPaneNoteId, ids: paneNoteIds, tokens: paneTokens } = paneNotesForTurn(
