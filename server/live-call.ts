@@ -278,7 +278,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     const roomKey = room ? `${room.kind}:${room.id}` : "";
     const app = picks?.language ?? (locale === "ko" ? "ko" : "en");
     const voice = picks?.voice ?? cfg.liveCall?.voice ?? LIVE_VOICE;
-    const style = picks?.style ?? "normal";
+    const style: CallStyle = "normal";
     const cached = briefs.get(callId);
     if (!swap && cached?.botId === bot.id && cached.roomKey === roomKey && now() - cached.at < BRIEF_TTL_MS) return cached;
     const messages = store.activePath(bot.threadId);
@@ -327,7 +327,7 @@ export function createLiveCallRoutes(deps: LiveCallDeps) {
     const sameBot = body.mode === "bot" && !room;
     const sameLocale = picks?.language ?? (body.locale === "ko" ? "ko" : "en");
     const { brief, locale, voice, style } = sameBot
-      ? { brief: "", locale: sameLocale, voice: picks?.voice ?? cfg.liveCall?.voice ?? LIVE_VOICE, style: picks?.style ?? "normal" }
+      ? { brief: "", locale: sameLocale, voice: picks?.voice ?? cfg.liveCall?.voice ?? LIVE_VOICE, style: "normal" as CallStyle }
       : await briefFor(bot, callId, body.locale, swap, picks, room, tail);
     if (sameBot) keepPicks(callId, bot.id, { voice, style, language: sameLocale });
     const at = now();
