@@ -1,11 +1,11 @@
 // Every engine keys its warm process by the agents env, so a session keeps the import_memory tool it started
-// with: dropping it on message 4 cold-starts the engine. Saving still ends on the per-turn rule (see open).
+// with: dropping it on message 4 cold-starts the engine. Listing only: the calling turn decides saving.
 import type { SendTurnInput } from "./contracts.ts";
 
 const MAX_PINS = 32;
 
 type Cursor = SendTurnInput["resumeCursor"];
-type Pin = { instanceId: string; cursor: Cursor; open: boolean };
+type Pin = { instanceId: string; cursor: Cursor };
 
 const sameCursor = (a: Cursor, b: Cursor) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -19,11 +19,9 @@ export function importMemoryPins(max = MAX_PINS) {
       // a pin from a session's first turn binds to the cursor that session got
       const held = cursor !== undefined && pin?.instanceId === instanceId && (pin.cursor === undefined || sameCursor(pin.cursor, cursor));
       if (!held && !open) return false;
-      pins.set(threadId, { instanceId, cursor, open });
+      pins.set(threadId, { instanceId, cursor });
       if (pins.size > max) pins.delete(pins.keys().next().value!);
       return true;
     },
-    /** Whether import_memory may save in this chat's current turn. */
-    open: (threadId: string): boolean => pins.get(threadId)?.open === true,
   };
 }

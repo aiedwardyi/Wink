@@ -24,12 +24,14 @@ function t(key: MessageKey, vars?: { count: number }): string {
   return vars ? phrase.replaceAll("{count}", String(vars.count)) : phrase;
 }
 
+const offerOpen = () => !importDeclined() && !aboutYouFacts();
+
 /** An owner's 1:1 turn gets the tool for a new chat's first few typed messages. Unsent counts a send not in messages yet. */
 export function importMemoryTool(messages: Iterable<Pick<Message, "role" | "kind">>, unsent = 0): boolean {
   let typed = unsent;
   // stops past the first few typed lines, so a long chat costs nothing
   for (const message of messages) if (message.role === "user" && message.kind === "text" && ++typed > TOOL_TURNS) return false;
-  return Boolean(typed) && !importDeclined() && !aboutYouFacts();
+  return Boolean(typed) && offerOpen();
 }
 
 type Caller = { botId: string; threadId: string };
@@ -37,8 +39,8 @@ export type ImportMemoryDeps = {
   caller: (header: string | string[] | undefined) => Caller | undefined;
   ownerChat: (caller: Caller) => boolean;
   messages: (threadId: string) => readonly Message[];
-  /** The chat's current turn opened the tool; a session can keep it listed past that. */
-  open: (threadId: string) => boolean;
+  /** The calling turn is the owner's typed turn the per-turn rule opened; a session can keep the tool listed past it. */
+  open: (caller: Caller) => boolean;
   now?: () => number;
 };
 
@@ -69,7 +71,8 @@ export async function importMemoryRoute(req: IncomingMessage, res: ServerRespons
   if (!source) return json(res, 403, { error: "unknown sender" });
   // a room holds other people's text: only the owner's own chat may write their memory
   if (!deps.ownerChat(source)) return json(res, 403, { error: `${IMPORT_MEMORY_TOOL} works only in the user's own chat with you` });
-  if (!deps.open(source.threadId)) return json(res, 200, { text: CLOSED });
+  // Settings now, not at turn start: a save or decline there mid-turn closes it
+  if (!deps.open(source) || !offerOpen()) return json(res, 200, { text: CLOSED });
   const body = await readBody(req);
   if (body?.decline === true) {
     declineImport();

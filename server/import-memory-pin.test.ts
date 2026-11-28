@@ -9,7 +9,6 @@ describe("import_memory pinned to its provider session", () => {
     expect(pins.forTurn("t1", "gemini", "conv-1", true)).toBe(true);
     expect(pins.forTurn("t1", "gemini", "conv-1", false)).toBe(true);
     expect(pins.forTurn("t1", "gemini", "conv-1", false)).toBe(true);
-    expect(pins.open("t1")).toBe(false);
   });
 
   it("a new, recycled or compacted session, another engine or a restart goes by the per-turn rule", () => {
@@ -28,17 +27,6 @@ describe("import_memory pinned to its provider session", () => {
     const pins = importMemoryPins();
     expect(pins.forTurn("t1", "grok", undefined, false)).toBe(false);
     expect(pins.forTurn("t1", "grok", "s1", false)).toBe(false);
-    expect(pins.open("t1")).toBe(false);
-  });
-
-  it("opens saving only on a turn the rule opened", () => {
-    const pins = importMemoryPins();
-    pins.forTurn("t1", "claude", undefined, true);
-    expect(pins.open("t1")).toBe(true);
-    // Import Memory saved or declined mid-session
-    pins.forTurn("t1", "claude", "s1", false);
-    expect(pins.open("t1")).toBe(false);
-    expect(pins.open("t2")).toBe(false);
   });
 
   it("holds a bounded number of chats", () => {

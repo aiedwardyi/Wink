@@ -5952,9 +5952,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ...reactions,
   };
   const reactionsSeen = userTurnReactionKeys(turnOpts);
-  const importMemory = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId)
-    ? importPins.forTurn(threadId, instanceId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, importMemoryTool(activeMessages))
-    : false;
+  const importEligible = turnStartedByUser(opts) && opts?.readOnly !== true && instance.adapter.capabilities.agentsMcp === true && !notOwnerChats().has(threadId);
+  // the per-turn rule decides saving (turnRegistry); the pin only keeps the tool listed for the session it started
+  const importOpen = importEligible && importMemoryTool(activeMessages);
+  let importMemory = importEligible && importPins.forTurn(threadId, instanceId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, importOpen);
   const currentPrompt = [composeUserTurnPrompt(text, turnOpts), ...folded].join("\n\n");
   let { notes: paneNotes, newestId: newestPaneNoteId, ids: paneNoteIds, tokens: paneTokens } = paneNotesForTurn(
     activeMessages,
@@ -6419,7 +6420,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
-      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text), helperHint: turnStartedByUser(opts) && Boolean(integrations.terminal), typed: turnStartedByUser(opts) });
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text), helperHint: turnStartedByUser(opts) && Boolean(integrations.terminal), typed: turnStartedByUser(opts), importMemory: importOpen });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -6566,6 +6567,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             store.markProviderSessionBound(bot.id, threadId, opts?.cardContinuation ? activeMessages.at(-1)?.id ?? userMessage.id : userMessage.id);
             seed.cursor = undefined;
             resumeCursor = undefined;
+            // the new session goes by the per-turn rule, or the next turn resumes it with another tool list and launches again
+            if (importMemory) {
+              importMemory = importPins.forTurn(threadId, instanceId, undefined, importOpen);
+              if (!importMemory) delete integrations.agents?.env.OMB_IMPORT_MEMORY;
+            }
             text = withLate(systemRecycleText(!systemRecycle));
           } else text = [latestCompactionId === sessionCompactionId ? text : withTaskRecord(text, durableTaskRecordText), ...late.slice(lateCount)].join("\n\n");
           console.info(`[session] ${JSON.stringify({ threadId, reason: recycleDeferred ? "recycle-deferred-background" : systemRecycle ? "system" : "compaction", lastTurnToolRounds, sessionToolRounds })}`);
@@ -8769,7 +8775,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           caller: (header) => commsCallers.resolve(header),
           ownerChat: ({ botId, threadId }) => { const bot = store.bot(botId); return Boolean(bot && ownerChats(bot, notOwnerChats()).includes(threadId)); },
           messages: (threadId) => store.activePath(threadId),
-          open: (threadId) => importPins.open(threadId),
+          open: (caller) => ownerFileTurn(caller, caller.botId, caller.threadId) && turnRegistry.current(caller.threadId)?.importMemory === true,
         });
         for (const bot of store.bots) void memoryLookup.refresh(bot.id);
         return;

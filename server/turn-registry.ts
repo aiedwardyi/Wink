@@ -10,6 +10,8 @@ export interface LiveTurn {
   helperHint?: boolean;
   /** The user typed it: not a peer ask, routine, webhook, wake or card continuation. */
   typed?: boolean;
+  /** The per-turn rule opened import_memory saving when it was dispatched. */
+  importMemory?: boolean;
 }
 
 type TurnStart = Omit<LiveTurn, "nowWatch" | "rootId"> & { rootId?: string | null };

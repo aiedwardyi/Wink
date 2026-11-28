@@ -1,11 +1,11 @@
-// Preloaded with --import into a harness boot: appends a line to SPAWN_LOG when a fake engine CLI starts, is first
-// written to, and exits.
+// Preloaded with --import into a harness boot: appends a line to SPAWN_LOG when a fake engine CLI starts (with its
+// agents env when it gets an --mcp-config file), is first written to, and exits.
 import childProcess from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 
 const log = process.env.SPAWN_LOG!;
-const write = (entry: { fake: string; id: number; event: "spawn" | "stdin" | "exit" }) => appendFileSync(log, `${JSON.stringify(entry)}\n`);
+const write = (entry: { fake: string; id: number; event: "spawn" | "stdin" | "exit"; agents?: Record<string, string> }) => appendFileSync(log, `${JSON.stringify(entry)}\n`);
 let next = 0;
 const spawn = childProcess.spawn;
 // SAFETY: the wrapper passes every argument through to the real spawn and returns its child.
@@ -14,7 +14,9 @@ childProcess.spawn = ((command: string, args?: readonly string[], options?: chil
   const fake = [command, ...(args ?? [])].map(String).find((part) => /fake-[\w-]+\.ts/.test(part))?.match(/fake-[\w-]+\.ts/)?.[0];
   if (!fake || (args ?? []).includes("--version")) return child;
   const id = ++next;
-  write({ fake, id, event: "spawn" });
+  const config = (args ?? []).indexOf("--mcp-config");
+  const agents = config >= 0 ? JSON.parse(readFileSync(args![config + 1], "utf8")).mcpServers?.agents?.env : undefined;
+  write({ fake, id, event: "spawn", ...(agents && { agents }) });
   child.once("exit", () => write({ fake, id, event: "exit" }));
   const stdin = child.stdin;
   if (stdin) {
