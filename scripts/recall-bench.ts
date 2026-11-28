@@ -143,7 +143,7 @@ try {
     });
     if (!faithful) throw new Error(`${item.id}: the lookup logged ${JSON.stringify(shown)} but take() gave the bot ${JSON.stringify(carried)}: the scorer judges only rows the bot gets`);
     if (at < parity && JSON.stringify(await replay(item, workspace, notes)) !== JSON.stringify(shown)) mismatched.push(item.id);
-    rows.push({ id: item.id, kind: item.kind, family: item.family, shown, ...judgeCase(item, shown) });
+    rows.push({ id: item.id, kind: item.kind, family: item.family, ...(item.cluster === undefined ? {} : { cluster: item.cluster }), shown, ...judgeCase(item, shown) });
     if ((at + 1) % 250 === 0) console.error(`${opt.set}: ${at + 1}/${set.cases.length}`);
   }
   const of = (kind: Case["kind"]) => rows.filter((row) => row.kind === kind);

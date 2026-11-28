@@ -42,10 +42,15 @@ export function judge({ base, arms }) {
     let b = 0;
     let c = 0;
     const guards = { wrongScope: 0, superseded: 0, mustHold: 0, falseRecall: 0 };
+    // a real-traffic positive carries its answer-row cluster: the paired test counts each cluster once by its net change, so one note line or bot cannot carry a win
+    const votes = new Map();
+    const asks = { b: 0, c: 0 };
     arm.rows.forEach((row, at) => {
       const was = base[at];
       if (row.kind === "positive" && was.hit !== row.hit) {
-        if (row.hit) c++;
+        asks[row.hit ? "c" : "b"]++;
+        if (row.cluster !== undefined) votes.set(row.cluster, (votes.get(row.cluster) ?? 0) + (row.hit ? 1 : -1));
+        else if (row.hit) c++;
         else b++;
       }
       if (row.wrongScope && !was.wrongScope) guards.wrongScope++;
@@ -53,9 +58,14 @@ export function judge({ base, arms }) {
       if (row.kind === "guard" && was.hit && !row.hit) guards.mustHold++;
       if (row.kind === "miss" && row.shown.length && !was.shown.length) guards.falseRecall++;
     });
+    for (const net of votes.values()) {
+      if (net > 0) c++;
+      if (net < 0) b++;
+    }
+    const clustered = base.some((row) => row.cluster !== undefined);
     const clean = !guards.wrongScope && !guards.superseded && !guards.mustHold && !guards.falseRecall;
     const hits = count(arm.rows, (row) => row.kind === "positive" && row.hit);
-    return { name: arm.name, sham: Boolean(arm.sham), of: positives, baseHits: count(base, (row) => row.kind === "positive" && row.hit), hits, gain: (c - b) / positives, b, c, p: mcnemar(b, c), guards: { ...guards, clean } };
+    return { name: arm.name, sham: Boolean(arm.sham), of: positives, baseHits: count(base, (row) => row.kind === "positive" && row.hit), hits, gain: (asks.c - asks.b) / positives, b, c, ...(clustered ? { asks } : {}), p: mcnemar(b, c), guards: { ...guards, clean } };
   });
   const adjusted = holm(scored.map((arm) => arm.p));
   const ruled = scored.map((arm, at) => {

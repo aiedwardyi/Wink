@@ -26,6 +26,7 @@ export type Case = {
   stale: string[];
   /** real-traffic sets: every judged answer row's ref, the turn's time, and the notes as of it by name in the set's snapshots */
   answers?: string[];
+  cluster?: string;
   at?: number;
   snapshot?: string;
 };

@@ -1,0 +1,98 @@
+{
+ "tuning": {
+  "hash": "c7ad337c841ce17c16064226ddccf50d61f8d467545b1ec3d0abde2754bd1fdc",
+  "cases": 4873,
+  "positives": 522,
+  "misses": 4351,
+  "guards": 0,
+  "clusters": 166,
+  "topBotShare": 0.646,
+  "from": "2026-10-29T12:03:55.859Z",
+  "to": "2026-11-17T14:36:43.803Z",
+  "note": "clear asks only: both judges agree on whether an answer row exists; answer rows = rows both marked; both saw an answer but share no row = no-match"
+ },
+ "tuning-disputed": {
+  "hash": "5d75e83566061d8819b771a71edc5f9bac0d96d6cf7bbbfaf0b9947bd1928c6f",
+  "cases": 693,
+  "positives": 693,
+  "misses": 0,
+  "guards": 0,
+  "clusters": 220,
+  "topBotShare": 0.68,
+  "from": "2026-10-29T12:20:26.304Z",
+  "to": "2026-11-17T14:48:43.344Z",
+  "note": "side set: one judge saw an answer row, the other none"
+ },
+ "tuning-opus": {
+  "hash": "a052571223e2e1fc59991d07cae0b39d787290ca38302299ac5d44051ff2b57f",
+  "cases": 5566,
+  "positives": 1017,
+  "misses": 4549,
+  "guards": 0,
+  "clusters": 253,
+  "topBotShare": 0.649,
+  "from": "2026-10-29T12:03:55.859Z",
+  "to": "2026-11-17T14:48:43.344Z",
+  "note": "single judge: Opus rows, every ask"
+ },
+ "tuning-sol": {
+  "hash": "1a1d3de9eca7437b78b21f0c91c0c7c02333cc3ba1fb0e6b18d4d15b99921875",
+  "cases": 5566,
+  "positives": 882,
+  "misses": 4684,
+  "guards": 0,
+  "clusters": 166,
+  "topBotShare": 0.65,
+  "from": "2026-10-29T12:03:55.859Z",
+  "to": "2026-11-17T14:48:43.344Z",
+  "note": "single judge: Sol rows, every ask"
+ },
+ "held-out": {
+  "hash": "f36316991d3eea9e89de8da7cfbf93446572ea9b58aa57ea51d4b67ca98ccf7a",
+  "cases": 2241,
+  "positives": 465,
+  "misses": 1776,
+  "guards": 0,
+  "clusters": 140,
+  "topBotShare": 0.802,
+  "from": "2026-11-17T14:49:27.173Z",
+  "to": "2026-11-28T11:57:43.006Z",
+  "note": "clear asks only: both judges agree on whether an answer row exists; answer rows = rows both marked; both saw an answer but share no row = no-match"
+ },
+ "held-out-disputed": {
+  "hash": "2b09189410f1a7000484ab7ab044ed5044ce5bdd8de67a95202aca305f59c55c",
+  "cases": 543,
+  "positives": 543,
+  "misses": 0,
+  "guards": 0,
+  "clusters": 188,
+  "topBotShare": 0.768,
+  "from": "2026-11-17T15:13:19.893Z",
+  "to": "2026-11-28T11:54:02.138Z",
+  "note": "side set: one judge saw an answer row, the other none"
+ },
+ "held-out-opus": {
+  "hash": "cce3fda93b5a112bc5d8a6e25994076a125c61940dcf93c296c8bb7a6290475a",
+  "cases": 2784,
+  "positives": 900,
+  "misses": 1884,
+  "guards": 0,
+  "clusters": 195,
+  "topBotShare": 0.794,
+  "from": "2026-11-17T14:49:27.173Z",
+  "to": "2026-11-28T11:57:43.006Z",
+  "note": "single judge: Opus rows, every ask"
+ },
+ "held-out-sol": {
+  "hash": "766e13f3d36bb85290b8be1bbf6d5ff3f225e7e557f61a97d033174dd7a32f7b",
+  "cases": 2784,
+  "positives": 755,
+  "misses": 2029,
+  "guards": 0,
+  "clusters": 108,
+  "topBotShare": 0.8,
+  "from": "2026-11-17T14:49:27.173Z",
+  "to": "2026-11-28T11:57:43.006Z",
+  "note": "single judge: Sol rows, every ask"
+ }
+}

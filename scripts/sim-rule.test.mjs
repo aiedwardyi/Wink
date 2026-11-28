@@ -84,6 +84,15 @@ describe("round verdicts", () => {
     expect(round.arms.map((arm) => arm.guards.falseRecall)).toEqual([0, 0, 1]);
   });
 
+  it("positives tagged with an answer-row cluster count once per cluster, so one note line cannot carry a win", () => {
+    const tagged = (rows, cluster) => rows.map((row) => (row.kind === "positive" ? { ...row, cluster: cluster(Number(row.id.split("-")[1])) } : row));
+    const oneLine = (n) => (n >= 380 && n < 410 ? "r-one" : `r-${n}`);
+    const round = judge({ base: tagged(base(), oneLine), arms: [{ ...sham, rows: tagged(base(), oneLine) }, { name: "one-line", rows: tagged(flip(base(), range(380, 30), { hit: true, shown: ["a"] }), oneLine) }, { name: "spread", rows: tagged(flip(base(), range(380, 30), { hit: true, shown: ["a"] }), (n) => `r-${n}`) }] });
+    expect(round.arms.map((arm) => [arm.name, arm.b, arm.c, arm.verdict])).toEqual([["sham", 0, 0, "no gain"], ["one-line", 0, 1, "promising"], ["spread", 0, 30, "win"]]);
+    expect(round.arms[1].asks).toEqual({ b: 0, c: 30 });
+    expect(round.arms[1].gain).toBeCloseTo(30 / 450);
+  });
+
   it("a significant loss is worse", () => {
     const round = judge({ base: base(), arms: [sham, { name: "reversed", rows: flip(base(), range(0, 60), { hit: false, shown: ["b"] }) }] });
     expect(round.arms[1]).toMatchObject({ b: 60, c: 0, verdict: "worse" });
