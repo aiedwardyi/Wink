@@ -110,25 +110,27 @@ export async function openSignInTerminal({ command, driverKind }, platform = pro
   return false;
 }
 
-export function buildInstallScript({ command, needsNode, signInCommand, driverKind }, platform) {
+export function buildInstallScript({ command, needsNode, signInCommand, driverKind, failMarker }, platform) {
   const signIn = signInCommand && !/\bYOUR_[A-Z0-9_]+\b/.test(signInCommand) ? signInCommand : null;
   const agy = driverKind === "antigravityAgent";
   if (platform === "win32") {
     const refreshPath = "$env:Path=$env:Path+';'+[Environment]::GetEnvironmentVariable('Path', 'Machine')+';'+[Environment]::GetEnvironmentVariable('Path', 'User')";
     const signInEnv = agy ? "$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; "
       : driverKind === "claudeAgent" ? "$env:Path=(Join-Path $HOME '.local/bin')+';'+$env:Path; " : "";
+    // Wink's install probe reads this file to stop saying "Finish in the window".
+    const mark = failMarker ? ` try { Set-Content -LiteralPath '${failMarker.replaceAll("'", "''")}' -Value failed } catch {};` : "";
     return [
       "$ErrorActionPreference='Stop'",
       ...(needsNode && /^\s*npm(?:\s|$)/.test(command) ? [
         refreshPath,
         "if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {",
         "$node = $false; try { winget install -e --id OpenJS.NodeJS.LTS --source winget --accept-source-agreements --accept-package-agreements; $node = $LASTEXITCODE -eq 0 } catch {}",
-        `if (-not $node) { Write-Host "Node.js didn't install. Install Node.js LTS from https://nodejs.org, then try the install again in Wink."; return }`,
+        `if (-not $node) { Write-Host "Node.js didn't install. Install Node.js LTS from https://nodejs.org, then try the install again in Wink.";${mark} return }`,
         refreshPath,
         "}",
       ] : []),
       `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`$ErrorActionPreference='Stop'\n${command}`, "utf16le").toString("base64")}`,
-      `if ($LASTEXITCODE -ne 0) { Write-Host "The install didn't finish. See the error above, then try the install again in Wink."; return }`,
+      `if ($LASTEXITCODE -ne 0) { Write-Host "The install didn't finish. See the error above, then try the install again in Wink.";${mark} return }`,
       refreshPath,
       ...(signIn ? [`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`${signInEnv}${signIn}`, "utf16le").toString("base64")}`] : []),
     ].join("\n");

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -33,7 +33,8 @@ for (const shell of ["powershell.exe", "pwsh.exe"]) {
         const command = scenario === "installer exit" ? "Write-Output 'installer-output'; Invoke-Expression 'exit 7'"
           : scenario.startsWith("irm") ? `function Invoke-RestMethod { '${scenario === "irm failure" ? "Write-Error stub-failure" : "install"}' }\nirm https://stub.invalid/install.ps1 | iex`
             : npm ? "npm install -g stub" : "install";
-        const script = terminal.buildInstallScript({ command, needsNode: true, signInCommand: claude ? "claude auth login" : "signin", driverKind: claude ? "claudeAgent" : "codex" }, "win32");
+        const failMarker = join(dir, "it's failed.marker");
+        const script = terminal.buildInstallScript({ command, needsNode: true, signInCommand: claude ? "claude auth login" : "signin", driverKind: claude ? "claudeAgent" : "codex", failMarker }, "win32");
         // Keep PATH refresh on the stub tools.
         const powershell = join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0");
         const harness = `class Environment { static [string] GetEnvironmentVariable([string] $name, [string] $target) { return $env:WINK_TEST_PATH } }\n$env:Path=${quote(`${dir};${powershell}`)}\n& {\n${script}\n}\nWrite-Output 'parent-alive'`;
@@ -54,6 +55,7 @@ for (const shell of ["powershell.exe", "pwsh.exe"]) {
         if (scenario === "installer exit") assert.match(result.stdout, /installer-output/);
         if (["winget failure", "winget missing"].includes(scenario)) assert.match(result.stdout, /Node\.js didn't install\..*https:\/\/nodejs\.org/);
         if (["failure", "installer exit"].includes(scenario)) assert.match(result.stdout, /The install didn't finish\./);
+        assert.equal(existsSync(failMarker), ["failure", "winget failure", "winget missing", "irm failure", "installer exit"].includes(scenario), "failure marker");
         if (scenario === "irm failure") assert.ok(result.stderr, "PowerShell error stays visible");
       } finally { rmSync(dir, { recursive: true, force: true }); }
     });

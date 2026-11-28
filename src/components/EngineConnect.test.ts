@@ -296,6 +296,28 @@ describe("first engine connection", () => {
     expect(host.textContent).toContain("Finish in the window that opened.");
   });
 
+  it("shows Didn't finish? once the install window reports a failed install", async () => {
+    let failed = false;
+    const engineInstallFailed = vi.fn(async () => failed);
+    Object.assign(window.ogb!, { engineInstallFailed });
+    await connect();
+    const row = () => host.querySelector('[data-engine-connect="codex"]')!;
+    await press(row());
+    await advance(5000);
+    expect(row().textContent).toContain("Finish in the window that opened.");
+    failed = true;
+    await advance(5000);
+    expect(row().textContent).not.toContain("Finish in the window that opened.");
+    expect(row().textContent).toContain("Didn't finish?");
+    expect(row().querySelector("button")!.textContent).toContain("Try Again");
+    expect(engineInstallFailed).toHaveBeenCalledWith("codex");
+    failed = false;
+    await press(row());
+    expect(row().textContent).toContain("Finish in the window that opened.");
+    await advance(5000);
+    expect(row().textContent).toContain("Finish in the window that opened.");
+  });
+
   it("keeps polling after a failed recheck, without losing the commands escape", async () => {
     await connect();
     await click("ClaudeInstall");

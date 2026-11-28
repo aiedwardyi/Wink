@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -14,7 +15,9 @@ const encodedCommand = Buffer.from(`$ErrorActionPreference='Stop'\n${descriptor.
 const encodedSignIn = (script) => Buffer.from(script, "utf16le").toString("base64");
 
 function setup(trusted = true, opened = true) {
-  let handler;
+  const handlers = {};
+  const dir = mkdtempSync(join(tmpdir(), "wink-install-marker-"));
+  const marker = (id) => join(dir, `${id}.failed`);
   const contents = { isDestroyed: () => false, getURL: () => "http://localhost:5199/", mainFrame: { url: "http://localhost:5199/" } };
   const event = { sender: trusted ? contents : {}, senderFrame: contents.mainFrame };
   const fetch = vi.fn(async () => ({ ok: true, json: async () => descriptor }));
@@ -22,14 +25,36 @@ function setup(trusted = true, opened = true) {
   const open = vi.fn(async () => opened);
   const blank = vi.fn(async () => true);
   const server = vi.fn(() => ({ port: 8799, token: "test-token" }));
-  install.registerEngineInstall({ handle: (channel, fn) => { expect(channel).toBe("engine:install"); handler = fn; } }, {
+  install.registerEngineInstall({ handle: (channel, fn) => { handlers[channel] = fn; } }, {
     trusted: (caller) => trustedTerminalSender(caller, contents, "http://localhost:5199"),
-    server, fetch, copy, open, blank,
+    server, fetch, copy, open, blank, marker,
   });
-  return { call: (id, ...rest) => handler(event, id, ...rest), server, fetch, copy, open, blank };
+  expect(Object.keys(handlers)).toEqual(["engine:install", "engine:install-failed"]);
+  return { call: (id, ...rest) => handlers["engine:install"](event, id, ...rest), failed: (id) => handlers["engine:install-failed"](event, id), marker, server, fetch, copy, open, blank };
 }
 
 describe("engine install IPC", () => {
+  it("reports a failure marker the install window wrote and clears it before the next launch", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const d = setup();
+      writeFileSync(d.marker("codex"), "failed");
+      expect(await d.call("codex")).toBe("running");
+      expect(d.open).toHaveBeenLastCalledWith({ ...descriptor, failMarker: d.marker("codex") });
+      expect(existsSync(d.marker("codex"))).toBe(false);
+      expect(await d.failed("codex")).toBe(false);
+      writeFileSync(d.marker("codex"), "failed");
+      expect(await d.failed("codex")).toBe(true);
+      expect(await d.failed("claude")).toBe(false);
+      vi.setSystemTime(Date.now() + 10000);
+      expect(await d.call("codex")).toBe("running");
+      expect(await d.failed("codex")).toBe(false);
+      await expect(d.failed("../codex")).rejects.toThrow("Invalid engine id");
+      const untrusted = setup(false);
+      await expect(untrusted.failed("codex")).rejects.toThrow("Untrusted install caller");
+    } finally { vi.useRealTimers(); }
+  });
+
   it("guards an instance during resolution, launch, and the 10-second repeat window", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const d = setup();
@@ -114,7 +139,7 @@ describe("engine install IPC", () => {
     const d = setup();
     expect(await d.call("codex", "renderer payload")).toBe("running");
     expect(d.fetch).toHaveBeenCalledWith("http://127.0.0.1:8799/api/instances/codex/install", expect.objectContaining({ redirect: "error", headers: { Authorization: "Bearer test-token" } }));
-    expect(d.open).toHaveBeenCalledExactlyOnceWith(descriptor);
+    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...descriptor, failMarker: d.marker("codex") });
     expect(JSON.stringify(d.open.mock.calls)).not.toContain("renderer payload");
     expect(d.copy).not.toHaveBeenCalled();
   });
@@ -205,6 +230,18 @@ describe("install terminal script", () => {
     expect(lines[1]).toBe(`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedSignIn("$ErrorActionPreference='Stop'\nirm https://claude.ai/install.ps1 | iex")}`);
     expect(lines[2]).toMatch(/^if \(\$LASTEXITCODE -ne 0\) \{ Write-Host "[^"]+"; return \}$/);
     expect(lines.at(-1)).toBe(`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedSignIn(`$env:Path=(Join-Path $HOME '.local/bin')+';'+$env:Path; ${signIn}`)}`);
+  });
+
+  it("writes the failure marker on each failed step, quoting its path", () => {
+    const failMarker = "C:\\Users\\O'Neil\\AppData\\Local\\Temp\\wink-install-codex.failed";
+    const lines = terminal.buildInstallScript({ ...descriptor, failMarker }, "win32").split("\n");
+    const failures = lines.filter((line) => line.includes("return"));
+    expect(failures).toHaveLength(2);
+    for (const line of failures) {
+      expect(line).toContain("try { Set-Content -LiteralPath 'C:\\Users\\O''Neil\\AppData\\Local\\Temp\\wink-install-codex.failed' -Value failed } catch {}; return }");
+      expect(line.indexOf("Write-Host")).toBeLessThan(line.indexOf("Set-Content"));
+    }
+    expect(terminal.buildInstallScript({ ...descriptor, failMarker }, "darwin")).toBe(terminal.buildInstallScript(descriptor, "darwin"));
   });
 
   it("refreshes registry PATH before the npm check", () => {

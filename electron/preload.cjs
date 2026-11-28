@@ -144,6 +144,7 @@ contextBridge.exposeInMainWorld("ogb", {
   openInstallTerminal: (command) => ipcRenderer.invoke("engine:open-terminal", command),
   openEngineSignIn: (instanceId) => ipcRenderer.invoke("engine:sign-in", instanceId),
   openEngineInstall: (instanceId, installOnly) => invoke("engine:install", instanceId, installOnly),
+  engineInstallFailed: (instanceId) => invoke("engine:install-failed", instanceId),
   /** Open a web link in the default browser. Unlike renderer window.open,
    * this remains reliable after an asynchronous API request. */
   openExternal: (url) => invoke("desktop:open-external", url),

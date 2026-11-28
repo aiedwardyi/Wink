@@ -8,10 +8,27 @@ export function useEngineInstall(instances: InstanceInfo[], refresh: () => void 
   const latest = useRef({ instances, refresh, attempts });
   latest.current = { instances, refresh, attempts };
   const installing = Object.values(attempts).some((attempt) => !attempt.failed);
+  // A failed install window leaves a marker; flip only the attempt that was asked about, not a newer one.
+  const checkFailed = (ids: string[]) => {
+    const failedCheck = window.ogb?.engineInstallFailed;
+    if (!failedCheck) return [];
+    return ids.map((id) => {
+      const until = latest.current.attempts[id]?.until;
+      return failedCheck(id).then((failed) => {
+        if (failed) setAttempts((current) => current[id] && current[id].until === until && !current[id].failed
+          ? { ...current, [id]: { until: 0, failed: true } } : current);
+      }, () => {});
+    });
+  };
+  const activeIds = () => Object.entries(latest.current.attempts).filter(([id, attempt]) => !attempt.failed && Date.now() < attempt.until
+    && latest.current.instances.find((row) => row.instanceId === id)?.snapshot.state !== "available").map(([id]) => id);
 
   useEffect(() => {
     if (!focus) return;
-    const onFocus = () => { void Promise.resolve().then(() => latest.current.refresh()).catch(() => {}); };
+    const onFocus = () => {
+      void Promise.resolve().then(() => latest.current.refresh()).catch(() => {});
+      void Promise.all(checkFailed(activeIds()));
+    };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [focus]);
@@ -30,11 +47,10 @@ export function useEngineInstall(instances: InstanceInfo[], refresh: () => void 
     if (!installing) return;
     let checking = false;
     const timer = setInterval(() => {
-      const pending = Object.entries(latest.current.attempts).some(([id, attempt]) => !attempt.failed && Date.now() < attempt.until
-        && latest.current.instances.find((row) => row.instanceId === id)?.snapshot.state !== "available");
-      if (!pending || checking) return;
+      const ids = activeIds();
+      if (!ids.length || checking) return;
       checking = true;
-      void Promise.resolve().then(() => latest.current.refresh()).catch(() => {}).finally(() => { checking = false; });
+      void Promise.all([Promise.resolve().then(() => latest.current.refresh()).catch(() => {}), ...checkFailed(ids)]).finally(() => { checking = false; });
     }, 5000);
     return () => clearInterval(timer);
   }, [installing]);
