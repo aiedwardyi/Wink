@@ -163,3 +163,20 @@ it("keeps the comms depth cap and wires captured roots into every busy room path
   expect(prepares).toHaveLength(2);
   for (const call of prepares) expect(call.arguments[0].getText(source)).toContain("rootId");
 });
+
+it("starts an owner chain for the host's own line from a host seat, and none for a guest's", () => {
+  const configure = nodes(ts.isCallExpression).find((node) => node.expression.getText(source) === "configureRoomAsks")!;
+  const dispatch = (configure.arguments[0] as ts.ObjectLiteralExpression).properties.find((prop) => prop.name?.getText(source) === "dispatch") as ts.PropertyAssignment;
+  const queued: { rootId?: string }[] = [];
+  const run = (owner: boolean, entryId: string) => new Function("enqueueDrainedRoomTurn", "store", "endAsk", "askFromOwner", "rootForStart", `return ${dispatch.initializer.getText(source)};`)(
+    (_botId: string, _threadId: string, room: { rootId?: string }) => { queued.push(room); return Promise.resolve(); },
+    { groupByThread: () => ({ id: "g1" }) },
+    () => {},
+    () => owner,
+    rootForStart,
+  )({ id: `ask-${entryId}`, botId: "b1", threadId: "root-index-thread", entryId });
+  run(true, "seat-line");
+  run(false, "guest-line");
+  expect(ownerRoot(queued[0]?.rootId)).toBe(true);
+  expect(queued[1]?.rootId).toBeUndefined();
+});

@@ -7230,7 +7230,8 @@ configureRoomAsks({
   store,
   hostName: () => cfg.profile?.name?.trim() || "The host",
   instance: (botId, threadId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot, threadId) : null; },
-  dispatch: (ask) => void enqueueDrainedRoomTurn(ask.botId, ask.threadId, { groupId: store.groupByThread(ask.threadId)?.id ?? "", hop: 0, askId: ask.id, onDispatchError: () => void endAsk(ask.id, "failed") }),
+  // the host's own line from a host seat starts an owner chain, as it does from this PC's group box
+  dispatch: (ask) => void enqueueDrainedRoomTurn(ask.botId, ask.threadId, { groupId: store.groupByThread(ask.threadId)?.id ?? "", hop: 0, askId: ask.id, ...(askFromOwner(ask) ? { rootId: rootForStart(ask.threadId, { kind: "human", messageKey: ask.entryId }) ?? undefined } : {}), onDispatchError: () => void endAsk(ask.id, "failed") }),
   stopTurn: (ask, ended) => groupRoutes.stopMember(ask.threadId, ask.botId, ended),
   endSession: async (ask) => { const bot = store.bot(ask.botId); await (bot && botAccounts.instance(bot, ask.threadId)?.adapter.endSession?.(ask.threadId)); },
   alert: roomAlert,
