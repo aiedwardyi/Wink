@@ -202,7 +202,7 @@ it("closes the compact menu on a phone swipe down from the top row, and keeps it
   expect(panel.dataset.closing).toBeUndefined();
   const top = panel.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Answered by"]')!;
   await swipe(top);
-  expect(panel.dataset.closing).toBe("true");
+  await vi.waitFor(() => expect(panel.dataset.closing).toBe("true"));
 });
 
 it("fits the panel and its volume slider on a phone", async () => {
