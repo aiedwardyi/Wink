@@ -13,6 +13,10 @@
   "alsoWin": [
    "tuning-opus",
    "tuning-sol"
+  ],
+  "judges": [
+   "opus",
+   "sol"
   ]
  },
  "tuning-disputed": {
@@ -37,7 +41,10 @@
   "topBotShare": 0.649,
   "from": "2026-10-29T12:03:55.859Z",
   "to": "2026-11-17T14:48:43.344Z",
-  "note": "single judge: Opus rows, every ask"
+  "note": "single judge: Opus rows, every ask",
+  "judges": [
+   "opus"
+  ]
  },
  "tuning-sol": {
   "hash": "1a1d3de9eca7437b78b21f0c91c0c7c02333cc3ba1fb0e6b18d4d15b99921875",
@@ -49,7 +56,10 @@
   "topBotShare": 0.65,
   "from": "2026-10-29T12:03:55.859Z",
   "to": "2026-11-17T14:48:43.344Z",
-  "note": "single judge: Sol rows, every ask"
+  "note": "single judge: Sol rows, every ask",
+  "judges": [
+   "sol"
+  ]
  },
  "held-out": {
   "hash": "f36316991d3eea9e89de8da7cfbf93446572ea9b58aa57ea51d4b67ca98ccf7a",
@@ -65,6 +75,10 @@
   "alsoWin": [
    "held-out-opus",
    "held-out-sol"
+  ],
+  "judges": [
+   "opus",
+   "sol"
   ]
  },
  "held-out-disputed": {
@@ -89,7 +103,10 @@
   "topBotShare": 0.794,
   "from": "2026-11-17T14:49:27.173Z",
   "to": "2026-11-28T11:57:43.006Z",
-  "note": "single judge: Opus rows, every ask"
+  "note": "single judge: Opus rows, every ask",
+  "judges": [
+   "opus"
+  ]
  },
  "held-out-sol": {
   "hash": "766e13f3d36bb85290b8be1bbf6d5ff3f225e7e557f61a97d033174dd7a32f7b",
@@ -101,6 +118,9 @@
   "topBotShare": 0.8,
   "from": "2026-11-17T14:49:27.173Z",
   "to": "2026-11-28T11:57:43.006Z",
-  "note": "single judge: Sol rows, every ask"
+  "note": "single judge: Sol rows, every ask",
+  "judges": [
+   "sol"
+  ]
  }
 }

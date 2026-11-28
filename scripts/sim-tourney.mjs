@@ -1,9 +1,11 @@
 // Offline recall tourney: spec -> one worktree per arm at a frozen sha -> scripts/recall-bench.ts -> scripts/sim-rule.mjs ->
 // result.json, and on held-out a pick-ledger entry. The scorer, sets and rule run from this checkout; an arm may only change app code.
-// node scripts/sim-tourney.mjs <spec.json> --sets <dir> --ledger <ledger.mjs> [--on tuning|held-out] [--manifest scripts/recall-sets.*.json] [--out <dir>] [--repo <dir>] [--keep]
+// node scripts/sim-tourney.mjs <spec.json> --sets <dir> --ledger <ledger.mjs> [--on tuning|held-out] [--manifest scripts/recall-sets.*.json] [--labels <row-labels.jsonl> --judge <judge.mjs>] [--out <dir>] [--repo <dir>] [--keep]
 // Each set sits alone in its own folder; arm seats get only the tuning folder, and a held-out run must say --on held-out.
 // spec: { name, base, prereg, arms: [{ name, sha, guess? } | { name, patch, guess? }, ...] }, exactly one arm with sham: true; guess = expected gain in points, filed before the first score
 // A manifest entry's alsoWin names sets (each in its own folder beside --sets) that every arm is also scored on: a win must be a win on each.
+// A manifest entry's judges names whose row labels judge its fires. Every row base or an arm shows needs a label from each: rows the store lacks are
+// written blind (no arm names, deduped, hash order) to the run's unjudged.jsonl and labeled by `node <judge> <unjudged.jsonl> <row-labels.jsonl>`.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
@@ -59,13 +61,48 @@ export function mustAlsoWin(arms, sides) {
   });
 }
 
+/** The row-label store: one JSON line per judge mark, { id, ref, engine, mark }; a later line for the same row and engine wins. */
+export function readLabels(path) {
+  const labels = new Map();
+  if (!existsSync(path)) return labels;
+  for (const line of lines(readFileSync(path, "utf8"))) {
+    const { id, ref, engine, mark } = JSON.parse(line);
+    const key = `${id}\t${ref}`;
+    labels.set(key, { ...labels.get(key), [engine]: mark });
+  }
+  return labels;
+}
+
+/** Every shown row some judge has not labeled, once each, in hash order so nothing tells which arm showed it. */
+export function unlabeled(rowSets, labels, engines) {
+  const out = new Map();
+  for (const rows of rowSets) for (const row of rows) for (const ref of row.shown) {
+    const key = `${row.id}\t${ref}`;
+    if (engines.some((engine) => typeof labels.get(key)?.[engine] !== "boolean")) out.set(key, { id: row.id, ref });
+  }
+  const order = (row) => createHash("sha256").update(`${row.id}\t${row.ref}`).digest("hex");
+  return [...out.values()].sort((a, b) => order(a).localeCompare(order(b)));
+}
+
+/** Each shown row's label for a set judged by these judges: right if all marked it, wrong if none did, else split. */
+export function withLabels(rows, labels, judges) {
+  return rows.map((row) => ({
+    ...row,
+    judged: row.shown.map((ref) => {
+      const marks = judges.map((engine) => labels.get(`${row.id}\t${ref}`)?.[engine]);
+      if (marks.some((mark) => typeof mark !== "boolean")) throw new Error(`${row.id} ${ref} has no ${judges.join(" + ")} label`);
+      return marks.every(Boolean) ? "right" : marks.some(Boolean) ? "split" : "wrong";
+    }),
+  }));
+}
+
 function score(root, on, sets, out, parity, manifestPath) {
   const run = spawnSync(process.execPath, ["--experimental-strip-types", join(BENCH, "scripts", "recall-bench.ts"), "--root", root, "--sets", sets, "--set", on, "--out", out, "--parity", String(parity), "--manifest", manifestPath], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
   if (run.status !== 0) refuse(`scorer failed on ${root}`);
   return JSON.parse(readFileSync(out, "utf8"));
 }
 
-export function tourney({ spec, on = "tuning", sets, ledger, manifest: manifestPath = join(BENCH, "scripts", "recall-sets.json"), out = join(sets, "..", "runs"), repo = BENCH, keep = false, today = new Date().toLocaleDateString("sv-SE") }) {
+export function tourney({ spec, on = "tuning", sets, ledger, manifest: manifestPath = join(BENCH, "scripts", "recall-sets.json"), labels: labelsPath, judge: judgeScript, out = join(sets, "..", "runs"), repo = BENCH, keep = false, today = new Date().toLocaleDateString("sv-SE") }) {
   if (!["held-out", "tuning"].includes(on)) refuse(`--on is tuning or held-out, not ${on}`);
   manifestPath = resolve(manifestPath);
   const manifestRel = relative(BENCH, manifestPath).replace(/\\/g, "/");
@@ -109,6 +146,12 @@ export function tourney({ spec, on = "tuning", sets, ledger, manifest: manifestP
     if (!manifest[name]?.hash) refuse(`${on} names alsoWin set ${name}, which has no hash in ${manifestRel}`);
     if (prereg.sides?.[name] !== manifest[name].hash) refuse(`pre-registration ${spec.prereg} names sides.${name} ${prereg.sides?.[name]}, but the bench has ${manifest[name].hash}: a changed set needs a new pre-registration`);
     if (!existsSync(join(sets, "..", name, `${name}.json`))) refuse(`${on} needs its alsoWin set ${name} in ${join(sets, "..", name)}`);
+  }
+  const judgesOf = Object.fromEntries([on, ...alsoWin].filter((name) => manifest[name]?.judges).map((name) => [name, manifest[name].judges]));
+  const engines = [...new Set(Object.values(judgesOf).flat())];
+  if (engines.length) {
+    if (!labelsPath || !judgeScript) refuse(`${Object.keys(judgesOf).join(", ")} judge fires by row labels: pass --labels <row-labels.jsonl> and --judge <judge.mjs>`);
+    if (prereg.files?.judgeHash !== fileHash(judgeScript)) refuse(`pre-registration ${spec.prereg} names files.judgeHash ${prereg.files?.judgeHash}, but --judge ${judgeScript} hashes ${fileHash(judgeScript)}: a changed judge needs a new pre-registration`);
   }
 
   const hash = manifest[on]?.hash;
@@ -157,12 +200,43 @@ export function tourney({ spec, on = "tuning", sets, ledger, manifest: manifestP
     const baseScore = score(baseRoot, on, sets, join(dir, "base.json"), PARITY, manifestPath);
     if (baseScore.parity.mismatches || baseScore.parity.checked < Math.min(PARITY, baseScore.totals.cases)) refuse(`bench parity ${baseScore.parity.checked - baseScore.parity.mismatches}/${baseScore.parity.checked} with the base lookup: the scorer no longer reads the real pick`);
     const scored = ready.map((arm) => ({ ...arm, score: score(arm.root, on, sets, join(dir, `${arm.name}.json`), 0, manifestPath) }));
-    const main = judge({ base: baseScore.rows, arms: scored.map((arm) => ({ name: arm.name, sham: arm.sham, rows: arm.score.rows })) });
-    const sides = Object.fromEntries(alsoWin.map((name) => {
+    const sideRows = Object.fromEntries(alsoWin.map((name) => {
       const folder = join(sets, "..", name);
-      const sideBase = score(baseRoot, name, folder, join(dir, `base.${name}.json`), 0, manifestPath);
-      return [name, judge({ base: sideBase.rows, arms: ready.map((arm) => ({ name: arm.name, sham: arm.sham, rows: score(arm.root, name, folder, join(dir, `${arm.name}.${name}.json`), 0, manifestPath).rows })) })];
+      return [name, { base: score(baseRoot, name, folder, join(dir, `base.${name}.json`), 0, manifestPath).rows, arms: ready.map((arm) => score(arm.root, name, folder, join(dir, `${arm.name}.${name}.json`), 0, manifestPath).rows) }];
     }));
+    const rowsOf = { [on]: { base: baseScore.rows, arms: scored.map((arm) => arm.score.rows) }, ...sideRows };
+    let labels = new Map();
+    let judged = 0;
+    if (engines.length) {
+      const judgedSets = Object.keys(judgesOf).map((name) => [name, [rowsOf[name].base, ...rowsOf[name].arms]]);
+      labels = readLabels(labelsPath);
+      const missing = unlabeled(judgedSets.flatMap(([, rows]) => rows), labels, engines);
+      if (missing.length) {
+        const texts = new Map();
+        for (const [name] of judgedSets) {
+          const set = JSON.parse(readFileSync(name === on ? join(sets, `${on}.json`) : join(sets, "..", name, `${name}.json`), "utf8"));
+          const cases = new Map(set.cases.map((item) => [item.id, item]));
+          for (const row of missing) {
+            if (texts.has(row)) continue;
+            const item = cases.get(row.id);
+            const [, source, at] = /^(.*):(\d+)$/.exec(row.ref) ?? [];
+            const text = item && set.snapshots?.[item.snapshot]?.[source]?.split("\n")[Number(at) - 1];
+            if (text !== undefined) texts.set(row, { ...row, line: text, day: item.snapshot.split("@")[1] });
+          }
+        }
+        const lost = missing.filter((row) => !texts.has(row));
+        if (lost.length) refuse(`${lost.length} shown rows are not lines of their case's notes (first ${lost[0].id} ${lost[0].ref}): the judge reads the line the bot got`);
+        writeFileSync(join(dir, "unjudged.jsonl"), missing.map((row) => JSON.stringify(texts.get(row))).join("\n") + "\n");
+        const ran = spawnSync(process.execPath, ["--experimental-strip-types", resolve(judgeScript), join(dir, "unjudged.jsonl"), resolve(labelsPath)], { stdio: "inherit" });
+        labels = readLabels(labelsPath);
+        const left = unlabeled(judgedSets.flatMap(([, rows]) => rows), labels, engines);
+        if (ran.status !== 0 || left.length) refuse(`the judge ${ran.status === 0 ? "finished" : `exited ${ran.status}`} with ${left.length} of ${missing.length} rows unlabeled: label them into ${labelsPath} and run the round again`);
+        judged = missing.length;
+      }
+    }
+    const ruled = (name) => (rows) => (judgesOf[name] ? withLabels(rows, labels, judgesOf[name]) : rows);
+    const main = judge({ base: ruled(on)(baseScore.rows), arms: scored.map((arm) => ({ name: arm.name, sham: arm.sham, rows: ruled(on)(arm.score.rows) })) });
+    const sides = Object.fromEntries(alsoWin.map((name) => [name, judge({ base: ruled(name)(sideRows[name].base), arms: ready.map((arm, at) => ({ name: arm.name, sham: arm.sham, rows: ruled(name)(sideRows[name].arms[at]) })) })]));
     const round = { void: main.void, arms: mustAlsoWin(main.arms, sides) };
     const result = {
       run,
@@ -175,7 +249,8 @@ export function tourney({ spec, on = "tuning", sets, ledger, manifest: manifestP
       rule: RULE,
       base: { sha: base, totals: baseScore.totals, parity: baseScore.parity, lookupMs: baseScore.lookupMs },
       void: round.void,
-      ...(alsoWin.length ? { sides: Object.fromEntries(Object.entries(sides).map(([name, side]) => [name, { hash: manifest[name].hash, arms: side.arms.map(({ name: arm, hits, of, b, c, gain, pHolm, verdict }) => ({ name: arm, hits, of, b, c, gain, pHolm, verdict })) }])) } : {}),
+      ...(engines.length ? { labels: { judges: judgesOf, judged, judgeHash: prereg.files.judgeHash } } : {}),
+      ...(alsoWin.length ? { sides: Object.fromEntries(Object.entries(sides).map(([name, side]) => [name, { hash: manifest[name].hash, arms: side.arms.map(({ name: arm, hits, of, b, c, gain, pHolm, guards, verdict }) => ({ name: arm, hits, of, b, c, gain, pHolm, precision: guards.precision, verdict })) }])) } : {}),
       arms: scored.map((arm, at) => ({ name: arm.name, sham: Boolean(arm.sham), sha: arm.sha, patch: arm.patch, diff: arm.diff, guess: arm.guess, totals: arm.score.totals, lookupMs: arm.score.lookupMs, ...round.arms[at] })),
     };
     writeFileSync(join(dir, "result.json"), `${JSON.stringify(result, null, 1)}\n`);
@@ -188,17 +263,17 @@ export function tourney({ spec, on = "tuning", sets, ledger, manifest: manifestP
 
 const line = (result) => [
   `${result.run} on ${result.on} ${result.set.hash.slice(0, 12)}${result.set.use ? ` (use ${result.set.use}/${result.set.of})` : ""}, base ${result.base.sha.slice(0, 9)} ${result.base.totals.hits}/${result.base.totals.positives}, parity ${result.base.parity.checked - result.base.parity.mismatches}/${result.base.parity.checked}${result.void ? ", VOID: the sham won" : ""}`,
-  ...result.arms.map((arm) => `  ${arm.name}${arm.sham ? " (sham)" : ""} ${arm.sha.slice(0, 9)}: ${arm.hits}/${arm.of} (b ${arm.b}, c ${arm.c}, gain ${(arm.gain * 100).toFixed(1)} pts${arm.guess === undefined ? "" : ` (guess ${arm.guess})`}, p ${arm.p.toPrecision(3)}, Holm ${arm.pHolm.toPrecision(3)}), guards: wrong-scope ${arm.guards.wrongScope}, superseded ${arm.guards.superseded}, must-hold ${arm.guards.mustHold}, new false recall ${arm.guards.falseRecall} (shown on ${arm.totals.falseRecall}/${arm.totals.misses})${arm.also ? `, also ${Object.entries(arm.also).map(([name, verdict]) => `${name} ${verdict}`).join(", ")}` : ""} -> ${arm.verdict}`),
+  ...result.arms.map((arm) => `  ${arm.name}${arm.sham ? " (sham)" : ""} ${arm.sha.slice(0, 9)}: ${arm.hits}/${arm.of} (b ${arm.b}, c ${arm.c}, gain ${(arm.gain * 100).toFixed(1)} pts${arm.guess === undefined ? "" : ` (guess ${arm.guess})`}, p ${arm.p.toPrecision(3)}, Holm ${arm.pHolm.toPrecision(3)}), guards: wrong-scope ${arm.guards.wrongScope}, superseded ${arm.guards.superseded}, must-hold ${arm.guards.mustHold}, new false recall ${arm.guards.falseRecall} (shown on ${arm.totals.falseRecall}/${arm.totals.misses}), added fires ${arm.guards.precision.added} (${arm.guards.precision.right} right, ${arm.guards.precision.wrong} wrong, ${arm.guards.precision.unjudged} unjudged, precision ${arm.guards.precision.precision === null ? "-" : arm.guards.precision.precision.toFixed(3)} vs base ${arm.guards.precision.floor.toFixed(3)})${arm.also ? `, also ${Object.entries(arm.also).map(([name, verdict]) => `${name} ${verdict}`).join(", ")}` : ""} -> ${arm.verdict}`),
 ].join("\n");
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { values: opt, positionals: [specFile] } = parseArgs({ allowPositionals: true, options: { on: { type: "string", default: "tuning" }, sets: { type: "string" }, manifest: { type: "string" }, ledger: { type: "string" }, out: { type: "string" }, repo: { type: "string" }, keep: { type: "boolean", default: false } } });
+  const { values: opt, positionals: [specFile] } = parseArgs({ allowPositionals: true, options: { on: { type: "string", default: "tuning" }, sets: { type: "string" }, manifest: { type: "string" }, labels: { type: "string" }, judge: { type: "string" }, ledger: { type: "string" }, out: { type: "string" }, repo: { type: "string" }, keep: { type: "boolean", default: false } } });
   try {
-    if (!specFile) refuse("usage: node scripts/sim-tourney.mjs <spec.json> --sets <dir> --ledger <ledger.mjs> [--on tuning|held-out] [--manifest scripts/recall-sets.*.json] [--out <dir>] [--repo <dir>] [--keep]");
+    if (!specFile) refuse("usage: node scripts/sim-tourney.mjs <spec.json> --sets <dir> --ledger <ledger.mjs> [--on tuning|held-out] [--manifest scripts/recall-sets.*.json] [--labels <row-labels.jsonl> --judge <judge.mjs>] [--out <dir>] [--repo <dir>] [--keep]");
     const spec = JSON.parse(readFileSync(specFile, "utf8"));
     // a spec's patch paths are relative to the spec
     for (const arm of spec.arms ?? []) if (arm.patch) arm.patch = resolve(dirname(specFile), arm.patch);
-    const { dir, result } = tourney({ spec, on: opt.on, sets: opt.sets ?? refuse("--sets <dir> is required"), ledger: opt.ledger ?? refuse("--ledger <ledger.mjs> is required"), manifest: opt.manifest, out: opt.out, repo: opt.repo ? resolve(opt.repo) : undefined, keep: opt.keep });
+    const { dir, result } = tourney({ spec, on: opt.on, sets: opt.sets ?? refuse("--sets <dir> is required"), ledger: opt.ledger ?? refuse("--ledger <ledger.mjs> is required"), manifest: opt.manifest, labels: opt.labels, judge: opt.judge, out: opt.out, repo: opt.repo ? resolve(opt.repo) : undefined, keep: opt.keep });
     console.log(line(result));
     console.log(join(dir, "result.json"));
   } catch (error) {

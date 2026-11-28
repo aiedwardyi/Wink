@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { armDiff, fileHash, LOCKED, lockedIn, mustAlsoWin } from "./sim-tourney.mjs";
+import { armDiff, fileHash, LOCKED, lockedIn, mustAlsoWin, readLabels, unlabeled, withLabels } from "./sim-tourney.mjs";
 
 const TOURNEY = fileURLToPath(new URL("./sim-tourney.mjs", import.meta.url));
 const BENCH = fileURLToPath(new URL("..", import.meta.url));
@@ -236,5 +236,66 @@ describe("sets manifest and single-judge sets", () => {
     expect(out.map((arm) => [arm.name, arm.verdict])).toEqual([["sham", "no gain"], ["a", "win"], ["b", "promising"], ["c", "worse"]]);
     expect(out[2].also).toEqual({ opus: "win", sol: "promising" });
     expect(mustAlsoWin(arms, {})).toBe(arms);
+  });
+});
+
+describe("row labels", () => {
+  const store = (marks) => {
+    const dir = mkdtempSync(join(tmpdir(), "sim-labels-test-"));
+    temps.push(dir);
+    writeFileSync(join(dir, "row-labels.jsonl"), marks.map((mark) => JSON.stringify(mark)).join("\n") + "\n");
+    return join(dir, "row-labels.jsonl");
+  };
+
+  it("reads one mark per judge, a later line winning", () => {
+    const labels = readLabels(store([{ id: "a", ref: "m.md:1", engine: "opus", mark: false }, { id: "a", ref: "m.md:1", engine: "sol", mark: true }, { id: "a", ref: "m.md:1", engine: "opus", mark: true }]));
+    expect(labels.get("a\tm.md:1")).toEqual({ opus: true, sol: true });
+    expect(readLabels(join(tmpdir(), "no-such-labels.jsonl")).size).toBe(0);
+  });
+
+  it("lists each shown row a judge has not labeled once, without saying which arm showed it", () => {
+    const labels = readLabels(store([{ id: "a", ref: "m.md:1", engine: "opus", mark: true }, { id: "a", ref: "m.md:1", engine: "sol", mark: false }, { id: "b", ref: "m.md:2", engine: "opus", mark: false }]));
+    const base = [{ id: "a", shown: ["m.md:1"] }, { id: "b", shown: [] }];
+    const arm = [{ id: "a", shown: ["m.md:1", "m.md:9"] }, { id: "b", shown: ["m.md:2"] }];
+    const other = [{ id: "a", shown: ["m.md:9"] }, { id: "b", shown: ["m.md:2"] }];
+    const missing = unlabeled([base, arm, other], labels, ["opus", "sol"]);
+    expect(missing).toHaveLength(2);
+    expect(missing.map((row) => `${row.id} ${row.ref}`).sort()).toEqual(["a m.md:9", "b m.md:2"]);
+    expect(Object.keys(missing[0]).sort()).toEqual(["id", "ref"]);
+    expect(unlabeled([arm, base, other], labels, ["opus", "sol"])).toEqual(missing);
+  });
+
+  it("labels a row right when every judge marked it, wrong when none did, split otherwise, and refuses an unlabeled one", () => {
+    const labels = readLabels(store([{ id: "a", ref: "r", engine: "opus", mark: true }, { id: "a", ref: "r", engine: "sol", mark: true }, { id: "a", ref: "s", engine: "opus", mark: true }, { id: "a", ref: "s", engine: "sol", mark: false }, { id: "a", ref: "t", engine: "opus", mark: false }, { id: "a", ref: "t", engine: "sol", mark: false }]));
+    const rows = [{ id: "a", shown: ["r", "s", "t"] }];
+    expect(withLabels(rows, labels, ["opus", "sol"])[0].judged).toEqual(["right", "split", "wrong"]);
+    expect(withLabels(rows, labels, ["opus"])[0].judged).toEqual(["right", "right", "wrong"]);
+    expect(withLabels(rows, labels, ["sol"])[0].judged).toEqual(["right", "wrong", "wrong"]);
+    expect(() => withLabels([{ id: "a", shown: ["u"] }], labels, ["opus", "sol"])).toThrow(/a u has no opus \+ sol label/);
+  });
+
+  it("a set whose manifest names judges needs --labels, --judge and the judge's hash in the pre-registration before any score", () => {
+    const REAL = join(BENCH, "scripts", "recall-sets.real-v1.json");
+    const real = JSON.parse(readFileSync(REAL, "utf8"));
+    const { dir, base, arm } = repo();
+    mkdirSync(join(dir, "sets"));
+    for (const name of ["tuning-opus", "tuning-sol"]) {
+      mkdirSync(join(dir, name));
+      writeFileSync(join(dir, name, `${name}.json`), "{}");
+    }
+    const files = { ...pins(), tuning: real.tuning.hash, heldOut: real["held-out"].hash };
+    const sides = { "tuning-opus": real["tuning-opus"].hash, "tuning-sol": real["tuning-sol"].hash };
+    writeFileSync(join(dir, "ledger.json"), JSON.stringify({ bench: { prereg: [{ id: "p", files, sides }] } }));
+    const spec = { name: "t", base, prereg: "p", arms: [{ name: "sham", sham: true, sha: base }, { name: "fair", sha: arm("server/memory-lookup.ts") }] };
+    const bare = run(dir, spec, ["--manifest", REAL]);
+    expect(bare.status).toBe(1);
+    expect(bare.stderr).toContain("judge fires by row labels: pass --labels");
+    writeFileSync(join(dir, "judge.mjs"), "// judge\n");
+    const judged = ["--manifest", REAL, "--labels", join(dir, "row-labels.jsonl"), "--judge", join(dir, "judge.mjs")];
+    expect(run(dir, spec, judged).stderr).toContain("names files.judgeHash undefined");
+    writeFileSync(join(dir, "ledger.json"), JSON.stringify({ bench: { prereg: [{ id: "p", files: { ...files, judgeHash: fileHash(join(dir, "judge.mjs")) }, sides }] } }));
+    const out = run(dir, spec, judged);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("scorer failed");
   });
 });

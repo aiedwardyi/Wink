@@ -119,3 +119,34 @@ describe("round verdicts", () => {
     expect(() => judge({ base: base(), arms: [sham, { name: "a", rows: base().slice(1) }] })).toThrow(/items/);
   });
 });
+
+describe("added-fire precision (real-v1c)", () => {
+  // 100 positives, base hits 10; 900 no-match asks, base shows a wrong row on 60: base precision 10/70
+  const real = () => [...items("positive", 10, { hit: true, shown: ["a"], judged: ["right"] }), ...items("positive", 90).map((row, n) => ({ ...row, id: `positive-${10 + n}` })), ...items("miss", 60, { shown: ["x"], judged: ["wrong"] }), ...items("miss", 840).map((row, n) => ({ ...row, id: `miss-${60 + n}` }))];
+  const gain = (rows) => flip(rows, range(10, 30), { hit: true, shown: ["a"], judged: ["right"] });
+  const misses = (from, count) => Array.from({ length: count }, (_, n) => `miss-${from + n}`);
+  const sham = () => ({ name: "sham", sham: true, rows: real() });
+
+  it("an arm adding a correct row the pool never showed, on a no-match ask, is not worse", () => {
+    const round = judge({ base: real(), arms: [sham(), { name: "found", rows: flip(gain(real()), ["miss-60"], { shown: ["new"], judged: ["right"] }) }] });
+    expect(round.arms[1].verdict).toBe("win");
+    expect(round.arms[1].guards.precision).toMatchObject({ added: 31, right: 31, wrong: 0, unjudged: 0 });
+  });
+
+  it("added fires at least as precise as the base pass; less precise ones are worse", () => {
+    const precise = flip(gain(real()), misses(60, 100), { shown: ["y"], judged: ["wrong"] });
+    const junk = flip(gain(real()), misses(60, 200), { shown: ["y"], judged: ["wrong"] });
+    const round = judge({ base: real(), arms: [sham(), { name: "precise", rows: precise }, { name: "junk", rows: junk }] });
+    expect(round.arms.map((arm) => [arm.name, arm.verdict])).toEqual([["sham", "no gain"], ["precise", "win"], ["junk", "worse"]]);
+    expect(round.arms[1].guards.precision).toMatchObject({ added: 130, right: 30, wrong: 100, floor: 10 / 70 });
+    expect(round.arms[2].guards.precision.precision).toBeCloseTo(30 / 230);
+    expect(round.arms[2].guards.falseRecall).toBe(200);
+  });
+
+  it("a fire is right if any shown row is right, and one with a split row and no right row is left out", () => {
+    const rows = flip(flip(gain(real()), misses(60, 200), { shown: ["y"], judged: ["split"] }), ["miss-260"], { shown: ["y", "z"], judged: ["wrong", "right"] });
+    const arm = judge({ base: real(), arms: [sham(), { name: "split", rows }] }).arms[1];
+    expect(arm.guards.precision).toMatchObject({ added: 231, right: 31, wrong: 0, unjudged: 200 });
+    expect(arm.verdict).toBe("win");
+  });
+});
