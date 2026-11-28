@@ -202,7 +202,9 @@ describe("EngineLogin", () => {
 
     it("ends a sign-in still waiting at 15 minutes", async () => {
       const { manager } = await waitingCode();
-      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      await vi.advanceTimersByTimeAsync(15 * 60_000 - 1000);
+      expect(manager.state("claude")).toBe("pending");
+      await vi.advanceTimersByTimeAsync(1000);
       expect(manager.state("claude")).toBe("failed");
     });
   });

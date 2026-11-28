@@ -320,6 +320,12 @@ export class ProviderRegistry {
     this.probeVersion += 1;
     for (const listener of this.probedListeners) listener(id);
   }
+  // A check that could not tell (a slow CLI) keeps a confirmed sign-out: only a confirmed sign-in clears it.
+  private keepSignedOut(id: string, snapshot: ProviderSnapshot): ProviderSnapshot {
+    const last = this.probed.get(id)?.snapshot;
+    return snapshot.state === "available" && snapshot.authenticated === undefined && last?.state === "available" && last.authenticated === false
+      ? { ...snapshot, authenticated: false } : snapshot;
+  }
   // A signed-out account keeps showing the address it was signed in as.
   private keepAddress(id: string, snapshot: ProviderSnapshot): ProviderSnapshot {
     const account = this.probed.get(id)?.snapshot.account;
@@ -506,7 +512,7 @@ export class ProviderRegistry {
     const live = this.get(instanceId);
     if (!live || live.account || this.signingOut.has(instanceId) || this.logins.generation(instanceId) !== generation) return undefined;
     let since = this.holdIdentity(instanceId, "refresh");
-    const snapshot = await live.snapshot({ refresh: true });
+    const snapshot = this.keepSignedOut(instanceId, await live.snapshot({ refresh: true }));
     if (this.get(instanceId) !== live || this.signingOut.has(instanceId) || this.logins.generation(instanceId) !== generation) return snapshot;
     const previous = this.probed.get(instanceId);
     this.probing.delete(instanceId);
@@ -779,7 +785,7 @@ export class ProviderRegistry {
     }
     if (snapshot.state === "available") snapshot = { ...snapshot, authChecked: true };
     return {
-      snapshot: this.keepAddress(entry.instanceId, snapshot),
+      snapshot: this.keepAddress(entry.instanceId, this.keepSignedOut(entry.instanceId, snapshot)),
       // every copy of the driver's default binary on the augmented PATH -
       // the dropdown's "detected" entries. Snapshotted per probe so a
       // newly installed CLI shows up on the next refresh.

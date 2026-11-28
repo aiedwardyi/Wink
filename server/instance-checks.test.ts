@@ -98,4 +98,43 @@ describe("first-run engine checks", () => {
     await registry.describe({ refresh: true });
     await vi.waitFor(() => expect(publish.mock.lastCall?.[0].find((row: { instanceId: string }) => row.instanceId === "b")?.snapshot.authenticated).toBe(authenticated));
   });
+
+  it("keeps a confirmed sign-out in every window through a check that could not tell, until a confirmed sign-in", async () => {
+    // a: another engine whose sign-in changes and pushes the whole list. b: a CLI whose check can time out.
+    let other = true;
+    let slow: boolean | undefined = false;
+    const fast = makeFakeDriver({ kind: "fast" });
+    const late = makeFakeDriver({ kind: "slow" });
+    for (const [fake, read] of [[fast, () => other], [late, () => slow]] as const) {
+      const create = fake.driver.create.bind(fake.driver);
+      fake.driver.create = async (input) => Object.assign(await create(input), { snapshot: async (): Promise<ProviderSnapshot> => ({ state: "available", authenticated: read() }) });
+    }
+    const registry = new ProviderRegistry([fast.driver, late.driver]);
+    await registry.load({ a: { driver: "fast" }, b: { driver: "slow" } });
+    await registry.describe();
+    type Rows = { instanceId: string; snapshot: ProviderSnapshot }[];
+    const pushed: Rows[] = [];
+    const checks = createInstanceChecks(registry, (rows) => { pushed.push(rows); });
+    const signIn = (rows: Rows) => rows.find((row) => row.instanceId === "b")?.snapshot.authenticated;
+    // The first window shows the card.
+    expect(signIn(await checks.describe())).toBe(false);
+
+    // A second window re-checks while the CLI is too slow to answer.
+    slow = undefined;
+    expect(signIn(await registry.describe({ refresh: true }))).toBe(false);
+
+    // Then another engine's change pushes the whole list, queued after anything the slow check pushed.
+    other = false;
+    expect(signIn(await registry.describe({ refresh: true }))).toBe(false);
+    await vi.waitFor(() => expect(pushed.at(-1)?.find((row) => row.instanceId === "a")?.snapshot.authenticated).toBe(false));
+    // The first window never saw the slow engine leave signed out.
+    expect(pushed.map(signIn)).toEqual(pushed.map(() => false));
+
+    // A confirmed sign-out still reads signed out; a confirmed sign-in clears it in every window.
+    slow = false;
+    expect(signIn(await registry.describe({ refresh: true }))).toBe(false);
+    slow = true;
+    expect(signIn(await registry.describe({ refresh: true }))).toBe(true);
+    await vi.waitFor(() => expect(signIn(pushed.at(-1) ?? [])).toBe(true));
+  });
 });
