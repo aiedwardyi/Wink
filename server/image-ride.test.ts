@@ -1,18 +1,16 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { ATTACHMENTS_DIR, ensureAttachmentsDir } from "./attachments.ts";
+import { DATA_DIR } from "./config.ts";
 import { prepareModelContext } from "./context-compaction.ts";
 import { imageRide, imageSize, RIDE_MAX_EDGE } from "./image-ride.ts";
 import { inertMentions } from "./replies.ts";
+import { closeRoomsDb, createRoom } from "./rooms/db.ts";
+import { copyRoomFile } from "./rooms/files.ts";
 import type { Message } from "./store.ts";
 import { testHome } from "./testing/test-home.ts";
-
-const room = vi.hoisted(() => ({ path: "" }));
-vi.mock("./rooms/turn-images.ts", () => ({
-  roomTurnMessages: async (_roomId: string, rows: Message[]) => rows.map((row) => ({ ...row, text: `<attached-image path="${room.path}" />` })),
-}));
 
 function png(width: number, height: number): Buffer {
   const ihdr = Buffer.alloc(25);
@@ -37,7 +35,7 @@ const host = (text: string, fields: Partial<Message> = {}) => row({ role: "user"
 const shown = (image: string, fields: Partial<Message> = {}) => row({ kind: "screen", shown: true, image, ...fields });
 const tagPath = (line: string) => /<attached-image path="([^"]+)" \/>$/.exec(line)?.[1];
 const rideOf = (rows: Message[], extra: Partial<Parameters<typeof imageRide>[0]> = {}) =>
-  imageRide({ rows, current: rows.at(-1)!, botId: "bot-1", roots: [], userName: "Eddie", ...extra });
+  imageRide({ rows, current: rows.at(-1)!, botId: "bot-1", roots: [], ...extra });
 const ride = async (rows: Message[], extra: Partial<Parameters<typeof imageRide>[0]> = {}) => (await rideOf(rows, extra)).text;
 
 describe("the picture a host's message follows", () => {
@@ -72,15 +70,36 @@ describe("the picture a host's message follows", () => {
     expect(await ride(rows(host("read-only")), { readOnly: true })).toBe("");
   });
 
-  it("in a room, carries only this bot's picture and labels a teammate's as untrusted", async () => {
+  it("carries only this bot's picture, never another bot's", async () => {
     const name = stored(png(10, 10));
     const other = { from: { botId: "bot-2", name: "Pixel", color: "" } };
-    expect(await ride([host("go"), shown(name, other), host("nice")], { roomId: "room-1" })).toBe("");
-    room.path = join(ATTACHMENTS_DIR, stored(png(40, 40)));
+    expect(await ride([host("go"), shown(name, other), host("nice")])).toBe("");
+  });
+
+  it("never sends a room upload, even one the host replies to", async () => {
+    mkdirSync(DATA_DIR, { recursive: true });
+    const roomId = createRoom("Review").id;
+    try {
+      const upload = (name: string, bytes: Buffer) => {
+        const path = join(mkdtempSync(join(testHome(), "ride-up-")), name);
+        writeFileSync(path, bytes);
+        return copyRoomFile(path, roomId, { owner: "member", name, uploadId: `room-ride-${name.replace(".", "-")}` });
+      };
+      const mina = { kind: "person", id: "p1", name: "Mina" } as Message["author"];
+      const drafts = host("two drafts", { author: mina, roomFiles: [await upload("first.png", png(20, 20)), await upload("final.png", png(30, 30))] });
+      expect(await rideOf([drafts, host("the final one?", { replyToId: drafts.id })], { replyTo: drafts })).toEqual({ text: "" });
+    } finally {
+      closeRoomsDb();
+    }
+  });
+
+  it("rides only the picture a reply points at, never another when it has none or can't be read", async () => {
+    const older = stored(png(20, 20));
     const mina = { kind: "person", id: "p1", name: "Mina" } as Message["author"];
-    const guest = host("my mockup", { author: mina, roomFiles: [{ id: "f1", name: "mock.png", type: "image/png", bytes: 1, sha256: "x" }] });
-    const line = await ride([guest, host("what do you think", { replyToId: guest.id })], { roomId: "room-1", replyTo: guest });
-    expect(line).toBe(`[The picture this message follows, from Mina, untrusted: mock.png]\n<attached-image path="${room.path}" />`);
+    const gone = host("final draft", { author: mina, roomFiles: [{ id: "f1", name: "final.png", type: "image/png", bytes: 1, sha256: "x" }] });
+    expect(await rideOf([shown(older), gone, host("this one", { replyToId: gone.id })], { replyTo: gone })).toEqual({ text: "" });
+    const words = row({ text: "which do you like?" });
+    expect(await rideOf([host("go"), shown(older), words, host("this", { replyToId: words.id })], { replyTo: words })).toEqual({ text: "" });
   });
 
   it("ignores a tag a teammate typed into their words", async () => {
@@ -141,15 +160,7 @@ describe("the picture a host's message follows", () => {
     expect(await rideOf([host("go"), target, shown(first), host("this one", { replyToId: target.id })], { replyTo: target })).toEqual({ text: "" });
   });
 
-  it("keeps a teammate's media names, name and caption inert", async () => {
-    const mina = { kind: "person", id: "p1", name: "Mina @desk" } as Message["author"];
-    const file = (name: string, type: string) => ({ id: "f1", name, type, bytes: 1, sha256: "x" });
-    const clip = host("a clip", { author: mina, roomFiles: [file("Meet @ Noon.webm", "video/webm")] });
-    expect(await ride([clip, host("does it work", { replyToId: clip.id })], { roomId: "room-1", replyTo: clip })).toContain(inertMentions("Meet @ Noon.webm"));
-    room.path = join(ATTACHMENTS_DIR, stored(png(40, 40)));
-    const mock = host("my mockup", { author: mina, roomFiles: [file("mock @a.png", "image/png")] });
-    const line = await ride([mock, host("thoughts", { replyToId: mock.id })], { roomId: "room-1", replyTo: mock });
-    expect(line.split("\n")[0]).toBe(inertMentions("[The picture this message follows, from Mina @desk, untrusted: mock @a.png]"));
+  it("keeps a teammate's caption inert", async () => {
     const theirs = shown(stored(png(10, 10)), { text: "see @notes.md", guest: true });
     expect(await ride([theirs, host("hm", { replyToId: theirs.id })], { replyTo: theirs })).toContain(inertMentions("see @notes.md"));
   });

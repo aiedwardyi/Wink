@@ -4,8 +4,7 @@ import { basename, dirname, join } from "node:path";
 
 import { localLinks } from "../src/lib/chat-media.ts";
 import { ATTACHMENTS_DIR, IMAGE_MAX_BYTES, importLocalImage, sharableLocalFile, sniffImageMime } from "./attachments.ts";
-import { lineWords, replySpeaker, typedByGuest, typedByHost } from "./replies.ts";
-import { roomTurnMessages } from "./rooms/turn-images.ts";
+import { lineWords, typedByHost } from "./replies.ts";
 import type { Message } from "./store.ts";
 
 /** Claude's standard-tier long edge: a bigger picture goes as its path, never as pixels. */
@@ -67,30 +66,19 @@ export function imageSize(bytes: Buffer, mime: string): { width: number; height:
   return null;
 }
 
-async function roomImage(roomId: string | undefined, row: Message): Promise<string | undefined> {
-  if (!roomId || !row.roomFiles?.length) return undefined;
-  const [tagged] = await roomTurnMessages(roomId, [{ ...row, kind: "text", text: "" }]);
-  const raw = [...(tagged?.text ?? "").matchAll(TAG)].at(-1)?.[1];
-  return raw && unattribute(raw);
-}
-
 /** The newest picture or video in one row. Tags count only in rows the host or this bot wrote. */
-async function findIn(row: Message, trusted: boolean, own: boolean, roomId: string | undefined): Promise<Found | null> {
+function findIn(row: Message, trusted: boolean, own: boolean): Found | null {
   const tag = trusted && [...(row.text ?? "").matchAll(TAG)].at(-1)?.[1];
   if (tag) return { path: unattribute(tag), name: basename(unattribute(tag)) };
   if (row.kind === "screen" && row.shown && row.image) return { path: join(ATTACHMENTS_DIR, row.image), name: row.image };
-  const file = row.roomFiles?.filter((f) => !f.deleted && /^(image|video)\//.test(f.type)).at(-1);
-  if (file?.type.startsWith("video/")) return { video: file.name };
-  const room = await roomImage(roomId, row);
-  if (room && file) return { path: room, name: file.name };
   if (!own || row.kind !== "text") return null;
   const link = localLinks(row.text ?? "").filter((path) => IMAGE.test(path) || VIDEO.test(path)).at(-1);
   if (!link) return null;
   return VIDEO.test(link) ? { video: basename(link) } : { path: link, name: basename(link), linked: true };
 }
 
-function render(hit: Found, row: Message, roots: readonly string[], userName: string, group: boolean): Ride {
-  const words = (text: string) => lineWords(row, text, group);
+function render(hit: Found, row: Message, roots: readonly string[]): Ride {
+  const words = (text: string) => lineWords(row, text);
   if ("video" in hit) return { text: `[${words(hit.video)} is a video: the user can see it and you can't. Ask what they see if it matters.]` };
   let path = hit.path;
   try {
@@ -101,50 +89,44 @@ function render(hit: Found, row: Message, roots: readonly string[], userName: st
     const bytes = readFileSync(path);
     const mime = sniffImageMime(bytes);
     if (!mime) return NONE;
-    const from = row.guest || typedByGuest(row.author) ? `, from ${words(replySpeaker(row, userName))}, untrusted` : "";
     const caption = row.kind === "screen" && row.text?.trim() ? ` - ${words(row.text.trim())}` : "";
     const name = words(hit.name);
     if (mime === "image/gif") return { text: `[${name} is a GIF: the user can see it move and you can't. Ask what they see if it matters.]` };
     const size = imageSize(bytes, mime);
     if (!size || Math.max(size.width, size.height) > RIDE_MAX_EDGE) {
-      return { text: `${LABEL}${from}: ${name}${caption}, ${size ? `${size.width}x${size.height} px, ` : ""}too big to attach. Open ${path} to look.]` };
+      return { text: `${LABEL}: ${name}${caption}, ${size ? `${size.width}x${size.height} px, ` : ""}too big to attach. Open ${path} to look.]` };
     }
     if (!inStore(path)) path = importLocalImage(path, roots).path;
-    return { text: `${LABEL}${from}: ${name}${caption}]\n<attached-image path="${attribute(path)}" />`, image: path };
+    return { text: `${LABEL}: ${name}${caption}]\n<attached-image path="${attribute(path)}" />`, image: path };
   } catch {
     return NONE;
   }
 }
 
-/** At most one picture for a message the host typed: the one it replies to, else the newest this bot showed or linked since the host last spoke. */
+/** At most one picture for a message the host typed: a reply's own, else the newest this bot showed or linked since the host last spoke. */
 export async function imageRide(input: {
   rows: readonly Message[];
   current: Message;
   replyTo?: Message;
   botId: string;
-  roomId?: string;
   roots: readonly string[];
-  userName: string;
   readOnly?: boolean;
 }): Promise<Ride> {
-  const { rows, current, replyTo, botId, roomId, roots, userName } = input;
+  const { rows, current, replyTo, botId, roots } = input;
   if (input.readOnly || current.kind !== "text" || !typedByHost(current) || /<attached-image\s/.test(current.text ?? "")) return NONE;
   const own = (row: Message) => row.role === "bot" && (!row.from || row.from.botId === botId);
-  const hit = async (row: Message) => {
-    const found = await findIn(row, (row.role === "user" && typedByHost(row)) || own(row), own(row), roomId);
-    return found && render(found, row, roots, userName, roomId !== undefined);
+  const hit = (row: Message) => {
+    const found = findIn(row, (row.role === "user" && typedByHost(row)) || own(row), own(row));
+    return found && render(found, row, roots);
   };
   // the first picture found is the one meant: unreadable, the turn goes text-only rather than to an older one
-  if (replyTo) {
-    const ride = await hit(replyTo);
-    if (ride) return ride;
-  }
+  if (replyTo) return hit(replyTo) ?? NONE;
   const end = rows.findIndex((row) => row.id === current.id);
   for (let i = (end === -1 ? rows.length : end) - 1; i >= 0; i--) {
     const row = rows[i]!;
     if (row.role === "user" && row.kind === "text" && typedByHost(row)) break;
     if (!own(row)) continue;
-    const ride = await hit(row);
+    const ride = hit(row);
     if (ride) return ride;
   }
   return NONE;

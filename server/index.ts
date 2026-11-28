@@ -5621,7 +5621,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         replyTo: opts?.replyTo,
         botId: bot.id,
         roots: botOutputRoots(bot, threadId, store.conversationForBot(bot.id, threadId)?.group?.id),
-        userName: cfg.profile?.name?.trim() || "User",
         readOnly: opts?.readOnly,
       })
     : { text: "" };
@@ -7519,9 +7518,7 @@ async function runClaimedGroupMemberTurn(
         current: hostRow,
         replyTo: hostRow.replyToId ? store.row(threadId, hostRow.replyToId) : undefined,
         botId: bot.id,
-        roomId: group.hosted?.roomId,
         roots: botOutputRoots(bot, threadId, group.id),
-        userName,
       })
     : { text: "" };
   const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
