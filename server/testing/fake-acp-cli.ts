@@ -66,7 +66,7 @@
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { spawn } from "node:child_process";
-import { appendFileSync, copyFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -320,9 +320,7 @@ function driveMcp(entry: McpEntry, calls: Array<{ name: string; args: (prev: str
 
 function playTurn() {
   if (process.env.FAKE_ACP_TOOL_FIXTURE) {
-    const frames: Array<{ copy?: Array<[from: string, to: string]> }> = JSON.parse(readFileSync(process.env.FAKE_ACP_TOOL_FIXTURE, "utf8"));
-    for (const { copy, ...update } of frames) {
-      for (const [from, to] of copy ?? []) copyFileSync(from, to);
+    for (const update of JSON.parse(readFileSync(process.env.FAKE_ACP_TOOL_FIXTURE, "utf8"))) {
       out({ jsonrpc: "2.0", method: "session/update", params: { update } });
     }
     return;

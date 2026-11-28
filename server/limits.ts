@@ -92,10 +92,6 @@ export const KEPT_LIMITS: Limits = {
   "server/rooms/invites.ts": { MAX_CREDENTIAL_LENGTH: OUTSIDER, MAX_PEOPLE: `${JOINER} 100 people loaded, 101 went blank (measured).` },
   "server/routines.ts": { MAX_RUNS: STATE },
   "server/self-wake.ts": { MAX_AHEAD_MS: AUTO },
-  "server/shell-made.ts": {
-    MAX_ENTRIES: "Crash: named folders and the new folders in them are listed on the event loop after each shell command; a huge folder would stall the server. It bounds the entries a command left untouched in a named folder and the size of a new folder tree; past it the folder itself is kept with the changed files read before it, as the base listing kept them, and a folder reached only by following pushes, pops or failed cds is kept only when something in it changed. Nothing is refused.",
-    MAX_TOKENS: "Crash: each path a command names costs a stat per folder named before it, on the event loop; a long script would stall the server. It also bounds those folders. Nothing is refused.",
-  },
   "server/side-chat.ts": {
     MAX_MS: "Data loss: the quick side answer runs beside the live turn; HANDOFF gives the full turn.",
     MAX_CHARS: "Data loss: the quick side answer runs beside the live turn; HANDOFF gives the full turn.",

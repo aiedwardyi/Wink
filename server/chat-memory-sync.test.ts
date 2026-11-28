@@ -46,7 +46,7 @@ const memoryOnB = (messages: readonly Message[]) => chatMemory({ record: null, m
 
 it("keeps recorded files when the call's row completes", () => {
   const [, row] = recordedThread();
-  // SAFETY: completedTool reads only the event's ok, summary, durationMs, detail, writes and made.
+  // SAFETY: completedTool reads only the event's ok, summary, durationMs, detail and writes.
   const tool = completedTool(row!.tool, { type: "item.completed", itemType: "tool", ok: true } as Parameters<typeof completedTool>[1]);
   expect({ ...row, tool }.recorded).toEqual(recorded);
   expect(recordedArtifactsPatch([], recorded)).toBeNull();
@@ -107,24 +107,6 @@ it("scrubs a credential from a recorded label before it reaches the other PC", a
   const [local, peer] = await Promise.all([a.scan(scope.threadId), b.scan(scope.threadId)]);
   for (const { messages } of [local, peer]) {
     expect(messages.flatMap((message) => message.recorded ?? []).map((item) => item.ref)).toEqual([plan]);
-    expect(JSON.stringify(messages)).not.toContain(marker);
-  }
-});
-
-it("scrubs a credential from a shell output name before it reaches the other PC", async () => {
-  const folder = temp();
-  const scope = { botSyncId: "marketing", threadId: "t1" };
-  const a = new ThreadSyncV2({ folder, dataDir: temp(), deviceId: "pc-a" });
-  const b = new ThreadSyncV2({ folder, dataDir: temp(), deviceId: "pc-b" });
-  clients.push(a, b);
-  const marker = "ghp_" + "J7k9U3v8N5w2Z6t4X1r0M9s8K7j6H5g4F3d2";
-  const row: Message = { id: "t1", role: "bot", kind: "activity", at: 1, parentId: null, tool: { name: "Bash", ok: true, made: [join(launch, `token-${marker}.txt`)] } };
-  await a.commit(scope, [{ kind: "row", value: row }, { kind: "metadata", value: { title: "Marketing", createdAt: 1 } }, { kind: "head", value: "t1" }]);
-  await a.flush(scope);
-  await b.pull(scope);
-  const [local, peer] = await Promise.all([a.scan(scope.threadId), b.scan(scope.threadId)]);
-  for (const { messages } of [local, peer]) {
-    expect(messages.flatMap((message) => message.tool?.made ?? [])).toHaveLength(1);
     expect(JSON.stringify(messages)).not.toContain(marker);
   }
 });

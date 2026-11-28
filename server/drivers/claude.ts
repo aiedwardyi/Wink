@@ -74,7 +74,6 @@ import { isPaymentDue, isSignOut } from "./signout.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
 import { FREE_ACCESS, guestText, type AccessTurn, type TurnAccess } from "./turn-access.ts";
-import { shellMade } from "../shell-made.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
 // Never killed and one per config dir: the check can be renewing the OAuth token, and a renewal cut short signs the account out.
@@ -1994,7 +1993,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                   : undefined;
                 const input = call?.input && typeof call.input === "object" ? call.input as Record<string, unknown> : {};
                 const path = input.file_path ?? input.notebook_path;
-                const done: Extract<RuntimeEvent, { type: "item.completed"; itemType: "tool" }> = {
+                emit({
                   ...base(threadId, currentTurnId()),
                   type: "item.completed",
                   itemType: "tool",
@@ -2004,10 +2003,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                   ...(summary && summary !== call?.summary ? { summary } : {}),
                   ...(call ? { durationMs: Date.now() - call.at } : {}),
                   ...(detail ? { detail } : {}),
-                };
-                const command = call && ["Bash", "PowerShell"].includes(call.name) ? z.string().safeParse(input.command) : undefined;
-                if (call && command?.success) done.made = shellMade(command.data, cwd, call.at);
-                emit(done);
+                });
               }
             }
             break;

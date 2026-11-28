@@ -121,7 +121,7 @@
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { randomUUID } from "node:crypto";
-import { appendFileSync, copyFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { execSync, spawn } from "node:child_process";
 import { connect, createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -1002,11 +1002,10 @@ const playTurn = (prompt: JsonValue, held = false) => {
   // figures, no tool_use, so a no-tool workload measures a no-tool turn.
   const toolFixture = process.env.FAKE_CLAUDE_TOOL_FIXTURE;
   if (toolFixture) {
-    const steps: Array<{ name: string; input: unknown; content?: unknown; is_error?: boolean; copy?: Array<[from: string, to: string]> }> = JSON.parse(readFileSync(toolFixture, "utf8"));
+    const steps: Array<{ name: string; input: unknown; content?: unknown; is_error?: boolean }> = JSON.parse(readFileSync(toolFixture, "utf8"));
     for (const [index, step] of steps.entries()) {
       const id = `tu-detail-${index}`;
       out({ type: "assistant", message: { content: [{ type: "tool_use", id, name: step.name, input: step.input }] } });
-      for (const [from, to] of step.copy ?? []) copyFileSync(from, to);
       out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: step.content, is_error: step.is_error ?? false }] } });
     }
   }

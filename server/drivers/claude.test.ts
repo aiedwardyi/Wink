@@ -561,26 +561,6 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect((await capture(name, { file_path: "page.html" }, "ok", false, false)).writes).toBeUndefined();
   });
 
-  it("names the files a shell copy made, apart from native writes", async () => {
-    const source = join(scratch, "source");
-    const shots = join(scratch, "launch outside task", "real-shots");
-    mkdirSync(source, { recursive: true });
-    mkdirSync(shots, { recursive: true });
-    const names = ["workers-1.png", "workers-2.png", "workers-3.png"];
-    for (const name of names) writeFileSync(join(source, name), name);
-    const path = join(scratch, "tool-detail.json");
-    const command = `cp source/*.png "${shots}/"`;
-    writeFileSync(path, JSON.stringify([{ name: "Bash", input: { command }, content: "", copy: names.map((name) => [join(source, name), join(shots, name)]) }]));
-    process.env.FAKE_CLAUDE_TOOL_FIXTURE = path;
-    await create();
-    await instance.adapter.sendTurn({ threadId: "t-made", text: "copy the shots" });
-    await recorder.until((e) => e.type === "turn.completed");
-    const event = recorder.events.find((e) => e.type === "item.completed" && e.itemType === "tool");
-    if (event?.type !== "item.completed" || event.itemType !== "tool") throw new Error("missing tool completion");
-    expect(event.made?.slice().sort()).toEqual(names.map((name) => join(shots, name)));
-    expect(event.writes).toBeUndefined();
-  });
-
   it("does not report a failed native write", async () => {
     expect((await capture("Write", { file_path: "page.html" }, "failed", true, false)).writes).toBeUndefined();
   });

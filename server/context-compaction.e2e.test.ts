@@ -833,7 +833,7 @@ describe("context compaction e2e", () => {
     const slimMessages = [
       { id: "s0", at: 1, parentId: null, role: "user", kind: "text", text: "say hi" },
       { id: "st0", at: 2, parentId: "s0", role: "bot", kind: "activity", tool: { name: "Read: readme.md", ok: true } },
-      { id: "st1", at: 3, parentId: "st0", role: "bot", kind: "activity", tool: { name: "Bash", ok: true, made: [join(home, "launch", "real-shots", "cover.png")] } },
+      { id: "st1", at: 3, parentId: "st0", role: "bot", kind: "activity", tool: { name: "Write", ok: true, writes: [join(home, "launch", "real-shots", "cover.png")] } },
       { id: "sa", at: 4, parentId: "st1", role: "bot", kind: "text", text: "hello" },
     ];
     writeFileSync(join(dataDir, `messages-${CLAUDE_FAT.threadId}.json`), JSON.stringify({

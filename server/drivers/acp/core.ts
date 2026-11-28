@@ -32,7 +32,6 @@ import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } f
 import { inputDigest } from "../../repeat-detector.ts";
 import { guardInput } from "../../auto-approve.ts";
 import { startTurnTimer } from "../../turn-timing.ts";
-import { shellMade } from "../../shell-made.ts";
 import { exhaustedWindow, grokRateLimitWindows, isConfirmedNonUsage, usageLimitFromError } from "../rate-limits.ts";
 import { billingThrottle } from "./billing-throttle.ts";
 
@@ -951,7 +950,6 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const state = { settled: false, promptSent: false, promptAccepted: false, text: "" };
         let promptReport: { prompt: { first: number; last: number }; contextWindow?: number } | undefined;
         const toolCalls = new Map<string, z.infer<typeof toolCallSchema>>();
-        const toolStarts = new Map<string, number>();
         const interjections = new Set<string>();
         const interjectionWaiters = new Map<string, (delivered: boolean) => void>();
         // Steer prompts Grok has not answered. If the running prompt ends
@@ -1210,8 +1208,6 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const completeTool = (itemId: string, ok: boolean, call: z.infer<typeof toolCallSchema> | undefined) => {
           const detail = call ? acpToolDetail(call) : undefined;
           toolCalls.delete(itemId);
-          const startedAt = toolStarts.get(itemId);
-          toolStarts.delete(itemId);
           const event: Extract<RuntimeEvent, { type: "item.completed"; itemType: "tool" }> = {
             ...base(threadId, turnId),
             type: "item.completed",
@@ -1224,8 +1220,6 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             const args = toolInputSchema.safeParse(call.rawInput);
             event.writes = [...new Set([...(call.locations ?? []).map(location => location.path), ...(call.content ?? []).flatMap(block => block.type === "diff" ? [block.path] : []), ...(args.success ? Object.values(args.data).filter((path): path is string => path !== undefined) : typeof call.rawInput === "string" ? [call.rawInput] : [])])].slice(0, 32);
           }
-          const command = call?.kind === "execute" ? z.object({ command: z.string() }).safeParse(call.rawInput) : undefined;
-          if (command?.success && startedAt !== undefined) event.made = shellMade(command.data.command, cwd, startedAt);
           emit(event);
         };
 
@@ -1274,7 +1268,6 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               flushAssistantText();
               const call = toolCallSchema.safeParse(u);
               if (call.success) toolCalls.set(call.data.toolCallId, call.data);
-              if (call.success && !toolStarts.has(call.data.toolCallId)) toolStarts.set(call.data.toolCallId, Date.now());
               const args = String(u.rawInput?.command ?? u.title ?? "tool");
               const kind = call.success ? call.data.kind : undefined;
               const verb =

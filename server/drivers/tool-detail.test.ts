@@ -151,22 +151,6 @@ describe.each(engines)("$name tool detail", ({ name, driver, cli, fixtureEnv }) 
     expect(JSON.stringify(events.map((event) => "detail" in event ? event.detail : undefined))).not.toContain("PartialPrivateBody");
   });
 
-  it.skipIf(fixtureEnv !== "FAKE_ACP_TOOL_FIXTURE")("names the files an ACP shell copy made", async () => {
-    const shots = join(scratch, "real-shots");
-    mkdirSync(shots);
-    const names = ["one.png", "two.png", "three.png"];
-    for (const file of names) writeFileSync(join(scratch, file), file);
-    writeFileSync(fixturePath, JSON.stringify([
-      { sessionUpdate: "tool_call", toolCallId: "copy", title: "Copy shots", kind: "execute", rawInput: { command: "cd real-shots && cp ../*.png ." } },
-      { sessionUpdate: "tool_call_update", toolCallId: "copy", status: "completed", copy: names.map((file) => [join(scratch, file), join(shots, file)]) },
-    ]));
-    await create();
-    const [event] = await run();
-    if (event?.type !== "item.completed" || event.itemType !== "tool") throw new Error("missing tool completion");
-    expect(event.ok).toBe(true);
-    expect(event.made?.slice().sort()).toEqual(names.map((file) => join(shots, file)).sort());
-  });
-
   it.skipIf(fixtureEnv !== "FAKE_ACP_TOOL_FIXTURE")("safety checks every ACP diff path independently of rawInput", async () => {
     writeFileSync(fixturePath, JSON.stringify([
       { sessionUpdate: "tool_call", toolCallId: "mixed", title: "Edit public.ts", kind: "edit", rawInput: { path: "public.ts" } },

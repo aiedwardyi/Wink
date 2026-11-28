@@ -621,7 +621,7 @@ type RecordedFile = { ref: string; label: string };
 
 export interface ChatMemoryInput {
   record: Pick<TaskRecordContext, "goal" | "plan" | "artifacts"> | null;
-  messages: readonly { recorded?: RecordedFile[]; tool?: { writes?: string[]; made?: string[] } }[];
+  messages: readonly { recorded?: RecordedFile[]; tool?: { writes?: string[] } }[];
   cwd?: string;
   work?: string;
 }
@@ -632,7 +632,7 @@ export function chatMemory(input: ChatMemoryInput): string {
   const recorded = [...input.record?.artifacts ?? [], ...rows];
   return memoryBlock({
     files: (input.record?.artifacts ?? []).map((item) => item.ref)
-      .concat(input.messages.flatMap((message) => [...(message.recorded ?? []).map((item) => item.ref), ...message.tool?.writes ?? [], ...message.tool?.made ?? []])),
+      .concat(input.messages.flatMap((message) => [...(message.recorded ?? []).map((item) => item.ref), ...message.tool?.writes ?? []])),
     cwd: input.cwd,
     plans: planFiles({ goal: input.record?.goal ?? "", plan: input.record?.plan ?? [], artifacts: recorded }, input.cwd),
     work: input.work,

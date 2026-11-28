@@ -179,8 +179,6 @@ export interface Message {
     usageWait?: UsageWaitView;
     /** an auto-approval chip; the model replay skips it */
     approval?: boolean;
-    /** shell rows: files the command named that it created or changed, found on disk; not writes, so verify and the Map keep their rules */
-    made?: string[];
     /** Sleep's morning line: the run it archived and how many lines */
     tidy?: { runId: string; count?: number; undoneAt?: number };
   };

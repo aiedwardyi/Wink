@@ -26,6 +26,5 @@ export function completedTool(
     ...(event.ok && event.writes?.length ? { writes: event.writes } : {}),
   };
   if (existing?.verb) tool.verb = existing.verb;
-  if (event.made?.length) tool.made = event.made;
   return tool;
 }

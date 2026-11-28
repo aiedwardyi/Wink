@@ -1416,11 +1416,6 @@ describe("fresh-session memory block", () => {
     });
     for (const name of ["launch.md", "計画.md", "brief.md", "shot.png"]) expect(text).toContain(name);
   });
-
-  it("names files a shell command made that no call recorded", () => {
-    const text = chatMemory({ record: null, messages: [{ tool: { made: shots } }], cwd });
-    expect(text).toContain(`${join(home, "launch", "real-shots")} 11 (workers-11.png, workers-10.png)`);
-  });
 });
 
 describe("the 11-22 23:11 turn, rebuilt", () => {
