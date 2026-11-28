@@ -166,6 +166,18 @@ describe("media reader regressions", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("hands Space back to a video after a seek or its full screen button", async () => {
+    await render(createElement(MediaViewer, { image: { src: "/api/attachments/walk.mp4", name: "walk.mp4", video: true }, onClose: vi.fn() }));
+    const video = document.querySelector<HTMLVideoElement>("[data-viewer-video]")!;
+    const blurred = vi.fn();
+    video.addEventListener("blur", blurred);
+    video.setAttribute("tabindex", "0");
+    video.focus();
+    await act(async () => { video.dispatchEvent(new Event("seeked")); document.dispatchEvent(new Event("fullscreenchange")); });
+    expect(blurred).toHaveBeenCalledTimes(2);
+    expect(document.activeElement).toBe(video);
+  });
+
   it("keeps the arrows on a phone for a video, which can't be swiped past, but not for a picture", async () => {
     const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "styles.css"), "utf8");
     const phone = css.slice(css.indexOf("{", css.indexOf("@media (max-width: 767px)")) + 1).split(/\n\}/)[0].replace(/\/\*[^]*?\*\//g, "");

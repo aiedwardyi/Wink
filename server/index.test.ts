@@ -13,7 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { openSse } from "./testing/sse.ts";
 import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES } from "./attachments.ts";
 import { defaultComputerForNewBot } from "./local-routing.ts";
@@ -21,6 +21,7 @@ import { readDecisions } from "./decision-log.ts";
 import { spawnHarness as spawn, harnessFetch as fetch, harnessToken } from "./testing/harness-auth.ts";
 import { agentsHeaders } from "./testing/agents-caller.ts";
 import { roomResponders } from "./store.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -101,7 +102,7 @@ const statusWithHeaders = (headers: Record<string, string>): Promise<number> =>
   });
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "omb-api-test-"));
+  home = createFixtureHome("omb-api-test-");
   staticDir = join(home, "static");
   fakeClaudeDump = join(home, "fake-claude-dump.json");
   // a fleet of exactly one unknown driver: no CLI probes, no network
@@ -118,7 +119,7 @@ beforeAll(async () => {
         claudeHappy: {
           driver: "claudeAgent",
           displayName: "Fixture Claude Happy",
-          environment: { FAKE_CLAUDE_MODE: "happy" },
+          environment: { FAKE_CLAUDE_MODE: "happy", FAKE_CLAUDE_PROMPT_LOG: join(home, "happy-prompts.ndjson") },
           config: { cli: FAKE_CLAUDE_CLI },
         },
         claudeStream: {
@@ -278,6 +279,7 @@ beforeAll(async () => {
       OMB_BOX_API: `http://127.0.0.1:${boxStubPort}`,
       OMB_COMPOSIO_API: `http://127.0.0.1:${boxStubPort}/api/v3.1`,
       OMB_STATIC_DIR: staticDir,
+      ORBIT_REMOTE_AUTO: "0",
       // Production uses 15s. Keep the real timer path while making the
       // browser-visible heartbeat assertion fast and deterministic.
       OMB_SSE_HEARTBEAT_MS: "50",
@@ -311,7 +313,7 @@ afterAll(async () => {
   // retry loop; these helpers are that fix plus the cause — the retry AND
   // an exit that is actually waited for before the delete begins.
   await waitForExit(child, { signal: "SIGTERM" });
-  await removeTempDir(home);
+  removeTestData(home);
 });
 
 describe("harness HTTP API", () => {
@@ -1318,7 +1320,6 @@ describe("harness HTTP API", () => {
 
   it("stores a room reply as a flat reference and rejects foreign targets", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
-    const foreign = (await api("POST", "/api/bots")).body.bot;
     const room = (await api("POST", "/api/groups", { name: "Reply room", memberIds: [bot.id] })).body.group;
     try {
       await api("PATCH", `/api/groups/${room.id}/setup`, { action: "skip" });
@@ -1338,12 +1339,26 @@ describe("harness HTTP API", () => {
       expect(current.messages.at(-1)).toMatchObject({ text: "Following up", replyToId: original.id });
       expect((await api("POST", `/api/groups/${room.id}/messages`, {
         text: "Wrong conversation",
-        replyToId: foreign.messages[0].id,
+        replyToId: "cancel-card",
       })).status).toBe(404);
     } finally {
       await api("DELETE", `/api/groups/${room.id}`);
       await api("DELETE", `/api/bots/${bot.id}`);
-      await api("DELETE", `/api/bots/${foreign.id}`);
+    }
+  });
+
+  it("stores the send order a room line was sent with", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const room = (await api("POST", "/api/groups", { name: "Order room", memberIds: [bot.id] })).body.group;
+    try {
+      await api("PATCH", `/api/groups/${room.id}/setup`, { action: "skip" });
+      await api("PATCH", `/api/groups/${room.id}`, { defaultResponder: { kind: "mentions" } });
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "in order", sendId: "send-order-0123456789", actedAt: 1, sendSeq: 3 })).status).toBe(202);
+      const current = (await api("GET", "/api/bots?messages=20")).body.groups.find((candidate: { id: string }) => candidate.id === room.id);
+      expect(current.messages.at(-1)).toMatchObject({ text: "in order", sendSeq: 3 });
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${bot.id}`);
     }
   });
 
@@ -3227,15 +3242,6 @@ describe("harness HTTP API", () => {
     await api("DELETE", `/api/bots/${bot.id}`);
   });
 
-  it("persists an answered onboarding card", async () => {
-    const { body } = await api("GET", "/api/bots");
-    const bot = body.bots[0];
-    const card = bot.messages.find((m: { kind: string }) => m.kind === "options");
-    const res = await api("PATCH", `/api/bots/${bot.id}/cards/${card.id}`, { answered: card.card.options[0] });
-    expect(res.status).toBe(200);
-    expect(res.body.message.card.answered).toBe(card.card.options[0]);
-  });
-
   it("validates approval decisions and reports a request that is no longer open", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];
@@ -3311,27 +3317,29 @@ describe("harness HTTP API", () => {
     const send = await api("POST", `/api/bots/${bot.id}/messages`, { text: "hello?" });
     expect(send.status).toBe(409);
     expect(send.body.error).toContain("unavailable");
-    // a failed send never landed a user message, so the first-run quiz stays
+    // a failed send never landed a user message
     const afterFail = (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
-    expect(afterFail.messages.find((m: { kind: string }) => m.kind === "options")?.card.dismissed).toBeFalsy();
+    expect(afterFail.messages.some((m: { role: string }) => m.role === "user")).toBe(false);
   });
 
   it("refuses to fork a message when the provider is unavailable, without mutating", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     const before = bot.messages.length;
 
-    // the first-run quiz is a bot card — not an editable user message
-    const quiz = bot.messages.find((m: { kind: string }) => m.kind === "options");
-    expect((await api("POST", `/api/bots/${bot.id}/messages/${quiz.id}/edit`, { text: "x" })).status).toBe(404);
-    expect((await api("POST", `/api/bots/${bot.id}/messages/${quiz.id}/edit`, { text: "  " })).status).toBe(400);
+    expect((await api("POST", `/api/bots/${bot.id}/messages/nope/edit`, { text: "x" })).status).toBe(404);
+    expect((await api("POST", `/api/bots/${bot.id}/messages/nope/edit`, { text: "  " })).status).toBe(400);
 
     const after = (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id);
     expect(after.messages.length).toBe(before);
   });
 
   it("switches the active branch and reports the new leaf", async () => {
-    const { body } = await api("GET", "/api/bots");
-    const bot = body.bots[0];
+    const created = (await api("POST", "/api/bots")).body.bot;
+    await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "claudeHappy", model: "claude-fake" } });
+    expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "hello" })).status).toBe(202);
+    const settled = async () => (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === created.id);
+    await expect.poll(async () => { const b = await settled(); return !b.busy && b.messages.length >= 2; }, { timeout: 15_000 }).toBe(true);
+    const bot = await settled();
     expect(bot.activeLeafId).toBe(bot.messages.at(-1).id);
 
     // pointing at the first message descends back to the newest leaf on
@@ -3521,6 +3529,323 @@ describe("harness HTTP API", () => {
       await api("DELETE", `/api/groups/${room.id}`);
       await api("DELETE", `/api/bots/${first.id}`);
       await api("DELETE", `/api/bots/${second.id}`);
+    }
+  });
+
+  it("settles matching credential cards across bots when settings saves a key", async () => {
+    const bots = await Promise.all(["First", "Second", "Dismissed"].map(async (name) => (await api("POST", "/api/bots", {
+      name,
+      modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" },
+    })).body.bot));
+    const host = "api.cron-job.org";
+    const settings = "/api/config?secretStorage=external";
+    const headers = { authorization: `Bearer ${await harnessToken(BASE)}`, "content-type": "application/json" };
+    const requestCard = async (bot: { id: string; threadId: string }, serviceHost = host) => {
+      const response = await fetch(`${BASE}/api/internal/request-credential`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, credentialId: "custom", service: { name: "Cron Key", host: serviceHost } }),
+      });
+      expect(response.status).toBe(201);
+      return z.object({ messageId: z.string() }).parse(await response.json()).messageId;
+    };
+    const stream = await openSse(`${BASE}/api/events`);
+    const prompts = join(home, "happy-prompts.ndjson");
+    const countResumes = (outcome: string) => existsSync(prompts)
+      ? readFileSync(prompts, "utf8").trim().split("\n").filter((row) => JSON.parse(row).text.includes(`Wink credential update: the user ${outcome} Cron Key.`)).length
+      : 0;
+    const waitForIdle = () => expect.poll(async () => {
+      const current = (await api("GET", "/api/bots?messages=0")).body.bots;
+      return bots.every((bot) => current.find((row: { id: string }) => row.id === bot.id)?.busy === false);
+    }, { timeout: 10_000 }).toBe(true);
+    try {
+      await stream.until((frame) => frame.kind === "hello");
+      const cards = await Promise.all(bots.map((bot) => requestCard(bot)));
+      const other = await requestCard(bots[0], "api.other.example");
+      const cardRoute = (index: number, action: string) => api("POST", `/api/bots/${bots[index].id}/secret-cards/${cards[index]}/${action}`, {
+        threadId: bots[index].threadId,
+      });
+      expect((await cardRoute(2, "dismiss")).status).toBe(200);
+      await expect.poll(() => countResumes("declined to provide"), { timeout: 10_000 }).toBe(1);
+
+      const saved = { customKeys: { [host]: { name: "Cron Key", header: "authorization", prefix: "Bearer ", key: "test-only-cron-key" } } };
+      expect((await api("PUT", settings, saved)).status).toBe(200);
+      // The older client still acknowledges its own card after the save.
+      expect((await cardRoute(0, "provided")).status).toBe(200);
+      expect((await cardRoute(2, "provided")).status).toBe(409);
+      for (const messageId of cards.slice(0, 2)) {
+        await stream.until((frame) => frame.kind === "message.patch" && frame.message?.id === messageId && frame.message.secret?.provided, 2_000);
+      }
+      await expect.poll(() => countResumes("securely provided"), { timeout: 10_000 }).toBe(2);
+      expect((await api("PUT", settings, saved)).status).toBe(200);
+      expect((await cardRoute(0, "resume")).status).toBe(200);
+      await waitForIdle();
+
+      const hydrated = (await api("GET", "/api/bots")).body.bots;
+      for (const [index, messageId] of cards.entries()) {
+        const message = hydrated.find((bot: { id: string }) => bot.id === bots[index].id).messages.find((row: { id: string }) => row.id === messageId);
+        expect(message.secret).toMatchObject(index < 2 ? { provided: true, resumed: true } : { dismissed: true, resumed: true });
+        expect(message.secret[index < 2 ? "dismissed" : "provided"]).toBeUndefined();
+      }
+      const unrelated = hydrated.find((bot: { id: string }) => bot.id === bots[0].id).messages.find((row: { id: string }) => row.id === other);
+      expect(unrelated.secret.provided).toBeUndefined();
+      expect(countResumes("securely provided")).toBe(2);
+      expect(countResumes("declined to provide")).toBe(1);
+    } finally {
+      stream.close();
+      await api("PUT", settings, { customKeys: { [host]: null } });
+      await waitForIdle();
+      for (const bot of bots) await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  }, 30_000);
+
+  it("settles one bot's two cards for a key with one continuation", async () => {
+    const bot = (await api("POST", "/api/bots", { name: "Twice", modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" } })).body.bot;
+    const host = "api.asked-twice.example";
+    const settings = "/api/config?secretStorage=external";
+    const headers = { authorization: `Bearer ${await harnessToken(BASE)}`, "content-type": "application/json" };
+    const prompts = join(home, "happy-prompts.ndjson");
+    const countResumes = () => existsSync(prompts)
+      ? readFileSync(prompts, "utf8").trim().split("\n").filter((row) => JSON.parse(row).text.includes("Wink credential update: the user securely provided Twice Key.")).length
+      : 0;
+    try {
+      const cards = [];
+      for (const header of ["authorization", "x-api-key"]) {
+        const response = await fetch(`${BASE}/api/internal/request-credential`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, credentialId: "custom", service: { name: "Twice Key", host, header } }),
+        });
+        expect(response.status).toBe(201);
+        cards.push(z.object({ messageId: z.string() }).parse(await response.json()).messageId);
+      }
+      expect(cards[0]).not.toBe(cards[1]);
+      const saved = { customKeys: { [host]: { name: "Twice Key", header: "authorization", prefix: "Bearer ", key: "test-only-twice-key" } } };
+      expect((await api("PUT", settings, saved)).status).toBe(200);
+      expect((await api("POST", `/api/bots/${bot.id}/secret-cards/${cards[0]}/provided`, { threadId: bot.threadId })).status).toBe(200);
+      await expect.poll(countResumes, { timeout: 10_000 }).toBe(1);
+      await expect.poll(async () => (await api("GET", "/api/bots?messages=0")).body.bots.find((row: { id: string }) => row.id === bot.id)?.busy, { timeout: 10_000 }).toBe(false);
+      const messages = (await api("GET", "/api/bots")).body.bots.find((row: { id: string }) => row.id === bot.id).messages;
+      for (const messageId of cards) {
+        expect(messages.find((row: { id: string }) => row.id === messageId).secret).toMatchObject({ provided: true, resumed: true });
+      }
+      expect(countResumes()).toBe(1);
+    } finally {
+      await api("PUT", settings, { customKeys: { [host]: null } });
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  }, 30_000);
+
+  it("keeps a private key save out of a hosted room's log", async () => {
+    const [atlas, juno] = await Promise.all(["Atlas", "Juno"].map(async (name) => (await api("POST", "/api/bots", {
+      name,
+      modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" },
+    })).body.bot));
+    const room = (await api("POST", "/api/groups", { name: "Hosted key room", memberIds: [juno.id], hosted: true })).body.group;
+    const hosts = ["api.private-save.example", "api.room-save.example"];
+    const settings = "/api/config?secretStorage=external";
+    const headers = { authorization: `Bearer ${await harnessToken(BASE)}`, "content-type": "application/json" };
+    const requestCard = async (bot: { id: string }, threadId: string, name: string, host: string) => {
+      const response = await fetch(`${BASE}/api/internal/request-credential`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ fromBotId: bot.id, fromThreadId: threadId, credentialId: "custom", service: { name, host } }),
+      });
+      expect(response.status).toBe(201);
+      return z.object({ messageId: z.string() }).parse(await response.json()).messageId;
+    };
+    const save = (host: string) => api("PUT", settings, { customKeys: { [host]: { name: "Room Key", header: "authorization", prefix: "Bearer ", key: "test-only-room-key" } } });
+    const prompts = join(home, "happy-prompts.ndjson");
+    const countResumes = (label: string) => existsSync(prompts)
+      ? readFileSync(prompts, "utf8").trim().split("\n").filter((row) => JSON.parse(row).text.includes(`Wink credential update: the user securely provided ${label}.`)).length
+      : 0;
+    const roomLog = () => {
+      const db = new DatabaseSync(join(home, ".orbit", "rooms.db"), { readOnly: true });
+      try {
+        return db.prepare("SELECT text FROM log WHERE room_id = ?").all(room.hosted.roomId).map((row) => row.text);
+      } finally {
+        db.close();
+      }
+    };
+    const roomCard = async (messageId: string) => (await api("GET", "/api/bots")).body.groups
+      .find((group: { id: string }) => group.id === room.id).messages.find((row: { id: string }) => row.id === messageId);
+    const waitForIdle = () => expect.poll(async () => {
+      const state = (await api("GET", "/api/bots?messages=0")).body;
+      return [atlas, juno].every((bot) => state.bots.find((row: { id: string }) => row.id === bot.id)?.busy === false) &&
+        !state.groups.find((group: { id: string }) => group.id === room.id)?.working;
+    }, { timeout: 10_000 }).toBe(true);
+    try {
+      expect(room.hosted.roomId).toBeTruthy();
+      const quiet = await requestCard(juno, room.threadId, "Juno Key", hosts[0]);
+      const privateCard = await requestCard(atlas, atlas.threadId, "Atlas Key", hosts[0]);
+      expect((await save(hosts[0])).status).toBe(200);
+      expect((await api("POST", `/api/bots/${atlas.id}/secret-cards/${privateCard}/provided`, { threadId: atlas.threadId })).status).toBe(200);
+      await expect.poll(() => countResumes("Atlas Key"), { timeout: 10_000 }).toBe(1);
+      await expect.poll(async () => (await roomCard(quiet))?.secret?.provided, { timeout: 10_000 }).toBe(true);
+      await waitForIdle();
+      expect(countResumes("Atlas Key")).toBe(1);
+      expect(countResumes("Juno Key")).toBe(0);
+      expect(roomLog()).toEqual([]);
+
+      // A save from the room's own card still continues the room.
+      const own = await requestCard(juno, room.threadId, "Room Card Key", hosts[1]);
+      expect((await save(hosts[1])).status).toBe(200);
+      expect((await api("POST", `/api/bots/${juno.id}/secret-cards/${own}/provided`, { threadId: room.threadId })).status).toBe(200);
+      await expect.poll(() => countResumes("Room Card Key"), { timeout: 10_000 }).toBe(1);
+      await waitForIdle();
+      expect(roomLog()).toHaveLength(1);
+      expect(countResumes("Juno Key")).toBe(0);
+    } finally {
+      await api("PUT", settings, { customKeys: Object.fromEntries(hosts.map((host) => [host, null])) });
+      await waitForIdle();
+      await api("DELETE", `/api/groups/${room.id}`);
+      for (const bot of [atlas, juno]) await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  }, 30_000);
+
+  it("starts one room continuation for sibling key cards however many views acknowledge them", async () => {
+    const juno = (await api("POST", "/api/bots", { name: "Juno", modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" } })).body.bot;
+    const room = (await api("POST", "/api/groups", { name: "Sibling key room", memberIds: [juno.id], hosted: true })).body.group;
+    const host = "api.room-sibling.example";
+    const settings = "/api/config?secretStorage=external";
+    const headers = { authorization: `Bearer ${await harnessToken(BASE)}`, "content-type": "application/json" };
+    const prompts = join(home, "happy-prompts.ndjson");
+    const countResumes = () => existsSync(prompts)
+      ? readFileSync(prompts, "utf8").trim().split("\n").filter((row) => JSON.parse(row).text.includes("Wink credential update: the user securely provided Sibling Key.")).length
+      : 0;
+    const roomLog = () => {
+      const db = new DatabaseSync(join(home, ".orbit", "rooms.db"), { readOnly: true });
+      try {
+        return db.prepare("SELECT text FROM log WHERE room_id = ?").all(room.hosted.roomId).map((row) => row.text);
+      } finally {
+        db.close();
+      }
+    };
+    const waitForIdle = () => expect.poll(async () => {
+      const state = (await api("GET", "/api/bots?messages=0")).body;
+      return state.bots.find((row: { id: string }) => row.id === juno.id)?.busy === false &&
+        !state.groups.find((group: { id: string }) => group.id === room.id)?.working;
+    }, { timeout: 10_000 }).toBe(true);
+    try {
+      const cards: string[] = [];
+      for (const header of ["authorization", "x-api-key"]) {
+        const response = await fetch(`${BASE}/api/internal/request-credential`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ fromBotId: juno.id, fromThreadId: room.threadId, credentialId: "custom", service: { name: "Sibling Key", host, header } }),
+        });
+        expect(response.status).toBe(201);
+        cards.push(z.object({ messageId: z.string() }).parse(await response.json()).messageId);
+      }
+      const saved = { customKeys: { [host]: { name: "Sibling Key", header: "authorization", prefix: "Bearer ", key: "test-only-sibling-key" } } };
+      const roomCards = async () => (await api("GET", "/api/bots")).body.groups
+        .find((group: { id: string }) => group.id === room.id).messages.filter((row: { id: string }) => cards.includes(row.id));
+      // Two owner views each save the key, then each acknowledges its own card.
+      expect((await api("PUT", settings, saved)).status).toBe(200);
+      expect((await api("PUT", settings, saved)).status).toBe(200);
+      await expect.poll(async () => (await roomCards()).every((row: { secret: { provided?: boolean } }) => row.secret.provided), { timeout: 10_000 }).toBe(true);
+      expect(countResumes()).toBe(0);
+      const ack = (messageId: string) => api("POST", `/api/bots/${juno.id}/secret-cards/${messageId}/provided`, { threadId: room.threadId });
+      expect((await Promise.all(cards.map(ack))).map((response) => response.status)).toEqual([200, 200]);
+      await expect.poll(countResumes, { timeout: 10_000 }).toBe(1);
+      await waitForIdle();
+      expect((await ack(cards[0])).status).toBe(200);
+      await waitForIdle();
+      expect(countResumes()).toBe(1);
+      expect(roomLog()).toHaveLength(1);
+    } finally {
+      await api("PUT", settings, { customKeys: { [host]: null } });
+      await waitForIdle();
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${juno.id}`);
+    }
+  }, 30_000);
+
+  it("settles a key card on an abandoned branch without continuing it", async () => {
+    const [atlas, juno] = await Promise.all(["Atlas", "Juno"].map(async (name) => (await api("POST", "/api/bots", {
+      name,
+      modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" },
+    })).body.bot));
+    const host = "api.abandoned-branch.example";
+    const settings = "/api/config?secretStorage=external";
+    const headers = { authorization: `Bearer ${await harnessToken(BASE)}`, "content-type": "application/json" };
+    const requestCard = async (bot: { id: string; threadId: string }, name: string) => {
+      const response = await fetch(`${BASE}/api/internal/request-credential`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, credentialId: "custom", service: { name, host } }),
+      });
+      expect(response.status).toBe(201);
+      return z.object({ messageId: z.string() }).parse(await response.json()).messageId;
+    };
+    const prompts = join(home, "happy-prompts.ndjson");
+    const countResumes = (label: string) => existsSync(prompts)
+      ? readFileSync(prompts, "utf8").trim().split("\n").filter((row) => JSON.parse(row).text.includes(`Wink credential update: the user securely provided ${label}.`)).length
+      : 0;
+    const current = async (id: string) => (await api("GET", "/api/bots")).body.bots.find((row: { id: string }) => row.id === id);
+    const waitForIdle = () => expect.poll(async () => {
+      const current = (await api("GET", "/api/bots?messages=0")).body.bots;
+      return [atlas, juno].every((bot) => current.find((row: { id: string }) => row.id === bot.id)?.busy === false);
+    }, { timeout: 10_000 }).toBe(true);
+    try {
+      expect((await api("POST", `/api/bots/${juno.id}/messages`, { text: "use the service plan" })).status).toBe(202);
+      await waitForIdle();
+      const original = (await current(juno.id)).messages.find((row: { text?: string }) => row.text === "use the service plan");
+      const card = await requestCard(juno, "Abandoned Key");
+      expect((await api("POST", `/api/bots/${juno.id}/messages/${original.id}/edit`, { text: "use the plan with no service" })).status).toBe(202);
+      await waitForIdle();
+      const before = await current(juno.id);
+      const byId = new Map<string, { parentId?: string }>(before.messages.map((row: { id: string; parentId?: string }) => [row.id, row]));
+      const path: string[] = [];
+      for (let id: string | undefined = before.activeLeafId; id; id = byId.get(id)?.parentId) path.push(id);
+      expect(path).not.toContain(card);
+
+      const saving = await requestCard(atlas, "Saving Key");
+      expect((await api("PUT", settings, { customKeys: { [host]: { name: "Saving Key", header: "authorization", prefix: "Bearer ", key: "test-only-branch-key" } } })).status).toBe(200);
+      expect((await api("POST", `/api/bots/${atlas.id}/secret-cards/${saving}/provided`, { threadId: atlas.threadId })).status).toBe(200);
+      await expect.poll(() => countResumes("Saving Key"), { timeout: 10_000 }).toBe(1);
+      await expect.poll(async () => (await current(juno.id)).messages.find((row: { id: string }) => row.id === card)?.secret?.provided, { timeout: 10_000 }).toBe(true);
+      await waitForIdle();
+      expect(countResumes("Abandoned Key")).toBe(0);
+      expect((await current(juno.id)).activeLeafId).toBe(before.activeLeafId);
+    } finally {
+      await api("PUT", settings, { customKeys: { [host]: null } });
+      await waitForIdle();
+      for (const bot of [atlas, juno]) await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  }, 30_000);
+
+  it("does not post a custom credential card when its host already has a key", async () => {
+    const bot = (await api("POST", "/api/bots", {})).body.bot;
+    const host = "api.already-saved.example";
+    const settings = "/api/config?secretStorage=external";
+    try {
+      expect((await api("PUT", settings, { customKeys: { [host]: { name: "Saved Key", header: "x-api-key", prefix: "", key: "test-only-key" } } })).status).toBe(200);
+      const response = await fetch(`${BASE}/api/internal/request-credential`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${await harnessToken(BASE)}`, "content-type": "application/json" },
+        body: JSON.stringify({ fromBotId: bot.id, credentialId: "custom", service: { name: "Different label", host } }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ alreadyConfigured: true, label: "Different label" });
+      const hydrated = (await api("GET", "/api/bots")).body.bots.find((row: { id: string }) => row.id === bot.id);
+      expect(hydrated.messages.some((row: { kind: string }) => row.kind === "secret")).toBe(false);
+    } finally {
+      await api("PUT", settings, { customKeys: { [host]: null } });
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("takes a second key save while the first one settles its cards", async () => {
+    const hosts = ["api.first-save.example", "api.second-save.example"];
+    const settings = "/api/config?secretStorage=external";
+    try {
+      const saves = await Promise.all(hosts.map((host) => api("PUT", settings, {
+        customKeys: { [host]: { name: "Saved Key", header: "x-api-key", prefix: "", key: "test-only-key" } },
+      })));
+      expect(saves.map((save) => save.status)).toEqual([200, 200]);
+    } finally {
+      await api("PUT", settings, { customKeys: Object.fromEntries(hosts.map((host) => [host, null])) });
     }
   });
 
@@ -4526,16 +4851,15 @@ describe("message pages", () => {
    * assertions. */
   const seedRoom = async (count: number) => {
     const { body } = await api("GET", "/api/bots");
-    const created = await api("POST", "/api/groups", { name: "Paging", memberIds: [body.bots[0].id] });
-    expect(created.status).toBe(201);
-    const groupId = created.body.group.id;
-    // finish room setup with a mentions-only responder so no bot answers the probes
-    const quiet = await api("PATCH", `/api/groups/${groupId}/setup`, {
-      action: "complete",
-      defaultResponder: { kind: "mentions" },
-      bulletin: "",
+    // setup goes in the create request: a room created without it is already skipped, so a later setup call is a no-op
+    const created = await api("POST", "/api/groups", {
+      name: "Paging",
+      memberIds: [body.bots[0].id],
+      setup: { bulletin: "", defaultResponder: { kind: "mentions" } },
     });
-    expect(quiet.status).toBe(200);
+    expect(created.status).toBe(201);
+    expect(created.body.group.defaultResponder).toEqual({ kind: "mentions" });
+    const groupId = created.body.group.id;
 
     for (let i = 0; i < count; i++) {
       const posted = await api("POST", `/api/groups/${groupId}/messages`, { text: `page probe ${i}` });
@@ -4702,7 +5026,8 @@ describe("resumable event stream", () => {
     const hello = await first.until((frame) => frame.kind === "hello");
     let cursor = hello.cursor;
     try {
-      expect(await first.until((frame) => frame.kind === "ping")).toEqual({ kind: "ping" });
+      expect(hello.now).toEqual(expect.any(Number));
+      expect(await first.until((frame) => frame.kind === "ping")).toEqual({ kind: "ping", now: expect.any(Number) });
       await nudge(botId);
       const next = await first.until((frame) => frame.kind === "bot" && frame.bot?.id === botId);
       const since = Number(hello.cursor.split(":")[1]);
@@ -4724,7 +5049,7 @@ describe("resumable event stream", () => {
     }
   });
 
-  it("replays exactly what a disconnected client missed", async () => {
+  it("replays what a disconnected client missed, in order", async () => {
     const { body } = await api("GET", "/api/bots");
     const botId = body.bots[0].id;
 
@@ -4747,16 +5072,14 @@ describe("resumable event stream", () => {
       // ...and an old cursor still replays them, in order, without a hydrate
       const back = await resumed.until((f) => f.kind === "hello");
       expect(back.resumed).toBe(true);
-      // This file shares one server. Leftover runtime traffic can occupy
-      // sequence numbers between nudges, so the missed bot frames are not
-      // always seen.seq+1..+3. Wait for the three nudges themselves.
-      await resumed.until(
-        () => resumed.frames.filter((f) => f.kind === "bot" && f.bot?.id === botId && f.seq > seen.seq).length >= 3,
-      );
+      // A bot frame carries the whole bot, so the ring keeps only the newest
+      // of the three nudges. This file shares one server, so other numbered
+      // frames can sit between them.
+      await resumed.until((f) => f.kind === "bot" && f.bot?.id === botId && f.seq > seen.seq);
       const replayed = resumed.frames
         .filter((f) => f.kind === "bot" && f.bot?.id === botId)
         .map((f) => f.seq);
-      expect(replayed.length).toBeGreaterThanOrEqual(3);
+      expect(replayed.length).toBeGreaterThanOrEqual(1);
       expect(replayed.every((seq) => seq > seen.seq)).toBe(true);
       expect(replayed).toEqual([...replayed].sort((a, b) => a - b));
     } finally {
@@ -5496,7 +5819,7 @@ describe("a start that fails before dispatch returns", () => {
         cwd: gone,
         modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" },
       })).status).toBe(200);
-      rmSync(gone, { recursive: true });
+      removeTestData(gone);
       for (const [index, text] of ["first try", "second try"].entries()) {
         expect((await api("POST", `/api/bots/${bot.id}/messages`, { text })).status).toBe(202);
         await expect.poll(() => failures(bot.threadId), { timeout: 10_000 }).toBe(index + 1);
@@ -5535,7 +5858,7 @@ describe("a start that fails before dispatch returns", () => {
       // the first turn's CLI keeps the desk, so the member moves to a folder nothing holds
       const gone = folder("MovedDesk");
       expect((await api("PATCH", `/api/bots/${bot.id}`, { cwd: gone })).status).toBe(200);
-      rmSync(gone, { recursive: true });
+      removeTestData(gone);
       expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "two" })).status).toBe(202);
       await expect.poll(() => failures(room.threadId), { timeout: 10_000 }).toBe(1);
 

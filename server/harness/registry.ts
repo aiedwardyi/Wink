@@ -14,7 +14,8 @@ import { applyCredentialAllowlist } from "../config.ts";
 import { findCliCandidates, refreshPathCache, splitCliString } from "../env-path.ts";
 import { clearVersionCache, cliRevision } from "../procs.ts";
 import { accountLaunch, type AccountContext } from "../account-policy.ts";
-import { EngineLogin } from "../engine-login.ts";
+import { MISSING_HOME, missingAccountHome } from "../accounts.ts";
+import { EngineLogin, type LoginCapture, type SignInMode } from "../engine-login.ts";
 import { withWslProbeSnapshot } from "../wsl-gate.ts";
 import { warmPool as sharedWarmPool, type WarmPool } from "../drivers/warm-pool.ts";
 import { retiredEngineLabel } from "../../shared/model-selection.ts";
@@ -100,11 +101,13 @@ function cliOfRaw(raw: unknown): string | undefined {
 
 export class ProviderRegistry {
   readonly logins = new EngineLogin();
-  private signingOut = new Set<string>();
+  // The sign-out in flight per instance; a press while one runs gets its answer.
+  private signingOut = new Map<string, Promise<boolean>>();
   private accounts = new Map<string, AccountContext>();
   private blockedAccounts = new Set<string>();
   private checkingAccounts = new Set<string>();
   private accountIdentity?: (id: string, snapshot: ProviderSnapshot) => Promise<void>;
+  private userSignedOut?: (id: string) => boolean;
   private environmentByInstance = new Map<InstanceId, Record<string, string>>();
   private byId = new Map<InstanceId, RegistryEntry>();
   /** decoded per-instance `cli` overrides, for describe() — drivers spawn
@@ -180,7 +183,8 @@ export class ProviderRegistry {
           enabled: entry.enabled ?? true,
           config,
           ...(entry.account ? { account: entry.account } : {}),
-          ...(entry.account && options?.deferAccountAuth ? { deferAccountAuth: true } : {}),
+          // A provider reload defers like a cold load where the check would start the CLI in a missing home; Sign In creates it.
+          ...(entry.account && (options?.deferAccountAuth || missingAccountHome(entry.account)) ? { deferAccountAuth: true } : {}),
         });
         return { entry: { instanceId, live }, rawCli, incarnation } satisfies { entry: RegistryEntry; rawCli?: string; incarnation?: string };
       } catch (e) {
@@ -275,6 +279,11 @@ export class ProviderRegistry {
   }
 
   onAccountIdentity(listener: (id: string, snapshot: ProviderSnapshot) => Promise<void>) { this.accountIdentity = listener; }
+  /** A base the user signed out stays blocked, but a refresh or rescan still reads its CLI home: a login found there ends the block. */
+  recheckSignedOut(check: (id: string) => boolean) { this.userSignedOut = check; }
+  private signedOutBase(id: string) {
+    return this.accountStopped(id) && !this.accounts.has(id) && !this.signingOut.has(id) && this.logins.state(id) !== "pending" && this.userSignedOut?.(id) === true;
+  }
   blockAccount(id: string, blocked: boolean) {
     this.checkingAccounts.delete(id);
     if (blocked) this.blockedAccounts.add(id);
@@ -321,11 +330,17 @@ export class ProviderRegistry {
   cliMissing(id: string) { return this.probed.get(id)?.snapshot.cliMissing === true; }
   async retryAccount(id: string) {
     const entry = this.byId.get(id);
-    if (entry?.live?.account) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }, true));
+    if (entry?.live) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }, true));
   }
-  accountAvailable(id: string) {
+  /** Reads the account's CLI home again, a signed-out base's too, so an account action sees the login there now. */
+  async recheck(id: string) {
+    const entry = this.byId.get(id);
+    if (entry?.live) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }));
+  }
+  accountAvailable(id: string, confirmed = false) {
     const snapshot = this.probed.get(id)?.snapshot;
-    return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" && snapshot?.authenticated !== false;
+    return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" &&
+      (confirmed ? snapshot?.authenticated === true : snapshot?.authenticated !== false);
   }
   accountBusy(id: string) { return this.probing.has(id) || this.modelRefreshInFlight.has(id) || this.helperWork.has(id) || this.logins.state(id) === "pending" || this.get(id)?.accountBusy?.() === true; }
   invalidateAccount(id: string) { this.holdIdentity(id, "account"); this.get(id)?.invalidateAccount?.(); this.forget(id); }
@@ -379,17 +394,49 @@ export class ProviderRegistry {
     } : null;
   }
 
-  async startSignIn(instanceId: InstanceId, device = false) {
+  /** Code when the CLI opens nothing on this PC: a device-flow request, or an engine whose only login is a device flow (Muse). */
+  signInMode(instanceId: InstanceId, device: boolean): SignInMode {
+    const entry = this.byId.get(instanceId);
+    const kind = entry?.live?.driverKind ?? entry?.shadow?.driverKind;
+    const login = kind ? this.driversByKind.get(kind)?.install?.login : undefined;
+    return device || Boolean(login?.deviceArgs && login.deviceArgs.join("\0") === login.args.join("\0")) ? "code" : "browser";
+  }
+
+  async startSignIn(instanceId: InstanceId, device: boolean, owner: string) {
     const config = this.loginConfig(instanceId);
     if (!config || this.signingOut.has(instanceId)) return null;
     this.holdIdentity(instanceId, "sign-in");
     const login = config.install?.login;
     const args = device ? login?.deviceArgs : login?.args;
     if (!args) return null;
-    const capture = await this.logins.start(instanceId, config.cli, args, config.env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true });
-    return login?.deviceArgs ? capture : { ...(capture.url ? { url: capture.url } : {}), ...(capture.error ? { error: capture.error } : {}),
-      ...(config.account && config.engine === "claudeAgent" && capture.inputGeneration ? { inputGeneration: capture.inputGeneration } : {}),
-    };
+    const env = device ? { ...config.env, ...login?.deviceEnv } : config.env;
+    const paste = device || Boolean(config.account && config.engine === "claudeAgent");
+    const signInEnded = await this.get(instanceId)?.signingIn?.();
+    let capture: LoginCapture;
+    try {
+      capture = await this.logins.start(instanceId, config.cli, args, env, login?.authHosts, { scope: config.engine, account: config.account, logExit: true, paste, owner, mode: this.signInMode(instanceId, device) });
+    } catch (error) {
+      signInEnded?.(false);
+      throw error;
+    }
+    if (signInEnded) void this.logins.wait(instanceId).then(() => signInEnded(this.logins.state(instanceId) === "complete"));
+    return this.shownCapture(instanceId, capture);
+  }
+
+  /** The waiting sign-in's details for `owner`, empty unless that session started it; no shared row carries them. */
+  signInCapture(instanceId: InstanceId, owner: string): LoginCapture {
+    return this.shownCapture(instanceId, this.logins.captureFor(instanceId, owner));
+  }
+
+  private shownCapture(instanceId: InstanceId, capture: LoginCapture): LoginCapture {
+    const kind = this.get(instanceId)?.driverKind;
+    const login = kind ? this.driversByKind.get(kind)?.install?.login : undefined;
+    if (login?.deviceArgs) return capture;
+    const shown: LoginCapture = {};
+    if (capture.url) shown.url = capture.url;
+    if (capture.error) shown.error = capture.error;
+    if (this.accounts.has(instanceId) && kind === "claudeAgent" && capture.inputGeneration) shown.inputGeneration = capture.inputGeneration;
+    return shown;
   }
 
   async cancelSignIn(instanceId: InstanceId) {
@@ -400,17 +447,36 @@ export class ProviderRegistry {
     return true;
   }
 
+  /** Whether a sign-out runs for this instance now; a press then joins it (signOut returns its answer). */
+  signingOutNow(instanceId: InstanceId) {
+    return this.signingOut.has(instanceId);
+  }
+
   async signOut(instanceId: InstanceId) {
     const config = this.loginConfig(instanceId);
     if (!config?.install?.logout) return null;
-    if (this.signingOut.has(instanceId)) return false;
-    this.signingOut.add(instanceId);
+    // A second press (another client, the phone, a reload, a retry) waits for the running sign-out and gets its answer.
+    const running = this.signingOut.get(instanceId);
+    if (running) return running;
+    let join!: (out: Promise<boolean>) => void;
+    const shared = new Promise<boolean>((resolve) => { join = resolve; });
+    shared.catch(() => undefined);
+    this.signingOut.set(instanceId, shared);
+    const out = this.signOutOnce(instanceId, config, config.install.logout);
+    join(out);
+    return out;
+  }
+
+  private async signOutOnce(instanceId: InstanceId, config: NonNullable<ReturnType<ProviderRegistry["loginConfig"]>>, logout: string[]) {
     const since = this.holdIdentity(instanceId, "sign-out");
     try {
       await this.logins.cancel(instanceId);
-      await this.logins.start(instanceId, config.cli, config.install.logout, config.env, [], { scope: config.engine, account: config.account });
+      await this.logins.start(instanceId, config.cli, logout, config.env, [], { scope: config.engine, account: config.account, mode: "sign-out" });
       await this.logins.wait(instanceId);
       let success = this.logins.state(instanceId) === "complete";
+      const signingOut = this.get(instanceId);
+      if (success && !config.account) signingOut?.signedOutByCli?.();
+      else if (!success && !config.account && signingOut?.signOutWithoutCli) success = await signingOut.signOutWithoutCli(this.logins.capture(instanceId).error);
       if (success || this.accounts.has(instanceId)) {
         if (success) this.logins.clear(instanceId);
         const previous = this.probed.get(instanceId);
@@ -435,27 +501,29 @@ export class ProviderRegistry {
     }
   }
 
-  async refreshLogins() {
-    await Promise.all(this.entries().map(async (entry) => {
-      const live = entry.live;
-      if (!live || live.account || this.accountBlocked(entry.instanceId) || this.signingOut.has(entry.instanceId) || !this.logins.needsRefresh(entry.instanceId)) return;
-      const previous = this.probed.get(entry.instanceId);
-      if (!previous) return;
-      const generation = this.logins.generation(entry.instanceId);
-      let since = this.holdIdentity(entry.instanceId, "refresh");
-      const snapshot = await live.snapshot({ refresh: true });
-      if (this.signingOut.has(entry.instanceId) || this.logins.generation(entry.instanceId) !== generation || !this.logins.needsRefresh(entry.instanceId)) return;
-      this.probed.set(entry.instanceId, { ...previous, snapshot });
-      this.probeVersion += 1;
-      if (snapshot.authenticated) {
-        const newer = (this.identityHolds.get(entry.instanceId)?.seq ?? since) > since;
-        const complete = this.holdIdentity(entry.instanceId, "sign-in complete");
-        if (!newer) since = complete;
-        this.logins.complete(entry.instanceId);
-      }
-      this.logins.acknowledge(entry.instanceId, snapshot.authenticated === true);
-      this.settleIdentity(entry.instanceId, since);
-    }));
+  /** One auth check after a base sign-in of `generation` ends; reads never check while it waits. */
+  async settleSignIn(instanceId: InstanceId, generation: number | undefined) {
+    const live = this.get(instanceId);
+    if (!live || live.account || this.signingOut.has(instanceId) || this.logins.generation(instanceId) !== generation) return undefined;
+    let since = this.holdIdentity(instanceId, "refresh");
+    const snapshot = await live.snapshot({ refresh: true });
+    if (this.get(instanceId) !== live || this.signingOut.has(instanceId) || this.logins.generation(instanceId) !== generation) return snapshot;
+    const previous = this.probed.get(instanceId);
+    this.probing.delete(instanceId);
+    this.probed.set(instanceId, { ...previous, snapshot,
+      cliCandidates: previous?.cliCandidates ?? this.candidateScan()(this.driversByKind.get(live.driverKind)),
+      models: previous?.models ?? (this.cacheDir ? structuredClone(live.models) : undefined),
+    });
+    this.probeVersion += 1;
+    if (snapshot.authenticated) {
+      const newer = (this.identityHolds.get(instanceId)?.seq ?? since) > since;
+      const complete = this.holdIdentity(instanceId, "sign-in complete");
+      if (!newer) since = complete;
+    }
+    this.logins.acknowledge(instanceId, snapshot.authenticated === true);
+    this.settleIdentity(instanceId, since);
+    for (const listener of this.probedListeners) listener(instanceId);
+    return snapshot;
   }
 
   entries(): RegistryEntry[] {
@@ -513,7 +581,6 @@ export class ProviderRegistry {
 
   /** describe() rows from the last completed probe; only instances added or changed since are probed. */
   async describeCached() {
-    await this.refreshLogins();
     const read = async () => {
       const candidatesFor = this.candidateScan();
       const rows = await Promise.all(
@@ -528,7 +595,6 @@ export class ProviderRegistry {
 
   /** describeCached() rows that never wait on a first check: such an instance reads "checking". */
   async describeKnown() {
-    await this.refreshLogins();
     // A blocked account never probes, so it reads as startProbe() answers it.
     const rows = this.entries().map((entry) => this.row(entry, this.known(entry.instanceId)
       ?? (this.accountStopped(entry.instanceId) && !this.probing.has(entry.instanceId) ? BLOCKED : CHECKING)));
@@ -622,13 +688,15 @@ export class ProviderRegistry {
   ): Promise<Probe> {
     const id = entry.instanceId;
     const since = this.holdSeq;
-    if (this.accountBlocked(id) && !retryAccount) return this.accountChecking(id) ? Promise.resolve(CHECKING) : this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? BLOCKED);
+    const recheck = !retryAccount && Boolean(opts?.rescan || opts?.refresh) && this.signedOutBase(id);
+    if (this.accountBlocked(id) && !retryAccount && !recheck) return this.accountChecking(id) ? Promise.resolve(CHECKING) : this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? BLOCKED);
     const pending: Promise<Probe> = this.probe(entry, candidatesFor, opts).then(async (probe) => {
       if (this.byId.get(id) === entry && this.probing.get(id) === pending) {
         this.probed.set(id, probe);
         // Identity observation must not count its own completed probe as live work.
         this.probing.delete(id);
         this.probeVersion += 1;
+        if (recheck && probe.snapshot.authenticated === true && this.signedOutBase(id)) this.blockAccount(id, false);
         if (entry.live?.account) {
           try { await this.accountIdentity?.(id, probe.snapshot); }
           catch (error) {
@@ -674,6 +742,11 @@ export class ProviderRegistry {
     const inst = entry.live;
     let snapshot: ProviderSnapshot;
     try {
+      const account = this.accounts.get(inst.instanceId);
+      // Launching would fail (Codex) or create the home (Claude, Grok); Sign In creates it.
+      if (account && missingAccountHome(account)) {
+        return { snapshot: { ...MISSING_HOME, authChecked: true }, cliCandidates: candidatesFor(driver), models: this.cacheDir ? structuredClone(inst.models) : undefined };
+      }
       const discovery = this.modelRefreshInFlight.get(inst.instanceId);
       if (discovery) await discovery;
       const lastRefresh = this.modelRefreshAt.get(inst.instanceId) ?? 0;
@@ -724,7 +797,7 @@ export class ProviderRegistry {
       return {
         instanceId: entry.instanceId,
         loginState: undefined,
-        loginCapture: undefined,
+        loginOpensBrowser: undefined,
         loginError: undefined,
         driverKind: entry.shadow.driverKind,
         displayName: entry.shadow.displayName ?? retiredEngineLabel(entry.shadow.driverKind) ?? entry.shadow.driverKind,
@@ -745,12 +818,7 @@ export class ProviderRegistry {
       ...(inst.account ? { accountOf: inst.account.of, accountGeneration: inst.account.generation, canRefreshUsage: true } : {}),
       ...(this.logins.capture(inst.instanceId).error ? { loginError: this.logins.capture(inst.instanceId).error } : {}),
       loginState: this.signingOut.has(inst.instanceId) ? "cancelled" : this.logins.state(inst.instanceId),
-      loginCapture: this.signingOut.has(inst.instanceId) ? {}
-        : driver?.install?.login?.deviceArgs ? this.logins.capture(inst.instanceId)
-        : { url: this.logins.capture(inst.instanceId).url,
-          ...(inst.account && inst.driverKind === "claudeAgent" && this.logins.capture(inst.instanceId).inputGeneration
-            ? { inputGeneration: this.logins.capture(inst.instanceId).inputGeneration } : {}),
-        },
+      loginOpensBrowser: (!this.signingOut.has(inst.instanceId) && this.logins.opensBrowser(inst.instanceId)) || undefined,
       driverKind: inst.driverKind,
       displayName: inst.displayName ?? inst.driverKind,
       snapshot,

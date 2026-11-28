@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { paneNotesForTurn, paneNotesSinceLastUserTurn } from "./context-compaction.ts";
-import { bootPaneWakes, hasLocalUndeliveredPaneNote, PANE_WAKE_DEBOUNCE_MS, paneNoteWaiting, PaneWakeScheduler, paneWakeEnabled, type WakeAdmission } from "./pane-wake.ts";
+import { hasLocalUndeliveredPaneNote, PANE_WAKE_DEBOUNCE_MS, paneNoteWaiting, paneWakeChats, PaneWakeScheduler, paneWakeEnabled, type WakeAdmission } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
 
 const PANE_ONLY: WakeAdmission = { rootId: null, reservation: null };
 
@@ -345,12 +346,13 @@ describe("hasLocalUndeliveredPaneNote", () => {
     expect(hasLocalUndeliveredPaneNote(newer, undefined, "home", "local")).toBe(true);
   });
 
-  it("finds boot wakes without loading the chat", () => {
+  it("finds boot wakes in bot order without loading the chat", () => {
     const selection = () => ({ instanceId: "claude", model: "claude-sonnet-5" });
     const store = new Store(selection);
     const waiting = store.createBot();
     const done = store.createBot();
-    for (const bot of [waiting, done]) {
+    const later = store.createBot();
+    for (const bot of [waiting, done, later]) {
       store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Run worker" });
       store.markPaneNotesDelivered(bot.id, bot.threadId, undefined);
       const note = store.appendMessage(bot.threadId, { role: "bot", kind: "note", text: "[pane worker01] DONE: verified", origin: "home" });
@@ -360,10 +362,12 @@ describe("hasLocalUndeliveredPaneNote", () => {
     const reopened = new Store(selection);
     const path = vi.spyOn(reopened, "activePath");
     const messages = vi.spyOn(reopened, "messagesFor");
-    const wakes = bootPaneWakes(reopened, "home");
-    expect(wakes).toContainEqual({ botId: waiting.id, threadId: waiting.threadId });
-    expect(wakes).not.toContainEqual({ botId: done.id, threadId: done.threadId });
-    for (const bot of [waiting, done]) {
+    const chats = paneWakeChats(reopened);
+    const wakes = bootRowsNow([], undefined, undefined, [], { chats, deviceId: "home" }).paneWakes;
+    const ours = new Set([waiting.id, done.id, later.id]);
+    expect(wakes.filter((wake) => ours.has(wake.botId))).toEqual(chats.flatMap(({ botId, threadId }) => (botId === waiting.id || botId === later.id ? [{ botId, threadId }] : [])));
+    expect(wakes.map((wake) => wake.botId)).not.toContain(done.id);
+    for (const bot of [waiting, done, later]) {
       expect(path).not.toHaveBeenCalledWith(bot.threadId);
       expect(messages).not.toHaveBeenCalledWith(bot.threadId);
     }

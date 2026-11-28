@@ -66,14 +66,18 @@ function chat(threadId: string) {
   const messages: Message[] = [];
   const patches: Array<Partial<Message>> = [];
   const peerReplyComm = new Map<string, NonNullable<Message["comm"]>>();
+  const patchRow = (_threadId: string, id: string, patch: Partial<Message>) => {
+    patches.push(patch);
+    Object.assign(messages.find((message) => message.id === id)!, patch);
+  };
   const deps: Record<string, unknown> = {
-    turnSummaries, takePeerReplyStamp, isVoiceLine, persistPeerUserReply, peerReplyComm, lastReply: new Map(), markChatLatency: () => {}, paneNoteTurnThreads: new Set<string>(),
+    turnSummaries, takePeerReplyStamp, isVoiceLine, persistPeerUserReply, peerReplyComm, lastReply: new Map(), markChatLatency: () => {}, paneNoteTurnThreads: new Set<string>(), askTexts: { text() {} }, turnOwnerId: undefined,
     store: {
       messagesFor: () => messages,
-      patchMessage: (_threadId: string, id: string, patch: Partial<Message>) => {
-        patches.push(patch);
-        Object.assign(messages.find((message) => message.id === id)!, patch);
-      },
+      findLast: (_threadId: string, predicate: (message: Message) => boolean) => messages.findLast(predicate),
+      row: (_threadId: string, id: string) => messages.find((message) => message.id === id),
+      patchMessage: patchRow,
+      patchRow,
     },
     pushMessage: (message: Omit<Message, "id" | "at">) => {
       const row = { id: `message-${messages.length}`, at: 1, ...message } as Message;

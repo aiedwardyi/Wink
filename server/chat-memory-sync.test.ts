@@ -9,6 +9,7 @@ import { loadThreadSyncLedger, pullThread, saveThreadSyncLedger, uploadThread, t
 import { ThreadSyncV2 } from "./thread-sync-v2.ts";
 import { completedTool, recordedArtifactsPatch } from "./tool-activity.ts";
 import { chatMemory } from "./turn-context.ts";
+import { testHome } from "./testing/test-home.ts";
 
 const roots: string[] = [];
 const clients: ThreadSyncV2[] = [];
@@ -19,7 +20,7 @@ afterEach(async () => {
 });
 
 function temp(): string {
-  const root = mkdtempSync(join(tmpdir(), "chat-memory-sync-"));
+  const root = mkdtempSync(join(testHome(), "chat-memory-sync-"));
   roots.push(root);
   return root;
 }

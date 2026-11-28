@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard } from "@/lib/usage-board";
 import { setUsageMode } from "@/lib/usage-preferences";
+import { usageOrderHost } from "@/lib/usage-order.test-host";
 
 const h = vi.hoisted(() => ({ board: null as UsageBoard | null, instances: [] as any[], api: vi.fn(), dispatch: vi.fn() }));
 vi.mock("@/state/store", async (original) => ({
@@ -19,6 +20,7 @@ vi.mock("@/lib/usage-auto-refresh", async (original) => ({ ...await original<typ
 import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { LIFT_SCALE } from "@/lib/use-touch-drag";
+import { landFold, spyReveal } from "./Fold.test-land";
 import { UsageDesk } from "./UsageDesk";
 import { ChatPlanMeters } from "./ChatPlanMeters";
 import { AccountPicker } from "./UsageAccounts";
@@ -26,6 +28,7 @@ import { AccountConnections } from "./AccountConnections";
 
 let host: HTMLDivElement;
 let root: Root;
+let wink: ReturnType<typeof usageOrderHost>;
 const q = (selector: string) => host.querySelector<HTMLElement>(selector);
 const click = async (selector: string) => {
   expect(q(selector), selector).not.toBeNull();
@@ -58,7 +61,9 @@ beforeEach(() => {
     snapshot: { authenticated: true, state: "available", account: `account-${account.number}@example.com` },
     canRefreshUsage: true, models: { default: "default", options: [] },
   })));
-  h.api.mockReset().mockResolvedValue({});
+  wink = usageOrderHost();
+  wink.open();
+  h.api.mockReset().mockImplementation((path: string, init?: RequestInit) => wink.answer(path, init) ?? Promise.resolve({}));
   h.dispatch.mockReset();
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
@@ -188,7 +193,7 @@ it.each(["claude", "codex"])("uses the %s engine base's partial order and leaves
   const before = engine.accounts.map((account) => account.id);
   engine.base = `${kind}-other`;
   h.instances.filter((each) => each.accountOf === kind).forEach((each) => { each.accountOf = engine.base; });
-  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ [kind]: before, [engine.base]: ["removed-account", before.at(-1)] }));
+  wink.push({ [kind]: before, [engine.base]: ["removed-account", before.at(-1)!] });
   await mount(createElement(ChatPlanMeters, { instanceId: engine.mainId, windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
   await click("[data-usage-meter]");
   const actual = [...document.querySelectorAll("[data-usage-quick] [data-account-row]")].map((node) => node.getAttribute("data-account-row"));
@@ -196,18 +201,20 @@ it.each(["claude", "codex"])("uses the %s engine base's partial order and leaves
   expect(engine.accounts.map((account) => account.id)).toEqual(before);
 });
 
-it.each([null, "{", "[]", '{"claude":[1]}', '{"codex":["codex"]}'])("keeps quick-view default order without a valid engine order (%s)", async (saved) => {
+it.each([null, "{", "[]", '{"claude":[1]}', '{"codex":["codex"]}'])("keeps quick-view default order without a valid engine order in an old local copy (%s)", async (saved) => {
   if (saved !== null) localStorage.setItem("openmausbot.usageOrder.v1", saved);
+  wink.open();
   const before = h.board!.engines[0]!.accounts.map((account) => account.id);
   await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
   await click("[data-usage-meter]");
   expect([...document.querySelectorAll("[data-usage-quick] [data-account-row]")].map((node) => node.getAttribute("data-account-row"))).toEqual(before);
+  expect(wink.puts).toEqual(saved?.includes("codex") ? [{ seed: { codex: ["codex"] }, from: "browser" }] : []);
 });
 
 it("shares order between mounted Connections and Usage without losing other engines", async () => {
   const before = h.board!.engines[0]!.accounts.map((account) => account.id);
   const codex = h.board!.engines[1]!.accounts.map((account) => account.id).reverse();
-  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ codex }));
+  wink.push({ codex });
   await mount(createElement("div", null, createElement(UsageDesk), createElement(AccountConnections, {
     accounts: h.instances.filter((account) => account.accountOf === "claude"), reload: async () => {},
   })));
@@ -216,18 +223,17 @@ it("shares order between mounted Connections and Usage without losing other engi
   expect(rows()).toEqual([before[1], before[0], before[2]]);
   await key('[data-usage-engine="claude"] [data-account-row="claude"]', "ArrowUp");
   expect(connections()).toEqual(before);
-  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).codex).toEqual(codex);
+  expect(wink.orders).toEqual({ codex, claude: before });
 });
 
-it("reads order changes from another window", async () => {
+it("reads order changes another client saved", async () => {
   await mount();
   const next = rows().reverse();
-  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ claude: next }));
-  await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: "openmausbot.usageOrder.v1" })));
+  await act(async () => wink.push({ claude: next as string[] }));
   expect(rows()).toEqual(next);
 });
 
-it("keeps another window's engine order when dropping an in-flight drag", async () => {
+it("keeps another client's engine order when dropping an in-flight drag", async () => {
   await mount();
   const before = rows();
   const codex = h.board!.engines[1]!.accounts.map((account) => account.id).reverse();
@@ -239,14 +245,13 @@ it("keeps another window's engine order when dropping an in-flight drag", async 
     q('[data-account-row="claude"]')!.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "mouse", button: 0, clientY: 40, bubbles: true }));
     document.dispatchEvent(new PointerEvent("pointermove", { clientY: 60, bubbles: true }));
   });
-  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ codex }));
-  await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: "openmausbot.usageOrder.v1" })));
+  await act(async () => wink.push({ codex }));
   await act(async () => {
     document.dispatchEvent(new PointerEvent("pointermove", { clientY: 130, bubbles: true }));
     document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
   });
   expect(rows()).toEqual([before[1], before[0], before[2]]);
-  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).codex).toEqual(codex);
+  expect(wink.orders).toEqual({ codex, claude: [before[1], before[0], before[2]] });
 });
 
 it("reorders sections with Alt+Down and keeps the order after remount", async () => {
@@ -304,12 +309,13 @@ it.each([false, true])("preserves hidden account slots after a collapsed reorder
   engine.mainId = "claude-6";
   const full = engine.accounts.map((account) => account.id);
   if (saved) [full[2], full[4]] = [full[4]!, full[2]!];
-  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ claude: full, codex: ["codex"] }));
+  wink.push({ claude: full, codex: ["codex"] });
   await mount();
   expect(rows()).toEqual([full[0], full[1], full[5]]);
   await key(`[data-account-row="${full[0]}"]`, "ArrowDown");
   const expected = [full[1], full[0], ...full.slice(2)];
-  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!)).toEqual({ claude: expected, codex: ["codex"] });
+  expect(wink.orders).toEqual({ claude: expected, codex: ["codex"] });
+  wink.open();
   await remount();
   await click('[data-usage-engine="claude"] [data-accounts-cap]');
   expect(rows()).toEqual(expected);
@@ -326,8 +332,8 @@ it("refreshes through the existing refresh API, including Muse", async () => {
   h.instances.push({ ...h.instances[0], instanceId: "muse", driverKind: "museAgent" });
   await mount();
   await click("[data-usage-refresh]");
-  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/muse", { method: "POST" });
-  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/claude", { method: "POST" });
+  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/muse?fresh=1", expect.objectContaining({ method: "POST" }));
+  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/claude?fresh=1", expect.objectContaining({ method: "POST" }));
 });
 
 it.each(["en", "ko"] as const)("refreshes a displayed Gemini reading in %s", async (locale) => {
@@ -339,7 +345,7 @@ it.each(["en", "ko"] as const)("refreshes a displayed Gemini reading in %s", asy
   await mount();
   expect(q('[data-usage-engine="gemini"] [data-account-row="gemini"]')).not.toBeNull();
   await click("[data-usage-refresh]");
-  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/gemini", { method: "POST" });
+  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/gemini?fresh=1", expect.objectContaining({ method: "POST" }));
   expect(h.dispatch).toHaveBeenCalledWith({ type: "rateLimits", instanceId: "gemini", report, identity: instance.snapshot.account });
 });
 
@@ -351,7 +357,7 @@ it.each(["unread", "signed out", "unsupported"])("skips manual Gemini refresh wh
   if (state === "unsupported") instance.canRefreshUsage = false;
   await mount();
   await click("[data-usage-refresh]");
-  expect(h.api).not.toHaveBeenCalledWith("/api/usage/refresh/gemini", { method: "POST" });
+  expect(h.api).not.toHaveBeenCalledWith("/api/usage/refresh/gemini?fresh=1", expect.objectContaining({ method: "POST" }));
 });
 
 it.each(["en", "ko"] as const)("toggles the chat card on click and preserves both Alt+U presses (%s)", async (locale) => {
@@ -398,7 +404,7 @@ it.each(["en", "ko"] as const)("refreshes the open quick view's accounts on Alt+
   }
   expect(posts()).toEqual([]);
   expect(await altR()).toBe(true);
-  const claude = h.board!.engines.find((each) => each.engine === "claude")!.accounts.map((each) => `/api/usage/refresh/${each.id}`);
+  const claude = h.board!.engines.find((each) => each.engine === "claude")!.accounts.map((each) => `/api/usage/refresh/${each.id}?fresh=1`);
   expect(posts().sort()).toEqual([...claude].sort());
   expect(button.hasAttribute("disabled")).toBe(true);
   expect(await altR(), "ignored while pending").toBe(false);
@@ -583,6 +589,46 @@ it.each(["[data-left]", "[data-account-email]", "[data-edit-name]", "[data-use]"
   expect(document.documentElement.hasAttribute("data-usage-dragging")).toBe(false);
 });
 
+it("reorders with a mouse drag from a signed-out row's Sign In", async () => {
+  h.board!.engines[0]!.accounts[0]!.signIn = "signed-out";
+  h.instances[0]!.snapshot = { authenticated: false, state: "available" };
+  await mount();
+  const before = rows();
+  stack(claudeRows());
+  const signIn = [...host.querySelectorAll<HTMLElement>('[data-account-row="claude"] button')].find((each) => each.textContent === "Sign In");
+  expect(signIn).toBeTruthy();
+  await drag(signIn!, 130);
+  expect(rows()).toEqual([before[1], before[0], ...before.slice(2)]);
+});
+
+it("reorders Connections with a mouse drag from Sign Out", async () => {
+  const first = h.instances.find((each) => each.accountOf === "claude")!;
+  const accounts = Array.from({ length: 3 }, (_, i) => ({ ...first, instanceId: i ? `slot-${i}` : first.instanceId }));
+  await mount(createElement(AccountConnections, { accounts, reload: async () => {} }));
+  const list = () => [...host.querySelectorAll<HTMLElement>("[data-connection-account]")];
+  stack(list());
+  const signOut = [...list()[0]!.querySelectorAll<HTMLElement>("button")].find((each) => each.textContent === "Sign Out");
+  expect(signOut).toBeTruthy();
+  await drag(signOut!, 130);
+  expect(list().map((node) => node.dataset.connectionAccount)).toEqual(["slot-1", first.instanceId, "slot-2"]);
+});
+
+it("keeps a press on Use with a 6 px jiggle a click", async () => {
+  await mount();
+  stack(claudeRows());
+  const use = q('[data-usage-engine="claude"] [data-use]')!;
+  const clicked = vi.fn();
+  use.addEventListener("click", clicked);
+  await act(async () => {
+    use.dispatchEvent(mouse("pointerdown", 40, 40));
+    document.dispatchEvent(mouse("pointermove", 40, 46));
+    document.dispatchEvent(mouse("pointerup", 40, 46));
+    use.click();
+  });
+  expect(lifted()).toBe(0);
+  expect(clicked).toHaveBeenCalledOnce();
+});
+
 it("waits a few px before dragging and stops the press from selecting text", async () => {
   await mount();
   const row = q('[data-account-row="claude"]')!;
@@ -659,7 +705,7 @@ it("reorders the small card by mouse, saves the shared order and stays open", as
   stack(quickRows());
   await drag(quickRows()[0]!, 130);
   expect(quickIds()).toEqual([before[1], before[0], before[2]]);
-  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).claude).toEqual([before[1], before[0], before[2]]);
+  expect(wink.orders?.claude).toEqual([before[1], before[0], before[2]]);
   expect(document.querySelector("[data-usage-quick]:not([data-closing])")).not.toBeNull();
 });
 
@@ -748,6 +794,64 @@ it("lifts a mouse-dragged row by the scale its travel counts", () => {
   expect(usageCss).toContain(`scale: ${LIFT_SCALE};`);
 });
 
+// 12 rows of 80 px in a 200 px scroller, row 6 pressed; a lifted row held in an edge band scrolls the list under it
+it.each([
+  ["a jiggle on Use", "[data-use]", 174, [180], 5],
+  ["a 4 px jiggle on the row near the bottom", "", 174, [178], 5],
+  ["a 4 px jiggle on the row near the top", "", 22, [18], 5],
+  ["a drag to the first row", "", 100, [2], 0],
+  ["a drag to the last row", "", 100, [198], 11],
+] as const)("moves a small card row by mouse only on a real drag: %s", async (_, from, start, points, wanted) => {
+  const engine = h.board!.engines[0]!;
+  engine.accounts = Array.from({ length: 12 }, (_, i) => ({ ...engine.accounts[i ? 2 : 0]!, id: i ? `slot-${i}` : "claude", number: i + 1, main: !i }));
+  const order = engine.accounts.map((account) => account.id);
+  wink.push({ claude: order });
+  await openQuick();
+  const rows = [...quickRows()];
+  const box = document.querySelector<HTMLElement>("[data-quick-scroll]")!;
+  scroller(box, rows);
+  box.scrollTop = 414 - start;
+  for (const [i, row] of rows.entries()) {
+    vi.spyOn(row, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, i * 80 - box.scrollTop, 400, 80));
+    Object.defineProperty(row, "animate", { configurable: true, value: undefined });
+  }
+  const pressed = from ? rows[5]!.querySelector(from)! : rows[5]!;
+  await act(async () => void pressed.dispatchEvent(mouse("pointerdown", 300, start)));
+  for (const y of points) {
+    await act(async () => void document.dispatchEvent(mouse("pointermove", 300, y)));
+    await held(32);
+  }
+  await held(wanted === 5 ? 300 : 1200);
+  await act(async () => void document.dispatchEvent(mouse("pointerup", 300, points.at(-1)!)));
+  const expected = [...order];
+  expected.splice(wanted, 0, expected.splice(5, 1)[0]!);
+  expect(quickIds()).toEqual(expected);
+  expect(wink.orders?.claude).toEqual(expected);
+});
+
+it("keeps Connections in order after a 4 px jiggle on a row's button near the list edge", async () => {
+  const first = h.instances.find((each) => each.accountOf === "claude")!;
+  const accounts = Array.from({ length: 12 }, (_, i) => ({ ...first, instanceId: i ? `slot-${i}` : first.instanceId }));
+  const order = accounts.map((account) => account.instanceId);
+  wink.push({ claude: order });
+  await mount(createElement(AccountConnections, { accounts, reload: async () => {} }));
+  const rows = [...host.querySelectorAll<HTMLElement>("[data-connection-account]")];
+  scroller(host, rows);
+  host.scrollTop = 414 - 174;
+  for (const [i, row] of rows.entries()) {
+    vi.spyOn(row, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, i * 80 - host.scrollTop, 400, 80));
+    Object.defineProperty(row, "animate", { configurable: true, value: undefined });
+  }
+  const button = rows[5]!.querySelector("button:not([data-edit-name])");
+  expect(button).not.toBeNull();
+  await act(async () => void button!.dispatchEvent(mouse("pointerdown", 300, 174)));
+  await act(async () => void document.dispatchEvent(mouse("pointermove", 300, 178)));
+  await held(300);
+  await act(async () => void document.dispatchEvent(mouse("pointerup", 300, 178)));
+  expect([...host.querySelectorAll<HTMLElement>("[data-connection-account]")].map((node) => node.dataset.connectionAccount)).toEqual(order);
+  expect(wink.orders?.claude).toEqual(order);
+});
+
 it("picks a row up on a long press", async () => {
   await mount();
   const row = q('[data-account-row="claude"]')!;
@@ -798,4 +902,27 @@ it("holds the quick view on screen, inert and fading, until its exit has run", a
   expect(view()?.hasAttribute("inert")).toBe(true);
   await act(async () => { vi.advanceTimersByTime(PRESENCE_EXIT_MS + 5); });
   expect(view()).toBeNull();
+});
+
+it("brings the first account into view once a pressed engine has opened, never for Expand all or closing", async () => {
+  await mount();
+  const scrolled = spyReveal();
+  try {
+    const fold = '[data-usage-engine="claude"] [data-engine-fold]';
+    await click(fold);
+    await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+    await click(fold);
+    expect(scrolled).not.toHaveBeenCalled();
+    await landFold(q('[data-usage-engine="claude"] [data-account-row]')!);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.contexts[0]).toBe(q('[data-usage-engine="claude"] [data-account-row]'));
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+    await click("[data-fold-all]");
+    await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
+    await click("[data-fold-all]");
+    for (const each of host.querySelectorAll("[data-usage-engine] [data-fold-soft]")) await landFold(each);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+  } finally {
+    scrolled.mockRestore();
+  }
 });

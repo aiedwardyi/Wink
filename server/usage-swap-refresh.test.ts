@@ -44,7 +44,7 @@ describe("usage swap refresh", () => {
       names: { get: () => null }, rateLimits, history, runs: async () => ({ known: true, runs: [] }), bots: () => [],
       accountChanged: (id, ready) => { void swap(id, ready); },
     });
-    const swap = createUsageSwapRefresh({ registry, configs, refresh, rateLimits, save: (id, report) => { if (report) board.recordReport(id, report); } });
+    const swap = createUsageSwapRefresh({ registry, configs, refresh, rateLimits, save: (id, report) => { if (report) board.recordReport(id, report); else board.touch(); } });
     const old = { windows: [{ id: "seven_day", usedPercent: 100, resetsAt: Date.parse(reset) }], observedAt: new Date(now - 1000).toISOString() };
     rateLimits.set("engine", old);
     board.recordReport("engine", old);

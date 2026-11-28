@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { memoryNotesEnabled } from "./config.ts";
 import { ensureWorkspace, loadMemory, memorySystemPrompt, MEMORY_SEED, workspaceDir } from "./workspace.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const baseline = JSON.parse(readFileSync(new URL("../test/fixtures/memory-prompt-on.json", import.meta.url), "utf8")) as {
   cases: Array<{ kind: string; hashes: string[] }>;
@@ -24,7 +25,7 @@ function seed(kind: string) {
   return dir;
 }
 
-beforeEach(() => rmSync(workspaceDir(botId), { recursive: true, force: true }));
+beforeEach(() => removeTestData(workspaceDir(botId)));
 
 describe("memory notes prompt", () => {
   it.each(baseline.cases)("keeps memory ON byte-identical to the base for $kind", ({ kind, hashes }) => {
@@ -58,7 +59,7 @@ describe("memory notes prompt", () => {
         expect(prompt).toContain("do not edit memory files or files your 1:1 is editing");
         expect(prompt).not.toContain("MEMORY.conflict-e059d14f.md");
       }
-      if (memory?.truncated) expect(prompt).toContain("[MEMORY.md was cut off here.]");
+      if (memory?.truncated) expect(prompt).toContain(memory.newest ? `[${memory.cut} older lines of MEMORY.md were cut here; its newest lines follow.]\n${memory.newest}` : "[MEMORY.md was cut off here.]");
     }
   });
 

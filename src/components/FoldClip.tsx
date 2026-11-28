@@ -7,7 +7,7 @@ export const FOLD_FADE = "[mask-image:linear-gradient(to_bottom,black_60%,transp
 export function FoldToggle({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
   const { t } = useI18n();
   return (
-    <button type="button" onClick={onToggle} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
+    <button type="button" data-fold-toggle onClick={onToggle} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
       {t(expanded ? "chat.showLess" : "chat.showFullMessage")}
     </button>
   );

@@ -8,8 +8,9 @@ import { EVENTS_DIR, NATIVE_DIR, type AppConfig } from "./config.ts";
 import { paneNoteText } from "./context-compaction.ts";
 import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
+import { coldLoad, coldPageBefore, coldPath, findInChat } from "./cold-thread.ts";
 import { createMediaIndex } from "./media-index.ts";
-import { searchHaystack, searchMessages, searchSnippet } from "./message-db.ts";
+import { searchHaystack, searchMessages, searchSnippet, type SearchHit } from "./message-db.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { serveRoomFile } from "./rooms/files.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
@@ -30,6 +31,7 @@ type ThreadRouteDeps = {
   DEFAULT_PAGE: number;
   pageSize: (raw: string | null) => number | null | undefined;
   clientMessage: (message: Message) => Message;
+  slimMessage: (message: Message) => Message | Record<string, unknown>;
   messagePage: (threadId: string, limit: number | undefined, before?: string | null) => { messages: unknown[]; hasMore?: boolean };
   messageWindow: (threadId: string, messageId: string, limit: number) => { messages: unknown[]; hasMore: boolean } | null;
   answerRequest: (threadId: string, instanceId: string, requestId: string, behavior: "allow" | "deny" | "answer", message?: string, decidedFor?: { id: string; name: string }) => Promise<RequestOutcome>;
@@ -47,6 +49,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
     DEFAULT_PAGE,
     pageSize,
     clientMessage,
+    slimMessage,
     messagePage,
     messageWindow,
     answerRequest,
@@ -88,6 +91,9 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
         if (!window) return json(res, 404, { error: "no such message" });
         return json(res, 200, window);
       }
+      // an unloaded chat pages off disk: loading a 234k-row chat for one page held this answer 5-7 s
+      const cold = before ? await coldPageBefore(store, threadId, before, (limit ?? DEFAULT_PAGE) * pages) : null;
+      if (cold) return json(res, 200, { messages: cold.messages.map(slimMessage), hasMore: cold.hasMore });
       // An unknown cursor must not silently answer with the newest page -
       // the client would paginate in a circle and never reach the top.
       if (before && !store.messagesFor(threadId).some((msg) => msg.id === before)) {
@@ -100,6 +106,8 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (!store.botByThread(threadId)) return json(res, 404, { error: "no such conversation" });
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
+      // the rail asks as the phone scrolls up; a whole-chat read here held every other request, the older page too
+      if (!store.loaded(threadId)) await coldLoad(store, threadId);
       return json(res, 200, turnIndex(store.activePath(threadId)));
     },
     media: async (res: ServerResponse, m: RegExpMatchArray, url: URL) => {
@@ -107,10 +115,11 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (!store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "no such conversation" });
       if (threadSyncGate.enabled) await pullSyncedThread(threadId);
       else pullSyncedThread(threadId);
-      mediaIndex ??= createMediaIndex(store);
+      // the side pane asks ahead as a long chat opens: a whole-chat read here held every other request, and a load evicted the chat in use
+      mediaIndex ??= createMediaIndex(store, (id) => coldPath(store, id));
       return json(res, 200, await mediaIndex(threadId, url.searchParams.get("v")));
     },
-    messageImage: async (res: ServerResponse, m: RegExpMatchArray) => {
+    messageImage: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       // Same guard as the page route above, and for the same reason twice
       // over: an unknown id should 404 deliberately rather than by accident,
       // and `messagesFor` materialises and caches a ThreadState for whatever
@@ -123,7 +132,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       const message = store.messagesFor(m[1]).find((msg) => msg.id === m![2]);
       if (message?.kind === "screen" && message.roomFiles) {
         const file = message.roomFiles.find((each) => !each.deleted && each.type.startsWith("image/"));
-        if (file && group?.hosted && await serveRoomFile(res, group.hosted.roomId, file.id, true)) return;
+        if (file && group?.hosted && await serveRoomFile(req, res, group.hosted.roomId, file.id, true)) return;
         return json(res, 404, { error: "no image on that message" });
       }
       const attachment = message?.image ? readAttachment(message.image) : null;
@@ -142,29 +151,43 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       const rawLimit = url.searchParams.get("limit");
       const limit = rawLimit ? Math.min(Math.max(Number(rawLimit) || 0, 1), 100) : 40;
       const threadId = url.searchParams.get("threadId")?.trim() || undefined;
-      // in-chat find: the page after `before`, matched against what the chat's skin draws
+      // in-chat find: the page after `before`, matched against what the chat's skin draws; its `at` and `row` place it even once that row is gone
       const before = threadId ? url.searchParams.get("before") || undefined : undefined;
+      const at = Number(url.searchParams.get("at") ?? NaN);
+      const row = Number(url.searchParams.get("row") ?? NaN);
+      const place = before && Number.isSafeInteger(at) && Number.isSafeInteger(row) ? { at, row } : undefined;
       const chips = url.searchParams.get("view") === "chips";
       if (threadId && !store.botByThread(threadId) && !store.groupByThread(threadId)) {
         return json(res, 404, { error: "no such conversation" });
       }
+      const needle = q.trim().toLowerCase();
+      const skip = new Set([...store.trash.threadIds(), ...hidden]);
+      // one chat's find reads off the server thread: a long chat scans for seconds
+      const head = threadId ? store.findHead(threadId) : undefined;
+      let page: SearchHit[], more: boolean;
+      if (threadId) ({ hits: page, more } = await findInChat(threadId, q, limit, { before, place, chips, skip }));
+      else {
+        const found = searchMessages(q, limit + 1, threadId, { before, chips, skip });
+        page = found.slice(0, limit);
+        more = found.length > limit;
+      }
       // whether each hit sits on its thread's visible branch - a click on
-      // one that does not has to switch versions first (and only then)
+      // one that does not has to switch versions first (and only then).
+      // A chat not in memory answers from disk: loading a long one took seconds.
       const activePaths = new Map<string, Set<string>>();
       const onActivePath = (threadId: string, messageId: string) => {
         let ids = activePaths.get(threadId);
-        if (!ids) activePaths.set(threadId, (ids = new Set(store.activePath(threadId).map((m) => m.id))));
+        if (!ids) activePaths.set(threadId, (ids = store.onActivePath(threadId, page.filter((hit) => hit.threadId === threadId).map((hit) => hit.messageId), head)));
         return ids.has(messageId);
       };
       const threadRows = new Map<string, Map<string, Message>>();
       const messageIn = (threadId: string, messageId: string) => {
+        if (!store.loaded(threadId)) return store.row(threadId, messageId);
         let rows = threadRows.get(threadId);
         if (!rows) threadRows.set(threadId, (rows = new Map(store.messagesFor(threadId).map((m) => [m.id, m]))));
         return rows.get(messageId);
       };
-      const needle = q.trim().toLowerCase();
-      const found = searchMessages(q, limit + 1, threadId, { before, chips, skip: new Set([...store.trash.threadIds(), ...hidden]) });
-      const hits = found.slice(0, limit)
+      const hits = page
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);
           const group = bot ? undefined : store.groupByThread(hit.threadId);
@@ -183,7 +206,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
           return null;
         })
         .filter((hit): hit is NonNullable<typeof hit> => hit !== null);
-      return json(res, 200, { hits, more: found.length > limit });
+      return json(res, 200, { hits, more });
     },
     exportThread: async (res: ServerResponse, m: RegExpMatchArray, url: URL) => {
       const threadId = m[1];

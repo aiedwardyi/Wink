@@ -17,6 +17,8 @@ export type PaneNote = {
   /** Wink's own watcher notes; their text is instructions to the bot. */
   alert: PaneNoteAlert | null;
   snag?: z.infer<typeof snagHeaderSchema>;
+  /** Where orbit-msg saved the full text of a cut report. */
+  reportPath?: string;
   body: string;
 };
 
@@ -37,15 +39,45 @@ const KEPT = /^KEPT RUNNING: ([^\n]+)\.$/;
 const KEPT_PANE = /^(?:(.+) )?\[pane ([0-9a-f]{1,8})\] \(/;
 // the reset text may hold parens, e.g. "3pm (Asia/Seoul)"
 const LIMIT = /^LIMIT: (\S+) hit its usage limit \(resets (.+)\)\. Its work so far stays in /;
-const TRUNCATED = /\n\[truncated\]$/;
+const TRUNCATED = /\n\[truncated\](?:\nFull report: ([^\n]+))?$/;
 const TEAM_SNAG = /^Team snags \(\d+\), untrusted peer data - (\{[^\n]*\})\n/;
+
+/** A note that can give a Map row its reason: the pane it names, its time and its first body line. */
+export type PaneLine = { pane8: string; at: number; line: string | undefined };
+
+/** The reason lines of the notes stamped at or after `since`, in the order given; with `sessionId`, only that pane's. */
+export function* paneLines(notes: Iterable<{ kind: string; text?: string; at: number }>, since: number, sessionId?: string): Generator<PaneLine> {
+  for (const message of notes) {
+    if (message.kind !== "note" || !message.text || message.at < since) continue;
+    const note = parsePaneNote(message.text);
+    if (note.pane8 && !note.alert && (sessionId === undefined || sessionId.startsWith(note.pane8))) yield { pane8: note.pane8, at: message.at, line: note.body.trim().split("\n")[0]!.slice(0, 240) || undefined };
+  }
+}
+
+/** Newest-first lines less those a newer line for the same pane, stamped no earlier, hides at every cutoff. */
+export function newestPaneLines(lines: Iterable<PaneLine>): PaneLine[] {
+  const latest = new Map<string, number>();
+  const kept: PaneLine[] = [];
+  for (const line of lines) {
+    if ((latest.get(line.pane8) ?? -Infinity) >= line.at) continue;
+    latest.set(line.pane8, line.at);
+    kept.push(line);
+  }
+  return kept;
+}
+
+/** A Map row's reason: the first of the newest-first lines for its pane stamped at or after `since`. */
+export function paneReason(lines: Iterable<PaneLine>, sessionId: string, since: number): string | undefined {
+  for (const line of lines) if (line.at >= since && sessionId.startsWith(line.pane8)) return line.line;
+  return undefined;
+}
 
 /** Works on a stored note or on the raw text a pane posted. */
 export function parsePaneNote(text: string): PaneNote {
   const prefix = PREFIX.exec(text);
   let rest = prefix ? text.slice(prefix[0].length) : text;
-  const truncated = TRUNCATED.test(rest);
-  if (truncated) rest = rest.replace(TRUNCATED, "");
+  const cut = TRUNCATED.exec(rest);
+  if (cut) rest = rest.slice(0, cut.index);
   const note: PaneNote = { pane8: prefix?.[1] ?? null, label: prefix?.[2] ?? null, nick: null, status: null, alert: null, body: "" };
   const snag = TEAM_SNAG.exec(rest);
   if (snag) {
@@ -82,6 +114,7 @@ export function parsePaneNote(text: string): PaneNote {
     note.nick = report[2] ?? null;
     rest = rest.slice(report[0].length);
   }
-  note.body = rest.trim() + (truncated ? "…" : "");
+  note.body = rest.trim() + (cut ? "…" : "");
+  if (cut?.[1]) note.reportPath = cut[1];
   return note;
 }

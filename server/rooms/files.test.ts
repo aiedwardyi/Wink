@@ -1,11 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, ReadStream, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, ReadStream, statSync, writeFileSync } from "node:fs";
 import { createServer, request, type IncomingHttpHeaders, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { removeTestData, testHome } from "../testing/test-home.ts";
 
 import { attachmentExists, ATTACHMENTS_DIR, readAttachment } from "../attachments.ts";
 import { DATA_DIR } from "../config.ts";
@@ -62,7 +62,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   closeRoomsDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   replies.length = 0;
 });
@@ -183,7 +183,7 @@ describe("room file types", () => {
     const video = (await upload(room, clip, { name: "clip.mp4" }, "p1")).json.file;
     const played = await call("GET", `/rooms/${room}/files/${video.id}`, { owner: "p1" });
     expect(played.body.equals(clip)).toBe(true);
-    expect(played.headers).toMatchObject({ ...safe, "content-type": "application/octet-stream", "content-disposition": expect.stringMatching(/^attachment;/) });
+    expect(played.headers).toMatchObject({ ...safe, "content-type": "video/mp4", "content-disposition": expect.stringMatching(/^attachment;/) });
     expect((await call("GET", `/rooms/${room}/files/${video.id}/preview`)).status).toBe(404);
   });
 });
@@ -293,13 +293,13 @@ describe("room file isolation", () => {
     await upload(room, Buffer.concat([Buffer.from("MZ"), randomBytes(100)]));
     await upload(room, Buffer.alloc(0));
     await call("GET", `/rooms/${room}/files/${"A".repeat(24)}`);
-    rmSync(roomDir(room), { recursive: true, force: true });
+    removeTestData(roomDir(room));
     writeFileSync(roomDir(room), "a file where the folder goes");
     await upload(room, png(100));
     expect(replies.map((reply) => reply.status)).toEqual([200, 415, 400, 404, 500]);
     expect(replies[0]!.json.file.name).toBe("cat.png");
     const all = JSON.stringify(replies.map((reply) => [reply.headers, reply.body.toString("utf8")]));
-    for (const path of [DATA_DIR, homedir(), DATA_DIR.replaceAll("\\", "\\\\"), "room-files", ".tmp"]) expect(all).not.toContain(path);
+    for (const path of [DATA_DIR, testHome(), DATA_DIR.replaceAll("\\", "\\\\"), "room-files", ".tmp"]) expect(all).not.toContain(path);
   });
 });
 

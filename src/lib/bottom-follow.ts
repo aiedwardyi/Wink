@@ -5,6 +5,20 @@ export const BOTTOM_FOLLOW_THRESHOLD = 16;
 const followScrollTops = new WeakMap<HTMLElement, number>();
 const followScrollEvents = new WeakSet<Event>();
 
+/** Bubbles from a box opening in place: following the bottom would push it out of view. */
+export const STOP_FOLLOW_EVENT = "orbit:stop-follow";
+/** Sent to the chat once the reader scrolls or that box closes: older rows held until then may load. */
+export const REVEALED_EVENT = "orbit:revealed";
+
+export function onStopFollow(el: HTMLElement | null, stop: () => void, revealed: () => void): () => void {
+  el?.addEventListener(STOP_FOLLOW_EVENT, stop);
+  el?.addEventListener(REVEALED_EVENT, revealed);
+  return () => {
+    el?.removeEventListener(STOP_FOLLOW_EVENT, stop);
+    el?.removeEventListener(REVEALED_EVENT, revealed);
+  };
+}
+
 export function scrollToFollowBottom(el: HTMLElement): number {
   const previousTop = el.scrollTop;
   el.scrollTo({ top: el.scrollHeight });

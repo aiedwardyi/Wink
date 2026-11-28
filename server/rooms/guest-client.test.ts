@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer, type Server } from "node:https";
 import { join } from "node:path";
+import { createSecureContext, type SecureContext } from "node:tls";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { botChain } from "../../shared/bot-chain.ts";
@@ -9,13 +10,15 @@ import { DATA_DIR } from "../config.ts";
 import { loopbackLookup } from "../phone-relay/testing/fake-relay.ts";
 import { listenLocal } from "../phone-relay/testing/net.ts";
 import { TestCa } from "../phone-relay/testing/pki.ts";
-import { GuestClient, roomCodeHost, uploadDeadline, type GuestClientDeps } from "./guest-client.ts";
+import { GuestClient, movedHosts, roomCodeHost, uploadDeadline, type GuestClientDeps } from "./guest-client.ts";
 import * as joinedFiles from "./joined-files.ts";
-import { addJoinedEntries, closeJoinedDb, joinedEntries, joinedKey, joinedRoom, saveJoined, setJoinedSentName, setJoinedState, type JoinedEntry } from "./joined.ts";
+import { addJoinedEntries, closeJoinedDb, endJoined, joinedEntries, joinedKey, joinedRoom, removeJoined, saveJoined, seatTaken, setJoinedSentName, setJoinedState, type JoinedEntry } from "./joined.ts";
 import { joinedRoute } from "./joined-routes.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const BASE = "wink.test";
 const HOST = `abcdefghijklmnop.${BASE}`;
+const MOVED = "abcdefghijklmnop.app.test";
 const SECRET = `wki_${"s".repeat(43)}`;
 const KEY = `wkg_${"k".repeat(43)}`;
 const CODE = `wkr1:${HOST}:inv1.${SECRET}`;
@@ -24,6 +27,7 @@ const STATE = { version: 1, roomName: "Team", instructions: "", host: "Edward", 
 
 let server: Server;
 let tls: { key: string; cert: string; ca: string };
+let moved: SecureContext;
 let https: GuestClientDeps["https"];
 let seen: Array<{ method: string; url: string; headers: IncomingMessage["headers"]; body: string }> = [];
 let route: (req: IncomingMessage, res: ServerResponse, body: string) => void;
@@ -33,13 +37,14 @@ beforeAll(async () => {
   const ca = await TestCa.create();
   const { keyPem, certPem } = await ca.issue(HOST);
   tls = { key: keyPem, cert: certPem, ca: ca.certPem };
+  moved = createSecureContext(await ca.issue(MOVED).then(({ keyPem, certPem }) => ({ key: keyPem, cert: certPem })));
 });
 
 // A server per test: a stopped client's request still in flight meets a closed port, not the next test's `seen`.
 beforeEach(async () => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
-  server = createServer({ key: tls.key, cert: tls.cert }, (req, res) => {
+  server = createServer({ key: tls.key, cert: tls.cert, SNICallback: (name, cb) => cb(null, name === MOVED ? moved : undefined) }, (req, res) => {
     let body = "";
     req.on("data", (chunk: Buffer) => (body += chunk.toString("utf8")));
     req.on("end", () => {
@@ -192,6 +197,12 @@ describe("room codes", () => {
     expect(roomCodeHost(CODE, ["evil.example"])).toBeNull();
   });
 
+  it("follows a moved host only to its own label under the current bases", () => {
+    expect(movedHosts("abcdefghijklmnop.old.test", [null, BASE, BASE.toUpperCase(), "old.test"])).toEqual([HOST]);
+    expect(movedHosts(HOST, [null, BASE])).toEqual([]);
+    expect(movedHosts(`x.${HOST}`, ["app.test"])).toEqual([]);
+  });
+
   it("refuses a bad code without any request", async () => {
     route = quietDoor;
     const result = await guest({ bases: () => ["evil.example"] }).join(CODE);
@@ -250,6 +261,44 @@ describe("join", () => {
     }
     expect(result).toEqual({ ok: false, status: 409, error: "room is busy" });
     await until(() => c.rooms()[0]?.link === "live");
+  });
+
+  it("joins one at a time, so the key kept is the last one the door gave this PC", async () => {
+    const issued: string[] = [];
+    route = (req, res) => {
+      if (req.url !== "/room/v1/join") return quietDoor(req, res);
+      // the door reuses the seat and replaces the key; the first reply is the slow one
+      const key = `wkg_${String(issued.length + 1).repeat(43)}`;
+      issued.push(key);
+      const answer = () => reply(res, 200, { roomId: "r1", person: { id: "p1", name: "Mina" }, key });
+      if (issued.length === 1) setTimeout(answer, 200);
+      else answer();
+    };
+    const c = guest();
+    const results = await Promise.all([c.join(CODE), c.join(CODE)]);
+    expect(results.map((result) => result.ok)).toEqual([true, true]);
+    expect(issued).toHaveLength(2);
+    expect(joinedKey("r1")?.key).toBe(issued.at(-1));
+  });
+
+  it("seats sync's join only where this PC has no seat and never left one by hand", async () => {
+    route = quietDoor;
+    const c = guest();
+    const together = await Promise.all([c.join(CODE), c.seat(CODE, "r1")]);
+    expect(together[1]).toEqual({ ok: false, status: 409, error: "seated" });
+    expect(seen.filter((request) => request.url === "/room/v1/join")).toHaveLength(1);
+    expect(endJoined("r1", "left")).toBe(true);
+    expect(removeJoined("r1")).toBe(true);
+    expect(await c.seat(CODE, "r1")).toEqual({ ok: false, status: 409, error: "seated" });
+    expect(seen.filter((request) => request.url === "/room/v1/join")).toHaveLength(1);
+    // a join by hand is the user's own choice again, and clears the leave
+    expect((await c.join(CODE)).ok).toBe(true);
+    expect(seatTaken("r1")).toBe(true);
+    expect(endJoined("r1", "removed")).toBe(true);
+    expect(removeJoined("r1")).toBe(true);
+    expect(seatTaken("r1")).toBe(false);
+    expect((await c.seat(CODE, "r1")).ok).toBe(true);
+    expect(JSON.parse(seen.filter((request) => request.url === "/room/v1/join").at(-1)!.body)).toMatchObject({ code: CODE, roomId: "r1" });
   });
 
   it("is one call with the pasted code: the door gets the code and this PC's own name, nothing typed", async () => {
@@ -368,6 +417,16 @@ describe("sync", () => {
     expect(joinedKey("r1")).toBeNull();
     expect(await client!.send("r1", "hi")).toEqual({ ok: false, status: 409, error: "this room is read-only" });
     expect(JSON.stringify(changed.mock.calls)).not.toContain(KEY);
+  });
+
+  it("streams from the moved host that answered the snapshot", async () => {
+    route = (req, res) => (req.headers.host === HOST ? reply(res, 503, { error: "unavailable" }) : quietDoor(req, res));
+    saveJoined("r1", HOST, STATE.me, KEY);
+    const c = guest({ bases: () => [BASE, "app.test"], timing: { retryMs: 20 } });
+    c.start();
+    await until(() => c.rooms()[0]?.link === "live");
+    expect(joinedKey("r1")?.relayHost).toBe(MOVED);
+    expect(seen.filter((row) => row.url.includes("/stream")).map((row) => row.headers.host)).toEqual([MOVED]);
   });
 
   it("goes offline and backs off while the host is unreachable", async () => {
@@ -608,7 +667,7 @@ describe("deleted files", () => {
     guest({ timing: { retryMs: 10 } }).start();
     await until(() => asked.length >= 2);
     expect(asked.slice(0, 2)).toEqual(["0", "0"]);
-    rmSync(copy, { recursive: true });
+    removeTestData(copy);
     await until(() => asked.includes("3"));
     expect(existsSync(copy)).toBe(false);
   });

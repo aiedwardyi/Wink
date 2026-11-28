@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testHome } from "./testing/test-home.ts";
 
 import { augmentedPath, findCliCandidates, refreshPathCache, resetPathCacheForTests } from "./env-path.ts";
 
@@ -24,8 +24,8 @@ describe("login-shell candidate invalidation", () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     vi.stubEnv("VITEST", undefined);
     vi.stubEnv("PATH", "");
-    oldBin = join(homedir(), "old-bin");
-    newBin = join(homedir(), "rc-bin");
+    oldBin = join(testHome(), "old-bin");
+    newBin = join(testHome(), "rc-bin");
     mkdirSync(oldBin, { recursive: true });
     mkdirSync(newBin, { recursive: true });
     writeFileSync(join(newBin, name), "fixture");

@@ -124,6 +124,27 @@ import { trackFeature, trackScreen } from "@/lib/usage-stats";
 // Effect-level easing: getComputedTiming().progress is then the eased edge position.
 const SIDEBAR_MOTION = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
 
+// The view and the open docked panels; a closing panel keeps its own exit. Picked
+// without reading style, which React's commit has just made dirty.
+function besideViews(aside: HTMLElement): HTMLElement[] {
+  const views: HTMLElement[] = [];
+  const view = aside.nextElementSibling;
+  for (let el = view; el; el = el.nextElementSibling) {
+    if (el instanceof HTMLElement && (el === view || el.matches("[data-side-panel]:not([data-closing])"))) views.push(el);
+  }
+  return views;
+}
+
+function slideBeside(aside: HTMLElement, shift: number): Animation[] {
+  const motions = besideViews(aside).map((el) => el.animate([{ transform: `translateX(${shift}px)` }, { transform: "none" }], SIDEBAR_MOTION));
+  const view = aside.nextElementSibling;
+  // A closing panel docked inside the view would ride its slide; translate leaves its own exit's transform alone.
+  for (const el of view?.querySelectorAll<HTMLElement>("[data-side-panel][data-closing]") ?? []) {
+    motions.push(el.animate([{ translate: `${-shift}px 0` }, { translate: "0 0" }], SIDEBAR_MOTION));
+  }
+  return motions;
+}
+
 export { compactSidebarModelLabel } from "./SidebarConversations";
 
 export function UpdateButton() {
@@ -717,6 +738,8 @@ export function Sidebar({
   const asideRef = useRef<HTMLElement>(null);
   const sidebarGhostRef = useRef<HTMLDivElement>(null);
   const shownSidebarWidth = useRef(0);
+  const shownSidebarSide = useRef(sidebarSide);
+  const swapCarry = useRef(0);
   // Bot details docks beside the chat above the breakpoint and takes width from it.
   const dockedAsideWidth = dockedDetailsWidth(
     state.settingsOpen,
@@ -878,18 +901,8 @@ export function Sidebar({
       };
       motions.push(shrink);
     }
-    // The view and the open docked panels; a closing panel keeps its own exit. Picked
-    // without reading style, which React's commit has just made dirty.
+    motions.push(...slideBeside(aside, railShift));
     const view = aside.nextElementSibling;
-    for (let el = view; el; el = el.nextElementSibling) {
-      if (el instanceof HTMLElement && (el === view || el.matches("[data-side-panel]:not([data-closing])"))) {
-        motions.push(el.animate([{ transform: `translateX(${railShift}px)` }, { transform: "none" }], SIDEBAR_MOTION));
-      }
-    }
-    // A closing panel docked inside the view would ride its slide; translate leaves its own exit's transform alone.
-    for (const el of view?.querySelectorAll<HTMLElement>("[data-side-panel][data-closing]") ?? []) {
-      motions.push(el.animate([{ translate: `${-railShift}px 0` }, { translate: "0 0" }], SIDEBAR_MOTION));
-    }
     // the list's raised badges would show through the view sliding off it
     const raised = shift < 0 && view instanceof HTMLElement ? view : null;
     if (raised) {
@@ -907,6 +920,54 @@ export function Sidebar({
       if (raised) raised.style.zIndex = "";
     };
   }, [sidebarDisplayWidth]);
+
+  // A side swap snaps the layout once, like a fold: the views glide the list's width
+  // off its new place while the ghost holds its old one, so nothing crosses the screen.
+  useLayoutEffect(() => {
+    const from = shownSidebarSide.current;
+    shownSidebarSide.current = sidebarSide;
+    const aside = asideRef.current;
+    const ghost = sidebarGhostRef.current;
+    if (from === sidebarSide || !aside || !ghost) return;
+    // the closed drawer's translate flips edge to edge; it must not slide across the chat
+    for (const motion of aside.getAnimations()) motion.finish();
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!window.matchMedia(`(min-width: ${SIDEBAR_INLINE_BREAKPOINT}px)`).matches) return;
+    // an interrupted swap reverses from where the views are
+    const shift = (sidebarOnRight ? sidebarDisplayWidth : -sidebarDisplayWidth) + swapCarry.current;
+    swapCarry.current = 0;
+    if (!shift) return;
+    const across = (aside.parentElement?.clientWidth ?? 0) - sidebarDisplayWidth;
+    ghost.style.width = `${Math.abs(shift)}px`;
+    ghost.style.left = `${sidebarOnRight ? -across : across + sidebarDisplayWidth - Math.abs(shift)}px`;
+    ghost.style.transformOrigin = sidebarOnRight ? "left" : "right";
+    const shrink = ghost.animate([{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], { ...SIDEBAR_MOTION, fill: "forwards" });
+    const motions = [shrink, ...slideBeside(aside, shift)];
+    // md:order-last paints the list over the views sliding across it; its raised badges stay under them too
+    const raised = besideViews(aside).filter((el) => !el.style.zIndex);
+    aside.style.isolation = "isolate";
+    for (const el of raised) el.style.zIndex = "11";
+    const settle = () => {
+      ghost.style.width = "";
+      ghost.style.left = "";
+      ghost.style.transformOrigin = "";
+      aside.style.isolation = "";
+      for (const el of raised) el.style.zIndex = "";
+    };
+    shrink.onfinish = () => {
+      shrink.cancel();
+      settle();
+    };
+    return () => {
+      const progress = shrink.effect?.getComputedTiming().progress;
+      if (progress != null) swapCarry.current = shift * (1 - progress);
+      for (const motion of motions) {
+        motion.finished.catch(() => undefined);
+        motion.cancel();
+      }
+      settle();
+    };
+  }, [sidebarSide]);
 
   useEffect(() => {
     if (sidebarCollapsed || !focusSearchAfterExpand.current) return;
@@ -1674,9 +1735,9 @@ export function Sidebar({
             {(closing) => (
               <>
                 {!closing && <div className="fixed inset-0 z-30" onMouseDown={() => setPlusOpen(false)} />}
-                <div data-closing={closing || undefined} inert={closing} className={cn(
+                <div data-new-menu data-closing={closing || undefined} inert={closing} className={cn(
                   "animate-pop-in absolute top-full z-40 mt-1 w-52 overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60",
-                  density === "icons" && !sidebarOnRight ? "left-0" : "right-0",
+                  (density === "icons" ? !sidebarOnRight : !phone) ? "left-0" : "right-0",
                 )}>
                   <button
                     onClick={() => {

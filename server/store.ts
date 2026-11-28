@@ -18,6 +18,7 @@ import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
 import { syncPathChanged } from "./thread-sync-path.ts";
 import { THREAD_CACHE_CHARS, ThreadCache, type ThreadState } from "./thread-cache.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
+import { latestTaskAsks } from "../shared/task-ask-list.ts";
 import { removeWorkspace } from "./workspace.ts";
 import { readSessionSystem, SESSION_SYSTEM_DIR, sessionSystemFile, writeSessionSystem } from "./session-system.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
@@ -29,6 +30,7 @@ import { redactSecretsInText } from "./redact.ts";
 import { noticeText } from "./rooms/db.ts";
 import { coalescedSave } from "./save-defer.ts";
 import { redactToolMessage } from "./tool-detail.ts";
+import { isOpenAsk, type TaskAsk } from "./task-asks.ts";
 import { redactVerifyCard } from "./verify-message.ts";
 import type { NativePrompt, ResumeSeed } from "./turn-context.ts";
 import {
@@ -39,6 +41,7 @@ import {
   writeTaskResumePacket,
   type TaskResumePacket,
 } from "./task-state.ts";
+import { logDroppedAsks } from "./task-dropped.ts";
 import { lastUserInstruction, packetAfterInterruption } from "./task-recovery-flush.ts";
 import {
   botAvatarChoiceSchema,
@@ -89,6 +92,8 @@ export interface OptionCardData {
   askUser?: true;
   /** an ask_user card that waits until answered; older ones closed when typed past */
   staysOpen?: true;
+  /** an ask_user card: the asking turn's last text; absent when that turn wrote none */
+  replyId?: string;
   /** permission cards: the tool being requested, so the card can show what
    * is actually being asked and offer "always allow this tool". */
   tool?: string;
@@ -176,6 +181,8 @@ export interface Message {
     approval?: boolean;
     /** shell rows: files the command named that it created or changed, found on disk; not writes, so verify and the Map keep their rules */
     made?: string[];
+    /** Sleep's morning line: the run it archived and how many lines */
+    tidy?: { runId: string; count?: number; undoneAt?: number };
   };
   /** Files a task-state call recorded; the record stays on this PC, the row syncs. */
   recorded?: Array<{ ref: string; label: string }>;
@@ -191,6 +198,8 @@ export interface Message {
   summarized?: boolean;
   /** Hidden: a later text of its turn says the same, so replay skips it. */
   restated?: true;
+  /** The reply of a new bot's offer turn that carries the Import Memory prompt; the provider buttons show only here. */
+  importOffer?: true;
   /** Bot replies: the engine driver kind that wrote it; older rows have none. */
   engine?: string;
   call?: import("../shared/live-call.ts").CallTag;
@@ -220,9 +229,17 @@ export interface Message {
   answersCard?: string;
   /** When the person acted, before card persistence or a queue delayed delivery. */
   actedAt?: number;
+  /** Waited below the turn (after this turn, sync hold, Send now): drawn where it landed, not by actedAt. */
+  waited?: boolean;
+  /** One past every send the sending window knew: orders two lines the server stamped alike. */
+  sendSeq?: number;
+  /** Last transcript row visible at send time, or null for an empty transcript. */
+  sentAfterId?: string | null;
   origin?: string;
   /** Team room rows: who said it, and the room log entry it mirrors. */
   author?: import("./rooms/db.ts").RoomAuthor;
+  /** A joined room's row that anyone but this PC's person typed: no replay lets its @ name a file. */
+  guest?: boolean;
   roomEntryId?: string;
   roomFiles?: import("./rooms/db.ts").RoomFile[];
   quiet?: true;
@@ -510,6 +527,9 @@ export type BotActivity = "working" | "waiting-on-you" | "idle" | "no-signal" | 
 /** The states in which the bot cannot take a new message. */
 export const ACTIVITY_BUSY: ReadonlySet<BotActivity> = new Set(["working", "waiting-on-you", "no-signal"]);
 
+/** Store.rowMark: a loaded thread's row count, or an unloaded one's newest stored rowid. */
+export type RowMark = { count: number } | { after: number };
+
 export type StoreChange =
   | { type: "message"; threadId: string; message: Message; imported?: true }
   | { type: "message.patch"; threadId: string; message: Message }
@@ -582,6 +602,8 @@ export interface BotRecord {
    * Cleared when chat rules that folder out, and when Settings Clear
    * drops the pin so the next task is the private workspace. */
   lastProjectCwd?: string;
+  /** GitHub repos of the bot's pane origin remotes, where a bare "PR n" is looked up when the folder is not a repo. */
+  knownRepos?: string[];
   /** When Settings Clear last dropped the folder. Chat lines from before it
    * are spent: no later turn may re-derive the cleared folder from them. */
   projectFolderClearedAt?: number;
@@ -760,11 +782,26 @@ export function roomResponders<T extends { id: string; name: string; hidden?: bo
   return [];
 }
 
-const onboardingCard = (): OptionCardData => ({
-  title: "What do you mostly want help with?",
-  subtitle: "Pick whatever's closest; we can always expand from there.",
-  options: ["Work & projects", "Writing & research", "Life admin", "A bit of everything"],
-});
+/** Root-to-leaf rows by parent links. A row's id is unique in its chat (the table's key), and a parent is stored
+ * before its children, so the walk reads back through the rows once and builds an id map only for one that is not. */
+function walkPath(messages: readonly Message[], leafId: string | null): Message[] {
+  const path: Message[] = [];
+  let byId: Map<string, Message> | undefined;
+  let at = messages.length;
+  for (let id = leafId; id; ) {
+    let row: Message | undefined;
+    if (!byId) {
+      let index = at - 1;
+      while (index >= 0 && messages[index]!.id !== id) index--;
+      if (index >= 0) row = messages[(at = index)];
+    }
+    row ??= (byId ??= new Map(messages.map((m) => [m.id, m]))).get(id);
+    if (!row) break;
+    path.push(row);
+    id = row.parentId ?? null;
+  }
+  return path.reverse();
+}
 
 export class Store {
   bots: BotRecord[] = [];
@@ -776,6 +813,8 @@ export class Store {
   /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
   private unloaded = new Set<string>();
   private threads: ThreadCache;
+  /** Chats a find or jump answered from disk, where the old ones loaded them, with the head that load held: it stays until a head is stored. */
+  private foundOnDisk = new Map<string, string | null>();
   /** Threads a driver still owns after Stop marked its bot idle; the cache keeps them. */
   private heldThreads: () => Iterable<string> = () => [];
   private taskPackets = new Map<string, TaskResumePacket | null>();
@@ -1161,6 +1200,7 @@ export class Store {
   /** Room thread imports write their rows outside the store. */
   syncedGroupThread(groupId: string, threadId: string): void {
     this.threads.delete(threadId);
+    this.foundOnDisk.delete(threadId);
     this.saveGroups();
     this.emit({ type: "group", groupId });
   }
@@ -1198,6 +1238,7 @@ export class Store {
   /** A thread's durable record: DB rows plus any legacy JSON leftovers. `tell` false writes no delete for other PCs. */
   deleteThreadRecord(threadId: string, tell = true) {
     this.threads.delete(threadId);
+    this.foundOnDisk.delete(threadId);
     this.taskPackets.delete(threadId);
     try {
       deleteTaskResumePacket(threadId);
@@ -1321,6 +1362,7 @@ export class Store {
     if (cached) return cached;
     const { state, chars } = this.readState(threadId);
     this.threads.set(threadId, state, chars);
+    this.foundOnDisk.delete(threadId);
     return state;
   }
 
@@ -1329,12 +1371,37 @@ export class Store {
     if (this.threads.has(threadId)) return;
     const { state, chars } = this.readState(threadId);
     this.threads.offer(threadId, state, chars);
+    if (this.threads.has(threadId)) this.foundOnDisk.delete(threadId);
   }
 
-  private readState(threadId: string): { state: ThreadState; chars: number } {
+  /** Takes a chat read off the server thread, unless a write loaded it first. */
+  adopt(threadId: string, read: mdb.ThreadRows & { chars: number }): void {
+    if (this.threads.has(threadId)) return;
+    const { state, chars } = this.readState(threadId, this.coldRead(threadId, read));
+    this.threads.set(threadId, state, chars);
+    this.foundOnDisk.delete(threadId);
+  }
+
+  /** The active path of a chat read off the server thread, kept only in spare cache room, as warm keeps it. */
+  look(threadId: string, read: mdb.ThreadRows & { chars: number }): Message[] {
+    if (this.threads.has(threadId)) return this.activePath(threadId);
+    const { state, chars } = this.readState(threadId, this.coldRead(threadId, read));
+    const rows = walkPath(state.messages, state.activeLeafId);
+    Object.freeze(rows);
+    state.path = { leafId: state.activeLeafId, rows };
+    if (this.threads.offer(threadId, state, chars)) this.foundOnDisk.delete(threadId);
+    return rows;
+  }
+
+  // the reader picked the stored head; a find or jump from disk kept the one an earlier load held
+  private coldRead(threadId: string, read: mdb.ThreadRows & { chars: number }): mdb.ThreadRows & { chars: number } {
+    return this.foundOnDisk.has(threadId) ? { ...read, activeLeafId: this.diskHead(threadId) ?? read.activeLeafId } : read;
+  }
+
+  private readState(threadId: string, read = mdb.readThread(threadId, messagesFile(threadId))): { state: ThreadState; chars: number } {
     // SQLite is the source of truth; a thread with no rows imports its
     // legacy messages-<threadId>.json once, inside readThread
-    const { messages, activeLeafId: storedLeaf, chars } = mdb.readThread(threadId, messagesFile(threadId));
+    const { messages, activeLeafId: storedLeaf, chars } = read;
     let activeLeafId = storedLeaf;
     // legacy rows carry no parentId — chain them in array order
     let prev: string | null = null;
@@ -1342,7 +1409,9 @@ export class Store {
       if (m.parentId === undefined) m.parentId = prev;
       prev = m.id;
     }
-    if (!activeLeafId) activeLeafId = messages.at(-1)?.id ?? null;
+    // a find or jump from disk kept the head an earlier load fell back to, while it is still there
+    const kept = this.foundOnDisk.get(threadId);
+    if (!activeLeafId) activeLeafId = (kept && messages.some((m) => m.id === kept) ? kept : messages.at(-1)?.id) ?? null;
     return { state: { messages, activeLeafId }, chars };
   }
 
@@ -1376,7 +1445,7 @@ export class Store {
   }
 
   activeLeaf(threadId: string): string | null {
-    const head = this.threads.has(threadId) ? undefined : mdb.storedHead(threadId);
+    const head = this.threads.has(threadId) ? undefined : this.diskHead(threadId);
     return head === undefined ? this.thread(threadId).activeLeafId : head;
   }
 
@@ -1389,22 +1458,87 @@ export class Store {
   activePath(threadId: string): Message[] {
     const t = this.thread(threadId);
     if (t.path && t.path.leafId === t.activeLeafId) return t.path.rows;
-    const byId = new Map(t.messages.map((m) => [m.id, m]));
-    const path: Message[] = [];
-    let cur = t.activeLeafId ? byId.get(t.activeLeafId) : undefined;
-    while (cur) {
-      path.push(cur);
-      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
-    }
-    path.reverse();
+    const leaf = t.messages.at(-1);
+    // a row appended under the last path's leaf extends it: a 237k-row chat's walk held the server ~110 ms per send
+    const path = t.path && leaf && leaf.id === t.activeLeafId && leaf.parentId && leaf.parentId === t.path.leafId
+      ? [...t.path.rows, leaf]
+      : walkPath(t.messages, t.activeLeafId);
     Object.freeze(path);
     t.path = { leafId: t.activeLeafId, rows: path };
     return path;
   }
 
+  /** Which of `ids` lie on the active path; a thread not loaded walks its stored path, never reading every row. `head`, from findHead when the find began, is the head a load then would have held. */
+  onActivePath(threadId: string, ids: readonly string[], head?: string | null): Set<string> {
+    if (!this.threads.has(threadId)) {
+      this.readOnDisk(threadId, head);
+      return mdb.onStoredPath(threadId, ids, this.foundOnDisk.get(threadId));
+    }
+    const path = new Set(this.activePath(threadId).map((m) => m.id));
+    return new Set(ids.filter((id) => path.has(id)));
+  }
+
+  /** The rows around `messageId` read from disk for a chat not loaded, which a jump once loaded; null when it is loaded or no stored row has that id. */
+  storedWindow(threadId: string, messageId: string, limit: number): { messages: Message[]; hasMore: boolean } | null {
+    if (this.threads.has(threadId)) return null;
+    const window = mdb.storedWindow(threadId, messageId, limit);
+    if (window) this.readOnDisk(threadId);
+    return window;
+  }
+
+  /** For a chat not loaded, the head a load now would hold: a find reads its hits off this thread, and a sync can land before they come back. */
+  findHead(threadId: string): string | null | undefined {
+    return this.threads.has(threadId) ? undefined : mdb.storedHead(threadId) ?? null;
+  }
+
+  /** Notes a chat a find or jump read from disk; the first read keeps the head a load there would have held. */
+  private readOnDisk(threadId: string, head = mdb.storedHead(threadId) ?? null): void {
+    if (!this.foundOnDisk.has(threadId)) this.foundOnDisk.set(threadId, head);
+  }
+
+  /** The head of a chat not loaded: once a find or jump read it from disk, the head a load there held until a head is stored. */
+  private diskHead(threadId: string): string | null | undefined {
+    return mdb.storedHead(threadId, this.foundOnDisk.get(threadId));
+  }
+
   /** activePath newest first, read lazily from disk when the thread is not loaded. */
   activePathBack(threadId: string): Iterable<Message> {
-    return (!this.threads.has(threadId) && mdb.activePathBack(threadId)) || this.activePath(threadId).toReversed();
+    return (!this.threads.has(threadId) && mdb.activePathBack(threadId, this.foundOnDisk.get(threadId))) || this.activePath(threadId).toReversed();
+  }
+
+  /** messagesFor(threadId).findLast(predicate), read newest first from disk when the thread is not loaded. */
+  findLast(threadId: string, predicate: (message: Message) => boolean): Message | undefined {
+    if (this.threads.has(threadId)) return this.thread(threadId).messages.findLast(predicate);
+    for (const message of mdb.rowsBack(threadId)) if (predicate(message)) return message;
+    return undefined;
+  }
+
+  /** activePath(threadId).findLast(predicate), walked back from disk when the thread is not loaded. */
+  findLastOnPath(threadId: string, predicate: (message: Message) => boolean): Message | undefined {
+    if (this.threads.has(threadId)) return this.activePath(threadId).findLast(predicate);
+    for (const message of this.activePathBack(threadId)) if (predicate(message)) return message;
+    return undefined;
+  }
+
+  /** activePath(threadId).slice(-count), walked back from disk when the thread is not loaded. */
+  pathTail(threadId: string, count: number): Message[] {
+    if (this.threads.has(threadId)) return this.activePath(threadId).slice(-count);
+    const rows: Message[] = [];
+    for (const message of this.activePathBack(threadId)) if (rows.unshift(message) >= count) break;
+    return rows;
+  }
+
+  /** Where the rows a turn adds begin: the row count when the thread is loaded, else its newest stored rowid. */
+  rowMark(threadId: string): RowMark {
+    return this.threads.has(threadId) ? { count: this.thread(threadId).messages.length } : { after: mdb.lastCursor(threadId) };
+  }
+
+  /** The rows added since rowMark; a mark taken while the thread was unloaded reads them by rowid. */
+  rowsSince(threadId: string, mark: RowMark): readonly Message[] {
+    if ("count" in mark) return this.thread(threadId).messages.slice(mark.count);
+    const rows: Message[] = [];
+    for (let page = mdb.scanThreadRows(threadId, mark.after, 1024); page.messages.length; page = mdb.scanThreadRows(threadId, page.cursor, 1024)) rows.push(...page.messages);
+    return rows;
   }
 
   /** Note rows newest first, read lazily from disk when the thread is not loaded. */
@@ -1413,6 +1547,9 @@ export class Store {
   }
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
+    // mail is matched by key against every row and a screen frame prunes older ones; both need the transcript
+    const head = this.threads.has(threadId) || message.comm?.mailKey || message.kind === "screen" ? undefined : this.diskHead(threadId);
+    if (head !== undefined) return this.appendRow(threadId, message, head);
     const t = this.thread(threadId);
     if (message.comm?.mailKey) {
       const existing = t.messages.find((row) => row.comm?.mailKey === message.comm!.mailKey);
@@ -1448,6 +1585,16 @@ export class Store {
     return full;
   }
 
+  /** appendMessage for a chat that is not loaded: writes the row and head by key and loads nothing, so a send never waits on a long chat's read. */
+  private appendRow(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }, head: string | null): Message {
+    const full: Message = { id: newId(), at: Date.now(), parentId: head, ...redactBotAuthored(message) };
+    this.beforeWrite(threadId);
+    this.persistThread(threadId, [{ kind: "row", value: full }, { kind: "head", value: full.id }], () => mdb.appendMessage(threadId, full));
+    this.emit({ type: "message", threadId, message: full });
+    if (full.role === "user" && full.kind === "text") this.dismissOnboardingCard(threadId);
+    return full;
+  }
+
   appendCompaction(threadId: string, compaction: ContextCompactionV1): Message {
     const checked = readContextCompaction({
       value: {
@@ -1465,13 +1612,13 @@ export class Store {
 
   /** Hide the first-run quiz on this thread, if it is still open. */
   dismissOnboardingCard(threadId: string): Message | null {
-    const t = this.thread(threadId);
-    const card = t.messages.find(
+    const rows = this.threads.has(threadId) ? this.thread(threadId).messages : mdb.optionRows(threadId);
+    const card = rows.find(
       (message) =>
         message.kind === "options" && message.card && !message.card.requestId && !message.card.askUser && !message.card.dismissed,
     );
     if (!card?.card) return null;
-    return this.patchMessage(threadId, card.id, { card: { ...card.card, dismissed: true } });
+    return this.patchRow(threadId, card.id, { card: { ...card.card, dismissed: true } });
   }
 
   recordCardAnswer(threadId: string, messageId: string, text: string): Message | null {
@@ -1585,6 +1732,14 @@ export class Store {
     return this.bots.find((b) => b.threadId === threadId || b.tasks?.some((t) => t.threadId === threadId)) ?? null;
   }
 
+  /** The bots that run turns on a thread: its room's members or its chat's bot; none once the room or chat is deleted. */
+  threadBots(threadId: string): BotRecord[] {
+    const group = this.groupByThread(threadId);
+    if (group) return group.memberIds.flatMap((id) => this.bot(id) ?? []);
+    const bot = this.botByThread(threadId);
+    return bot ? [bot] : [];
+  }
+
   conversationForBot(botId: string, threadId: string) {
     const bot = this.bot(botId);
     if (!bot) return null;
@@ -1598,8 +1753,7 @@ export class Store {
       Pick<BotRecord, "name" | "title" | "description" | "color" | "mascotExpression" | "mascotStyle" | "modelSelection" | "section" | "computer" | "cwd" | "autoApprove">
     > = {},
     opts: {
-      /** false = no onboarding seed. Imported bots must not open with a
-       * first-person greeting the user never asked for. */
+      /** @deprecated no-op: a new bot's chat starts empty. */
       seedMessages?: boolean;
       job?: string;
       /** Test seam for the packaged-Windows first-run computer default. */
@@ -1635,14 +1789,7 @@ export class Store {
     this.bots.unshift(bot);
     this.persistTask(bot.tasks[0]);
     this.saveBots();
-    // Announce the owner before its onboarding transcript. SSE clients need
-    // the bot/thread mapping before they can place either message.
     this.emit({ type: "bot", botId: bot.id });
-    if (opts.seedMessages !== false && !job) {
-      // Job-first bots open on the existing ChatView empty state. A scripted
-      // "I'll handle …" line looks like the bot already spoke.
-      this.appendMessage(bot.threadId, { role: "bot", kind: "options", card: onboardingCard() });
-    }
     return bot;
   }
 
@@ -2050,6 +2197,13 @@ export class Store {
     this.saveBotsSoon();
   }
 
+  rememberRepos(botId: string, repos: string[]): void {
+    const bot = this.bot(botId);
+    if (!bot) return;
+    bot.knownRepos = repos;
+    this.saveBotsSoon();
+  }
+
   /** Drop a remembered project so a ruled-out folder does not stick. */
   forgetProjectCwd(botId: string): void {
     const bot = this.bot(botId);
@@ -2140,11 +2294,10 @@ export class Store {
     }
     let saved: TaskResumePacket;
     try {
-      saved = writeTaskResumePacket({ ...packet, botId });
+      saved = this.savePacket({ ...packet, botId });
     } catch {
       return null;
     }
-    this.taskPackets.set(threadId, saved);
     this.emit({ type: "task.packet", threadId });
     return saved;
   }
@@ -2170,18 +2323,39 @@ export class Store {
     return repaired ? structuredClone(repaired) : null;
   }
 
-  /** `staged` is a send's write: readers have the record at once, and settleTaskPacket pays its fsync after the dispatch. */
-  writeTaskPacket(packet: TaskResumePacket, opts: { staged?: boolean } = {}): TaskResumePacket | null {
+  /** Open asks the bot's other owner chats hold, newest copy of each, minus the ones this chat already has; none for or from a room or routine thread in notOwner. */
+  otherChatAsks(botId: string, threadId: string, notOwner: ReadonlySet<string>): TaskAsk[] {
+    const bot = this.bot(botId);
+    if (!bot || notOwner.has(threadId)) return [];
+    const key = (ask: TaskAsk) => `${ask.at}\0${ask.ask}`;
+    const own = new Set((this.taskPacket(threadId)?.asks ?? []).map(key));
+    const threads = new Set([bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)]);
+    threads.delete(threadId);
+    const records = [...threads].filter((id) => !notOwner.has(id)).map((id) => this.taskPacket(id)).filter((record) => record !== null);
+    return latestTaskAsks(records, (ask) => ask.ask).filter((ask) => isOpenAsk(ask) && !own.has(key(ask)));
+  }
+
+  /** `staged` is a send's write: readers have the record at once, and settleTaskPacket pays its fsync after the dispatch. `seen` holds the asks of queued records this one replaced and the closed asks its update trimmed. */
+  writeTaskPacket(packet: TaskResumePacket, opts: { staged?: boolean } = {}, seen: readonly TaskAsk[] = []): TaskResumePacket | null {
     if (!this.conversationForBot(packet.botId, packet.threadId)) return null;
-    const saved = opts.staged ? stageTaskResumePacket(packet) : writeTaskResumePacket(packet);
-    this.taskPackets.set(packet.threadId, saved);
+    const saved = this.savePacket(packet, opts, seen);
     this.emit({ type: "task.packet", threadId: packet.threadId });
     return structuredClone(saved);
   }
 
+  // every packet write comes through here, so an ask a write drops is logged, never lost silently
+  private savePacket(packet: TaskResumePacket, opts: { staged?: boolean; settle?: boolean } = {}, seen: readonly TaskAsk[] = []): TaskResumePacket {
+    const before = this.taskPackets.has(packet.threadId) ? this.taskPackets.get(packet.threadId) : readTaskResumePacket(packet.threadId);
+    const saved = opts.settle ? settleTaskResumePacket(packet.threadId) ?? packet : opts.staged ? stageTaskResumePacket(packet) : writeTaskResumePacket(packet);
+    this.taskPackets.set(packet.threadId, saved);
+    logDroppedAsks(saved, before?.asks, seen, packet.asks);
+    return saved;
+  }
+
   settleTaskPacket(threadId: string): void {
+    const staged = this.taskPackets.get(threadId);
     try {
-      settleTaskResumePacket(threadId);
+      if (staged) this.savePacket(staged, { settle: true });
     } catch (error) {
       console.error("task state: settle failed", error);
     }
@@ -2289,6 +2463,7 @@ export class Store {
       }
     });
     this.threads.delete(threadId);
+    this.foundOnDisk.delete(threadId);
     // a client that already painted this chat follows the new parents and leaf
     for (const message of moved.values()) this.emit({ type: "message.patch", threadId, message });
     if (leaf) this.emit({ type: "thread", threadId, activeLeafId: leaf });
@@ -2307,6 +2482,9 @@ export class Store {
         task = { threadId, title: UNTITLED_TASK, createdAt: 0, resumeCursors: {} };
         bot.tasks = [...(bot.tasks ?? []), task];
       }
+      // a parentless row or a null head reads differently from disk than in a loaded chat; read in a chat find left on disk first, as finding it once loaded it
+      const loadedReading = (change: SyncChange) => change.kind === "head" ? change.value === null : change.kind === "row" && (change.value as Message).parentId === undefined;
+      if (this.foundOnDisk.has(threadId) && changes.some(loadedReading)) this.thread(threadId);
       const cached = this.threads.peek(threadId);
       const events: StoreChange[] = [];
       const pathChanged = mdb.withMessageTransaction((db) => {

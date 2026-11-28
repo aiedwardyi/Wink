@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { ChevronRight, History, Paperclip, Pencil, Search } from "lucide-react";
+import { flushSync } from "react-dom";
 import { z } from "zod";
 
 import { request } from "@/lib/api-request";
@@ -9,6 +10,7 @@ import { localeTag, useI18n, type LocaleId, type MessageKey } from "@/lib/i18n";
 import { adjacentMedia, type MediaReference, type PreviewImage } from "@/lib/media-viewer";
 import { watchMemorySave } from "@/lib/memory-clean-events";
 import { fileOpen, openFile } from "@/lib/open-file";
+import { reducedMotion } from "@/lib/phone-swipe";
 import { linkedFileSrc, showName } from "@/lib/show-pane";
 import { entryTime, pickStamp } from "../../shared/timeline-time";
 import { wheelZoomFactor } from "./image-zoom";
@@ -98,7 +100,8 @@ function timelineDays(entries: readonly Entry[]): { day: string; rows: Row[] }[]
     if (day) day.push(row);
     else days.set(key, [row]);
   }
-  return [...days].map(([day, list]) => ({ day, rows: list }));
+  // built newest first so replaced picks list newest first; drawn oldest first, down to the newest
+  return [...days].reverse().map(([day, list]) => ({ day, rows: list.toReversed() }));
 }
 
 // Drawn only while the bot has no picks: never saved, sent or counted.
@@ -130,12 +133,14 @@ function dayLabel(day: string, now: Date, t: (key: MessageKey) => string, locale
 const ZOOM = { min: 0.3, max: 2.5 };
 const SLOP = 4;
 const KEY_PAN = 40;
+const GLIDE_MS = 360;
 const ARROWS = new Map<string, [number, number]>([["ArrowLeft", [1, 0]], ["ArrowRight", [-1, 0]], ["ArrowUp", [0, 1]], ["ArrowDown", [0, -1]]]);
 // Hundreds of picks mount in one task too slowly, so the newest draw first and the rest follow a batch a frame.
 const FIRST = 8;
 const BATCH = 24;
 // The sheet stops at its own edges, so a fling never leaves an empty canvas.
-const START = { x: 4, y: 44 };
+// the sheet keeps this much room at the left and top, clear of the Oldest pill
+const PAD = { x: 4, y: 44 };
 const edge = (size: number, room: number, at: number, start: number) => Math.min(start, Math.max(Math.min(start, room - size), at));
 const LINE = "color-mix(in srgb, var(--color-ink-secondary) 80%, transparent)";
 const WON = "var(--color-success)";
@@ -231,7 +236,8 @@ function drawInk(sheet: HTMLElement, ink: SVGSVGElement) {
       const ox = out.x + out.w / 2;
       add("branch", penCurve(r, lx, ly + 2, ox, out.y - 4), LINE, 1.4);
       add("branch", penCurve(r, lx + 0.8, ly + 2, ox + 0.6, out.y - 4, 0.7), LINE, 0.7);
-      add("tick", penLine(r, ox - 8, out.y - 9, ox + 8, out.y - 6, 1), OUT, 1.6);
+      // no mark above a struck option, the X already says it; the draw stays so the strokes after it keep their wobble
+      penLine(r, ox - 8, out.y - 9, ox + 8, out.y - 6, 1);
       add("strike", penLine(r, out.x + 4, out.y + 6, out.x + out.w - 4, out.y + out.h - 6), OUT, 2.2, ' opacity=".9"');
       add("strike", penLine(r, out.x + out.w - 6, out.y + 8, out.x + 6, out.y + out.h - 10), OUT, 2.2, ' opacity=".9"');
     }
@@ -265,7 +271,7 @@ function drawInk(sheet: HTMLElement, ink: SVGSVGElement) {
   ink.innerHTML = paths.join("");
 }
 
-type PaneProps = { botId: string; threadId: string; maximized: boolean; closing: boolean; profileName?: string };
+type PaneProps = { botId: string; threadId: string; maximized: boolean; closing: boolean; profileName?: string; kept?: boolean };
 
 export function TimelinePane(props: PaneProps) {
   const [viewing, setViewing] = useState<PreviewImage | null>(null);
@@ -290,7 +296,7 @@ export function TimelinePane(props: PaneProps) {
   );
 }
 
-function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) {
+function Picks({ botId, threadId, maximized, closing, profileName, kept }: PaneProps) {
   const { t } = useI18n();
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -332,7 +338,7 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
   const you = profileName || t("chrome.you");
 
   return (
-    <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} aria-busy={(!entries && !failed) || undefined} data-sample={sample || undefined}>
+    <div className="verify-watch-frame timeline-pane" data-maximized={maximized || undefined} data-kept={kept} aria-busy={(!entries && !failed) || undefined} data-sample={sample || undefined}>
       {failed && !entries
         ? <p role="status" className="show-media-empty">{t("errors.request")}</p>
         : sample
@@ -342,7 +348,7 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
                 <small className={DEMO_CHIP}>{t("timeline.sample")}</small>
                 <p className="show-media-empty">{t("timeline.empty")}</p>
               </div>
-              <div inert className="contents"><Canvas days={days} needle="" botId={botId} threadId={threadId} you={you} closing={closing} /></div>
+              <Canvas key="sample" days={days} needle="" botId={botId} threadId={threadId} you={you} closing={closing} />
             </>
           )
           : entries && (
@@ -370,6 +376,9 @@ function Picks({ botId, threadId, maximized, closing, profileName }: PaneProps) 
   );
 }
 
+// where the sheet sits with its newest pick at the bottom of the pane, or at the top if it is shorter
+const pinY = (box: HTMLElement, sheet: HTMLElement, scale: number) => Math.min(PAD.y, box.clientHeight - sheet.offsetHeight * scale);
+
 function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: string; rows: Row[] }[]; needle: string; botId: string; threadId: string; you: string; closing: boolean }) {
   const { t, locale } = useI18n();
   const frame = useRef<HTMLDivElement>(null);
@@ -377,6 +386,9 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
   const ink = useRef<SVGSVGElement>(null);
   const zoom = useRef<HTMLElement>(null);
   const view = useRef<View | null>(null);
+  const pinned = useRef(false);
+  const gliding = useRef(0);
+  const laid = useRef({ rows: "", first: "", height: 0, opened: null as ReadonlySet<string> | null });
   const searched = useRef(needle);
   const wasClosing = useRef(closing);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
@@ -395,11 +407,11 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
   const total = days.reduce((sum, day) => sum + day.rows.length, 0);
   const drawn = useMemo(() => {
     let left = grow.limit;
-    return days.flatMap((day) => {
-      const rows = day.rows.slice(0, Math.max(0, left));
+    return [...days].reverse().flatMap((day) => {
+      const rows = day.rows.slice(Math.max(0, day.rows.length - left));
       left -= rows.length;
       return rows.length ? [{ ...day, rows }] : [];
-    });
+    }).reverse();
   }, [days, grow.limit]);
   useEffect(() => {
     if (grow.limit >= total) return;
@@ -414,12 +426,50 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     const width = sheet.current!.offsetWidth * next.scale;
     const height = sheet.current!.offsetHeight * next.scale;
     const kept = box.clientWidth && !free
-      ? { scale: next.scale, x: edge(width, box.clientWidth, next.x, START.x), y: edge(height, box.clientHeight, next.y, START.y) }
+      ? { scale: next.scale, x: edge(width, box.clientWidth, next.x, PAD.x), y: edge(height, box.clientHeight, next.y, PAD.y) }
       : next;
     view.current = kept;
+    pinned.current = kept.y <= box.clientHeight - height + 1;
     sheet.current!.style.transform = `translate(${kept.x}px, ${kept.y}px) scale(${kept.scale})`;
     zoom.current!.textContent = `${Math.round(kept.scale * 100)}%`;
   }, []);
+
+  // will-change pins the sheet's bitmap at the scale it first painted, so it is set only while a drag or glide moves it.
+  // Below 1.5x Chromium draws subpixel text only off a layer, so a lift there would flicker the text to grayscale and back.
+  // That follows the display scale; devicePixelRatio also carries the desktop window zoom, and under 1.5x it shifts grey text on a layer too.
+  const lift = useCallback((on: boolean) => {
+    const scale = devicePixelRatio / (window.ogb?.zoomFactor?.() ?? 1);
+    if (sheet.current) sheet.current.style.willChange = on && Math.round(Math.min(scale, devicePixelRatio) * 100) >= 150 ? "transform" : "";
+  }, []);
+
+  const stopGlide = useCallback(() => {
+    if (!gliding.current) return;
+    cancelAnimationFrame(gliding.current);
+    gliding.current = 0;
+    lift(false);
+  }, [lift]);
+
+  // the newest end is read each frame, so a pick landing mid-glide is still where it ends
+  const glideTo = useCallback((end: "oldest" | "newest") => {
+    stopGlide();
+    const box = frame.current!;
+    // the older rows lay out first, so the move below starts from the expanded sheet
+    if (end === "oldest") flushSync(() => setGrow((at) => (at.limit < total ? { ...at, limit: total } : at)));
+    const goal = () => (end === "oldest" ? PAD.y : pinY(box, sheet.current!, view.current!.scale));
+    if (reducedMotion()) return show({ ...view.current!, y: goal() });
+    lift(true);
+    let began: number | undefined;
+    let from = 0;
+    const step = (now: number) => {
+      began ??= now;
+      if (now === began) from = view.current!.y;
+      const done = Math.min(1, (now - began) / GLIDE_MS);
+      show({ ...view.current!, y: from + (goal() - from) * (1 - (1 - done) ** 3) });
+      gliding.current = done < 1 ? requestAnimationFrame(step) : 0;
+      if (done === 1) lift(false);
+    };
+    gliding.current = requestAnimationFrame(step);
+  }, [lift, show, stopGlide, total]);
 
   const zoomAt = useCallback((x: number, y: number, factor: number, at = view.current!) => {
     const scale = Math.min(ZOOM.max, Math.max(ZOOM.min, at.scale * factor));
@@ -427,30 +477,54 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     show({ scale, x: x - (x - at.x) * ratio, y: y - (y - at.y) * ratio });
   }, [show]);
 
-  const redraw = useCallback(() => drawInk(sheet.current!, ink.current!), []);
+  // A resize can land after React detached the sheet, so the refs may be gone.
+  const redraw = useCallback(() => {
+    if (sheet.current && ink.current) drawInk(sheet.current, ink.current);
+  }, []);
 
   useLayoutEffect(() => {
     redraw();
     const box = frame.current!;
     const width = sheet.current!.offsetWidth;
-    const scale = Math.min(0.86, Math.max(0.62, width ? (box.clientWidth / width) * 1.06 : 1));
+    const height = sheet.current!.offsetHeight;
+    const fit = Math.min(0.86, Math.max(0.62, width ? (box.clientWidth / width) * 1.06 : 1));
     const at = view.current;
     const reopened = wasClosing.current && !closing;
     const changed = searched.current !== needle;
-    const next = !at || reopened || (changed && !needle)
-      ? { ...START, scale }
-      : changed ? { ...START, scale: at.scale } : at;
+    const was = laid.current;
+    const first = drawn[0]?.rows[0]?.id ?? "";
+    const rows = `${first}\n${drawn.at(-1)?.rows.at(-1)?.id}\n${drawn.reduce((sum, day) => sum + day.rows.length, 0)}`;
+    // the newest pick is at the bottom, so a view left there follows new picks down
+    const floor = (scale: number) => pinY(box, sheet.current!, scale);
+    let next: View;
+    if (!at || reopened || changed) {
+      stopGlide();
+      const scale = !at || reopened || !needle ? fit : at.scale;
+      next = { x: PAD.x, y: floor(scale), scale };
+    // the same picks keep the view, unless one grew (a tweak landed) while it sat on the newest pick
+    } else if (was.rows === rows && (was.height === height || was.opened !== opened)) next = at;
+    else if (pinned.current) next = { ...at, y: floor(at.scale) };
+    // older picks mounting above keep a scrolled-up view on what it shows
+    else next = first === was.first ? at : { ...at, y: at.y - (height - was.height) * at.scale };
+    laid.current = { rows, first, height, opened };
     wasClosing.current = closing;
     searched.current = needle;
     show(next, true);
-  }, [closing, drawn, needle, opened, redraw, show]);
+  }, [closing, drawn, needle, opened, redraw, show, stopGlide]);
 
   useEffect(() => {
     const box = frame.current!;
-    const resized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(redraw);
+    // a pane resize while the view sits on the newest pick keeps it there
+    const resized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      redraw();
+      const at = view.current;
+      if (at && pinned.current && sheet.current) show({ ...at, y: pinY(box, sheet.current, at.scale) }, true);
+    });
     resized?.observe(sheet.current!);
+    resized?.observe(box);
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
+      stopGlide();
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? box.clientHeight : 1;
       const rect = box.getBoundingClientRect();
       if (event.ctrlKey || event.metaKey) return zoomAt(event.clientX - rect.left, event.clientY - rect.top, wheelZoomFactor(event.deltaY * unit));
@@ -467,8 +541,9 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
       box.removeEventListener("wheel", onWheel);
       box.removeEventListener("gesturestart", prevent);
       box.removeEventListener("gesturechange", prevent);
+      stopGlide();
     };
-  }, [redraw, show, zoomAt]);
+  }, [redraw, show, stopGlide, zoomAt]);
 
   const spot = (event: ReactPointerEvent) => {
     const rect = frame.current!.getBoundingClientRect();
@@ -476,6 +551,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
   };
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    stopGlide();
     if (!pointers.current.size) dragged.current = false;
     pointers.current.set(event.pointerId, spot(event));
   };
@@ -484,10 +560,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     if (!last) return;
     const point = spot(event);
     const at = view.current!;
-    if (event.pointerType === "mouse" && !event.buttons) {
-      pointers.current.delete(event.pointerId);
-      return;
-    }
+    if (event.pointerType === "mouse" && !event.buttons) return onPointerUp(event);
     if (pointers.current.size >= 2) {
       // SAFETY: two or more pointers are down, so the first two exist before and after this move.
       const [a, b] = [...pointers.current.values()] as [typeof point, typeof point];
@@ -496,6 +569,7 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
       const [c, d] = [...pointers.current.values()] as [typeof point, typeof point];
       if (!dragged.current) {
         dragged.current = true;
+        lift(true);
         frame.current!.setPointerCapture?.(event.pointerId);
       }
       const mid = { x: (c.x + d.x) / 2, y: (c.y + d.y) / 2 };
@@ -506,21 +580,26 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
     if (!dragged.current) {
       if (Math.hypot(point.x - last.x, point.y - last.y) < SLOP) return;
       dragged.current = true;
+      lift(true);
       frame.current!.setPointerCapture?.(event.pointerId);
       frame.current!.dataset.grabbing = "";
     }
     pointers.current.set(event.pointerId, point);
     show({ ...at, x: at.x + point.x - last.x, y: at.y + point.y - last.y });
   };
+  // also ends a mouse drag whose mouse-up the page never saw
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     pointers.current.delete(event.pointerId);
-    if (!pointers.current.size) delete frame.current!.dataset.grabbing;
+    if (pointers.current.size) return;
+    delete frame.current!.dataset.grabbing;
+    lift(false);
   };
 
   return (
     <div
       ref={frame}
       className="timeline-canvas"
+      data-no-swipe
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -537,14 +616,15 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
         const step = ARROWS.get(event.key);
         if (!step || event.altKey || event.ctrlKey || event.metaKey) return;
         event.preventDefault();
+        stopGlide();
         const at = view.current!;
         show({ ...at, x: at.x + step[0] * KEY_PAN, y: at.y + step[1] * KEY_PAN });
       }}
       onFocus={(event) => {
-        if (!(event.target instanceof HTMLElement) || !event.target.matches(":focus-visible")) return;
+        if (!(event.target instanceof HTMLElement) || !event.target.matches(":focus-visible") || event.target.dataset.end) return;
         const to = event.target.getBoundingClientRect();
         const box = frame.current!.getBoundingClientRect();
-        if (to.top >= box.top + START.y && to.bottom <= box.bottom && to.left >= box.left && to.right <= box.right) return;
+        if (to.top >= box.top + PAD.y && to.bottom <= box.bottom && to.left >= box.left && to.right <= box.right) return;
         const at = view.current!;
         show({ ...at, x: at.x + box.left + box.width / 2 - (to.left + to.width / 2), y: at.y + box.top + box.height / 2 - (to.top + to.height / 2) });
       }}
@@ -552,7 +632,6 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
       <Redraw.Provider value={redraw}>
         <div ref={sheet} className="timeline-sheet">
           <svg ref={ink} className="timeline-ink" aria-hidden="true" />
-          <p className="timeline-day"><b>{t("timeline.newest")}</b></p>
           {drawn.map(({ day, rows }) => {
             const [name, date] = day ? dayLabel(day, now, t, locale) : [];
             return (
@@ -562,10 +641,11 @@ function Canvas({ days, needle, botId, threadId, you, closing }: { days: { day: 
               </section>
             );
           })}
-          {grow.limit >= total && <p className="timeline-day"><b>{t("timeline.oldest")}</b></p>}
         </div>
       </Redraw.Provider>
       <p className="timeline-hint">{t(touch ? "timeline.hintTouch" : "timeline.hintMouse")}<b ref={zoom} /></p>
+      <button type="button" className="timeline-hint" data-end="oldest" aria-label={t("timeline.goOldest")} onClick={() => glideTo("oldest")}>{t("timeline.oldest")}</button>
+      <button type="button" className="timeline-hint" data-end="newest" aria-label={t("timeline.goNewest")} onClick={() => glideTo("newest")}>{t("timeline.newest")}</button>
     </div>
   );
 }

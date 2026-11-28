@@ -11,13 +11,17 @@
 .timeline-canvas { position: relative; flex: 1; min-height: 0; overflow: clip; background-image: radial-gradient(circle, color-mix(in srgb, var(--color-ink-secondary) 22%, transparent) 1px, transparent 1.3px); background-size: 20px 20px; cursor: grab; touch-action: none; user-select: none; }
 /* an inherited cursor change on the canvas would restyle every pick mid-drag */
 .timeline-canvas[data-grabbing]::after { content: ""; position: absolute; inset: 0; z-index: 4; cursor: grabbing; }
-.timeline-sheet { position: absolute; top: 0; left: 0; width: max-content; padding: 20px 24px 40px; transform-origin: 0 0; will-change: transform; }
+.timeline-sheet { position: absolute; top: 0; left: 0; width: max-content; padding: 20px 24px 40px; transform-origin: 0 0; }
 .timeline-ink { position: absolute; top: 0; left: 0; z-index: 2; overflow: visible; pointer-events: none; }
 .timeline-ink path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .timeline-day { margin: 6px 0 16px; color: var(--color-ink-secondary); font-size: 13px; font-weight: 600; }
 .timeline-day b { color: var(--color-ink); }
 .timeline-hint { position: absolute; bottom: 8px; left: 10px; z-index: 3; display: flex; align-items: center; gap: 8px; padding: 3px 9px; border-radius: 999px; background: var(--color-raised); box-shadow: 0 1px 2px rgb(0 0 0 / .2); color: var(--color-ink-secondary); font-size: 11px; pointer-events: none; }
 .timeline-hint b { color: var(--color-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* which way time runs: oldest top right, under the search bar when there is one; newest bottom right */
+.timeline-hint[data-end] { right: 10px; left: auto; cursor: pointer; pointer-events: auto; }
+.timeline-hint[data-end="oldest"] { top: 8px; bottom: auto; }
+.timeline-search + .timeline-canvas > .timeline-hint[data-end="oldest"] { top: 48px; }
 
 .timeline-detail { display: flex; align-items: flex-start; gap: 34px; margin-bottom: 56px; }
 .timeline-left { display: flex; flex-direction: column; align-items: center; }

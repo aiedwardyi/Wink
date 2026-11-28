@@ -1,3 +1,28 @@
+# Model Index refresh, 2026-11-21
+
+0 published values added, 11 changed, 0 removed, read 2026-11-21 UTC. The GPT-6.2 Astra/Sol swap (#1905) and Gemini 4 Neon (#1976) were already filled; this pass re-read every source and found nothing newer for them. No chart version moved.
+
+- The Vals pages now put a `stderr` field between `latency` and `cost_per_test`, which made both Vals fetchers fail with "no cost per test". The parser reads past it. Re-read boards are dated 2026-11-19 (Legal Research Bench, from 2026-11-16; CyberBench, from 2026-11-05) with no score or cost change.
+- AA, from the public model pages (all 22 mapped models, every effort): Intelligence Index 5.0.1, Terminal-Bench 4.0, FrontierCode 2.0 and GDPval-AA 2.1 scores match the snapshots except one value: Claude Fable 5.2 (medium) GDPval-AA 1591.16 became 1591.13.
+- Changed costs, Gemini 4 only: Intelligence Index cost for Carbon low/medium/high ($5.22, $4.68, $5.48 became $7.19, $6.59, $7.76) and Argon medium/high ($4.31, $4.97 became $8.63, $9.95); Terminal-Bench cost for the same rows, from the `terminalbench-4-0` cost per task in the same record (Carbon $6.05, $6.24, $7.11 became $8.57, $8.82, $10.05; Argon $6.42, $6.78 became $12.85, $13.56). Argon (high) is back at the $9.95 AA showed before the 2026-11-14 fill. Every other model's cost matched.
+- Rams Index (board 2026-10-29), list prices and the Intelligence Index free API were re-read with no change. GPT-5.6 Terra, Claude Fable 5, GPT-6.1 Sol and GPT-6 Astra keep their existing rows.
+- Not re-read: the GDPval-AA Cost per Task bars. They render client-side and the heavy-run lock stayed taken for the whole window, so every GDPval cost keeps its 2026-11-14 reading, including Gemini 4 Carbon (high) $2.12. Do this by hand next pass.
+- Source gaps, not skipped fills: AA publishes no GDPval-AA score for GPT-6.2 Astra, GPT-6.2 Sol, Muse Ember, Gemini 4 Neon or Gemini 4 Hydrogen (null on their records). The Rams board and the Vals CyberBench board list none of the new models (Vals' `fireworks/ember-1` is a different model from Muse Ember). Vals Legal Research has no Gemini 4 Neon.
+
+Counts use the 19 picker models; Muse Spark 1.3 Contributor carries a list price only. All 19 have at least one Model Index entry. Picker model/chart gaps stay at 30.
+
+| Chart | Missing before | Missing after | Filled | Still missing |
+| --- | ---: | ---: | --- | --- |
+| Intelligence Index 5.0.1 | 1 | 1 | - | Muse Spark 1.3 Contributor |
+| FrontierCode 2.0 | 1 | 1 | - | Muse Spark 1.3 Contributor |
+| Terminal-Bench 4.0 | 1 | 1 | - | Muse Spark 1.3 Contributor |
+| GDPval-AA 2.1 | 6 | 6 | - | GPT-6.2 Astra, GPT-6.2 Sol, Muse Spark 1.3 Contributor, Muse Ember, Gemini 4 Neon, Gemini 4 Hydrogen |
+| Rams Index 0.6.1 | 10 | 10 | - | Claude Fable 5.2, GPT-6.2 Astra, GPT-6.2 Sol, Grok 4.6, Muse Spark 1.3, Muse Spark 1.3 Contributor, Muse Ember, Gemini 4 Carbon, Gemini 4 Neon, Gemini 4 Hydrogen |
+| CyberBench 1.1 | 9 | 9 | - | Claude Fable 5.2, GPT-6.2 Astra, GPT-6.2 Sol, GPT-6.1 Terra, Muse Spark 1.3 Contributor, Muse Ember, Gemini 4 Carbon, Gemini 4 Neon, Gemini 4 Hydrogen |
+| Legal Research Bench 1 | 2 | 2 | - | Muse Spark 1.3 Contributor, Gemini 4 Neon |
+| List prices | 0 | 0 | - | - |
+| Total model/chart gaps | 30 | 30 | | |
+
 # Model Index fill, 2026-11-14
 
 61 published values added and 71 changed, read 2026-11-14 UTC. 9 Terminal-Bench costs were removed because AA no longer publishes them. No chart version moved.

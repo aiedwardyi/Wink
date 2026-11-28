@@ -23,6 +23,7 @@ vi.mock("@/state/store", async (importOriginal) => {
 import App from "./App";
 import { closeShow, showItem } from "@/lib/show-pane";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
+import { CHAT_SWITCH_PATH } from "@/lib/chat-switch-diag";
 
 describe("desktop notification routing", () => {
   it.each(["bot", "room"])("selects a %s and switches its task once per click", async (kind) => {
@@ -53,7 +54,7 @@ describe("desktop notification routing", () => {
       focus.mockClear();
       const target = { botId: "b1", threadId: kind === "bot" ? "t-background" : "g-background" };
       await act(async () => { for (const listener of listeners) listener(target); });
-      const posts = vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === "POST");
+      const posts = vi.mocked(fetch).mock.calls.filter(([path, init]) => init?.method === "POST" && path !== CHAT_SWITCH_PATH);
       expect(posts.map(([path]) => path)).toEqual([kind === "bot" ? "/api/bots/b1/tasks/t-background" : "/api/groups/g1/tasks/g-background"]);
       expect(store.actions.filter((action) => action.type === "select")).toEqual([{ type: "select", id: kind === "bot" ? "b1" : "g1", reveal: true }]);
       expect(listeners.size).toBe(1);

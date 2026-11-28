@@ -8,7 +8,7 @@ import { sidebarWorkerStatus } from "@/lib/worker-status";
 import { workerRuns } from "@/lib/worker-runs";
 import type { Message } from "@/state/store";
 import { saveSidebarSide } from "@/lib/sidebar-preferences";
-import { closeShow, showItem, showMedia, showWorkers, useMediaThread, useShowItem, useWorkersThread } from "@/lib/show-pane";
+import { closeShow, showItem, showMedia, showWorkers, useMediaThread, useShowItem, useToolsThread, useWorkersThread } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { ShowPaneButton } from "./ShowPaneButton";
 import type { WorkerSource } from "./WorkerRows";
@@ -21,10 +21,12 @@ let state: unknown[] = [];
 
 let workers: WorkerSource | undefined;
 let crew: string | null = null;
+let listed: string | null = null;
 
 function Probe({ threadId }: { threadId: string }) {
   state = [useShowItem()?.path ?? null, useMediaThread(), Boolean(useVerifyWatch())];
   crew = useWorkersThread();
+  listed = useToolsThread();
   return createElement(ShowPaneButton, { threadId, workers });
 }
 
@@ -37,7 +39,7 @@ afterEach(() => { workers = undefined; act(() => root.unmount()); host.remove();
 const render = (threadId: string) => act(async () => root.render(createElement(Probe, { threadId })));
 const press = () => act(async () => host.querySelector("button")!.click());
 
-it.each(["left", "right"] as const)("opens Media, then closes, with the bot list on the %s", async (side) => {
+it.each(["left", "right"] as const)("opens the tool list, then closes, with the bot list on the %s", async (side) => {
   saveSidebarSide(side);
   await render("b1");
   const button = host.querySelector("button")!;
@@ -48,12 +50,21 @@ it.each(["left", "right"] as const)("opens Media, then closes, with the bot list
   expect(button.querySelector("svg")!.getAttribute("width")).toBe("18");
   expect(button.querySelector("svg")!.getAttribute("stroke-width")).toBe("2");
   await press();
-  expect(state).toEqual([null, "b1", false]);
+  expect([state, listed]).toEqual([[null, null, false], "b1"]);
   expect(button.getAttribute("aria-pressed")).toBe("true");
   expect(button.querySelector("svg")!.classList.contains("lucide-panel-right-close")).toBe(true);
   await press();
-  expect(state).toEqual([null, null, false]);
+  expect([state, listed]).toEqual([[null, null, false], null]);
   expect(button.querySelector("svg")!.classList.contains("lucide-panel-right-open")).toBe(true);
+});
+
+it("stays the sidebar toggle's gray when open", async () => {
+  await render("b7");
+  const button = host.querySelector("button")!;
+  await press();
+  expect(button.getAttribute("aria-pressed")).toBe("true");
+  expect(button.classList.contains("text-ink-secondary")).toBe(true);
+  expect(button.classList.contains("text-accent")).toBe(false);
 });
 
 it("opens Show when this chat has shown a file", async () => {

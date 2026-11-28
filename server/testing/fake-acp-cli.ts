@@ -33,6 +33,15 @@
 //                     file exists — a deterministic busy window for the
 //                     steer-queue e2e, with the echo pinning exactly what a
 //                     drained turn was sent)
+//                   | read (like grok 1.0.92 over `agent stdio`: a read_file of
+//                     notes.txt in the session's cwd, or a `cat` through the
+//                     shell tool, runs unasked in every mode, plan included.
+//                     --tools and --disallowed-tools are ignored there; only an
+//                     --agent-profile `tools:` list removes the rest. What it
+//                     read goes to FAKE_ACP_READ_OUT. An `@path` in the prompt
+//                     is inlined with no tool and no ask, as grok 1.0.92 does,
+//                     after the start, whitespace, U+200B or one of : , - / = \
+//                     — relative to that cwd, or absolute — and appended there)
 //   FAKE_ACP_DUMP   path to write {argv, env} as JSON, so a test can assert
 //                   argv shape (agent/stdio flags) and env hygiene. Per-session
 //                   settings land next to it in `<path>.config.json`, so a test
@@ -47,6 +56,7 @@
 //   FAKE_ACP_USAGE_ROOT  put the prompt result's usage at the root instead of
 //                        under _meta (what opencode 1.18.18 actually does)
 //   FAKE_ACP_COMPACT     emit Grok's auto-compaction update while a prompt runs
+//   FAKE_ACP_LOAD_FAILS  session/load answers "session not found", as load-fails does, in any mode
 //   FAKE_ACP_PERMISSION_KINDS  comma-separated ACP option kinds, in the order
 //                        the agent advertises them (e.g.
 //                        "allow_always,allow_once,reject_always,reject_once").
@@ -56,8 +66,9 @@
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 
 const mode = process.env.FAKE_ACP_MODE ?? "happy";
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -97,6 +108,15 @@ const sessionModels = () =>
   acpModels.length ? { currentModelId: acpModels[0].modelId, availableModels: acpModels } : null;
 
 const argv = process.argv.slice(2);
+// the session's folder, where the read mode looks
+let sessionCwd: string | null = null;
+// a built-in tool this launch offers: only an --agent-profile `tools:` list narrows them
+const offered = (tool: string): boolean => {
+  const at = argv.indexOf("--agent-profile");
+  if (at < 0) return true;
+  const list = readFileSync(argv[at + 1]!, "utf8").match(/\ntools:\n((?:\s+- .+\n)+)/)?.[1];
+  return list === undefined || list.split("\n").some((line) => line.trim() === `- ${tool}`);
+};
 const dumpEnv = Object.fromEntries(
   [
     "PATH",
@@ -391,6 +411,7 @@ function handle(msg: any) {
         writeFileSync(`${process.env.FAKE_ACP_DUMP}.cwd.json`, JSON.stringify(msg.params?.cwd ?? null));
       }
       agentsMcp = servers.find((s: any) => s?.name === "agents") ?? null;
+      sessionCwd = typeof msg.params?.cwd === "string" ? msg.params.cwd : null;
       if (process.env.FAKE_ACP_DUMP) {
         writeFileSync(`${process.env.FAKE_ACP_DUMP}.mcp.json`, JSON.stringify(servers, null, 2));
       }
@@ -404,10 +425,11 @@ function handle(msg: any) {
       break;
     }
     case "session/load": {
-      if (mode === "load-fails") {
+      if (mode === "load-fails" || process.env.FAKE_ACP_LOAD_FAILS) {
         out({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: "session not found" } });
         break;
       }
+      sessionCwd = typeof msg.params?.cwd === "string" ? msg.params.cwd : null;
       const opts = configOptions();
       const mdls = sessionModels();
       result(msg.id, { ...(opts ? { configOptions: opts } : {}), ...(mdls ? { models: mdls } : {}) });
@@ -498,6 +520,20 @@ function handle(msg: any) {
       if (process.env.FAKE_ACP_DUMP) {
         dumpState.prompt = msg.params?.prompt;
         writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify(dumpState, null, 2));
+      }
+      const reader = ["read_file", "run_terminal_cmd"].find(offered);
+      if (mode === "read" && sessionCwd && reader) {
+        const path = join(sessionCwd, "notes.txt");
+        out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "read-1", title: reader === "read_file" ? "read_file" : "cat notes.txt", kind: reader === "read_file" ? "read" : "execute" } } });
+        if (existsSync(path)) writeFileSync(process.env.FAKE_ACP_READ_OUT ?? "read.txt", readFileSync(path));
+        out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "read-1", status: "completed" } } });
+      }
+      if (mode === "read" && sessionCwd) {
+        const said = (msg.params?.prompt ?? []).map((part: { text?: string }) => part?.text ?? "").join("\n");
+        for (const [, named] of said.matchAll(/(?:^|[\s\u200B:,\-/=\\])@([^\s"'`<>()[\]]+)/g)) {
+          const path = resolve(sessionCwd, named!.replace(/[.,;:!?]+$/, ""));
+          if (existsSync(path) && statSync(path).isFile()) appendFileSync(process.env.FAKE_ACP_READ_OUT ?? "read.txt", readFileSync(path));
+        }
       }
       if (mode === "hang") {
         // never resolve the prompt — lets tests exercise interrupt

@@ -636,11 +636,24 @@ describe("chat usage meter, quick view and wait card", () => {
     await mount(makeBot("bot-atlas", "Atlas", "claude"), { locale, instances: signedOut("claude") });
     expect(meter(), "the bar stays").not.toBeNull();
     expect(text(q("[data-meter-name]"))).toBe("Claude 1");
-    expect(text(q("[data-meter-signed-out]"))).toBe(locale === "en" ? "Signed out" : "로그아웃됨");
+    expect(text(q("[data-meter-off]"))).toBe(locale === "en" ? "Signed out" : "로그아웃됨");
     expect(q("[data-meter-first], [data-meter-second]"), "no percentages").toBeNull();
     await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
     await settle();
     expect(quick(), "Alt+U opens the quick view with no windows").not.toBeNull();
+  });
+
+  it.each(["en", "ko"] as const)("shows Payment due on the chat bar and its Usage row instead of the stale reading (%s)", async (locale) => {
+    server.board.engines[0]!.accounts[0]!.signIn = "payment-due";
+    await mount(makeBot("bot-atlas", "Atlas", "claude"), { desk: true, locale });
+    const due = locale === "en" ? "Payment due" : "결제 필요";
+    expect(text(q("[data-meter-name]"))).toBe("Claude 1");
+    expect(text(q("[data-meter-off]"))).toBe(due);
+    expect(q("[data-meter-off]")?.className).toContain("text-warning");
+    expect(meter()?.querySelector("[data-meter-first], [data-meter-second]"), "no stale percentages").toBeNull();
+    const row = q('[data-usage-desk]:not([data-usage-quick]) [data-account-row="claude"]');
+    expect(text(row?.querySelector("[data-row-status]"))).toBe(due);
+    expect(row?.querySelector("[data-window]"), "no stale meter").toBeNull();
   });
 
   it("starts the signed-out text where the composer text starts", async () => {

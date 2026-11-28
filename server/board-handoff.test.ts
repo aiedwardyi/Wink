@@ -9,12 +9,14 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 import { BOARD_USER, createBoard, type Board } from "./board.ts";
 import { createBoardCalls, type BoardCalls } from "./board-calls.ts";
+import { createBoardRoutes } from "./board-routes.ts";
 import { createBotCalls } from "./bot-call.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import type { BotRecord, Store } from "./store.ts";
 import { seedTaskResumePacket } from "./task-state-fold.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { olderCall } from "./testing/older-call.ts";
 import type { PushPayload } from "./web-push.ts";
 
 const temps = createTempDirs();
@@ -46,7 +48,6 @@ beforeEach(() => {
     current: (threadId) => packets.get(threadId)!.blockers,
     chat: () => undefined,
     skip: () => false,
-    called: (botId, threadId, blocker) => void boardCalls.called(botId, threadId, blocker),
   });
   const store = {
     bot: (id: string) => BOTS[id],
@@ -88,11 +89,10 @@ const posted = (bot: BotRecord, parentId: string, text: string) => {
 
 describe("board handoff eval", () => {
   it("Bot B finishes on Bot A's fix without calling", async () => {
-    // Bot A is blocked on X: it calls, and the call leaves a stuck post
+    // Bot A is blocked on X and calls; an older build on another PC left the stuck post
     await blockers(BOTS.astra!, [X("14:05")]);
     expect(sent.map((payload) => payload.title)).toEqual(["📞 Astra is calling"]);
-    const [stuck] = board.list();
-    expect(stuck).toMatchObject({ kind: "stuck", status: "open", author_bot_id: "astra", project_id: "wink" });
+    const stuck = olderCall(board, "astra", "ta", X("14:05"));
 
     // the user answers in chat; Bot A clears the blocker and the note it writes then is the fix
     await blockers(BOTS.astra!, [], ANSWER);
@@ -116,7 +116,7 @@ describe("board handoff eval", () => {
 
   it("a fix that did not work calls on the second try", async () => {
     await blockers(BOTS.astra!, [X("14:05")]);
-    posted(BOTS.astra!, board.list()[0]!.id, ANSWER);
+    posted(BOTS.astra!, olderCall(board, "astra", "ta", X("14:05")).id, ANSWER);
     const callsBefore = sent.length;
     await blockers(BOTS.carbon!, [X("09:30")]);
     expect(sent.length).toBe(callsBefore);
@@ -126,10 +126,10 @@ describe("board handoff eval", () => {
     expect(board.list().find((post) => post.kind === "stuck")!.helped_bot_ids).toEqual([]);
   });
 
-  it("a solved blocker that comes back gets a fresh post, rings and takes the new answer", async () => {
+  it("a solved blocker that comes back is offered its fix once, then rings without a new post", async () => {
     await blockers(BOTS.astra!, [X("14:05")]);
-    const [first] = board.list();
-    posted(BOTS.astra!, first!.id, ANSWER);
+    const first = olderCall(board, "astra", "ta", X("14:05"));
+    posted(BOTS.astra!, first.id, ANSWER);
     await blockers(BOTS.astra!, []);
     boardCalls.turnEnded("ta", true);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
@@ -138,15 +138,8 @@ describe("board handoff eval", () => {
     expect(await blockers(BOTS.astra!, [X("14:05")])).toContain(ANSWER);
     await blockers(BOTS.astra!, [X("14:05")]);
     expect(sent.slice(callsBefore).map((payload) => payload.title)).toEqual(["📞 Astra is calling"]);
-    const stuck = board.list().filter((post) => post.kind === "stuck");
-    expect(stuck).toHaveLength(2);
-    const fresh = stuck.find((post) => post.id !== first!.id)!;
-    expect(fresh).toMatchObject({ status: "open", author_bot_id: "astra" });
-    const NEW = "Codex moved to the team plan; sign in again with the work account.";
-    posted(BOTS.astra!, fresh.id, NEW);
-    expect(board.get(fresh.id)).toMatchObject({ status: "solved", fix: NEW });
-    expect(board.list().find((post) => post.kind === "fix" && post.parent_id === fresh.id)).toMatchObject({ body: NEW, author_bot_id: "astra" });
-    expect(board.get(first!.id)).toMatchObject({ status: "solved", fix: ANSWER });
+    expect(board.list().filter((post) => post.kind === "stuck")).toEqual([board.get(first.id)]);
+    expect(board.get(first.id)).toMatchObject({ status: "solved", fix: ANSWER });
   });
 
   it("holds only blockers whose fixes fit in the notice; the rest call", async () => {
@@ -168,7 +161,7 @@ describe("board handoff eval", () => {
 
   it("a chat reply is never the fix: the post waits for the bot to clear its blocker", async () => {
     await blockers(BOTS.astra!, [X("14:05")]);
-    const [stuck] = board.list();
+    const stuck = olderCall(board, "astra", "ta", X("14:05"));
     expect("answered" in boardCalls).toBe(false);
     expect(board.get(stuck!.id)!.status).toBe("open");
     await blockers(BOTS.astra!, []);
@@ -179,27 +172,20 @@ describe("board handoff eval", () => {
   it("one note clearing two calls solves neither", async () => {
     const Y = { kind: "engine", note: "Claude: overloaded on the work PC, wait for capacity." };
     await blockers(BOTS.astra!, [X("14:05"), Y]);
-    expect(board.list()).toHaveLength(2);
+    for (const blocker of [X("14:05"), Y]) olderCall(board, "astra", "ta", blocker);
     await blockers(BOTS.astra!, [], ANSWER);
     expect(board.list().map((post) => post.status)).toEqual(["open", "open"]);
   });
 
   it("a Board write error never skips phone cleanup", async () => {
     await blockers(BOTS.astra!, [X("14:05")]);
+    olderCall(board, "astra", "ta", X("14:05"));
     vi.spyOn(board, "solve").mockImplementation(() => {
       throw new Error("disk full");
     });
     await blockers(BOTS.astra!, [], ANSWER);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(sent.map((payload) => payload.title)).toEqual(["📞 Astra is calling"]);
-  });
-
-  it("long notes that differ late get their own posts", () => {
-    const note = (end: string) => `Codex: ${"usage limit ".repeat(24)}${end}`.slice(0, 300);
-    expect(note("one").endsWith("one")).toBe(true);
-    boardCalls.called("astra", "ta", { kind: "engine", note: note("one") });
-    boardCalls.called("astra", "ta", { kind: "engine", note: note("two") });
-    expect(board.list().map((post) => post.body.slice(-3)).sort()).toEqual(["one", "two"]);
   });
 
   it("a call posted under the old full-note ref is still solved", async () => {
@@ -233,9 +219,84 @@ describe("board handoff eval", () => {
     expect(sent.map((payload) => payload.title)).toEqual(["📞 Carbon is calling"]);
   });
 
+  it("a login or engine call rings once and leaves the Forum alone", async () => {
+    await blockers(BOTS.astra!, [{ kind: "login", note: "Sign in to Claude on Home so tonight's eval can run." }]);
+    await blockers(BOTS.carbon!, [X("09:30")]);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    const calls = new Map(sent.filter((payload) => payload.call).map((payload) => [payload.call, payload.title]));
+    expect([...calls.values()]).toEqual(["📞 Astra is calling", "📞 Carbon is calling"]);
+    expect(board.list()).toEqual([]);
+  });
+
+  it("a login stuck post made before the rule still closes when its login clears", () => {
+    const LOGIN = { kind: "login" as const, note: "Sign in to Claude on Home so tonight's eval can run." };
+    const old = board.post({ author_bot_id: "astra", kind: "stuck", title: LOGIN.note, body: LOGIN.note, project_id: "wink", source_ref: `call:ta:0:login:${LOGIN.note}` });
+    const solved = boardCalls.cleared("ta", [LOGIN], [], "Signed in to Claude on Home.");
+    expect(solved.map((post) => [post.id, post.status])).toEqual([[old.id, "solved"]]);
+  });
+
   it("an open post with no answer yet holds nothing back", async () => {
     await blockers(BOTS.astra!, [X("14:05")]);
     await blockers(BOTS.carbon!, [X("09:30")]);
     expect(sent.map((payload) => payload.title)).toEqual(["📞 Astra is calling", "📞 Carbon is calling"]);
+  });
+});
+
+describe("a bot's own open Stuck post", () => {
+  const stuckBy = async (bot: BotRecord, title: string) => {
+    let reply = "";
+    // SAFETY: the route calls only writeHead, end and the request's headers and data events.
+    const res = { writeHead() {}, end(text: string) { reply = text; } } as unknown as ServerResponse;
+    // SAFETY: as above.
+    const req = new EventEmitter() as IncomingMessage;
+    req.headers = {};
+    const routes = createBoardRoutes({ board, caller: () => ({ botId: bot.id, threadId: bot.threadId }), known: () => true, projectOf: () => "wink", roomTurn: () => null });
+    const pending = routes.post(req, res);
+    req.emit("data", JSON.stringify({ kind: "stuck", title, body: title }));
+    req.emit("end");
+    await pending;
+    return String(JSON.parse(reply).id);
+  };
+
+  it("rides each task write on its thread until a fix reply under it solves it", async () => {
+    const id = await stuckBy(BOTS.astra!, "post_to_group is missing from the Wink tools");
+    const notice = await blockers(BOTS.astra!, []);
+    expect(notice).toContain(id);
+    expect(notice.length / 4).toBeLessThanOrEqual(40);
+    expect(await blockers(BOTS.astra!, [])).toContain(id);
+    posted(BOTS.astra!, id, "post_to_group shipped in #2231; it posts now.");
+    expect(board.get(id)).toMatchObject({ status: "solved", fix: "post_to_group shipped in #2231; it posts now." });
+    expect(await blockers(BOTS.astra!, [])).toBe("");
+  });
+
+  it("names a call post an older build left on the thread, one post at a time", async () => {
+    const old = olderCall(board, "astra", "ta", X("14:05"));
+    expect(await blockers(BOTS.astra!, [])).toContain(old.id);
+    vi.advanceTimersByTime(1_000);
+    const id = await stuckBy(BOTS.astra!, "post_to_group is missing from the Wink tools");
+    const notice = await blockers(BOTS.astra!, []);
+    expect([notice.includes(id), notice.includes(old.id)]).toEqual([true, false]);
+    posted(BOTS.astra!, id, "post_to_group shipped in #2231.");
+    expect(await blockers(BOTS.astra!, [])).toContain(old.id);
+  });
+
+  it("a merge alone closes nothing and adds no line", async () => {
+    expect(await blockers(BOTS.astra!, [], "Merged #2231: post_to_group is live.")).toBe("");
+    const id = await stuckBy(BOTS.astra!, "post_to_group is missing from the Wink tools");
+    expect(await blockers(BOTS.astra!, [], "Merged #2231: post_to_group is live.")).toContain(id);
+    expect(board.get(id)!.status).toBe("open");
+  });
+
+  it("another bot's post gives no line", async () => {
+    await stuckBy(BOTS.astra!, "post_to_group is missing from the Wink tools");
+    expect(await blockers(BOTS.carbon!, [])).toBe("");
+  });
+
+  it("a room turn gives no line", async () => {
+    await stuckBy(BOTS.astra!, "post_to_group is missing from the Wink tools");
+    olderCall(board, "astra", "ta", X("14:05"));
+    const room = createBoardCalls({ board, projectOf: () => "wink", room: (threadId) => threadId === "ta" });
+    expect(room.ownStuck("astra", "ta")).toBe("");
+    expect(boardCalls.ownStuck("astra", "ta")).not.toBe("");
   });
 });

@@ -7,9 +7,10 @@ import { afterFold } from "@/lib/fold-press";
 import { localeTag, useI18n, type MessageKey, type Translate } from "@/lib/i18n";
 import { EASE_ENTRANCE, EASE_SOFT, MOTION_FAST_MS, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { museReading, resetCompact, windowExpired } from "@/lib/usage";
-import { refreshUsage, useRefreshKey, useRefreshPending } from "@/lib/usage-auto-refresh";
+import { refreshUsage, useAutoRefresh, useRefreshKey, useRefreshPending } from "@/lib/usage-auto-refresh";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardEvent, UsageBoardWindow } from "@/lib/usage-board";
 import { checkedMain, requestMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { bindingWindow, chartSeries, historyColumn, leftOf, pace, splitWindows, todayVsNormal, type Verdict } from "@/lib/usage-pace";
@@ -201,7 +202,7 @@ function Ticker({ board, engineId, select, phone, terminal, clock, instances }: 
   );
 }
 
-const STATE_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "engines.notSignedIn", "cli-missing": "engines.notInstalled", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
+const STATE_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "engines.notSignedIn", "payment-due": "usage.chat.paymentDue", "cli-missing": "engines.notInstalled", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
 /** Main, Switch and Sign In share one box: same height, width floor, radius and right edge; a larger touch target sits outside it on phones. */
 const SPOT = "usage-control relative inline-flex h-[22px] min-w-12 shrink-0 items-center justify-center whitespace-nowrap border px-2 text-[11px] leading-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
 const BUTTON = "border-hairline bg-raised text-ink hover:bg-raised-hover";
@@ -394,14 +395,16 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
   const { t } = clock;
   const checked = checkedMain(state, engine.base);
   const id = useId();
+  // Expand all opens every engine at once, so only a press on this header brings its rows into view.
+  const pressed = useRef(false);
   const main = engine.accounts.find((each) => each.id === checked) ?? engine.accounts[0];
   const row = (account: UsageBoardAccount, slots?: RowSlots) => <AccountRow key={account.id} engine={engine} account={account} board={board} state={state}
     checked={account.id === checked} terminal={terminal} clock={clock} reloadInstances={reloadInstances} signIn={signIn} settings {...slots} />;
-  const capped = useCappedAccounts({ accounts: ordered(engine.accounts, accountOrder, (each) => each.id), checked, t, row,
+  const capped = useCappedAccounts({ accounts: ordered(engine.accounts, accountOrder, (each) => each.id), checked, pending: state.pending[engine.base]?.target, t, row,
     loadOpen: () => loadFolds(ACCOUNTS_KEY)[engine.base] ?? false, saveOpen: (open) => saveFold(engine.base, open, ACCOUNTS_KEY) });
   const head = (arrows?: ReactNode) => (
     <div data-engine-head="" {...(board.engines.filter((each) => each.accounts.length).length > 1 && reorderable(t("usage.desk.reorder", { name: label })))} className="usage-engine-head">
-      <button type="button" data-engine-fold="" aria-expanded={!folded} aria-controls={id} onClick={() => afterFold(id, onFold)}
+      <button type="button" data-engine-fold="" aria-expanded={!folded} aria-controls={id} onClick={() => afterFold(id, () => { pressed.current = folded; onFold(); })}
         className={cn("group relative flex h-5 min-w-0 shrink items-center gap-2 text-[14px] font-semibold text-ink",
           terminal ? "rounded-none" : "rounded-md", "[@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2")}>
         <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px] font-normal")}><ProviderBrandMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
@@ -411,7 +414,10 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
       {folded ? main && <FoldSummary engine={engine} account={main} clock={clock} /> : arrows && <span className="ml-auto flex shrink-0">{arrows}</span>}
     </div>
   );
-  const group = (content: ReactNode) => <Fold open={!folded} id={id} soft><AccountGroup label={label} terminal={terminal}>{content}</AccountGroup></Fold>;
+  const group = (content: ReactNode) => <Fold open={!folded} id={id} soft onOpened={() => {
+    if (pressed.current) revealOnOpen(document.getElementById(id)?.querySelector<HTMLElement>("[data-account-row]") ?? null);
+    pressed.current = false;
+  }}><AccountGroup label={label} terminal={terminal}>{content}</AccountGroup></Fold>;
   return (
     <section data-usage-engine={engine.engine} data-usage-base={engine.base} aria-label={label} className="min-w-0">
       {USAGE_LAYOUT === "A" ? <PagedAccounts engine={engine} checked={checked} stacked={stacked} t={t} head={head} row={row} group={group} />
@@ -428,10 +434,11 @@ export function engineLabel(board: UsageBoard, engine: UsageBoardEngine, instanc
 }
 
 /** Settings > Usage: every engine under a header that folds, its accounts in one box, each with a meter per reported window. */
-export function UsageDesk() {
+export function UsageDesk({ closing = false }: { closing?: boolean }) {
   const { t, locale } = useI18n();
   const { state: store, dispatch, refreshInstances } = useStore();
   const state = useUsageBoard();
+  useAutoRefresh(state.board, closing ? undefined : "desk");
   const phone = useIsPhone();
   const terminal = isTerminalSkin(useSkin());
   const mode = useUsageMode();
@@ -544,7 +551,7 @@ export function UsageDesk() {
   if (!board.engines.some((each) => each.accounts.length)) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t("usage.limits.empty")}</EmptyState></div>;
   const engine = board.engines.find((each) => each.base === engineId) ?? board.engines[0]!;
   const account = engine.accounts.find((each) => each.id === viewed[engine.base]) ?? engine.accounts.find((each) => each.id === engine.mainId) ?? engine.accounts[0];
-  const folded = (each: UsageBoardEngine) => folds[each.base] ?? !each.accounts.some((account) => account.signIn === "ready");
+  const folded = (each: UsageBoardEngine) => folds[each.base] ?? false;
   const allFolded = board.engines.filter((each) => each.accounts.length).every(folded);
   const fold = (base: string, value: boolean) => {
     const head = desk.current?.querySelector<HTMLElement>(`[data-usage-base="${base}"] > [data-engine-head]`);

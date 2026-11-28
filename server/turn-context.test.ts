@@ -38,6 +38,9 @@ import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket, stam
 import { deleteTaskResumePacket, writeTaskPlanSidecar, type TaskResumePacket } from "./task-state.ts";
 import { planFiles as oldPlanFiles } from "./testing/plan-files-c9206fd80.ts";
 import { planFiles as prevPlanFiles } from "./testing/plan-files-9c19449a1.ts";
+import { applyPicks } from "./picks.ts";
+import { asksBlock } from "./task-asks.ts";
+import { ensureWorkspace, memorySystemPrompt } from "./workspace.ts";
 
 const transcript = [
   { role: "user" as const, text: "my dog is named Biscuit" },
@@ -437,7 +440,7 @@ describe("asks in the task record", () => {
     ],
   };
   const lines = "- A1 waiting-for-user needs verdict 11-08: Review the model picker PR\n- A3 building 11-12: Fix the login redirect";
-  const verdict = "[Wink asks list - 2 open, 1 needs a verdict: no ref and no change in 3+ days, so build, park or close it yourself, and ask the user about at most 3 at a time.";
+  const verdict = "[Wink asks list - 2 open, 1 needs a verdict: no ref and no change in 3+ days, or waiting on the user that long, so check whether the user already did their part, then build, park or close it yourself, and ask the user about at most 3 at a time.";
   const stale = `${verdict}]\n${lines}`;
   const listed = `${verdict} Build any summary or status from this list.]\n${lines}`;
   const plain = { text: "thanks", transcript, rewound: false, fresh: false, replaysNatively: false };
@@ -1685,5 +1688,32 @@ describe("fresh-session memory block", () => {
     expect(builtListPath(notes, (path) => path === built)).toBe(built);
     expect(builtListPath(notes, () => false)).toBeNull();
     expect(builtListPath("no list here", () => true)).toBeNull();
+  });
+});
+
+describe("the 11-22 23:11 turn, rebuilt", () => {
+  it("keeps the glasses goal in view beside the 22:40 summary, a buried pointer, a parked ask and 74 picks", () => {
+    const bot = "bot-turn-2311";
+    const dir = ensureWorkspace(bot);
+    const notes = Array.from({ length: 160 }, (_, i) => `- RULE ${i} (11-2${i % 3}): keep replies short and check the board before card ${i}.`);
+    notes[13] = "- SIM LOOP (11-21): run the sim before you call a build done, on phone and desktop. Glasses v1 spec: memory/glasses-v1.md.";
+    writeFileSync(join(dir, "MEMORY.md"), `# Memory\n${notes.join("\n")}\n`);
+    writeFileSync(join(dir, "memory", "glasses-v1.md"), "Glasses v1 = CEO meeting tool: person brief + top 3 competitors + 1 news line\n");
+    const start = new Date(2026, 10, 22, 15, 38).getTime();
+    const picks = applyPicks("", Array.from({ length: 74 }, (_, i) => ({ kind: "pick" as const, at: start + (i + 1) * 60_000, key: `question ${i}`, picked: `option ${i}`, said: `go with ${i}` })))!.text;
+    const first = picks.indexOf("\n## ");
+    writeFileSync(join(dir, "memory", "decisions.md"), `${picks.slice(0, first)}\n\n## 2026-11-22 15:38 | Glasses v1 | current\n- Picked: Glasses v1 = CEO meeting tool: person brief + top 3 competitors + 1 news line\n- Kind: goal${picks.slice(first)}`);
+    const now = new Date(2026, 10, 22, 23, 11).getTime();
+    const asks = asksBlock([{ id: "A961", ask: "glasses prompter demo", status: "open", until: now + 3 * 86_400_000, at: now - 86_400_000, changedAt: now - 86_400_000 }], now);
+    const summary = "[Wink durable context summary]\nEdward wants Wink to be like the ceo watching over all of them. Meta glasses: Edward playing with the glasses UI; a helper ran a glasses-UI competitor check. Workers shipped the sign-in fix.";
+    const { turnText } = buildTurnContext({
+      text: "ok whats the plan for the ceo meeting thing on the glasses?",
+      transcript: [{ role: "assistant", text: summary }, { role: "user", text: "ship the sign-in fix" }, { role: "assistant", text: "Shipped." }],
+      rewound: false,
+      fresh: true,
+      replaysNatively: false,
+      taskRecordText: asks,
+    });
+    expect(`${memorySystemPrompt(bot)}\n${turnText}`).toContain("competitors");
   });
 });

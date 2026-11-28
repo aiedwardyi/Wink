@@ -290,6 +290,49 @@ describe("antigravityRateLimitWindows", () => {
     ).toEqual([{ id: "five_hour", usedPercent: 50, resetsAt: now + 60_000, windowMinutes: 300 }]);
   });
 
+  it("reads agy 1.5 buckets (id / name / reset_time) and keeps the most constrained pool", () => {
+    const bucket = (id: string, name: string, remaining: number, resetInMs: number) => ({ id, name, window: id.endsWith("5h") ? "5h" : "weekly", remaining_fraction: remaining, reset_time: new Date(now + resetInMs).toISOString() });
+    const DAY = 86_400_000;
+    const groups = (argonRemaining: number) => ({
+      groups: [
+        { name: "Gemini Models", buckets: [bucket("gemini-weekly", "Weekly Limit Remaining", 0.9, 6 * DAY), bucket("gemini-5h", "Five Hour Limit Remaining", 0.7, 2 * 3_600_000)] },
+        { name: "Gemini 4 Argon", buckets: [{ id: "gemini-argon-wtu-weekly", name: "Gemini 4 Argon Weekly Limit", window: "weekly", remaining_fraction: argonRemaining, reset_time: new Date(now + 7 * DAY).toISOString() }] },
+      ],
+    });
+    // Argon untouched: the Gemini pool is the more constrained one and wins.
+    expect(antigravityRateLimitWindows(groups(1), now)).toEqual([
+      { id: "five_hour", usedPercent: 30, resetsAt: now + 2 * 3_600_000, windowMinutes: 300 },
+      { id: "seven_day", usedPercent: 10, resetsAt: now + 6 * DAY, windowMinutes: 10_080 },
+    ]);
+    // The existing rule is unchanged: a more used Argon weekly would take over seven_day.
+    expect(antigravityRateLimitWindows(groups(0.2), now).find((window) => window.id === "seven_day")).toEqual(
+      { id: "seven_day", usedPercent: 80, resetsAt: now + 7 * DAY, windowMinutes: 10_080 },
+    );
+    // A spent Argon still shows on the bar, marked as leaving the Gemini pool to run on.
+    expect(antigravityRateLimitWindows(groups(0), now).find((window) => window.id === "seven_day")).toEqual(
+      { id: "seven_day", usedPercent: 100, resetsAt: now + 7 * DAY, windowMinutes: 10_080, otherPoolLeft: true },
+    );
+  });
+
+  it("leaves the helper's own Gemini Models pool unmarked when it is the spent one", () => {
+    const reset = now + 7 * 86_400_000;
+    const bucket = (id: string, remaining: number) => ({ id, name: "Weekly Limit Remaining", window: "weekly", remaining_fraction: remaining, reset_time: new Date(reset).toISOString() });
+    expect(antigravityRateLimitWindows({ groups: [{ name: "Gemini Models", buckets: [bucket("gemini-weekly", 0)] }, { name: "Claude and GPT models", buckets: [bucket("3p-weekly", 1)] }] }, now)).toEqual([
+      { id: "seven_day", usedPercent: 100, resetsAt: reset, windowMinutes: 10_080 },
+    ]);
+    expect(antigravityRateLimitWindows({ groups: [{ name: "Gemini Models", buckets: [bucket("gemini-weekly", 0.5)] }, { name: "Claude and GPT models", buckets: [bucket("3p-weekly", 0)] }] }, now)).toEqual([
+      { id: "seven_day", usedPercent: 100, resetsAt: reset, windowMinutes: 10_080, otherPoolLeft: true },
+    ]);
+  });
+
+  it("leaves a window spent in every pool unmarked", () => {
+    const reset = now + 7 * 86_400_000;
+    const spent = (id: string) => ({ id, name: "Weekly Limit Remaining", window: "weekly", remaining_fraction: 0, reset_time: new Date(reset).toISOString() });
+    expect(antigravityRateLimitWindows({ groups: [{ buckets: [spent("gemini-weekly")] }, { buckets: [spent("3p-weekly")] }] }, now)).toEqual([
+      { id: "seven_day", usedPercent: 100, resetsAt: reset, windowMinutes: 10_080 },
+    ]);
+  });
+
   it("drops buckets without a fill level and tolerates junk", () => {
     expect(
       antigravityRateLimitWindows({ "gemini-weekly": { reset_in_seconds: 60 }, "gemini-5h": { remaining_fraction: "0.5" } }, now),

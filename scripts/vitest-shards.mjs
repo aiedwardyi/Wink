@@ -8,6 +8,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const timingsUrl = new URL("./vitest-timings.json", import.meta.url);
 
+const mean = (values) => values.reduce((sum, value) => sum + value, 0) / (values.length || 1);
+
 const median = (values) => {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = sorted.length >> 1;
@@ -15,7 +17,8 @@ const median = (values) => {
 };
 
 export function packShards(files, timings, count) {
-  const fallback = median(Object.values(timings));
+  // The median of most-tiny files is the cheapest file, so untimed ones all tied at ~0.7 s and one more file reshuffled which shard got the slow ones.
+  const fallback = mean(Object.values(timings));
   const cost = (file) => timings[file] ?? fallback;
   const shards = Array.from({ length: count }, () => ({ seconds: 0, files: [] }));
   const order = [...files].sort((a, b) => cost(b) - cost(a) || (a < b ? -1 : 1));
@@ -75,7 +78,7 @@ function main([first, ...rest]) {
   if (overlaps.length) throw new Error(`vitest-shards: overlapping test paths: ${overlaps.join(", ")}`);
   const timings = JSON.parse(readFileSync(timingsUrl, "utf8"));
   const untimed = files.filter((file) => !(file in timings)).length;
-  // An untimed file is packed at the median, so stale timings let one shard run long and set the run's wall time.
+  // An untimed file is packed at the mean, so stale timings let one shard run long and set the run's wall time.
   if (index === 1 && untimed > files.length / 10) console.error(`::warning::${untimed} of ${files.length} test files have no shard timing; refresh with node scripts/vitest-shards.mjs --update <the vitest-N.json artifacts of a few green runs>`);
   const shards = packShards(files, timings, count);
   console.log(shards[index - 1].files.join("\n"));

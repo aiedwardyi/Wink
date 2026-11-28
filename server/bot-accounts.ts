@@ -3,8 +3,12 @@ import { currentModel } from "../shared/replaced-models.ts";
 import { AccountError, type AccountService } from "./accounts.ts";
 import type { AutomaticCandidate, AutomaticCapability } from "./automatic-selection.ts";
 import type { ModelCatalog, ModelSelection, ProviderInstance, ProviderSnapshot } from "./contracts.ts";
+import { DREAM_GEMINI, type DreamJudges } from "./dream-judge.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
+import { noteGenerator, type NoteLimits } from "./memory-pass.ts";
 import type { BotRecord, Store } from "./store.ts";
+import { summaryInstance } from "./summary-instance.ts";
+import { ENGINE_NAMES } from "./turn-context.ts";
 
 export const SIGNED_OUT = "This account is signed out. Sign in again, then send your message.";
 export const SIGN_IN_UNCONFIRMED = "This account's sign-in isn't confirmed yet.";
@@ -124,6 +128,37 @@ export class BotAccounts {
     return id ? { instanceId: id, available: this.available(id) } : undefined;
   }
 
+  notes(bot: Pick<BotRecord, "modelSelection">, usage?: NoteLimits) {
+    if (this.registry.get(bot.modelSelection.instanceId)?.driverKind === "claudeAgent") {
+      return noteGenerator(this.registry.instances(), this.noteAccount());
+    }
+    try {
+      const selection = this.resolve(bot);
+      if (!this.registry.accountAvailable(selection.instanceId, true)) return null;
+      const instance = this.registry.get(selection.instanceId);
+      return instance ? noteGenerator([], undefined, summaryInstance(instance, selection.model), usage) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  dreamJudges(usage?: NoteLimits): DreamJudges {
+    const gemini = () => {
+      const base = this.registry.instances().find((instance) => instance.driverKind === "antigravityAgent" && !instance.account && instance.enabled && instance.generateText);
+      if (!base) return null;
+      try {
+        const selection = this.resolve({ modelSelection: { instanceId: base.instanceId, model: DREAM_GEMINI } });
+        const instance = this.registry.accountAvailable(selection.instanceId, true) ? this.registry.get(selection.instanceId) : undefined;
+        const generateText = instance?.generateText;
+        if (!instance || !generateText) return null;
+        return noteGenerator([], undefined, { driverKind: instance.driverKind, enabled: instance.enabled, instanceId: instance.instanceId, textModel: DREAM_GEMINI, generateText: (prompt, opts) => generateText(prompt, { ...opts, model: DREAM_GEMINI }) }, usage);
+      } catch {
+        return null;
+      }
+    };
+    return { claude: noteGenerator(this.registry.instances(), this.noteAccount()), gemini: gemini() };
+  }
+
   references(bot: BotRecord, id: string): boolean {
     return this.selections(bot).some((selection) => (this.accounts.defaultFor(selection.instanceId) ?? selection.instanceId) === id);
   }
@@ -169,7 +204,7 @@ export class BotAccounts {
   private blocked(id: string) {
     const account = this.accounts.get(id);
     const of = account?.of ?? id;
-    if (this.registry.cliMissing(id) || this.registry.cliMissing(of)) return cliMissing(this.registry.get(of)?.driverKind === "codex" ? "Codex" : "Claude");
+    if (this.registry.cliMissing(id) || this.registry.cliMissing(of)) return cliMissing(ENGINE_NAMES.get(this.registry.get(of)?.driverKind ?? "") ?? "This engine");
     return account?.state === "ready" ? SIGN_IN_UNCONFIRMED : SIGNED_OUT;
   }
 

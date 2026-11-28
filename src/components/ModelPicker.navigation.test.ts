@@ -291,16 +291,16 @@ describe("ModelPicker cross navigation", () => {
     expect(mock.dispatch.mock.calls[0]?.[0].selection).not.toHaveProperty("effort");
   });
 
-  it("tiers the on-list Argon cell horizontally without sending effort", async () => {
-    mock.instances = [engine("antigravity", "antigravityAgent", ["gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low"])];
-    await mount({ instanceId: "antigravity", model: "gemini-4-argon-low", mode: "pinned" });
+  it("tiers the on-list Hydrogen cell horizontally without sending effort", async () => {
+    mock.instances = [engine("antigravity", "antigravityAgent", ["gemini-4-hydrogen-high", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low"])];
+    await mount({ instanceId: "antigravity", model: "gemini-4-hydrogen-low", mode: "pinned" });
     expect(document.body.textContent).not.toContain("Current (not in list)");
-    expect(document.querySelector('[data-model-cell="gemini-4-argon-high"][aria-pressed="true"]')).not.toBeNull();
+    expect(document.querySelector('[data-model-cell="gemini-4-hydrogen-high"][aria-pressed="true"]')).not.toBeNull();
     await key("ArrowRight");
     await key("Enter");
     expect(mock.dispatch).toHaveBeenCalledExactlyOnceWith({
       type: "setModel", botId: "bot-1",
-      selection: { instanceId: "antigravity", model: "gemini-4-argon-medium", mode: "pinned" },
+      selection: { instanceId: "antigravity", model: "gemini-4-hydrogen-medium", mode: "pinned" },
     });
     expect(mock.dispatch.mock.calls[0]?.[0].selection).not.toHaveProperty("effort");
   });

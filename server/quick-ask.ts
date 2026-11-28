@@ -12,7 +12,7 @@ import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import type { ProviderInstance, RuntimeEvent } from "./contracts.ts";
 import { steerUntilTaken } from "./note-steer.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
-import { nominate } from "./quick-route.ts";
+import { isNudge, isOrder, nominate, questionPart } from "./quick-route.ts";
 import type { QuickBot, QuickResult } from "./side-chat.ts";
 import { queueSteeredMessage } from "./steer-queue.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
@@ -20,14 +20,14 @@ import type { BotRecord, Message, Store } from "./store.ts";
 const BLOCK_HEAD =
   "[Your earlier fast replies in this chat, sent while you were busy. They are your own words and the person has seen them. If one was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you:]";
 const NOTE_HEAD =
-  "[Wink note, automated, not from the person. You already sent the person this reply earlier in this chat, and they have seen it. Do not repeat it. Use it only if it changes your current work, and then say only what changes. If it was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you.]";
+  "[Wink note, automated, not from the person. You already sent the person this reply earlier in this chat, and they have seen it. Do not repeat it. Use it only if it changes your current work, and then say only what changes. If it was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you. The user's own words decide; if they don't match what you asked (like 'both' for 3 items), take every item or ask one short question.]";
 const BLOCK_PAIRS = 6;
 const BLOCK_TOKENS = 1_500;
 const INDEX_FILE = join(DATA_DIR, "quick-asks.json");
 // engines that passed the real-engine accuracy bar
 const QUICK_ENGINES: ReadonlySet<string> = new Set(["claudeAgent"]);
 
-export type QuickAsk = (bot: QuickBot, threadId: string, ask: { text: string; notes?: string; ack?: boolean }) => Promise<QuickResult>;
+export type QuickAsk = (bot: QuickBot, threadId: string, ask: { text: string; notes?: string }) => Promise<QuickResult>;
 
 export interface QuickGate {
   bot: BotRecord;
@@ -60,8 +60,43 @@ function route(gate: QuickGate): ReturnType<typeof nominate> {
 }
 
 export const routesQuick = (gate: QuickGate) => route(gate) === "quick";
-/** Steered to the bot as the person's own words, with one short helper reply beside it. */
-export const routesAck = (gate: QuickGate) => route(gate) === "ack";
+/** Steered to the bot as the person's own words; the helper answers only the question in it. */
+export const routesAside = (gate: QuickGate) => route(gate) === "aside";
+
+// The question rows a helper is answering now, so a second nudge or aside starts no second helper for them.
+const answering = new Set<string>();
+
+export interface Waiting {
+  question: string;
+  /** claimed for this nudge's helper; none when helpers already answer every one */
+  rows: string[];
+}
+
+/** A nudge's question: the questions the person typed since the bot last said anything that no helper took, oldest first, with those no helper answers yet claimed; none when the send is no nudge, is the bot's alone, or nothing waits. */
+export function claimWaitingQuestion(gate: QuickGate): Waiting | undefined {
+  if (!isNudge(gate.text) || route(gate) === "main") return undefined;
+  const path = gate.messages;
+  const asked: string[] = [];
+  const rows: string[] = [];
+  for (let at = path.length - 1; at >= 0; at--) {
+    const row = path[at]!;
+    if (row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && row.text?.trim()) break;
+    if (row.role !== "user" || row.kind !== "text" || row.quick || isNudge(row.text ?? "")) continue;
+    const question = questionPart(row.text ?? "");
+    if (!question) continue;
+    asked.unshift(question);
+    rows.unshift(row.id);
+  }
+  if (!rows.length) return undefined;
+  const free = rows.filter((id) => !answering.has(id));
+  if (!free.length) return { question: asked.join(" "), rows: [] };
+  for (const id of free) answering.add(id);
+  return { question: asked.filter((_, at) => free.includes(rows[at]!)).join(" "), rows: free };
+}
+
+export const releaseWaiting = (waiting: Waiting) => {
+  for (const id of waiting.rows) answering.delete(id);
+};
 
 // The answers a thread's starting turn carries in its block, until that turn's first model event.
 const carried = new Map<string, string[]>();
@@ -92,13 +127,16 @@ export function quickAnswersSinceLastUserTurn(messages: Message[], excludeIds: R
 }
 
 /** Marks the carried answers noted on the turn's first model event; a turn that ends before it leaves them for the next. */
-export function quickAnswersTaken(store: Pick<Store, "messagesFor" | "patchMessage">, event: RuntimeEvent): void {
+export function quickAnswersTaken(store: Pick<Store, "row" | "patchRow">, event: RuntimeEvent): void {
   const ids = carried.get(event.threadId);
   const ended = event.type === "turn.completed" || event.type === "session.exited";
   if (!ids || (!ended && !MODEL_EVENTS.has(event.type))) return;
   carried.delete(event.threadId);
   if (ended) return;
-  for (const row of store.messagesFor(event.threadId)) if (row.quick && ids.includes(row.id)) store.patchMessage(event.threadId, row.id, { quick: { ...row.quick, noted: true } });
+  for (const id of ids.toReversed()) {
+    const row = store.row(event.threadId, id);
+    if (row?.quick) store.patchRow(event.threadId, id, { quick: { ...row.quick, noted: true } });
+  }
 }
 
 export interface QuickDeps {
@@ -119,9 +157,9 @@ export const pending = (store: Pick<Store, "activePath">, threadId: string, ask:
   store.activePath(threadId).some((row) => row.id === ask.id && row.text === ask.text && !row.steered && row.quick?.state !== "handoff");
 
 /** The ask as the bot's ordinary next turn in its own thread, else the failed-send row. */
-function queueAsk(store: AskStore, botId: string, threadId: string, ask: Message): void {
+export function queueAsk(store: AskStore, botId: string, threadId: string, ask: Message, prompt?: string): void {
   try {
-    const queued = queueSteeredMessage(botId, threadId, ask.text ?? "");
+    const queued = queueSteeredMessage(botId, threadId, ask.text ?? "", { prompt });
     store.patchRow(threadId, ask.id, { quick: { state: "handoff" }, queueId: queued.id });
   } catch (error) {
     store.patchRow(threadId, ask.id, { quick: undefined });
@@ -142,7 +180,7 @@ export function requeueDroppedAsk(store: AskStore, botId: string, threadId: stri
   drain();
 }
 
-/** The same for a call's order or ask: its row stays and the queue drains into it. */
+/** The same for a call's order or ask, or a promised order: its row stays and the queue drains into it. */
 export function requeueDroppedCall(store: AskStore, botId: string, threadId: string, row: Message, drain: () => void): void {
   if (stopped.has(row.id) || !store.activePath(threadId).some((message) => message.id === row.id && message.steered)) return;
   try {
@@ -207,44 +245,62 @@ export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, bo
         stopped.add(row.id);
         // a stopped ask reads as handed off, so it is neither pending nor recovered
         store.patchMessage(threadId, row.id, { quick: { state: "handoff" } });
-      } else if (turn && row.steered && (row.quick?.state === "handoff" || row.call?.order || row.call?.ask)) stopped.add(row.id);
+      } else if (turn && row.steered) stopped.add(row.id);
     }
   }
 }
 
+// the last run's index, read once per store: this run's sends rewrite the file before the boot reads take their list
+const lastRun = new WeakMap<object, Array<{ botId: string; threadId: string }>>();
+
 /** The open chats plus the threads of asks still running at shutdown; no other thread can hold a recovered ask. */
 export function quickAskThreads(store: Pick<Store, "bots" | "taskByThread">): Map<string, string> {
   const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
-  for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
+  if (!lastRun.has(store)) lastRun.set(store, savedThreads());
+  for (const { botId, threadId } of lastRun.get(store)!) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
   return threads;
 }
 
+type RecoveryStore = AskStore & Pick<Store, "bots" | "taskByThread" | "activePathBack" | "loaded" | "messagesFor">;
+type FoundAsk = { id: string; at: number };
+
 const recovering = new Map<string, Promise<void>>();
+// the chats the boot reads have not recovered yet, each with its bot
+const unrecovered = new Map<string, string>();
+let recoverNow: ((threadId: string, botId: string) => Promise<void>) | undefined;
 
-/** A send to this chat waits here first, so a recovered ask still queues ahead of it. */
-export const quickAskRecovery = (threadId: string): Promise<void> | undefined => recovering.get(threadId);
+/** A send to this chat waits here first, so a recovered ask still queues ahead of it; before the boot reads land, it recovers this chat alone. */
+export function quickAskRecovery(threadId: string): Promise<void> | undefined {
+  const botId = unrecovered.get(threadId);
+  if (botId !== undefined && recoverNow) {
+    unrecovered.delete(threadId);
+    const done: Promise<void> = recoverNow(threadId, botId).finally(() => {
+      if (recovering.get(threadId) === done) recovering.delete(threadId);
+    });
+    recovering.set(threadId, done);
+  }
+  return recovering.get(threadId);
+}
 
-/** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. `asks` come from boot-reads.ts. */
-export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "taskByThread" | "activePathBack">, asks: Promise<Array<{ threadId: string; id: string; at: number }>>): Promise<void> {
+/** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. `asks` come from boot-reads.ts; with `onDemand`, a send that comes first reads its own chat's asks and drains them. */
+export function recoverQuickAsks(store: RecoveryStore, asks: Promise<Array<FoundAsk & { threadId: string }>>, onDemand?: { read: (threadId: string) => Promise<FoundAsk[]>; drain: () => void }): Promise<void> {
   const threads = quickAskThreads(store);
+  for (const [threadId, botId] of threads) unrecovered.set(threadId, botId);
+  recoverNow = onDemand && (async (threadId, botId) => {
+    let found: FoundAsk[] | undefined;
+    try {
+      if (!store.loaded(threadId)) found = await onDemand.read(threadId);
+    } catch (error) {
+      console.error("cold quick ask read failed; the store answers", threadId, error);
+    }
+    if (!recoverThread(store, botId, threadId, found ?? loadedAsks(store, threadId))) return;
+    saveRunning();
+    onDemand.drain();
+  });
   const done = asks.then((found) => {
     for (const [threadId, botId] of threads) {
-      const ids = new Map(found.filter((ask) => ask.threadId === threadId).map((ask) => [ask.id, ask.at]));
-      if (!ids.size) continue;
-      const path: Message[] = [];
-      // newest first by key, and only until every ask is seen: timestamps need not fall along the path
-      let left = ids.size;
-      // an answer that landed after the boot read sits newer on the path than its ask, so the walk meets it first
-      const answered = new Set<string>();
-      for (const row of store.activePathBack(threadId)) {
-        if (row.role === "bot" && row.quick?.askId) answered.add(row.quick.askId);
-        if (ids.has(row.id)) {
-          left--;
-          if (row.quick?.state === "asked" && !answered.has(row.id)) path.push(row);
-        }
-        if (!left) break;
-      }
-      for (const ask of path.toReversed()) queueAsk(store, botId, threadId, ask);
+      // a send already recovered it
+      if (unrecovered.delete(threadId)) recoverThread(store, botId, threadId, found.filter((ask) => ask.threadId === threadId));
     }
     saveRunning();
   }).finally(() => {
@@ -254,9 +310,37 @@ export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "taskByT
   return done;
 }
 
+/** quickAsksOn's rows from a chat already in memory: an asked user line no bot line answers. */
+function loadedAsks(store: Pick<Store, "messagesFor">, threadId: string): FoundAsk[] {
+  const rows = store.messagesFor(threadId);
+  const answered = new Set(rows.flatMap((row) => (row.role === "bot" && row.kind === "text" && row.quick?.askId ? [row.quick.askId] : [])));
+  return rows.filter((row) => row.role === "user" && row.kind === "text" && row.quick?.state === "asked" && !answered.has(row.id));
+}
+
+/** Queues the found asks still open on the chat's path, oldest first; returns how many. */
+function recoverThread(store: RecoveryStore, botId: string, threadId: string, found: FoundAsk[]): number {
+  const ids = new Map(found.map((ask) => [ask.id, ask.at]));
+  if (!ids.size) return 0;
+  const path: Message[] = [];
+  // newest first by key, and only until every ask is seen: timestamps need not fall along the path
+  let left = ids.size;
+  // an answer that landed after the boot read sits newer on the path than its ask, so the walk meets it first
+  const answered = new Set<string>();
+  for (const row of store.activePathBack(threadId)) {
+    if (row.role === "bot" && row.quick?.askId) answered.add(row.quick.askId);
+    if (ids.has(row.id)) {
+      left--;
+      if (row.quick?.state === "asked" && !answered.has(row.id)) path.push(row);
+    }
+    if (!left) break;
+  }
+  for (const ask of path.toReversed()) queueAsk(store, botId, threadId, ask);
+  return path.length;
+}
+
 type HelperDeps = Omit<QuickDeps, "handoff" | "drain">;
 
-async function askHelper(deps: HelperDeps, instance: ProviderInstance, botId: string, threadId: string, ask: Message, ack?: boolean): Promise<QuickResult> {
+async function askHelper(deps: HelperDeps, instance: ProviderInstance, botId: string, threadId: string, ask: Message, text = ask.text ?? ""): Promise<QuickResult> {
   const usageId = `quick:${ask.id}`;
   let result: QuickResult = { route: "handoff", ms: 0 };
   deps.usage?.start(botId, threadId, usageId);
@@ -264,10 +348,10 @@ async function askHelper(deps: HelperDeps, instance: ProviderInstance, botId: st
     const messages = deps.store.activePath(threadId).filter((message) => message.id !== ask.id);
     const calls = ask.call ? callLinesSinceLastUserTurn(messages, new Set()) : [];
     const notes = [...quickAnswersSinceLastUserTurn(messages, new Set()), ...calls].join("\n\n");
-    result = await deps.ask({ instance, messages, userName: deps.userName }, threadId, { text: ask.text ?? "", notes, ack });
+    result = await deps.ask({ instance, messages, userName: deps.userName }, threadId, { text, notes });
   } catch {}
   deps.usage?.settle(usageId);
-  console.info(`[quick] ${JSON.stringify({ id: usageId, accountId: instance.instanceId, route: result.route, ms: result.ms, ack, ...result.usage })}`);
+  console.info(`[quick] ${JSON.stringify({ id: usageId, accountId: instance.instanceId, route: result.route, ms: result.ms, ...result.usage })}`);
   return result;
 }
 
@@ -276,6 +360,14 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   const { store } = deps;
   const bot = store.bot(botId);
   const instance = bot ? deps.instance(bot, threadId) : null;
+  const text = ask.text ?? "";
+  if (isOrder(text)) {
+    if (!bot || !pending(store, threadId, ask)) return;
+    // this route never gave the bot the order, so it waits for the bot's next turn here
+    queueAsk(store, botId, threadId, ask);
+    deps.drain();
+    return;
+  }
   const result: QuickResult = instance ? await askHelper(deps, instance, botId, threadId, ask) : { route: "handoff", ms: 0 };
   const current = store.bot(botId);
   // a stopped ask still takes its late answer; one handed to the bot any other way is the bot's
@@ -304,33 +396,44 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   await land(store, instance, current, threadId, ask, result.text);
 }
 
-const repliedUnder = (path: Message[], ask: Message) => {
+export const repliedUnder = (path: Message[], ask: Message) => {
   const asked = path.findIndex((row) => row.id === ask.id);
   return asked >= 0 && path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && !isVoiceLine(row) && row.text?.trim());
 };
 
 /** The helper's reply as a row under the ask, then a note to the bot while it still works there. */
-async function land(store: QuickDeps["store"], instance: ProviderInstance | null | undefined, current: BotRecord, threadId: string, ask: Message, text: string): Promise<void> {
+async function land(store: QuickDeps["store"], instance: ProviderInstance | null | undefined, current: BotRecord, threadId: string, ask: Message, text: string, asked = ask.text): Promise<void> {
   const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text, engine: instance?.driverKind, quick: { state: "answer", askId: ask.id } });
   if (!current.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
-  const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${text}`;
+  const note = `${NOTE_HEAD} Q: ${asked?.trim()} A: ${text}`;
   await steerUntilTaken(instance?.adapter, threadId, note, () => {
     const row = store.messagesFor(threadId).find((message) => message.id === answer.id);
     if (row?.quick) store.patchMessage(threadId, answer.id, { quick: { ...row.quick, noted: true } });
   })?.catch(() => false);
 }
 
-/** One short helper reply under a send the bot already took as the person's own words; none when the helper has none. */
-export async function ackQuick(deps: HelperDeps, botId: string, threadId: string, sent: Message): Promise<void> {
-  const { store } = deps;
-  const bot = store.bot(botId);
-  const instance = bot ? deps.instance(bot, threadId) : null;
-  if (!instance) return;
-  const result = await askHelper(deps, instance, botId, threadId, sent, true);
-  const current = store.bot(botId);
-  if (!current || result.route === "handoff" || !result.text) return;
-  const path = store.activePath(threadId);
-  // an edit or rewind dropped the send, or the finished turn already replied to it
-  if (!path.some((row) => row.id === sent.id && row.text === sent.text) || (!current.busy && repliedUnder(path, sent))) return;
-  await land(store, instance, current, threadId, sent, result.text);
+/** The helper's answer to the question in a send the bot already took as the person's own words, or to the question a nudge waits on; none when the helper has none. */
+export async function answerAside(deps: HelperDeps, botId: string, threadId: string, sent: Message, question: string, waiting?: Waiting): Promise<void> {
+  const claim = waiting ?? { question, rows: [sent.id] };
+  if (!waiting) answering.add(sent.id);
+  try {
+    const { store } = deps;
+    const bot = store.bot(botId);
+    const instance = bot ? deps.instance(bot, threadId) : null;
+    if (!instance) return;
+    const result = await askHelper(deps, instance, botId, threadId, sent, question);
+    const current = store.bot(botId);
+    if (!current || result.route === "handoff" || !result.text) return;
+    const path = store.activePath(threadId);
+    // an edit or rewind dropped the send, or the finished turn already replied to it
+    if (!path.some((row) => row.id === sent.id && row.text === sent.text) || (!current.busy && repliedUnder(path, sent))) return;
+    // a waiting question is the bot's once any line of its own lands after it, mid-turn or not
+    if (waiting) {
+      const asked = path.findIndex((row) => row.id === waiting.rows[0]);
+      if (asked < 0 || path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !isVoiceLine(row) && row.text?.trim())) return;
+    }
+    await land(store, instance, current, threadId, sent, result.text, waiting ? question : undefined);
+  } finally {
+    releaseWaiting(claim);
+  }
 }

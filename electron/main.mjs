@@ -57,7 +57,7 @@ import { pollServerIdentity } from "./server-boot-probe.mjs";
 import { createServerRevival } from "./server-revival.mjs";
 import { brandForRenderer, brandWindowOptions, holdBrandTitle, readBrandOverride } from "./brand-override.mjs";
 import { crashReportsEnv, createErrorReports, errorReportDsn } from "./error-reports.mjs";
-import { installErrorReportCapture, registerErrorReportIpc } from "./error-report-capture.mjs";
+import { installErrorReportCapture, registerErrorReportIpc, shippedChunks } from "./error-report-capture.mjs";
 import { installCrashStats, statsUrl } from "./usage-stats.mjs";
 import { spoolTeamSnag } from "./team-snags.mjs";
 import { ERROR_SITES } from "../shared/error-report.mjs";
@@ -119,7 +119,7 @@ const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource
 );
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
-const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, devicePickTarget, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, devicePickTarget, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, normalizedHost, openOrFocus, readyRelayDeviceUrl, relayDeviceUrl, saveDeviceLinkedFile, selfHostFromStatus, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 const { handleDeviceLinkedFile, openPeerLinkedFile } = require("./linked-file-window.cjs");
 const { setDevicePermissions } = require("./device-permissions.cjs");
 const { setMainPermissions } = require("./main-permissions.cjs");
@@ -142,6 +142,8 @@ const deviceWindows = new Map();
 const deviceOrigin = (contents) => [...deviceWindows].find(([, open]) => !open.isDestroyed() && open.webContents === contents)?.[0];
 const micAllowed = () => process.platform !== "win32" || !["denied", "restricted"].includes(systemPreferences.getMediaAccessStatus("microphone"));
 const deviceLinkPages = new WeakMap();
+// Device window -> its one-time Google sign-in hand-off, for a PC that also has a trusted relay host.
+const devicePairing = new WeakMap();
 const deviceLoads = new WeakMap();
 let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
 let pendingNotificationTarget = parseNotificationTargetFromCommandLine(process.argv);
@@ -160,8 +162,9 @@ function deliverNotificationTarget(win, target = pendingNotificationTarget) {
 }
 let mainWindow = null;
 const ERROR_REPORT_DSN = verifyProbe ? null : errorReportDsn(() => require("./error-report-config.json"));
-const errorReports = createErrorReports({ userData: app.getPath("userData"), dsn: ERROR_REPORT_DSN, build: require("../package.json").version, platform: process.platform, arch: process.arch });
-registerErrorReportIpc(ipcMain, errorReports, () => mainWindow?.webContents, () => app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin);
+const rendererChunks = app.isPackaged ? shippedChunks(path.join(process.resourcesPath, "ui")) : new Set();
+const errorReports = createErrorReports({ userData: app.getPath("userData"), dsn: ERROR_REPORT_DSN, build: require("../package.json").version, platform: process.platform, arch: process.arch, chunks: rendererChunks });
+registerErrorReportIpc(ipcMain, errorReports, () => mainWindow?.webContents, () => app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin, { chunks: rendererChunks });
 installErrorReportCapture(app, errorReports, () => mainWindow?.webContents);
 const STATS_URL = verifyProbe ? "" : statsUrl(() => require("./error-report-config.json"));
 const crashStats = installCrashStats(app, () => mainWindow?.webContents, async (events) => {
@@ -1245,8 +1248,9 @@ async function openDeviceLinkedFile(devices, target, name) {
   }
 }
 
-async function openDeviceWindow(rawHost, rawName) {
-  const relayUrl = relayDeviceUrl(rawHost, GOOGLE_CLIENT?.teamRelay);
+async function openDeviceWindow(rawHost, rawName, relayHost) {
+  const base = GOOGLE_CLIENT?.teamRelay;
+  const relayUrl = relayDeviceUrl(rawHost, base);
   if (relayUrl) {
     await shell.openExternal(relayUrl);
     return true;
@@ -1254,6 +1258,14 @@ async function openDeviceWindow(rawHost, rawName) {
   const tailnet = await localTailnet();
   if (!tailnet) return false;
   const url = deviceWindowUrl(rawHost, tailnet);
+  // No cookie for this PC means this app never pasted its link, so Home would answer 401. A ready relay on
+  // this Google account opens in the browser before any window; anything else opens the window as before.
+  const unpaired = !deviceWindows.has(url.origin) && Boolean(relayDeviceUrl(relayHost, base))
+    && !(await session.fromPartition(DEVICE_WINDOW_PARTITION).cookies.get({ url: url.origin })).length;
+  if (unpaired) {
+    const ready = await readyRelayDeviceUrl(relayHost, base);
+    if (ready && await shell.openExternal(ready).then(() => true, () => false)) return true;
+  }
   openOrFocus(deviceWindows, url.origin, () => {
     const title = deviceWindowTitle(rawName, url.hostname);
     const name = typeof rawName === "string" && rawName.trim() ? rawName.trim().slice(0, 64) : url.hostname;
@@ -1271,7 +1283,7 @@ async function openDeviceWindow(rawHost, rawName) {
       },
       ...verifyProbe?.windowOptions(),
     });
-    deviceLinkPages.set(win, deviceLinkPage({
+    const linkPage = deviceLinkPage({
       host: url.host,
       title,
       heading: title,
@@ -1279,7 +1291,20 @@ async function openDeviceWindow(rawHost, rawName) {
       placeholder: `https://${url.host}/remote?key=...`,
       submit: nativeText("packaged.deviceLinkSubmit"),
       invalid: nativeText("packaged.deviceLinkInvalid"),
-    }));
+    });
+    deviceLinkPages.set(win, linkPage);
+    // A login cookie Home no longer takes also answers 401: that window hands off the same way.
+    if (!unpaired && relayDeviceUrl(relayHost, base)) {
+      let pairing = false;
+      devicePairing.set(win, async () => {
+        if (pairing) return;
+        pairing = true;
+        const ready = await readyRelayDeviceUrl(relayHost, base);
+        if (ready && await shell.openExternal(ready).then(() => true, () => false)) return void (win.isDestroyed() || win.close());
+        devicePairing.delete(win);
+        if (!win.isDestroyed() && win.webContents.getURL() !== linkPage) void win.loadURL(linkPage);
+      });
+    }
     const devices = win.webContents.session;
     const linkedFile = (target) => handleDeviceLinkedFile(target, url.origin, { createWindow: (options) => new BrowserWindow(verifyProbe ? verifyProbe.windowOptions(options) : options), webContents: win.webContents, openFile: (href, name) => openDeviceLinkedFile(devices, href, name), log: slog });
     setDevicePermissions(devices, { origin: deviceOrigin, micAllowed });
@@ -1290,7 +1315,10 @@ async function openDeviceWindow(rawHost, rawName) {
       if (!target || !sameDesktopViewerOrigin(href, origin)) return;
       if (statusCode === 403) return deviceLoads.get(target)?.refused(href);
       // Not a data: check: a retry from the unreachable page answers 401 before it commits.
-      if (target.webContents.getURL() !== deviceLinkPages.get(target)) void target.loadURL(deviceLinkPages.get(target));
+      if (target.webContents.getURL() === deviceLinkPages.get(target)) return;
+      const pair = devicePairing.get(target);
+      if (pair) void pair();
+      else void target.loadURL(deviceLinkPages.get(target));
     });
     win.on("page-title-updated", (event) => {
       event.preventDefault();
@@ -1921,7 +1949,7 @@ ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
 });
 
 // Another PC's Orbit opens beside this one; picking it again focuses that window.
-ipcMain.handle("device-window:open", (_event, host, name) => openDeviceWindow(host, name));
+ipcMain.handle("device-window:open", (_event, host, name, relayHost) => openDeviceWindow(host, name, relayHost));
 
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.
@@ -2038,6 +2066,7 @@ const pushGoogleSession = createGoogleSessionPush({
 const googleAccount = createGoogleAccountController({
   client: GOOGLE_CLIENT,
   openExternal: (url) => shell.openExternal(url),
+  getLocale: uiLocale,
   saveSession: async (session, idToken) => {
     if (!(await safeStorage.isAsyncEncryptionAvailable())) throw new Error("The operating-system credential store is unavailable");
     await updateSecureCredentialDocument((credentials) => ({ ...credentials, googleAccount: session }));
@@ -2050,9 +2079,18 @@ const googleAccount = createGoogleAccountController({
     });
     await pushGoogleSession(null);
   },
+  // The server saves it before it answers the turn-on, so it is current by finish.
+  relayBase: () => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"), "config.json"), "utf8")).phoneRelay?.base ?? null;
+    } catch {
+      return null;
+    }
+  },
   log: slog,
 });
-ipcMain.handle("google-account:sign-in", () => googleAccount.signIn());
+ipcMain.handle("google-account:sign-in", (_event, options) => googleAccount.signIn({ hold: options?.hold }));
+ipcMain.handle("google-account:finish", (_event, base) => googleAccount.finish(base));
 ipcMain.handle("google-account:cancel", () => googleAccount.cancel());
 ipcMain.handle("google-account:sign-out", () => googleAccount.signOut());
 

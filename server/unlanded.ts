@@ -19,7 +19,7 @@ const PR_REF = /\bPR\s*#?(\d{1,6})\b/gi;
 const BRANCH = / branch=(\S+)/;
 const SHA = / sha=([0-9a-f]{7,40})/;
 const NOT_PR_BRANCH = new Set(["none", "HEAD", "main", "master"]);
-const NOT_FOUND = /no pull requests found|Could not resolve to a PullRequest|HTTP 404/i;
+export const NOT_FOUND = /no pull requests found|Could not resolve to a PullRequest|HTTP 404/i;
 
 const viewSchema = z.object({
   number: z.number(), title: z.string(), url: z.string(), state: z.enum(["OPEN", "MERGED", "CLOSED"]),

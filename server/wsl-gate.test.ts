@@ -120,7 +120,7 @@ describe("snapshot() under the gate", () => {
     const snapshot = await inst.snapshot();
     expect(execCalls).toEqual(["gate-test-cli", "wsl gate-test-cli", "wsl /home/u/.local/bin/gate-test-cli"]);
     expect(wslResolveCli).toHaveBeenCalledTimes(1);
-    expect(snapshot).toEqual({ state: "unavailable", reason: "`gate-test-cli` CLI not found" });
+    expect(snapshot).toEqual({ state: "unavailable", reason: "`gate-test-cli` CLI not found", cliMissing: true });
   });
 
   it("probes WSL on an explicit rescan even while WSL is down", async () => {
@@ -162,7 +162,7 @@ describe("snapshot() under the gate", () => {
       enabled: true,
       config: { cli: "native-only-cli", fullAuto: false, prewarm: false },
     });
-    expect(await instance.snapshot()).toEqual({ state: "unavailable", reason: "`native-only-cli` CLI not found" });
+    expect(await instance.snapshot()).toEqual({ state: "unavailable", reason: "`native-only-cli` CLI not found", cliMissing: true });
     expect(listRunning).not.toHaveBeenCalled();
   });
 });

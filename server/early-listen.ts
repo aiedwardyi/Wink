@@ -26,6 +26,7 @@ export const EARLY_MIME: Record<string, string> = {
   ".json": "application/json",
   ".woff2": "font/woff2",
   ".mp3": "audio/mpeg",
+  ".mp4": "video/mp4",
 };
 
 export type HarnessHandler = (req: IncomingMessage, res: ServerResponse) => unknown;

@@ -212,6 +212,12 @@
   justify-content: flex-end;
 }
 
+/* Some skins fill your own bubble with the accent, so text drawn on it takes the bubble's ink. */
+[data-orbit-message="user"] [data-orbit-message-content] :is(a, [data-fold-toggle], [data-file-row] *) {
+  color: inherit;
+  text-decoration-color: currentColor;
+}
+
 /* Rows are display:contents wrappers, so their children carry the containment.
    The newest row remembers its size too, or settling it drops to 80px for a frame and clamps the scroll. */
 [data-orbit-transcript] :is([data-settled], [data-mid], [data-run]) > * {
@@ -5705,10 +5711,6 @@ html[data-orbit-idle] [role="radiogroup"]:focus-within > [data-segmented-thumb] 
 
 html[data-orbit-idle="hidden"] .needs-you-glow::after {
   animation-play-state: paused;
-}
-
-[data-board-list] > [data-board-post]:not([data-on-screen]) .orbit-ring {
-  display: none;
 }
 
 /* A frozen ring reads as a hung turn; the elapsed timer carries it instead. */

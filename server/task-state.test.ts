@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -35,7 +36,7 @@ import {
   type TaskResumePacket,
 } from "./task-state.ts";
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket } from "./task-state-fold.ts";
-import type { TaskAsk } from "./task-asks.ts";
+import { taskAskSchema, type TaskAsk } from "./task-asks.ts";
 
 const packet = (overrides: Partial<TaskResumePacket> = {}): TaskResumePacket => ({
   v: 1,
@@ -158,6 +159,64 @@ describe("task resume packets", () => {
     const kept = [{ id: "A1", ask: "Renew the domain", status: "open" as const, until: 1_800_000_000_000, shown: 1_700_000_000_000, at: 100, changedAt: 100 }];
     expect(writeTaskResumePacket(packet({ asks: kept }), { dir }).asks).toEqual(kept);
     expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual(kept);
+  });
+
+  it("keeps a promise's kind beside the record, so an older build still reads its goal and asks", () => {
+    const promise: TaskAsk = { id: "A4", ask: "I'll check the laptop backup tomorrow.", status: "open", kind: "promise", at: 130, changedAt: 130 };
+    writeTaskResumePacket(packet({ asks: [...asks, promise] }), { dir });
+    const raw = JSON.parse(readFileSync(join(dir, "thread-1.json"), "utf8"));
+    // 24ae8a240's reader: strict asks whose kind is question or none
+    const older = z.array(taskAskSchema.extend({ kind: z.literal("question").optional() }).strict());
+    expect(older.parse(raw.asks)).toEqual([...asks, { ...promise, kind: undefined }].map((item) => JSON.parse(JSON.stringify(item))));
+    expect(raw.goal).toBe(packet().goal);
+    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual([...asks, promise]);
+    // an older build saving it again keeps the id and creation time the kind is filed under
+    writeFileSync(join(dir, "thread-1.json"), JSON.stringify({ ...raw, nextAction: "Saved by an older build" }));
+    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual([...asks, promise]);
+    writeFileSync(join(dir, "thread-1.json"), JSON.stringify({ ...raw, asks: raw.asks.map((item: TaskAsk) => item.id === "A4" ? { ...item, at: 999 } : item) }));
+    expect(readTaskResumePacket("thread-1", { dir })?.asks?.at(-1)).not.toHaveProperty("kind");
+    expect(deleteTaskResumePacket("thread-1", { dir })).toBe(true);
+    expect(existsSync(join(dir, "thread-1.promises.json"))).toBe(false);
+  });
+
+  it("keeps a promise's kind when a staged record settles", () => {
+    const promise: TaskAsk = { id: "A4", ask: "I'll check the laptop backup tomorrow.", status: "open", kind: "promise", at: 130, changedAt: 130 };
+    writeTaskResumePacket(packet({ asks: [...asks, promise] }), { dir });
+    stageTaskResumePacket(packet({ asks: [...asks, promise], nextAction: "Staged" }), { dir });
+    expect(settleTaskResumePacket("thread-1", { dir })?.asks?.at(-1)).toEqual(promise);
+  });
+
+  it("keeps a filed ask's key beside the record, so an older build still reads it and a repeat still matches", () => {
+    const filed: TaskAsk[] = [
+      { id: "A4", ask: "Could you write ready.txt?", status: "open", shown: 0, key: "a".repeat(64), at: 130, changedAt: 130 },
+      { id: "A5", ask: "I'll update the file src/Header.ts.", status: "open", kind: "promise", key: "b".repeat(64), at: 130, changedAt: 130 },
+    ];
+    expect(writeTaskResumePacket(packet({ asks: [...asks, ...filed] }), { dir }).asks).toEqual([...asks, ...filed]);
+    const raw = JSON.parse(readFileSync(join(dir, "thread-1.json"), "utf8"));
+    const older = z.array(taskAskSchema.omit({ key: true }).extend({ kind: z.literal("question").optional() }).strict());
+    expect(() => older.parse(raw.asks)).not.toThrow();
+    expect(readTaskResumePacket("thread-1", { dir })?.asks).toEqual([...asks, ...filed]);
+    stageTaskResumePacket(packet({ asks: [...asks, ...filed], nextAction: "Staged" }), { dir });
+    expect(settleTaskResumePacket("thread-1", { dir })?.asks?.slice(-2)).toEqual(filed);
+  });
+
+  it("keeps the saved record's promise and key marks until the record replacing it is on disk", () => {
+    const filed: TaskAsk = { id: "A5", ask: "I'll update the file src/Header.ts.", status: "open", kind: "promise", key: "b".repeat(64), at: 130, changedAt: 130 };
+    writeTaskResumePacket(packet({ asks: [...asks, filed] }), { dir });
+    const real = atomic.writeFileAtomic;
+    const write = vi.spyOn(atomic, "writeFileAtomic").mockImplementation((path, ...rest) => {
+      if (String(path).endsWith("thread-1.json")) throw new Error("disk full");
+      return real(path, ...rest);
+    });
+    expect(() => writeTaskResumePacket(packet({ asks }), { dir })).toThrow("disk full");
+    write.mockRestore();
+    expect(readTaskResumePacket("thread-1", { dir })?.asks?.at(-1), "a failed write").toEqual(filed);
+    stageTaskResumePacket(packet({ asks }), { dir });
+    rmSync(join(dir, "thread-1.json.staged"));
+    expect(readTaskResumePacket("thread-1", { dir })?.asks?.at(-1), "a stage that never landed").toEqual(filed);
+    writeTaskResumePacket(packet({ asks }), { dir });
+    const marks = readdirSync(dir).filter((name) => name.endsWith(".promises.json")).map((name) => readFileSync(join(dir, name), "utf8")).join("");
+    expect(marks, "the committed record's own marks only").not.toContain("A5");
   });
 
   it("loads a record saved with an ask due time and wake id, asks and plan intact", () => {

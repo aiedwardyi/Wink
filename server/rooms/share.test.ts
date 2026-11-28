@@ -18,6 +18,7 @@ import { closeInvitesDb, roomCode } from "./invites.ts";
 import { writeRoomEntry } from "./mirror.ts";
 import { createPeopleOnlyRoom, peopleOnlyRoom } from "./people-only.ts";
 import { shareGroup, shareRoute, type ShareDeps } from "./share.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const HOST = "abcdefghijklmnop.wink.test";
 
@@ -37,7 +38,7 @@ const restart = () => {
 beforeEach(() => {
   closeInvitesDb();
   closeRoomsDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   wink = store.patchBot(store.createBot().id, { name: "Wink" })!.id;
   relay = HOST;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { anyChatNeedsYou, askUserStatus, chatMovedOn, chatNeedsYou, needsYou, openQuestion, pinnedQuestion } from "./open-question";
+import { anyChatNeedsYou, askUserStatus, chatMovedOn, chatNeedsYou, needsYou, openQuestion, pinnedQuestion, questionJumpId } from "./open-question";
 import type { Message } from "@/state/store";
 
 let at = 0;
@@ -172,3 +172,55 @@ describe("the chat moving on from a question", () => {
   });
 });
 
+describe("questionJumpId", () => {
+  const by = (botId: string, message: Message): Message => ({ ...message, from: { botId, name: botId, color: "blue" } });
+  const tool = activity;
+  const wake = (id: string): Message => ({ id, role: "bot", kind: "routine.run", at: ++at, routineRun: { wake: true } as never });
+  const routine = (id: string): Message => ({ id, role: "bot", kind: "routine.run", at: ++at, routineRun: {} as never });
+  // the server stamps a card with its asking turn's last text, or nothing when that turn wrote none
+  const asked = (replyId?: string) => ask("q", replyId ? { staysOpen: true, replyId } : { staysOpen: true });
+  const jump = (messages: Message[], question: Message, hasMore = false) => questionJumpId(messages, question, pinnedQuestion(messages), hasMore);
+
+  it.each<[string, (q: Message) => Message[], string | undefined]>([
+    ["typed turn, reply then card", (q) => [typed("u0"), tool("a0"), botText("b1"), q], "b1"],
+    ["turn woken by a pane note, no text", (q) => [typed("u0"), botText("b-prev"), paneNote("n1"), tool("a1"), tool("a2"), q], undefined],
+    ["turn woken by a peer note, no text", (q) => [typed("u0"), botText("b-prev"), peer("p1"), tool("a1"), q], undefined],
+    ["turn woken by wake_me, no text", (q) => [typed("u0"), botText("b-prev"), wake("w1"), tool("a1"), q], undefined],
+    ["turn started by a routine run, no text", (q) => [typed("u0"), botText("b-prev"), routine("r1"), tool("a1"), q], undefined],
+    ["three woken turns with no text", (q) => [typed("u0"), botText("b-old"), paneNote("n1"), tool("a1"), paneNote("n2"), tool("a2"), paneNote("n3"), tool("a3"), q], undefined],
+    ["a later woken turn writes text", (q) => [typed("u0"), tool("a0"), q, paneNote("n1"), tool("a1"), botText("b-later")], undefined],
+    ["person steers mid-turn before the card", (q) => [typed("u0"), botText("b1"), { ...typed("u1"), steered: true }, tool("a1"), q], undefined],
+    ["room: ada text, max text, ada asks", (q) => [typed("u0"), by("ada", botText("ada-1")), by("max", botText("max-1")), by("ada", q)], "ada-1"],
+    ["room: max calls ada back, ada asks with no text", (q) => [typed("u0"), by("ada", botText("ada-round1")), by("max", botText("max-asks-ada")), by("ada", tool("a1")), by("ada", q)], undefined],
+  ])("lands on the asking turn's own text only: %s", (_name, shape, replyId) => {
+    const messages = shape(asked(replyId));
+    const question = messages.find((message) => message.id === "q")!;
+    expect(jump(messages, question)).toBe(replyId ?? null);
+  });
+
+  it("pages in a reply older than the loaded tail, and does nothing once no older page is left", () => {
+    const question = asked("b-unloaded");
+    expect(jump([tool("a1"), tool("a2"), question, tool("a3"), botText("b-after")], question, true)).toBe("b-unloaded");
+    expect(jump([tool("a1"), tool("a2"), question], question, false)).toBeNull();
+  });
+
+  it("does nothing for an older record with no stamped turn, even with text just before it", () => {
+    const question = ask("q1");
+    expect(jump([typed("u0"), botText("b1"), activity("a1"), question], question)).toBeNull();
+  });
+
+  it("does nothing when the stamped text is hidden", () => {
+    const question = asked("b1");
+    expect(jump([typed("u0"), { ...botText("b1"), summarized: true }, question], question)).toBeNull();
+  });
+
+  it("keeps an older question's own record as the target, only while it is shown", () => {
+    const old = ask("q1", { staysOpen: true });
+    const newest = ask("q2", { staysOpen: true });
+    const messages = [typed("u0"), botText("b1"), old, newest];
+    expect(questionJumpId(messages, old, pinnedQuestion(messages))).toBe("q1");
+    expect(questionJumpId(messages, newest, pinnedQuestion(messages))).toBeNull();
+    // edited away: the older card sits on a branch the chat no longer shows
+    expect(questionJumpId([typed("u2"), botText("b2"), newest], old, newest)).toBeNull();
+  });
+});

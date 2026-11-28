@@ -37,6 +37,7 @@ vi.mock("node:fs", async (importOriginal) => {
 // The test setup already loads these modules, so re-import them with the mocked fs.
 vi.resetModules();
 const { DATA_DIR } = await import("./config.ts");
+const { removeTestData } = await import("./testing/test-home.ts");
 const { closeMessageDb } = await import("./message-db.ts");
 const { Store } = await import("./store.ts");
 const { BotTrash, trashedWorkspaceDir } = await import("./bot-trash.ts");
@@ -48,7 +49,7 @@ const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-
 describe("Store file guards", () => {
   let project: string;
   beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     project = mkdtempSync(join(tmpdir(), "omb-linked-project-"));
     mkdirSync(join(project, "src"));
     writeFileSync(join(project, "src", "main.ts"), "export const answer = 42;");
