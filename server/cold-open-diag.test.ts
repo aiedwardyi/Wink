@@ -227,7 +227,8 @@ describe("receiveChatSwitch", () => {
   it("logs a [dead-taps] line", async () => {
     const log = vi.fn();
     const dead = {
-      kind: "dead-taps", taps: 3, hit: "div[phoneDrawerScrim]", path: ["div[phoneDrawerScrim] {z30}"], target: "textarea[orbitComposer]", onTarget: false,
+      kind: "dead-taps", taps: 3, hit: "div[phoneDrawerScrim]", path: ["div[phoneDrawerScrim] {z30}", "div"], target: "div[phoneDrawerScrim]",
+      targetPath: ["div[phoneDrawerScrim] {z30}", "div"], onTarget: true,
       prevented: [], active: "body", stage: "none", rider: "none", idle: "", held: [], back: 2, viewport: "390x844+0 390x844",
       build: "/assets/index-x.js", sinceSwitch: 1200, focused: true, visibility: "visible", userAgent: "Mozilla/5.0 SamsungBrowser/27.0",
     };

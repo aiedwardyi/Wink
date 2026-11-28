@@ -156,6 +156,7 @@ const deadTapsSchema = z
     hit: z.string().max(120),
     path: z.array(z.string().max(120)).max(10),
     target: z.string().max(120),
+    targetPath: z.array(z.string().max(120)).max(10),
     onTarget: z.boolean(),
     prevented: z.array(z.string().max(16)).max(4),
     active: z.string().max(120),
