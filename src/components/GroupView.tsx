@@ -108,7 +108,7 @@ import {
   tailWindowStart,
 } from "@/lib/transcript-window";
 import { useReplyDraft } from "@/lib/drafts";
-import { useReplyFocus } from "@/lib/reply-focus";
+import { useReplyFocus, useReplyTargetInView } from "@/lib/reply-focus";
 
 /** One activity row in a room: the 1:1 rows, plus the room's folder fix and a still comm avatar. */
 export function RoomToolChip({
@@ -1000,6 +1000,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
     group.messages,
   );
   const selectReply = useReplyFocus(pickReply);
+  useReplyTargetInView(scrollRef, replyTo?.id);
   // Profile patches sync the pin to other devices.
   const togglePin = (message: Message) => {
     if (group.hosted) return void setHostNotice(group.id, group.notice?.entryId === message.roomEntryId ? null : message.roomEntryId!).catch(() => {});

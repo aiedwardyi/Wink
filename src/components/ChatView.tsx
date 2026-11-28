@@ -118,7 +118,7 @@ import {
 } from "@/lib/transcript-window";
 import { timelineEvents } from "@/lib/taskTimeline";
 import { useReplyDraft } from "@/lib/drafts";
-import { useReplyFocus } from "@/lib/reply-focus";
+import { useReplyFocus, useReplyTargetInView } from "@/lib/reply-focus";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { usageAccount } from "@/lib/accounts";
 import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
@@ -1037,6 +1037,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     bot.messages,
   );
   const selectReply = useReplyFocus(pickReply);
+  useReplyTargetInView(scrollRef, replyTo?.id);
   // Profile patches sync the pin to other devices.
   const togglePin = (message: Message) => {
     dispatch({
