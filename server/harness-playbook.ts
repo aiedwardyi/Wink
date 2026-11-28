@@ -75,6 +75,8 @@ function readCardFile(path: string): string | undefined {
 
 // Loose on purpose: a build card held by mistake costs one line under ## Undo first.
 const FIX_CARD = /\b(?:fix(?:e[sd]|ing)?|bugs?|broke|broken|regression|regressed)\b/i;
+// A review says read-only in its title or opens its Purpose with it; a fix card may still name a read-only thing later on.
+const REVIEW_ONLY = /\b(?:read|review)[- ]only\b/i;
 const UNDONE = /\brevert\s+(?:PR\s*#?\d+|#\d+|[0-9a-f]{7,40})\b|\bno earlier change caused this \(searched: [^)\s][^)]*\)|\bnew code: ["“][^"”]+["”] \([^)\s][^)]*\)/i;
 
 function cardSection(lines: string[], heading: string): string {
@@ -93,7 +95,9 @@ async function cardHold(command: string, cwd: string | undefined, readCard: (pat
   if (card === undefined) return undefined;
   const lines = card.split(/\r?\n/);
   if (!cardSection(lines, "Already built")) return `Held: ${path} has no prior-work search. Fill ## Already built: search built.md, the status board and earlier cards for this feature; write 'none found (searched: <terms>)' if empty. Then send the spawn again.`;
-  if (FIX_CARD.test(cardSection(lines, "Purpose")) && !UNDONE.test(cardSection(lines, "Undo first"))) return `Held: ${path} is a fix card that names no change to undo. Fill ## Undo first: 'revert <sha or PR>' for the change that caused it, else 'no earlier change caused this (searched: <terms>)', or 'new code: "<user's words>" (<date>)' when the user asked for new code. Then send the spawn again.`;
+  const purpose = cardSection(lines, "Purpose");
+  const review = REVIEW_ONLY.test(lines.find((line) => /^#\s/.test(line)) ?? "") || REVIEW_ONLY.exec(purpose)?.index === 0;
+  if (!review && FIX_CARD.test(purpose) && !UNDONE.test(cardSection(lines, "Undo first"))) return `Held: ${path} is a fix card that names no change to undo. Fill ## Undo first: 'revert <sha or PR>' for the change that caused it, else 'no earlier change caused this (searched: <terms>)', or 'new code: "<user's words>" (<date>)' when the user asked for new code. Then send the spawn again.`;
   return lookFirst?.(path!, card);
 }
 
