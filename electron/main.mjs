@@ -57,7 +57,7 @@ import { pollServerIdentity } from "./server-boot-probe.mjs";
 import { createServerRevival } from "./server-revival.mjs";
 import { brandForRenderer, brandWindowOptions, holdBrandTitle, readBrandOverride } from "./brand-override.mjs";
 import { crashReportsEnv, createErrorReports, errorReportDsn } from "./error-reports.mjs";
-import { installErrorReportCapture, registerErrorReportIpc } from "./error-report-capture.mjs";
+import { installErrorReportCapture, registerErrorReportIpc, shippedChunks } from "./error-report-capture.mjs";
 import { installCrashStats, statsUrl } from "./usage-stats.mjs";
 import { spoolTeamSnag } from "./team-snags.mjs";
 import { ERROR_SITES } from "../shared/error-report.mjs";
@@ -162,8 +162,9 @@ function deliverNotificationTarget(win, target = pendingNotificationTarget) {
 }
 let mainWindow = null;
 const ERROR_REPORT_DSN = verifyProbe ? null : errorReportDsn(() => require("./error-report-config.json"));
-const errorReports = createErrorReports({ userData: app.getPath("userData"), dsn: ERROR_REPORT_DSN, build: require("../package.json").version, platform: process.platform, arch: process.arch });
-registerErrorReportIpc(ipcMain, errorReports, () => mainWindow?.webContents, () => app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin);
+const rendererChunks = app.isPackaged ? shippedChunks(path.join(process.resourcesPath, "ui")) : new Set();
+const errorReports = createErrorReports({ userData: app.getPath("userData"), dsn: ERROR_REPORT_DSN, build: require("../package.json").version, platform: process.platform, arch: process.arch, chunks: rendererChunks });
+registerErrorReportIpc(ipcMain, errorReports, () => mainWindow?.webContents, () => app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin, { chunks: rendererChunks });
 installErrorReportCapture(app, errorReports, () => mainWindow?.webContents);
 const STATS_URL = verifyProbe ? "" : statsUrl(() => require("./error-report-config.json"));
 const crashStats = installCrashStats(app, () => mainWindow?.webContents, async (events) => {

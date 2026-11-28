@@ -143,8 +143,12 @@ export function readThread(threadId: string, legacyFile: string): ThreadRows & {
 
 /** The head Store.thread() would pick without loading the thread, or undefined when it has no rows here; `kept`, while that row exists, stands in for the newest row when no head is stored. */
 export function storedHead(threadId: string, kept?: string | null): string | null | undefined {
+  return storedHeadOn(db(), threadId, kept);
+}
+
+function storedHeadOn(handle: DatabaseSync, threadId: string, kept?: string | null): string | null | undefined {
   // SAFETY: Each subquery selects one TEXT column, or NULL when it finds no row.
-  const row = db().prepare(
+  const row = handle.prepare(
     "SELECT (SELECT active_leaf_id FROM thread_state WHERE thread_id = ?1) AS leaf, " +
       "(SELECT id FROM messages WHERE thread_id = ?1 AND id = ?2) AS kept, " +
       "(SELECT id FROM messages WHERE thread_id = ?1 ORDER BY rowid DESC LIMIT 1) AS last",
@@ -401,9 +405,13 @@ export function readMessage(threadId: string, id: string): Message | undefined {
 
 /** The active path newest first, one row at a time, or null when there are no stored rows; `kept` as storedHead takes it. */
 export function activePathBack(threadId: string, kept?: string | null): Iterable<Message> | null {
-  const leaf = storedHead(threadId, kept);
+  return activePathBackOn(db(), threadId, kept);
+}
+
+/** activePathBack on another handle: boot-reads.ts walks chat tails on its worker's own connection. */
+export function activePathBackOn(database: DatabaseSync, threadId: string, kept?: string | null): Iterable<Message> | null {
+  const leaf = storedHeadOn(database, threadId, kept);
   if (!leaf) return null;
-  const database = db();
   const row = database.prepare("SELECT rowid AS position, json FROM messages WHERE thread_id = ? AND id = ?");
   return (function* () {
     const seen = new Set<string>();

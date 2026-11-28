@@ -8,8 +8,6 @@ export interface LiveTurn {
   docFix?: string;
   /** A typed user turn with the terminal mounted: a big plan saved in it gets the helper hint. */
   helperHint?: boolean;
-  /** The user typed it: not a peer ask, routine, webhook, wake or card continuation. */
-  typed?: boolean;
   /** The per-turn rule opened import_memory saving when it was dispatched. */
   importMemory?: boolean;
 }

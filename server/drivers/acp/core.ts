@@ -33,6 +33,7 @@ import { inputDigest } from "../../repeat-detector.ts";
 import { guardInput } from "../../auto-approve.ts";
 import { startTurnTimer } from "../../turn-timing.ts";
 import { exhaustedWindow, grokRateLimitWindows, isConfirmedNonUsage, usageLimitFromError } from "../rate-limits.ts";
+import { billingThrottle } from "./billing-throttle.ts";
 
 const LOCAL_HOST_KEY_ENVS = [
   ...new Set(LOCAL_HOSTS.map((host) => host.apiKeyEnv).filter((key): key is string => Boolean(key))),
@@ -447,6 +448,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const active = new Map<string, Turn>();
       const systemHeld = systemLedger(false, instanceId);
       const billingStops = new Set<() => void>();
+      const billing = billingThrottle();
       const pool = support.warmPool ?? sharedWarmPool;
       const incarnation = input.incarnation ?? newId();
       const keyFor = (threadId: string) => ({ engine: DRIVER_KIND, instanceId, threadId });
@@ -1078,12 +1080,13 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               stopReason: canceledBeforePrompt ? "cancelled" : stopReason, cost: null,
               ...(state.promptAccepted ? { promptAccepted: true } : {}), ...promptReport });
           };
-          if (readBilling && support.billingMethod) {
+          const claim = readBilling && support.billingMethod ? billing.take(`${captured.generation}:${captured.identity}`) : null;
+          if (claim && support.billingMethod) {
             billingStops.add(stop);
             void request(support.billingMethod, {}, INIT_TIMEOUT).then((result) => {
               const windows = grokRateLimitWindows(result);
               if (windows.length > 0) emit({ ...base(threadId, turnId), type: "account.rate-limits.updated", windows });
-            }).catch(() => {}).then(finish);
+            }).catch(() => claim.release()).then(finish);
           } else finish();
         };
 

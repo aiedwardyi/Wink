@@ -93,7 +93,6 @@ import * as composio from "./composio.ts";
 import { isUtilityShutdownMessage } from "./utility-parent.ts";
 import { chiefOfStaffSystemPrompt, peerAgentsSystemPrompt } from "./chief-of-staff.ts";
 import { openMausStatusSystemPrompt } from "./openmaus-status-capsule.ts";
-import { ownerOwnTurn, ownerTypedTurn, type OwnerTurnFacts } from "./owner-turn.ts";
 import {
   containerComputerAction,
   containerComputerExists,
@@ -214,7 +213,7 @@ import { replyActivity } from "./reply-activity.ts";
 import { createQuietEnd } from "./quiet-end.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
-import { CommsCallers, type CommsCaller } from "./comms-caller.ts";
+import { CommsCallers } from "./comms-caller.ts";
 import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
@@ -334,7 +333,7 @@ import { recoverHandedMail } from "./mail-index.ts";
 import { bootReads, skipBootReads, startBootReads } from "./boot-reads.ts";
 import { createMailboxReceipts } from "./mailbox-receipts.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
-import { bootPaneWakes, isWakeNote, paneWakeEnabled, PANE_WAKE_PROMPT, PaneWakeScheduler } from "./pane-wake.ts";
+import { isWakeNote, paneWakeChats, paneWakeEnabled, PANE_WAKE_PROMPT, PaneWakeScheduler } from "./pane-wake.ts";
 import { KEEP_GOING_USAGE_FRESH_MS, KeepGoing } from "./keep-going.ts";
 import { LimitWaits } from "./limit-wait.ts";
 import {
@@ -734,7 +733,7 @@ let terminalBridgeAccess =
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
 
-function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false, handOff = false, importMemory = false, ownerFiles = false) {
+function agentsIntegration(botId: string, threadId: string, depth: number, searchOwnerChats = false, readOnly = false, handOff = false, importMemory = false) {
   return {
     command: process.execPath,
     args: [agentsProxyPath],
@@ -743,7 +742,7 @@ function agentsIntegration(botId: string, threadId: string, depth: number, searc
       OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
       OMB_BOT_ID: botId,
       OMB_THREAD_ID: threadId,
-      OMB_COMMS_TOKEN: commsCallers.token(botId, threadId, ownerFiles),
+      OMB_COMMS_TOKEN: commsCallers.token(botId, threadId),
       OMB_TURN_DEPTH: String(depth),
       OMB_TEAM_REPORTS: teamReports.prompt() ? "1" : "0",
       ...(searchOwnerChats ? { OMB_OWNER_CHATS: "1" } : {}),
@@ -5446,7 +5445,7 @@ function firstTurnLaunch(bot: BotRecord, instance: ProviderInstance): NonNullabl
     const cua = readCuaConnection();
     if (cua) integrations.localComputer = cua;
   }
-  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTool(store.activePathBack(bot.threadId), 1), ownerFileStart(bot.id, bot.threadId, 0, true)) : undefined;
+  const agents = instance.adapter.capabilities.agentsMcp === true ? agentsIntegration(bot.id, bot.threadId, 0, false, false, false, importMemoryTool(store.activePathBack(bot.threadId), 1)) : undefined;
   if (agents) integrations.agents = agents;
   const cwd = task.cwd !== undefined
     ? task.cwd
@@ -6368,7 +6367,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
       if (instance.adapter.capabilities.agentsMcp === true && opts?.webReader !== true) {
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory, ownerFileStart(bot.id, threadId, commsDepth, turnStartedByUser(opts)));
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, false, readOnly, false, importMemory);
       }
       const canMessage = !readOnly && Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
@@ -6420,7 +6419,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
-      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text), helperHint: turnStartedByUser(opts) && Boolean(integrations.terminal), typed: turnStartedByUser(opts), importMemory: importOpen });
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text), helperHint: turnStartedByUser(opts) && Boolean(integrations.terminal), importMemory: importOpen });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -8416,23 +8415,6 @@ function guestRoomTurn(botId: string, threadId: string) {
   const hosted = store.groupByThread(threadId)?.hosted;
   return readOnlyRoomTurn(botId, threadId) || joinedGuestThreads.has(threadId) || Boolean(hosted && teammateAskTurn(hosted.roomId, threadId, botId));
 }
-function ownerFileFacts(): OwnerTurnFacts {
-  return {
-    current: (id) => turnRegistry.current(id),
-    ownerChats: (id) => {
-      const bot = store.bot(id);
-      return bot ? ownerChats(bot, notOwnerChats()) : [];
-    },
-    roomTurn: (id, thread) => Boolean(store.groupByThread(thread)) || joinedRoomThreads.has(thread) || guestRoomTurn(id, thread),
-  };
-}
-function ownerFileTurn(caller: CommsCaller | undefined, botId: string, threadId: string) {
-  return ownerOwnTurn(ownerFileFacts(), caller, botId, threadId);
-}
-/** Whether a turn being dispatched gets the owner token its tools need for files outside the bot's folders. */
-function ownerFileStart(botId: string, threadId: string, depth: number, typed: boolean) {
-  return ownerTypedTurn(ownerFileFacts(), { botId, owner: depth ? "peer" : "user", depth, typed }, botId, threadId);
-}
 const boardRoutes = createBoardRoutes({
   board,
   caller: (header) => commsCallers.resolve(header),
@@ -8445,7 +8427,6 @@ const boardRoutes = createBoardRoutes({
 });
 const internalRoutes = createInternalRoutes({
   readOnlyTurn: readOnlyRoomTurn,
-  ownerTurn: ownerFileTurn,
   planHint: { room: sharedTurn(store, joinedRoomThreads), workerReady: workerEngineSignedIn, livePanes: botLivePanes },
   answeredLine: (threadId) => roomTurnInstruction.get(threadId),
   turnText: (botId, threadId) => askTexts.last(botId, threadId),
@@ -8775,7 +8756,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           caller: (header) => commsCallers.resolve(header),
           ownerChat: ({ botId, threadId }) => { const bot = store.bot(botId); return Boolean(bot && ownerChats(bot, notOwnerChats()).includes(threadId)); },
           messages: (threadId) => store.activePath(threadId),
-          open: (caller) => ownerFileTurn(caller, caller.botId, caller.threadId) && turnRegistry.current(caller.threadId)?.importMemory === true,
+          // the chat's one token outlives its turns: the turn running now must be the one the per-turn rule opened
+          open: ({ botId, threadId }) => { const turn = turnRegistry.current(threadId); return turn?.botId === botId && turn.importMemory === true; },
         });
         for (const bot of store.bots) void memoryLookup.refresh(bot.id);
         return;
@@ -10190,8 +10172,8 @@ startTeamReportOwner({ dir: join(DATA_DIR, "team-report-inbox"), base: () => pho
   ...reportOwnerPost(store, profileSyncSettings.deviceId, (botId, threadId) => paneWake.noteArrived(botId, threadId)), warn: (line) => console.warn(line) });
 // Wake timers die with the process; re-arm teachers whose stored notes are
 // undelivered. Untracked legacy tasks wait for the next send, as before.
-startupTiming.measure("paneWake", () => {
-  for (const { botId, threadId } of bootPaneWakes(store, profileSyncSettings.deviceId)) paneWake.noteArrived(botId, threadId);
+void bootReads().then((rows) => {
+  for (const { botId, threadId } of rows.paneWakes) paneWake.noteArrived(botId, threadId);
 });
 // Saved probes steer automatic picks until the deferred refresh lands.
 rememberAutomaticAvailability(registry.describeSaved());
@@ -10217,6 +10199,7 @@ startupTiming.afterPaint("bootReads", () => startBootReads({
   dataDir: DATA_DIR, now: Date.now(), askThreads: [...quickAskThreads(store).keys()], cutoverAt: migrationCutoverAt(DATA_DIR),
   notices: { migration: `error: ${CONFLICT_NOTICE}`, conflict: [CONFLICT_NOTICE, CONFLICT_NOTICE_V2].map((notice) => `error: ${notice}`) },
   reportThreads: store.bots.map((bot) => bot.threadId),
+  paneWakes: { chats: paneWakeChats(store), deviceId: profileSyncSettings.deviceId },
 }));
 startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("roomFixes", async () => roomFixes?.released(process.env.OMB_APP_VERSION ?? ""));
