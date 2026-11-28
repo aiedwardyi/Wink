@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,7 +43,7 @@ for (const shell of ["powershell.exe", "pwsh.exe"]) {
         const harness = `class Environment { static [string] GetEnvironmentVariable([string] $name, [string] $target) { return $env:WINK_TEST_PATH } }\n$env:Path=${quote(`${dir};${powershell}`)}\n& {\n${script}\n}\nWrite-Output 'parent-alive'`;
         const result = spawnSync(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(harness, "utf16le").toString("base64")], {
           encoding: "utf8", windowsHide: true, timeout: 30000,
-          env: { ...process.env, ...(claude ? { USERPROFILE: home, HOME: home } : {}), WINK_TEST_PATH: `${dir};${bin};${powershell}` },
+          env: { ...process.env, ...(claude ? { USERPROFILE: home, HOME: home } : {}), WINK_TEST_PATH: `${dir};${bin};${powershell}`, WINK_INSTALL_FAIL_MARKER: failMarker },
         });
         assert.ifError(result.error);
         const calls = (() => { try { return readFileSync(log, "utf8").trim().split(/\r?\n/); } catch { return []; } })();
@@ -61,5 +62,34 @@ for (const shell of ["powershell.exe", "pwsh.exe"]) {
         if (scenario === "irm failure") assert.ok(result.stderr, "PowerShell error stays visible");
       } finally { rmSync(dir, { recursive: true, force: true }); }
     });
+  }
+}
+
+for (const shell of ["powershell.exe", "pwsh.exe"]) {
+  for (const name of ["ONeil", "O'Neil", "O\u2019Neil"]) {
+    for (const outcome of ["success", "failure"]) {
+      test(`${shell}: ${outcome} with profile ${name}`, { skip: process.platform !== "win32" }, async () => {
+        const dir = mkdtempSync(join(tmpdir(), "wink-engine-install-"));
+        try {
+          const failMarker = join(dir, name, "wink-install", "codex+attempt.failed");
+          mkdirSync(join(dir, name, "wink-install"), { recursive: true });
+          const command = outcome === "success" ? "Write-Output 'stub-install-ran'" : "Write-Output 'stub-install-ran'; Invoke-Expression 'exit 7'";
+          let launched;
+          const run = (executable, args, options) => {
+            launched = { args, options };
+            const child = new EventEmitter();
+            queueMicrotask(() => child.emit("spawn"));
+            return child;
+          };
+          assert.equal(await terminal.openInstallTerminal({ command, driverKind: "codex", failMarker }, "win32", run), true);
+          const result = spawnSync(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", launched.args.at(-1)], {
+            encoding: "utf8", windowsHide: true, timeout: 30000, env: launched.options.env ?? process.env,
+          });
+          assert.ifError(result.error);
+          assert.match(result.stdout, /stub-install-ran/, `${result.stdout}\n${result.stderr}`);
+          assert.equal(existsSync(failMarker), outcome === "failure", "failure marker");
+        } finally { rmSync(dir, { recursive: true, force: true }); }
+      });
+    }
   }
 }

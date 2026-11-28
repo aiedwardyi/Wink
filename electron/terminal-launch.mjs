@@ -114,6 +114,8 @@ export async function openSignInTerminal({ command, driverKind }, platform = pro
   return false;
 }
 
+const FAIL_MARKER_ENV = "WINK_INSTALL_FAIL_MARKER";
+
 export function buildInstallScript({ command, needsNode, signInCommand, driverKind, failMarker }, platform) {
   const signIn = signInCommand && !/\bYOUR_[A-Z0-9_]+\b/.test(signInCommand) ? signInCommand : null;
   const agy = driverKind === "antigravityAgent";
@@ -123,8 +125,9 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
       : driverKind === "claudeAgent" ? "$env:Path=(Join-Path $HOME '.local/bin')+';'+$env:Path; " : "";
     // The Codex installer otherwise ends on a "Start Codex now?" prompt the sign-in step would wait behind.
     const installEnv = driverKind === "codex" ? "$env:CODEX_NON_INTERACTIVE='1'; " : "";
-    // Wink's install probe reads this file to stop saying "Finish in the window".
-    const mark = failMarker ? ` try { Set-Content -LiteralPath '${failMarker.replaceAll("'", "''")}' -Value failed } catch {};` : "";
+    // Wink's install probe reads this file to stop saying "Finish in the window". The path arrives
+    // through the window's environment: PowerShell also reads curly apostrophes as quotes.
+    const mark = failMarker ? ` try { Set-Content -LiteralPath $env:${FAIL_MARKER_ENV} -Value failed } catch {};` : "";
     return [
       "$ErrorActionPreference='Stop'",
       `Write-Host '${installingLine(driverKind)}'`,
@@ -149,7 +152,9 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
 
 export async function openInstallTerminal(install, platform = process.platform, run = execFile) {
   if (platform === "win32") {
-    return launch("cmd.exe", ["/c", "start", "", "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-EncodedCommand", Buffer.from(buildInstallScript(install, platform), "utf16le").toString("base64")], { windowsHide: true }, run);
+    const options = { windowsHide: true };
+    if (install.failMarker) options.env = { ...process.env, [FAIL_MARKER_ENV]: install.failMarker };
+    return launch("cmd.exe", ["/c", "start", "", "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-EncodedCommand", Buffer.from(buildInstallScript(install, platform), "utf16le").toString("base64")], options, run);
   }
   if (platform === "darwin") {
     return openMacTerminal(buildInstallScript(install, platform), run);

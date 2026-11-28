@@ -260,13 +260,15 @@ describe("install terminal script", () => {
     expect(lines.at(-1)).toBe(`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedSignIn(`$env:Path=(Join-Path $HOME '.local/bin')+';'+$env:Path; ${signIn}`)}`);
   });
 
-  it("writes the failure marker on each failed step, quoting its path", () => {
-    const failMarker = "C:\\Users\\O'Neil\\AppData\\Local\\Temp\\wink-install-codex.failed";
-    const lines = terminal.buildInstallScript({ ...descriptor, failMarker }, "win32").split("\n");
-    const failures = lines.filter((line) => line.includes("return"));
+  it("writes the failure marker on each failed step, reading its path from the environment", () => {
+    const failMarker = "C:\\Users\\O\u2019Neil\\AppData\\Local\\Temp\\wink-install-codex.failed";
+    const script = terminal.buildInstallScript({ ...descriptor, failMarker }, "win32");
+    expect(script).not.toContain(failMarker);
+    expect(script).not.toContain("O\u2019Neil");
+    const failures = script.split("\n").filter((line) => line.includes("return"));
     expect(failures).toHaveLength(2);
     for (const line of failures) {
-      expect(line).toContain("try { Set-Content -LiteralPath 'C:\\Users\\O''Neil\\AppData\\Local\\Temp\\wink-install-codex.failed' -Value failed } catch {}; return }");
+      expect(line).toContain("try { Set-Content -LiteralPath $env:WINK_INSTALL_FAIL_MARKER -Value failed } catch {}; return }");
       expect(line.indexOf("Write-Host")).toBeLessThan(line.indexOf("Set-Content"));
     }
     expect(terminal.buildInstallScript({ ...descriptor, failMarker }, "darwin")).toBe(terminal.buildInstallScript(descriptor, "darwin"));
