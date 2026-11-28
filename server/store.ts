@@ -94,6 +94,8 @@ export interface OptionCardData {
   staysOpen?: true;
   /** an ask_user card: the asking turn's last text; absent when that turn wrote none */
   replyId?: string;
+  /** an ask_user card the bot closed as answered in chat: the person's message it answered */
+  answeredBy?: string;
   /** permission cards: the tool being requested, so the card can show what
    * is actually being asked and offer "always allow this tool". */
   tool?: string;

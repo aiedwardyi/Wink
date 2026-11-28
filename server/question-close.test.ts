@@ -9,7 +9,7 @@ import { askUserRequestSchema, postAskUser, type AskUserDeps } from "./ask-user.
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
 import { Store, type BotRecord } from "./store.ts";
-import { scanQuestion } from "../shared/open-question.ts";
+import { answerPrefix, scanQuestion } from "../shared/open-question.ts";
 
 function harness() {
   const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
@@ -28,8 +28,8 @@ function harness() {
     notifyQuestion,
     whenSettled: (botId, threadId, post, question) => hold.whenSettled(botId, threadId, post, question),
   };
-  const ask = (question: string, close = false, threadId = bot.threadId) => postAskUser(deps,
-    askUserRequestSchema.parse({ fromBotId: bot.id, fromThreadId: threadId, question, choices: ["Yes", "No"], close }));
+  const ask = (question: string, close = false, threadId = bot.threadId, answer?: string) => postAskUser(deps,
+    askUserRequestSchema.parse({ fromBotId: bot.id, fromThreadId: threadId, question, choices: ["Yes", "No"], close, answer }));
   return { store, bot, hold, ask, notifyQuestion, patchMessage };
 }
 
@@ -39,12 +39,40 @@ describe("close question", () => {
     h.ask("Ship it?");
     h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Use staging first." });
     expect(scanQuestion(h.store.activePath(h.bot.threadId))).not.toBeNull();
-    expect(h.ask("Ship it?", true)).toEqual({ status: 200, body: { closed: true } });
+    expect(h.ask("Ship it?", true, h.bot.threadId, "Use staging first.")).toEqual({ status: 200, body: { closed: true } });
     expect(scanQuestion(h.store.activePath(h.bot.threadId))).toBeNull();
     expect(h.patchMessage).toHaveBeenCalledWith(h.bot.threadId, expect.any(String), {
       card: expect.objectContaining({ answered: "Answered in chat" }),
     });
     expect(h.notifyQuestion).toHaveBeenCalledTimes(1);
+  });
+
+  it("records the one message holding the words a close names, never one another card holds", () => {
+    const h = harness();
+    h.ask("Ship it?");
+    const path = () => h.store.activePath(h.bot.threadId);
+    const card = path().at(-1)!;
+    const typed = h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Use  staging first." });
+    h.ask("Which region?");
+    const region = path().at(-1)!;
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Use staging", answersCard: region.id });
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: `${answerPrefix(region)}Use staging, EU` });
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Noted." });
+    expect(h.ask("Ship it?", true, h.bot.threadId, "Use staging")).toMatchObject({ body: { closed: true } });
+    expect(path().find((m) => m.id === card.id)?.card).toMatchObject({ answered: "Answered in chat", answeredBy: typed.id });
+  });
+
+  it.each([
+    ["names no words", undefined, /^answer required/],
+    ["names words only a message before the card holds", "Before the card.", /^no message/],
+  ])("refuses a close that %s and keeps the card open", (_name, answer, error) => {
+    const h = harness();
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Before the card." });
+    h.ask("Ship it?");
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Use staging first." });
+    expect(h.ask("Ship it?", true, h.bot.threadId, answer)).toEqual({ status: 400, body: { error: expect.stringMatching(error) } });
+    expect(h.patchMessage).not.toHaveBeenCalled();
+    expect(scanQuestion(h.store.activePath(h.bot.threadId))?.card?.subtitle).toBe("Ship it?");
   });
 
   it.each([[{ answered: "Yes" }, "answered"], [{ dismissed: true }, "dismissed"]] as const)("leaves a settled card unchanged: %j", (patch, settled) => {
@@ -71,7 +99,8 @@ describe("close question", () => {
     const h = harness();
     h.ask("Ship it?");
     h.ask("Which region?");
-    expect(h.ask(" Ship it? ", true)).toMatchObject({ body: { closed: true } });
+    h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Ship it." });
+    expect(h.ask(" Ship it? ", true, h.bot.threadId, "Ship it.")).toMatchObject({ body: { closed: true } });
     expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: false, settled: "answered" } });
     expect(scanQuestion(h.store.activePath(h.bot.threadId))?.card?.subtitle).toBe("Which region?");
     expect(h.patchMessage).toHaveBeenCalledTimes(1);
@@ -95,7 +124,8 @@ describe("close question", () => {
     h.ask("Ship it?", false, room.threadId);
     h.store.appendMessage(room.threadId, { role: "bot", kind: "options", from: { botId: peer.id, name: peer.name, color: peer.color },
       card: { title: "Question", subtitle: "Ship it?", options: ["Yes"], askUser: true, staysOpen: true } });
-    expect(h.ask("Ship it?", true, room.threadId)).toMatchObject({ body: { closed: true } });
+    h.store.appendMessage(room.threadId, { role: "user", kind: "text", text: "Ship it." });
+    expect(h.ask("Ship it?", true, room.threadId, "Ship it.")).toMatchObject({ body: { closed: true } });
     expect(scanQuestion(h.store.activePath(room.threadId))?.from?.botId).toBe(peer.id);
     expect(h.ask("Ship it?", true, peer.threadId)).toMatchObject({ status: 403 });
   });
@@ -126,7 +156,7 @@ describe("stale question taps", () => {
     h.ask("Which region?");
     const [older, newer] = h.store.activePath(h.bot.threadId).filter((m) => m.card?.askUser);
     h.store.appendMessage(h.bot.threadId, { role: "user", kind: "text", text: "Staging first, then prod." });
-    expect(h.ask("Ship it?", true)).toMatchObject({ body: { closed: true } });
+    expect(h.ask("Ship it?", true, h.bot.threadId, "Staging first, then prod.")).toMatchObject({ body: { closed: true } });
     const stale = await call(routes.patchCard, h.bot.id, older!.id, { answered: "Yes" });
     expect(stale).toMatchObject({ status: 409, body: { message: { id: older!.id, card: { answered: "Answered in chat" } } } });
     expect(h.store.activePath(h.bot.threadId).find((m) => m.id === older!.id)?.card?.answered).toBe("Answered in chat");
@@ -140,7 +170,8 @@ describe("stale question taps", () => {
     const routes = createGroupRoutes({ store: h.store, clientMessage: (m: unknown) => m } as unknown as Parameters<typeof createGroupRoutes>[0]);
     h.ask("Ship it?", false, room.threadId);
     const card = h.store.activePath(room.threadId).find((m) => m.card?.askUser)!;
-    expect(h.ask("Ship it?", true, room.threadId)).toMatchObject({ body: { closed: true } });
+    h.store.appendMessage(room.threadId, { role: "user", kind: "text", text: "Ship it." });
+    expect(h.ask("Ship it?", true, room.threadId, "Ship it.")).toMatchObject({ body: { closed: true } });
     expect(await call(routes.patchCard, room.id, card.id, { answered: "Yes" })).toMatchObject({ status: 409 });
     expect(await call(routes.patchCard, room.id, card.id, { dismissed: true })).toMatchObject({ status: 200 });
   });

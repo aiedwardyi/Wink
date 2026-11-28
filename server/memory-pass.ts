@@ -7,8 +7,8 @@ import type { ProviderInstance } from "./contracts.ts";
 import { AGY_TEXT_MODEL, exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
 import { isSignOut } from "./drivers/signout.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
-import { offersOption, replyTurns, validatePickBinding, type ReplyPictures } from "./pick-sources.ts";
-import { applyPicks, currentPicks, LABELED, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
+import { labeledOptions, offersOption, QUOTE_LABEL, replyTurns, validatePickBinding, type PickBinding, type ReplyPictures } from "./pick-sources.ts";
+import { applyPicks, currentPicks, KEY_MAX, LABELED, parseTimeline, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { loadProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
 import { redactRoomMemory, redactSecretsInText } from "./redact.ts";
@@ -74,13 +74,15 @@ const stateSchema = z.object({
   })).optional().catch(undefined),
   // restored from another PC: left to it once this copy syncs the bot's chats
   foreign: z.record(z.string(), z.array(z.string())).optional(),
+  // cards the bot closed as answered in chat after their reply's pass, still to be filed
+  owed: z.record(z.string(), z.array(z.string())).optional(),
 });
 
 export type NoteGenerator = ((prompt: string, signal: AbortSignal, onUsage?: UsageObserver) => Promise<string>) & { engine?: string };
 export type Fact = z.infer<typeof factsSchema>[number];
 export type Note = { line: string; replaces?: string; kind?: "decision" | "tweak"; pick?: PickChange };
-/** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images. */
-export type UserLine = Partial<ReplyPictures> & { text: string; id?: string; files?: string[]; at?: number; tap?: boolean; thread?: string };
+/** A user line, with the end of the bot's reply before it when the line is short, the pictures the bot showed before it, and the user's own attached images; typedAnswer: a card answer in the user's typed words, not a press of one of its own options; cardOnly: filed under its card in code, never sent to the note-taker. */
+export type UserLine = Partial<ReplyPictures> & { text: string; id?: string; files?: string[]; at?: number; tap?: boolean; typedAnswer?: boolean; cardOnly?: boolean; thread?: string };
 type DroppedCount = z.infer<typeof droppedSchema>;
 type Landed = z.infer<typeof landedSchema>;
 // the user's words it came from, so a restart checks it against MEMORY.md as a retry does
@@ -89,7 +91,7 @@ type HeldNote = Note & { quote?: string };
 export type DroppedNotes = DroppedCount & { lost?: DroppedCount };
 
 export interface MemoryPassDeps {
-  store: Pick<Store, "onChange" | "messagesFor" | "groupByThread" | "botByThread" | "appendMessage"> & Partial<Pick<Store, "bot">>;
+  store: Pick<Store, "onChange" | "messagesFor" | "groupByThread" | "botByThread" | "appendMessage"> & Partial<Pick<Store, "bot" | "importingSync">>;
   /** The selected account's one-shot call, if it can run. */
   generate(botId: string): NoteGenerator | null;
   /** The bot's Auto notes switch, read live. */
@@ -165,10 +167,16 @@ export function withoutBlocks(text: string): string {
     .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2[^\n]*|$)/g, "$1");
 }
 
-export function userTyping(text: string, dropSensitive = true, keepImages = false): string {
-  const typed = withoutBlocks(text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : ""));
+/** whole: a card answer, never cut for length: a card's own option keeps its quotes and blockquotes, a typed answer loses only pastes and code. */
+export function userTyping(text: string, dropSensitive = true, keepImages = false, whole?: "option" | "answer"): string {
+  const attached = text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : "");
+  const typed = whole === "option" ? attached : withoutBlocks(attached);
+  // a quote of earlier chat is screened apart from the user's own words, so a secret it carries costs only the quote
+  const own = whole === "answer" ? typed.replace(QUOTE_LABEL, "") : typed;
   // the whole message: a label and its value can sit in different paragraphs
-  if (dropSensitive && secretValue(typed)) return "";
+  if (dropSensitive && secretValue(own)) return "";
+  if (whole === "option") return redactSecretsInText(typed.trim());
+  if (whole === "answer") return redactSecretsInText(typed.replace(QUOTE_LABEL, (quote) => dropSensitive && secretValue(`${own}\n${quote}`) ? "" : quote).trim());
   const unwrapped = typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
   const kept = unwrapped
     .split(/\n\s*\n/)
@@ -430,8 +438,6 @@ const CLAUSE = /[,;.!?]+|\s(?:and|but|or)\s|\s-\s/g;
 const NEGATED = /(?:^|\s)(?:not|no|nope|nah|don't|dont|never|without|hate|dislike|except|skip|instead of|rather than|other than)(?:\s|$)/;
 const ASKING = /^(?:what|which|how|why|should|shall|would|could|can|is|are|does|did|will|maybe)$/;
 const CHOOSING = /(?:^|\s)(?:yes|yeah|yep|yup|sure|definitely|absolutely|agreed|perfect|sounds good|do it|go ahead|go with it|that one|this one|first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th|네|넵|응|좋아|좋아요|그래|그래요)(?:\s|$)/;
-const labeledOptions = (context = "") => [...context.matchAll(/(?:^|\s)([a-h]|\d{1,2})\s*[-.):]\s+(.+?)(?=\s+(?:or\s+)?(?:[a-h]|\d{1,2})\s*[-.):]\s+|$)/gi)]
-  .map((match) => `${match[1]} - ${match[2]!.replace(/[?,;]+$/, "").trim()}`);
 
 /** The quote is in the text, a short one as whole words, so "c" never matches inside "cards". */
 export function quotes(text: string, said: string): boolean {
@@ -537,7 +543,7 @@ export function acceptFacts(facts: Fact[], userText: string | UserLine[], notes:
 // a fact keeps the quote it passed on, so a held batch rechecks that one and never a turned-away twin
 function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: string, archived = ""): HeldNote[] {
   const sources = Array.isArray(userText) ? userText : [{ text: userText }];
-  const paragraphs = sources.map(({ text }) => text).join("\n\n").split(/\n\s*\n/).filter((paragraph) => !secretValue(paragraph));
+  const paragraphs = sources.filter(({ cardOnly }) => !cardOnly).map(({ text }) => text).join("\n\n").split(/\n\s*\n/).filter((paragraph) => !secretValue(paragraph));
   const lines = notes.split("\n");
   const span = decisionSpan(lines);
   const inSection = (target: string) => {
@@ -551,6 +557,7 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
   const seen = new Set<string>();
   const decided = new Set<string>();
   const taken = new Set<string>();
+  const cardNotes = new Map<string, CardNote>();
   const accept = (fact: Fact): HeldNote | null => {
     const { kind, quote, replaces } = fact;
     const decision = kind === "decision";
@@ -569,7 +576,8 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
     const sensitive = decision || tweak || goal ? secretValue : secretLike;
     // the "Goal:" label's colon reads as a value handed over
     if (sensitive(stated) || sensitive(said)) return null;
-    const quoting = sources.filter(({ text }) => quotes(text, said));
+    // the note-taker never saw a card-only line
+    const quoting = sources.filter(({ text, cardOnly }) => !cardOnly && quotes(text, said));
     const identified = decision && fact.message_id != null ? quoting.filter(({ id }) => id === fact.message_id) : quoting;
     const own = identified.length ? identified : quoting;
     const at = own.at(-1)?.at ?? 0;
@@ -599,7 +607,6 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
       // an older Auto Notes line on this question leaves MEMORY.md for the timeline, named by the note-taker or not
       const listed = replaceable(replaces, lines, claims) && (inSection(replaces) || legacyLine(thing, [replaces], taken) === replaces) && !taken.has(replaces) ? replaces : undefined;
       const target = listed ?? legacyLine(thing, lines, taken);
-      if (target) taken.add(target);
       const over = listOf(fact.over)
         .filter((option) => option.length <= DECISION_MAX && !secretLike(option) && pickKey(option) !== pickKey(line) && optionNamed(option, said, known, own))
         .slice(0, OPTIONS_MAX);
@@ -608,15 +615,23 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
         key: thing, picked: line, over, messageId: fact.message_id, questionId: fact.question_id, picture: fact.picture,
         overPictures: fact.over_pictures == null ? undefined : listOf(fact.over_pictures),
       }, bound, before, sources.filter((other) => other !== bound && (quoting.includes(other) || offersOption(other, line))));
-      const old = target ? NOTED.exec(target) : null;
+      // a card answer is filed in code from the user's own words: a note bound to its card only names its key, the options it beat and the line it replaces
+      if (source.tap && source.id) {
+        if (binding?.messageId === source.id && binding.questionId === source.questionId && !cardNotes.has(cardLine(source))) {
+          if (target) taken.add(target);
+          decided.add(squash(said));
+          cardNotes.set(cardLine(source), { key: thing, over, binding, replaces: target });
+        }
+        return null;
+      }
+      if (target) taken.add(target);
       seen.add(id);
       live.add(pickKey(thing));
       decided.add(squash(said));
       const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: binding?.at ?? source.at ?? 0, key: thing, picked: line, said };
       if (source.id) pick.binding = binding ?? "unbound";
       if (over.length) pick.over = over;
-      if (source.tap && binding) pick.tapped = true;
-      if (target) pick.legacy = { day: old?.[2] ?? day(pick.at), line: old?.[1] ?? target.replace(/^\s*[-*+]\s+/, "") };
+      if (target) pick.legacy = legacyPick(target, pick.at);
       const note: Note = { line: named, kind: "decision", pick };
       if (target) note.replaces = target;
       return note;
@@ -636,8 +651,62 @@ function acceptQuoted(facts: Fact[], userText: string | UserLine[], notes: strin
   // decisions first, then tweaks, so a tweak can land on a pick made in the same lines
   const rank = (fact: Fact) => (fact.kind === "decision" ? 0 : fact.kind === "tweak" ? 1 : 2);
   const order = facts.map((fact, index) => ({ fact, index })).sort((a, b) => rank(a.fact) - rank(b.fact));
-  const kept = new Map(order.map(({ fact, index }) => [index, accept(fact)] as const));
-  return facts.flatMap((_, index) => kept.get(index) ?? []);
+  const kept = new Map(order.filter(({ fact }) => fact.kind === "decision").map(({ fact, index }) => [index, accept(fact)] as const));
+  // a card answer filed in code is current before the tweaks, which may qualify it
+  const cards = cardAnswers(sources, cardNotes, archived);
+  for (const { pick } of cards) for (const key of [pick?.key, pick?.kind === "pick" ? pick.noted : undefined]) if (key) live.add(pickKey(key));
+  for (const { fact, index } of order) if (fact.kind !== "decision") kept.set(index, accept(fact));
+  const picked = (decision: boolean) => facts.flatMap((fact, index) => (fact.kind === "decision") === decision ? kept.get(index) ?? [] : []);
+  return [...picked(true), ...cards, ...picked(false)];
+}
+
+// a long card question is cut in the middle: two questions that open alike differ at the end, a topic set first stays; a cut another card holds is a different question, cut at the end
+function questionKey(question: string, held: (key: string) => boolean): string {
+  const chars = [...question];
+  if (chars.length <= KEY_MAX) return question;
+  const middle = `${chars.slice(0, 27).join("").trimEnd()}...${chars.slice(-30).join("").trimStart()}`;
+  return held(middle) ? `${chars.slice(0, KEY_MAX - 3).join("").trimEnd()}...` : middle;
+}
+
+type CardNote = { key: string; over: string[]; binding: PickBinding; replaces?: string };
+// one message can answer two cards
+const cardLine = (source: UserLine) => `${source.id}\n${source.questionId}`;
+
+const legacyPick = (target: string, at: number) => {
+  const old = NOTED.exec(target);
+  return { day: old?.[2] ?? day(at), line: old?.[1] ?? target.replace(/^\s*[-*+]\s+/, "") };
+};
+
+/** Every card answer, each a pick in the user's own words under its card; the note-taker's note on it adds only a key no other question holds, the options it beat and the line it replaces. */
+function cardAnswers(sources: UserLine[], noted: Map<string, CardNote>, archived: string): HeldNote[] {
+  const entries = parseTimeline(archived).entries;
+  const keys = new Map<string, string>();
+  return sources.flatMap((source) => {
+    const question = source.question?.replace(/\s+/g, " ").trim();
+    const said = source.text.trim();
+    // the option replyTurns read off the card itself, else the user's words as typed
+    const picked = source.choice ?? said;
+    // screened on the value filed too: a letter's option was not in the typed text
+    if (!source.tap || !source.id || !question || !said || secretValue(question) || secretValue(said) || secretValue(picked)) return [];
+    const note = noted.get(cardLine(source));
+    // bound by the card's own question and options: bot words before a card with no buttons never decide it
+    const binding = note?.binding ?? validatePickBinding({ key: question, picked, over: [] }, { ...source, context: [question, ...(source.options ?? [])].join("\n") });
+    if (!binding) return [];
+    const held = (key: string) => [...keys].some(([id, other]) => id !== binding.questionId && pickKey(other) === pickKey(key))
+      || entries.some((entry) => !entry.replacedBy && !entry.kind && entry.questionId !== binding.questionId && pickKey(entry.key) === pickKey(key));
+    // a card keeps the key it is filed under, so a revised answer replaces the older one
+    const key = keys.get(binding.questionId) ?? entries.findLast((entry) => !entry.kind && entry.questionId === binding.questionId)?.key
+      ?? (note && !held(note.key) ? note.key : questionKey(question, held));
+    keys.set(binding.questionId, key);
+    const pick: Extract<PickChange, { kind: "pick" }> = { kind: "pick", at: binding.at, key, picked, said, binding, tapped: true };
+    if (note?.over.length) pick.over = note.over;
+    if (note && pickKey(note.key) !== pickKey(key)) pick.noted = note.key;
+    if (source.typedAnswer) pick.typed = true;
+    if (note?.replaces) pick.legacy = legacyPick(note.replaces, pick.at);
+    const filed: HeldNote = { line: `${key}: ${picked}`, kind: "decision", pick };
+    if (note?.replaces) filed.replaces = note.replaces;
+    return [filed];
+  });
 }
 
 function day(ms: number): string {
@@ -699,6 +768,8 @@ interface PassLog {
 
 interface Batch {
   ids: string[];
+  // owed cards it files
+  owes?: string[];
   facts: Fact[];
   source: UserLine[];
   // accepted before a restart, since asking the note-taker again can word them another way
@@ -720,12 +791,15 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   const overflowed = new Map<string, DroppedCount>();
   const lost = new Map<string, DroppedCount>();
   const foreign = new Map<string, string[]>();
+  const owedCards = new Map<string, string[]>();
   // generated but unsaved, so a busy turn or a moved revision never pays for the same batch twice
   const held = new Map<string, Batch>();
   const replays = new Map<string, Pick<Batch, "ids" | "picked" | "wrote" | "seen"> & { notes: HeldNote[] }>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const queue: Array<{ botId: string; threadId: string }> = [];
   const running = new Map<string, { botId: string; done: Promise<void>; controller: AbortController }>();
+  // a pass asked for while one runs: the running one read its rows first
+  const again = new Set<string>();
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   let warned = false;
   let disposed = false;
@@ -755,6 +829,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       const theirs = restored ? ids : state.foreign?.[threadId];
       if (theirs?.length) foreign.set(threadId, [...theirs]);
     }
+    for (const [threadId, cards] of Object.entries(state.owed ?? {})) if (cards.length) owedCards.set(threadId, cards);
     for (const [botId, record] of Object.entries(state.dropped ?? {})) lost.set(botId, record);
     for (const [botId, record] of Object.entries(state.overflow ?? {})) overflowed.set(botId, record);
     for (const [threadId, batch] of Object.entries(state.held ?? {})) {
@@ -775,6 +850,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (overflowed.size) state.overflow = Object.fromEntries(overflowed);
       if (replays.size) state.held = Object.fromEntries(replays);
       if (foreign.size) state.foreign = Object.fromEntries(foreign);
+      if (owedCards.size) state.owed = Object.fromEntries(owedCards);
       writeFileAtomic(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 });
     } catch (error) {
       console.warn(`[memory-pass] state save failed (${error instanceof Error ? error.name : "error"})`);
@@ -800,7 +876,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
 
   const enqueue = (botId: string, threadId: string) => {
     const active = running.get(threadId);
-    if (disposed || (active && !active.controller.signal.aborted) || queue.some((item) => item.threadId === threadId)) return;
+    if (disposed || queue.some((item) => item.threadId === threadId)) return;
+    if (active && !active.controller.signal.aborted) {
+      again.add(threadId);
+      return;
+    }
     clearTimeout(timers.get(threadId));
     timers.delete(threadId);
     queue.push({ botId, threadId });
@@ -826,9 +906,12 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     save();
   };
 
-  const done = (threadId: string, ids: string[]) => {
+  const done = (threadId: string, ids: string[], owes: string[] = []) => {
     held.delete(threadId);
     replays.delete(threadId);
+    const rest = (owedCards.get(threadId) ?? []).filter((id) => !owes.includes(id));
+    if (rest.length) owedCards.set(threadId, rest);
+    else owedCards.delete(threadId);
     drop(threadId, ids);
   };
 
@@ -856,7 +939,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     const owed = batch.notes?.filter((note, index) => !checked?.[index]?.length && batch.wrote?.some(({ line }) => line === note.line)) ?? [];
     if (!accepted.length && !owed.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
-      return done(threadId, batch.ids);
+      return done(threadId, batch.ids, batch.owes);
     }
     // a turn may be writing MEMORY.md and its own save chip; retry after it
     if (busy(botId, threadId)) {
@@ -877,7 +960,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     });
     if (full && !changes.length && !facts.length) {
       log({ botId, threadId, facts: facts.length, ms, result: "too-large" });
-      return done(threadId, batch.ids);
+      return done(threadId, batch.ids, batch.owes);
     }
     // before MEMORY.md drops a replaced decision line, so a failed write never loses it; a retry lands each pick once
     const landed = changes.length ? applyPicks(timeline, changes) : null;
@@ -996,7 +1079,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     const kept = [...accepted.filter((note) => (note.kind ? picked : !overflow.includes(note) || [...wrote, ...batch.wrote ?? []].some(({ line }) => line === note.line))), ...owed];
     if (!kept.length) {
       log({ botId, threadId, lines: batch.source.length, facts: 0, ms, result: "none" });
-      return done(threadId, batch.ids);
+      return done(threadId, batch.ids, batch.owes);
     }
     deps.store.appendMessage(sourceThread(threadId), {
       role: "bot",
@@ -1011,7 +1094,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       overflowed.delete(botId);
       lost.delete(botId);
     }
-    done(threadId, batch.ids);
+    done(threadId, batch.ids, batch.owes);
   };
 
   const run = async (botId: string, threadId: string, signal: AbortSignal) => {
@@ -1021,29 +1104,43 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     // read now, not at startup: the bot's sync mapping can land after a restore
     if (source && chatSyncBotId(loadProfileSyncSettings(deps.dataDir), source.id)) drop(threadId, theirs);
     const ids = [...(pending.get(threadId) ?? [])];
-    if (!ids.length) return;
+    const owes = [...(owedCards.get(threadId) ?? [])];
+    if (!ids.length && !owes.length) return;
     if (busy(botId, threadId)) return arm(botId, threadId);
     const kept = held.get(threadId);
     if (kept) {
       land(botId, threadId, kept, readMemoryFile(botId), memoryFileRaw(botId), 0);
-      if (pending.has(threadId) && !held.has(threadId)) arm(botId, threadId);
+      if ((pending.has(threadId) || owedCards.has(threadId)) && !held.has(threadId)) arm(botId, threadId);
       return;
     }
     const generate = deps.generate(botId);
     if (!generate) return;
     const messages = deps.store.messagesFor(sourceThread(threadId));
     const rows = pendingRows(messages, ids);
-    const typed = ids.flatMap((id) => {
-      const row = rows.get(id);
-      // a pasted tag cannot open or close a prompt block
-      const text = eligibleRow(row) ? userTyping(row.text).replace(CONTEXT_TAGS, " ").trim() : "";
-      return text ? [{ id, text, at: row!.actedAt ?? row!.at, tap: Boolean(row!.answersCard), files: attachedImages(row!.text ?? "") }] : [];
+    // a reply whose pass ran before the bot closed its card: filed under the card now, its notes already taken
+    const closed = new Set([...pendingRows(messages, owes).values()].flatMap(({ card }) => card?.answeredBy && !ids.includes(card.answeredBy) ? [card.answeredBy] : []));
+    for (const [id, row] of pendingRows(messages, [...closed])) rows.set(id, row);
+    const eligible = [...ids, ...closed].filter((id) => eligibleRow(rows.get(id)));
+    const replies = replyTurns(messages, eligible, join(deps.dataDir, "attachments"));
+    const typed = eligible.flatMap((id) => {
+      const row = rows.get(id)!;
+      const first = replies.get(id);
+      // one line per card the reply answers; the note-taker reads it once
+      return [first, ...(first?.also ?? [])].flatMap((reply, n) => {
+        const cardOnly = n > 0 || closed.has(id);
+        if (cardOnly && !reply?.cardId) return [];
+        // a pasted tag cannot open or close a prompt block
+        // a card answer is the user's own words after the question it quotes, whole
+        const text = userTyping(reply?.answer ?? row.text!, true, false, reply?.answer === undefined ? undefined : reply.choice === reply.answer ? "option" : "answer").replace(CONTEXT_TAGS, " ").trim();
+        const pressed = Boolean(row.answersCard) && reply?.choice !== undefined && reply.choice === reply.answer;
+        return text ? [{ id, reply, text, at: Math.max(row.actedAt ?? row.at, (reply?.edits ?? -Infinity) + 1), tap: Boolean(row.answersCard || reply?.cardId), pressed, cardOnly, files: attachedImages(row.text ?? "") }] : [];
+      });
     });
-    const replies = replyTurns(messages, typed.map(({ id }) => id), join(deps.dataDir, "attachments"));
-    const lines = typed.sort((a, b) => a.at - b.at).map(({ id, text, at, tap, files }) => {
+    const lines = typed.sort((a, b) => a.at - b.at).map(({ id, reply, text, at, tap, pressed, cardOnly, files }) => {
       const line: UserLine = { id, text, at, thread: sourceThread(threadId) };
       if (tap) line.tap = true;
-      const reply = replies.get(id);
+      if (tap && !pressed) line.typedAnswer = true;
+      if (cardOnly) line.cardOnly = true;
       if (reply) {
         line.questionId = reply.questionId;
         line.context = reply.context ? replyContext(reply.context) : undefined;
@@ -1051,14 +1148,18 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         line.pictures = reply.pictures;
         line.previousAnswerId = reply.previousAnswerId;
         line.invalidCard = reply.invalidCard;
+        line.question = reply.question;
+        line.choice = reply.choice;
         if (reply.prior) line.prior = { ...reply.prior, context: reply.prior.context ? replyContext(reply.prior.context) : undefined };
       }
       if (files.length) line.files = files;
       return line;
     });
-    if (!lines.length) return done(threadId, ids);
+    if (!lines.length) return done(threadId, ids, owes);
     const memory = readMemoryFile(botId);
     const raw = memoryFileRaw(botId);
+    const asked = lines.filter(({ cardOnly }) => !cardOnly);
+    if (!asked.length) return land(botId, threadId, { ids, owes, facts: [], source: lines }, memory, raw, 0);
     const started = now();
     const trace = startTurnTrace(() => ({ engine: generate.engine, botId, threadId, batchId: `${threadId}:${ids.join(":")}`, sourceMessageIds: ids, sourceSendIds: ids.flatMap((id) => rows.get(id)?.sendId ? [rows.get(id)!.sendId!] : []) }));
     const endPass = trace?.span("background_pass");
@@ -1066,7 +1167,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     let outcome = "helper-failed";
     let output: string;
     try {
-      output = await generate(notePrompt(memory.text, lines, pickKeysList(readMemoryTopic(botId, PICKS_FILE))), signal, trace ? (usage, id) => {
+      output = await generate(notePrompt(memory.text, asked, pickKeysList(readMemoryTopic(botId, PICKS_FILE))), signal, trace ? (usage, id) => {
         request++;
         trace.request(id ?? `helper:${request}`, usage);
       } : undefined);
@@ -1087,7 +1188,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     if (disposed || signal.aborted || !deps.enabled(botId)) return;
     const facts = parseFacts(output);
     if (facts === null) return;
-    land(botId, threadId, { ids, facts, source: lines }, memory, raw, now() - started);
+    land(botId, threadId, { ids, owes, facts, source: lines }, memory, raw, now() - started);
   };
 
   const pump = () => {
@@ -1113,6 +1214,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
         .finally(() => {
           clearTimeout(timer);
           running.delete(threadId);
+          if (again.delete(threadId)) enqueue(botId, threadId);
           pump();
         });
     }
@@ -1121,17 +1223,28 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   const unsubscribe = deps.store.onChange((change: StoreChange) => {
     if (disposed) return;
     if (change.type === "bot.deleted" || (change.type === "bot" && !deps.enabled(change.botId))) return stop();
+    const targetsOf = (threadId: string) => {
+      const group = deps.store.groupByThread(threadId);
+      const bot = group ? undefined : deps.store.botByThread(threadId);
+      const targets = group ? (group.memberIds ?? []).map((id) => deps.store.bot?.(id)).filter((bot) => bot !== undefined && bot !== null) : bot ? [bot] : [];
+      return targets.filter((target) => deps.enabled(target.id)).map((target) => ({ botId: target.id, key: group ? roomKey(target.id, threadId) : threadId }));
+    };
+    // a card the bot closed as answered in chat: its reply's pass may be over, so the next one files it under the card
+    if (change.type === "message.patch" && change.message.card?.askUser && change.message.card.answeredBy && !deps.store.importingSync) {
+      for (const { botId, key } of targetsOf(change.threadId)) {
+        const cards = owedCards.get(key) ?? [];
+        if (!cards.includes(change.message.id)) owedCards.set(key, [...cards, change.message.id].slice(-MAX_PENDING));
+        if (!pending.has(key)) arm(botId, key);
+      }
+      return saveSoon();
+    }
     if (change.type !== "message" || change.imported) return;
     const { message, threadId } = change;
     if (message.role !== "user" || message.kind !== "text") return;
     const group = deps.store.groupByThread(threadId);
     if (group && (!eligibleRow(message) || message.author?.kind === "person" || message.author?.kind === "bot")) return;
-    const bot = group ? undefined : deps.store.botByThread(threadId);
-    const targets = group ? (group.memberIds ?? []).map((id) => deps.store.bot?.(id)).filter((bot) => bot !== undefined && bot !== null) : bot ? [bot] : [];
     let queued = false;
-    for (const target of targets) {
-      if (!deps.enabled(target.id)) continue;
-      const key = group ? roomKey(target.id, threadId) : threadId;
+    for (const { key } of targetsOf(threadId)) {
       const ids = pending.get(key) ?? [];
       if (!ids.includes(message.id)) pending.set(key, [...ids, message.id].slice(-MAX_PENDING));
       clearTimeout(timers.get(key));
@@ -1158,11 +1271,13 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     const before = pending.size;
     for (const threadId of pending.keys()) if (off(threadId)) pending.delete(threadId);
     for (const threadId of foreign.keys()) if (!pending.has(threadId)) foreign.delete(threadId);
-    if (pending.size !== before) save();
+    const owing = owedCards.size;
+    for (const threadId of owedCards.keys()) if (off(threadId)) owedCards.delete(threadId);
+    if (pending.size !== before || owedCards.size !== owing) save();
   };
 
   stop();
-  for (const threadId of pending.keys()) {
+  for (const threadId of new Set([...pending.keys(), ...owedCards.keys()])) {
     const bot = sourceBot(threadId);
     if (bot) arm(bot.id, threadId);
   }
@@ -1172,7 +1287,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       const group = deps.store.groupByThread(threadId);
       const targets = group ? (group.memberIds ?? []).map((id) => ({ botId: id, key: roomKey(id, threadId) })) : [{ botId, key: threadId }];
       for (const { botId, key } of targets) {
-        const count = pending.get(key)?.length ?? 0;
+        const count = (pending.get(key)?.length ?? 0) + (owedCards.get(key)?.length ?? 0);
         if (disposed || !count || !deps.enabled(botId)) continue;
         if (flush || count >= BATCH_MESSAGES || held.has(key)) enqueue(botId, key);
         else arm(botId, key);

@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createBotRoutes } from "./bot-routes.ts";
 import { acceptFacts, attachedImages, createMemoryPass, type MemoryPass, type NoteGenerator } from "./memory-pass.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
-import { currentPicks, parseTimeline } from "./picks.ts";
+import { currentPicks, parseTimeline, picksBlock } from "./picks.ts";
 import type { GroupRecord, Message, StoreChange } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 import { timelinePicks } from "./timeline-picks.ts";
@@ -410,6 +410,240 @@ describe("decision timeline", () => {
     reply({ kind: "decision", key: "forum", fact: "C - Reddit cards", quote: "C" });
     await settle();
     expect(currentPicks(timeline())[0]?.picked).toBe("C - Reddit cards");
+  });
+
+  describe("card answers filed in code", () => {
+    const swapCard = () => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Marketing", subtitle: "Swap the marketing bot or keep it?", options: ["Yes, swap", "Keep marketing bot"], askUser: true } });
+    const answer = (card: Message, text: string) => store.appendMessage("t1", { role: "user", kind: "text", text, answersCard: card.id, actedAt: Date.now() });
+    const picks = () => currentPicks(timeline()).map(({ key, picked, questionId }) => [key, picked, questionId]);
+
+    it("files a tap the note-taker also filed once", async () => {
+      const card = swapCard();
+      answer(card, "Yes, swap");
+      reply({ kind: "decision", key: "marketing bot", fact: "Swap marketing bot", quote: "Yes, swap" });
+      await settle();
+      // the note-taker's key, the user's own words
+      expect(picks()).toEqual([["marketing bot", "Yes, swap", card.id]]);
+    });
+
+    it("lands a revised answer the note-taker skipped on the key its card is filed under", async () => {
+      const card = swapCard();
+      answer(card, "Yes, swap");
+      reply({ kind: "decision", key: "marketing bot", fact: "Swap marketing bot", quote: "Yes, swap" });
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      answer(card, "Re: “Swap the marketing bot or keep it?”\nKeep marketing bot");
+      reply();
+      await settle();
+      expect(picks()).toEqual([["marketing bot", "Keep marketing bot", card.id]]);
+    });
+
+    it("never files a card answer or question holding a secret", async () => {
+      const deploy = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Deploy", subtitle: "Save sk-live-4f9a8b7c6d5e4f3a2b1c as the deploy key?", options: ["Yes", "No"], askUser: true } });
+      answer(deploy, "Yes");
+      const wifi = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Wi-Fi", subtitle: "Which network should the glasses join?", options: ["Home", "Office"], askUser: true } });
+      answer(wifi, "Re: “Which network should the glasses join?”\nHomeNet, password Tr0ub4dor&3xQ");
+      reply();
+      await settle();
+      expect(timeline()).toBe("");
+    });
+
+    it("lands a qualification on a card answer filed in the same pass", async () => {
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Theme", subtitle: "Which theme?", options: ["Dark", "Light"], askUser: true } });
+      answer(card, "Dark");
+      say("Keep the header small");
+      reply({ kind: "tweak", key: "Which theme?", fact: "Keep the header small", quote: "Keep the header small" });
+      await settle();
+      expect(picksBlock(timeline())).toContain("Keep the header small");
+    });
+
+    it("replaces a card's tap with a revised answer the note-taker files under its own key", async () => {
+      const card = swapCard();
+      answer(card, "Yes, swap");
+      reply();
+      await settle();
+      const revised = answer(card, "Re: “Swap the marketing bot or keep it?”\nKeep marketing bot");
+      reply({ kind: "decision", key: "marketing bot", fact: "Keep marketing bot", quote: "Keep marketing bot", message_id: revised.id, question_id: card.id });
+      await settle();
+      expect(picks()).toEqual([["Swap the marketing bot or keep it?", "Keep marketing bot", card.id]]);
+    });
+
+    it("keeps two long questions that open alike apart", async () => {
+      const lead = "For the next release, which of the two proposed signing settings should we use for ";
+      const desktop = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Signing", subtitle: `${lead}desktop builds?`, options: ["Local signing", "Cloud signing"], askUser: true } });
+      const mobile = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Signing", subtitle: `${lead}mobile builds?`, options: ["Local signing", "Cloud signing"], askUser: true } });
+      answer(desktop, "Local signing");
+      answer(mobile, "Cloud signing");
+      reply();
+      await settle();
+      expect(picks().map(([, picked, question]) => [picked, question])).toEqual([["Local signing", desktop.id], ["Cloud signing", mobile.id]]);
+      expect(picksBlock(timeline())).toMatch(/desktop builds\? \(\d\d-\d\d\): Local signing\n.*mobile builds\? \(\d\d-\d\d\): Cloud signing|mobile builds\? \(\d\d-\d\d\): Cloud signing\n.*desktop builds\? \(\d\d-\d\d\): Local signing/);
+    });
+
+    it("keeps two cards apart when their topic comes before the same question", async () => {
+      const billing = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Database", subtitle: "For the billing service. Which database should we use?", options: ["Postgres", "SQLite"], askUser: true } });
+      const analytics = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Database", subtitle: "For the analytics service. Which database should we use?", options: ["Postgres", "SQLite"], askUser: true } });
+      answer(billing, "Postgres");
+      answer(analytics, "SQLite");
+      reply();
+      await settle();
+      expect(picks().map(([, picked, question]) => [picked, question])).toEqual([["Postgres", billing.id], ["SQLite", analytics.id]]);
+    });
+
+    it("keeps a live answer when another card asks the same question", async () => {
+      const ask = (options: string[]) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Pick", subtitle: "Which option should we use?", options, askUser: true } });
+      const signing = ask(["Local signing", "Cloud signing"]);
+      answer(signing, "Local signing");
+      reply();
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      const backup = ask(["Cloud backup", "Local backup"]);
+      answer(backup, "Cloud backup");
+      reply();
+      await settle();
+      expect(picks()).toEqual([["Which option should we use?", "Local signing", signing.id], ["Which option should we use? (2)", "Cloud backup", backup.id]]);
+    });
+
+    it("saves the tapped option when the note-taker names another", async () => {
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Language", subtitle: "Which language should we use?", options: ["C++", "C#"], askUser: true } });
+      const tap = answer(card, "C#");
+      reply({ kind: "decision", key: "Language", fact: "C++", quote: "C#", message_id: tap.id, question_id: card.id });
+      await settle();
+      expect(picks()).toEqual([["Language", "C#", card.id]]);
+    });
+
+    it("replaces a tapped answer with one that differs only in case", async () => {
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Branch", subtitle: "Which branch should the Linux build target?", options: ["Use branch Release", "Use branch release"], askUser: true } });
+      answer(card, "Use branch Release");
+      reply();
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      answer(card, "Re: “Which branch should the Linux build target?”\nUse branch release");
+      reply();
+      await settle();
+      expect(picks()).toEqual([["Which branch should the Linux build target?", "Use branch release", card.id]]);
+    });
+
+    it("files one answer when the note-taker gives a tap two keys", async () => {
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Material", subtitle: "Which material should the bridge prototype use?", options: ["Balsa", "Birch"], askUser: true } });
+      const tap = answer(card, "Balsa");
+      reply(...["Prototype material", "Bridge material"].map((key) => ({ kind: "decision", key, fact: "Balsa", quote: "Balsa", message_id: tap.id, question_id: card.id })));
+      await settle();
+      expect(picks()).toEqual([["Prototype material", "Balsa", card.id]]);
+    });
+
+    it("saves a long tapped answer whole, with the words that hold it back", async () => {
+      const choice = "Send the finished release notes to everyone on the project mailing list and include the updated schedule, but wait for my approval before sending.";
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Share", subtitle: "How should we share the release notes?", options: [choice, "Save draft only"], askUser: true } });
+      answer(card, choice);
+      reply();
+      await settle();
+      expect(currentPicks(timeline()).map(({ picked, said }) => [picked, said])).toEqual([[choice, choice]]);
+      expect(memorySystemPrompt(BOT)).toContain("but wait for my approval before sending.");
+    });
+
+    it("files the whole tap when the note-taker quotes only part of it", async () => {
+      const choice = "Send the release notes to the mailing list, but wait for my approval before sending.";
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Share", subtitle: "How should we share the release notes?", options: [choice, "Save a draft"], askUser: true } });
+      const tap = answer(card, choice);
+      reply({ kind: "decision", key: "Release notes", fact: "Send the release notes to the mailing list", quote: "Send the release notes to the mailing list", message_id: tap.id, question_id: card.id });
+      await settle();
+      expect(currentPicks(timeline()).map(({ picked, questionId }) => [picked, questionId])).toEqual([[choice, card.id]]);
+      expect(memorySystemPrompt(BOT)).toContain("but wait for my approval before sending.");
+    });
+
+    it("keeps one answer when the note-taker gives the card id as the answer's", async () => {
+      const card = swapCard();
+      answer(card, "Yes, swap");
+      reply();
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      answer(card, "Re: “Swap the marketing bot or keep it?”\nKeep marketing bot");
+      reply({ kind: "decision", key: "Marketing bot", fact: "Keep marketing bot", quote: "Keep marketing bot", message_id: card.id, question_id: card.id });
+      await settle();
+      expect(picks()).toEqual([["Swap the marketing bot or keep it?", "Keep marketing bot", card.id]]);
+    });
+
+    it("keeps two cards apart when their shortened questions match", async () => {
+      const ask = (topic: string) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Signing", subtitle: `Which signing service should the ${topic} release pipeline use for distributing the signed release builds?`, options: ["Cloud signing", "Local signing"], askUser: true } });
+      const desktop = ask("desktop");
+      const mobile = ask("mobile");
+      answer(desktop, "Local signing");
+      answer(mobile, "Cloud signing");
+      reply();
+      await settle();
+      expect(picks().map(([, picked, question]) => [picked, question])).toEqual([["Local signing", desktop.id], ["Cloud signing", mobile.id]]);
+      expect(new Set(picks().map(([key]) => key)).size).toBe(2);
+      expect(picksBlock(timeline())).toContain("Local signing");
+      expect(picksBlock(timeline())).toContain("Cloud signing");
+    });
+
+    it("keeps every card answer in the prompt after its day and after a PR it names", async () => {
+      const ask = (subtitle: string, options: string[]) => store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Release", subtitle, options, askUser: true } });
+      answer(ask("When should we archive the demo?", ["Tonight", "Next week"]), "Tonight");
+      answer(ask("Which change should we merge?", ["Merge PR #41", "Leave it"]), "Merge PR #41");
+      reply();
+      await settle();
+      vi.setSystemTime(NOW + 2 * 24 * 60 * MINUTE);
+      answer(ask("Which label color?", ["Mint", "Orange"]), "Mint");
+      reply();
+      await settle();
+      expect(timeline()).not.toContain("- Retired:");
+      for (const choice of ["Tonight", "Merge PR #41", "Mint"]) expect(picksBlock(timeline())).toContain(choice);
+    });
+
+    it("replaces a tapped answer with a revision that only adds words to it", async () => {
+      const first = "A - Send the release notes";
+      const revised = `${first}, but wait for my approval before sending.`;
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Share", subtitle: "How should we share the release notes?", options: [first, "B - Save a draft"], askUser: true } });
+      answer(card, first);
+      reply();
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      answer(card, `Re: “How should we share the release notes?”\n${revised}`);
+      reply();
+      await settle();
+      expect(picks()).toEqual([["How should we share the release notes?", revised, card.id]]);
+      expect(memorySystemPrompt(BOT)).toContain("but wait for my approval before sending.");
+    });
+
+    it("replaces a tapped answer with one that differs only in symbols", async () => {
+      const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Language", subtitle: "Which language for the desktop client?", options: ["C++", "C#"], askUser: true } });
+      answer(card, "C++");
+      reply();
+      await settle();
+      await vi.advanceTimersByTimeAsync(MINUTE);
+      answer(card, "Re: “Which language for the desktop client?”\nC#");
+      reply();
+      await settle();
+      expect(picks()).toEqual([["Which language for the desktop client?", "C#", card.id]]);
+    });
+
+    it("keeps three cards apart when their shortened questions collide twice", async () => {
+      const choices = ["Local signing", "Cloud signing", "Hardware signing"];
+      const cards: Message[] = [];
+      for (const [i, platform] of ["desktop", "mobile", "tablet"].entries()) {
+        cards.push(store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Signing", subtitle: `For the upcoming release, which signing service should we use for the ${platform} installer when distributing builds to our beta testers?`, options: choices, askUser: true } }));
+        answer(cards[i]!, choices[i]!);
+        reply();
+        await settle();
+      }
+      expect(picks().map(([, picked, question]) => [picked, question])).toEqual(choices.map((choice, i) => [choice, cards[i]!.id]));
+      for (const choice of choices) expect(picksBlock(timeline())).toContain(choice);
+    });
+
+    it("keeps two cards apart when the note-taker files both under one key", async () => {
+      for (const [platform, choice] of [["desktop", "Local signing"], ["mobile", "Cloud signing"]]) {
+        const card = store.appendMessage("t1", { role: "bot", kind: "options", card: { title: "Signing", subtitle: `Which signing service for ${platform}?`, options: [choice!, "No signing"], askUser: true } });
+        const tap = answer(card, choice!);
+        reply({ kind: "decision", key: "Signing service", fact: choice, quote: choice, message_id: tap.id, question_id: card.id });
+        await settle();
+      }
+      expect(picks().map(([, picked]) => picked)).toEqual(["Local signing", "Cloud signing"]);
+      expect(picksBlock(timeline())).toContain("Local signing");
+      expect(picksBlock(timeline())).toContain("Cloud signing");
+    });
+
   });
 
   describe("one pick per source", () => {
@@ -1050,7 +1284,8 @@ describe("decision timeline", () => {
     const typed = say("C");
     reply({ kind: "decision", key: "forum look", fact: "C - Reddit cards", quote: "C", message_id: tapped.id }, { kind: "decision", key: "theme", fact: "C - system", quote: "C", message_id: typed.id });
     await settle();
-    expect(Object.fromEntries(currentPicks(timeline()).map(({ key, picked }) => [key, picked]))).toEqual({ "forum look": "A - plain list", theme: "C - system" });
+    // the tap answers its own card, beside the typed pick on the bot's question
+    expect(Object.fromEntries(currentPicks(timeline()).map(({ key, picked }) => [key, picked]))).toEqual({ "forum look": "A - plain list", "Which forum look?": "C - Reddit cards", theme: "C - system" });
   });
 
   it("strips planted prompt tags from the user's own lines", async () => {

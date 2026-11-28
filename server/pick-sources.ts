@@ -1,5 +1,7 @@
 import { basename, join } from "node:path";
 
+import { answerPrefix, askStates } from "../shared/open-question.ts";
+
 import { LABELED, pickKey, type PickEntry, type Picture } from "./picks.ts";
 import type { Message } from "./store.ts";
 
@@ -13,7 +15,19 @@ const CONFIRMATION = /^(?:option\s+)?[a-z1-9]\s+it is\b[^?]*$/i;
 
 export type ShownPicture = Picture & { original?: string };
 type PictureTurn = { questionId: string; context?: string; options?: string[]; pictures: ShownPicture[] };
-export type ReplyPictures = PictureTurn & { prior?: PictureTurn & { kind: "preview" | "correction" }; previousAnswerId?: string; invalidCard?: boolean };
+export type ReplyPictures = PictureTurn & {
+  prior?: PictureTurn & { kind: "preview" | "correction" }; previousAnswerId?: string; invalidCard?: boolean; question?: string;
+  /** the card the reply answers, by its id or as the chat reads the reply */
+  cardId?: string;
+  /** the reply's own words, without the question it quotes */
+  answer?: string;
+  /** the card's own option the reply picks, word for word */
+  choice?: string;
+  /** when the newest row an edit replaces took effect: the edit is newer, whatever that row's clock said */
+  edits?: number;
+  /** each other card the bot closed as answered by this reply */
+  also?: ReplyPictures[];
+};
 type PickSource = Partial<ReplyPictures> & { id?: string; at?: number; thread?: string; files?: string[] };
 type PickClaim = {
   key: string; picked: string; over: string[]; messageId?: string | null; questionId?: string | null; at?: number; thread?: string;
@@ -63,8 +77,60 @@ function picturesIn(turn: Message[], attachments: string, answered?: Message): P
   const questionId = question?.id ?? lastScreen;
   if (!questionId) return undefined;
   const card = question?.card;
-  const context = [answered ? card?.subtitle : reply?.text ?? card?.subtitle, ...(card?.options ?? [])].filter(Boolean).join("\n");
+  // a question with no buttons can lean on the bot's words before it, as an unanswered one does
+  const context = [answered && card?.options?.length ? card.subtitle : reply?.text ?? card?.subtitle, ...(card?.options ?? [])].filter(Boolean).join("\n");
   return { questionId, context, options: card?.options, pictures: pictures.slice(-PICTURES_MAX) };
+}
+
+export const labeledOptions = (context = "") => [...context.matchAll(/(?:^|\s)([a-h]|\d{1,2})\s*[-.):]\s+(.+?)(?=\s+(?:or\s+)?(?:[a-h]|\d{1,2})\s*[-.):]\s+|$)/gi)]
+  .map((match) => `${match[1]} - ${match[2]!.replace(/[?,;]+$/, "").trim()}`);
+
+const PLACES = ["first", "second", "third", "fourth", "fifth"];
+const POINTER = /^(?:option\s+)?([a-z]|\d{1,2})[.)]?$/i;
+const PLACE = /^(?:the\s+)?(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)(?:\s+(?:one|option|choice))?(?:,?\s+please)?[.!]?$/i;
+
+/** The card's own option an answer names: its whole text as written, else its letter, number or place on this card. Never a near name: "C++" is not "C#". */
+export function cardChoice(answer: string, options: readonly string[]): string | undefined {
+  const said = answer.trim();
+  const own = options.map((option) => option.trim()).filter(Boolean);
+  if (own.includes(said)) return said;
+  const label = POINTER.exec(said)?.[1]?.toLowerCase();
+  if (label) {
+    const labeled = own.filter((option) => LABELED.exec(option)?.[1]?.toLowerCase() === label);
+    // a card that letters or numbers its options is read by those labels, not by place
+    if (own.some((option) => LABELED.test(option))) return labeled.length === 1 ? labeled[0] : undefined;
+    return own[/\d/.test(label) ? Number(label) - 1 : label.charCodeAt(0) - 97];
+  }
+  const place = PLACE.exec(said)?.[1]?.toLowerCase();
+  if (!place) return undefined;
+  return own[place === "last" ? own.length - 1 : (PLACES.indexOf(place) + 1 || Number(place[0])) - 1];
+}
+
+export const QUOTED = /^\s*>/;
+const QUOTE_MARKS = /^\s*(?:>\s?)+/;
+const plain = (text: string) => text.replace(/[*_`~]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+
+export const QUOTE_LABEL = /\[quoting chat: ([^\]]*)\]/g;
+
+/** A reply's words without its quote marks and quote labels: what a close's words are matched against. */
+export const spoken = (text: string) => text.replace(QUOTE_LABEL, "$1").split("\n").map((line) => line.replace(QUOTE_MARKS, "")).join("\n");
+
+/** A reply with each blockquote it pasted from the chat before it labeled as a quote; a blockquote the user wrote, such as a callout, stays as typed. */
+function ownWords(said: string, before: () => readonly Message[]): string {
+  let shown: string | undefined;
+  const quotesChat = (words: string) => (shown ??= plain(before().flatMap((row) => [row.text ?? "", row.card?.subtitle ?? "", ...(row.card?.options ?? [])]).join("\n"))).includes(words);
+  return said.replace(/^[^\S\n]*>.*(?:\n[^\S\n]*>.*)*/gm, (block) => {
+    const quote = block.split("\n").map((line) => line.replace(QUOTE_MARKS, "").trim()).filter(Boolean).join(" ");
+    return quote && quotesChat(plain(quote)) ? `[quoting chat: ${quote}]` : block;
+  }).trim();
+}
+
+/** What a reply files as its answer to `card`: the option it names word for word, else its words with quotes of `before` labeled. A close checks its words against this same text. */
+export function cardAnswer(card: Message, reply: Message, before: () => readonly Message[] = () => []) {
+  const text = reply.text ?? "";
+  const said = (text.startsWith(answerPrefix(card)) ? text.slice(answerPrefix(card).length) : text).trim();
+  const choice = cardChoice(said, card.card?.options?.length ? card.card.options : labeledOptions(card.card?.subtitle));
+  return { answer: choice === said ? said : ownWords(said, before), choice };
 }
 
 export function replyTurns(messages: readonly Message[], ids: string[], attachments: string): Map<string, ReplyPictures> {
@@ -76,18 +142,60 @@ export function replyTurns(messages: readonly Message[], ids: string[], attachme
     const index = id === undefined ? i - 1 : id ? byId.get(id) ?? -1 : -1;
     return index < i ? index : -1;
   };
+  // the chat as the reply's own branch shows it, root first: a card on another branch is never its question
+  const pathTo = (i: number) => {
+    const path: Message[] = [];
+    for (let at = i; at >= 0; at = parent(at)) path.push(messages[at]!);
+    return path.reverse();
+  };
+  // a reply with no card id answers the newest card on its branch it quotes, answered before or not, else every card the bot closed for it or for a row it edits, else the card a tapped row it edits answered, else a card its branch closes with it: one with no buttons by any words, else by an option's whole text, as a tap sends it
+  const chatCards = (answer: Message, path: readonly Message[], replaced: readonly Message[]): string[] => {
+    const text = answer.text ?? "";
+    const quoted = text.startsWith("Re: “") ? path.findLast((row) => row !== answer && isQuestionCard(row) && text.startsWith(answerPrefix(row))) : undefined;
+    if (quoted) return [quoted.id];
+    // newest first
+    const closedFor = (ids: readonly string[]) => path.filter((row) => row !== answer && isQuestionCard(row) && ids.includes(row.card?.answeredBy ?? "")).map(({ id }) => id).reverse();
+    const closed = closedFor([answer.id]);
+    if (closed.length) return closed;
+    const edited = closedFor(replaced.map(({ id }) => id));
+    if (edited.length) return edited;
+    const tapped = replaced.findLast((row) => row.answersCard)?.answersCard;
+    if (tapped) return [tapped];
+    for (const [card, state] of askStates(path)) if (state.state === "answered" && state.by === answer && (!card.card?.options?.length || card.card.options.includes(text.trim()))) return [card.id];
+    return [];
+  };
   for (let i = messages.length - 1; i >= 0 && wanted.size; i -= 1) {
     const answer = messages[i]!;
     if (!wanted.delete(answer.id)) continue;
-    const card = answer.answersCard ? byId.get(answer.answersCard) : undefined;
-    const answered = card !== undefined && card < i && isQuestionCard(messages[card]!) ? messages[card] : undefined;
-    const { turn, previous } = botTurn(messages, answered ? card! : parent(i), parent);
-    const current = picturesIn(turn, attachments, answered) ?? { questionId: answer.id, pictures: [] };
-    const previousAnswer = messages[previous];
-    const preview = current.pictures.length > 0 && PREVIEW_REQUEST.test(previousAnswer?.text?.trim() ?? "");
-    const correction = !current.pictures.length && !current.options?.length && (!current.context || CONFIRMATION.test(current.context)) && CORRECTION.test(answer.text?.trim() ?? "");
-    const prior = previousAnswer && !answered && (preview || correction) ? picturesIn(botTurn(messages, parent(previous), parent).turn, attachments) : undefined;
-    found.set(answer.id, { ...current, prior: prior && { ...prior, kind: preview ? "preview" : "correction" }, previousAnswerId: previousAnswer?.id, invalidCard: Boolean(answer.answersCard && !answered) });
+    let path: Message[] | undefined;
+    const branch = () => (path ??= pathTo(i));
+    // an edit sits on the parent of the user's rows it replaces
+    const replaced = messages.slice(0, i).filter((row, j) => sentByPerson(row) && parent(j) === parent(i));
+    const replyTo = (cardId: string | undefined) => {
+      const card = cardId ? byId.get(cardId) : undefined;
+      const answered = card !== undefined && card < i && isQuestionCard(messages[card]!) ? messages[card] : undefined;
+      const { turn, previous } = botTurn(messages, answered ? card! : parent(i), parent);
+      const current = picturesIn(turn, attachments, answered) ?? { questionId: answer.id, pictures: [] };
+      const previousAnswer = messages[previous];
+      const preview = current.pictures.length > 0 && PREVIEW_REQUEST.test(previousAnswer?.text?.trim() ?? "");
+      const correction = !current.pictures.length && !current.options?.length && (!current.context || CONFIRMATION.test(current.context)) && CORRECTION.test(answer.text?.trim() ?? "");
+      const prior = previousAnswer && !answered && (preview || correction) ? picturesIn(botTurn(messages, parent(previous), parent).turn, attachments) : undefined;
+      const reply: ReplyPictures = { ...current, prior: prior && { ...prior, kind: preview ? "preview" : "correction" }, previousAnswerId: previousAnswer?.id, invalidCard: Boolean(answer.answersCard && !answered), question: answered?.card?.subtitle };
+      if (answered) {
+        reply.cardId = answered.id;
+        const { answer: words, choice } = cardAnswer(answered, answer, () => branch().slice(0, -1));
+        if (choice !== undefined) reply.choice = choice;
+        reply.answer = words;
+      }
+      // each earlier edit took effect after the rows it replaced, so a later edit is newer still
+      if (replaced.length) reply.edits = replaced.reduce((after, row) => Math.max(row.actedAt ?? row.at, after + 1), -Infinity);
+      return reply;
+    };
+    const [cardId, ...others] = answer.answersCard ? [answer.answersCard] : chatCards(answer, branch(), replaced);
+    const reply = replyTo(cardId);
+    const also = others.map(replyTo).filter(({ cardId }) => cardId);
+    if (also.length) reply.also = also;
+    found.set(answer.id, reply);
   }
   return found;
 }
@@ -196,7 +304,7 @@ const sourcesOf = (entry: PickEntry) => new Set([
   ...entry.files,
 ]);
 
-/** Picks on different questions that claim one answer or screenshot, less the one pick bound to it by its own message id and action time, when only one is. */
+/** Picks on different questions that claim one answer or screenshot, less the picks bound to it by its own message id and action time: one, or one reply's picks on distinct cards. */
 export function sharedSources(entries: readonly PickEntry[]): Set<PickEntry> {
   const claims = new Map<string, PickEntry[]>();
   for (const entry of entries) {
@@ -207,7 +315,9 @@ export function sharedSources(entries: readonly PickEntry[]): Set<PickEntry> {
   for (const claimants of claims.values()) {
     if (new Set(claimants.map(({ key }) => pickKey(key))).size < 2) continue;
     const exact = claimants.filter((entry) => entry.binding === "verified" && entry.messageId && entry.at !== undefined);
-    for (const entry of claimants) if (exact.length !== 1 || entry !== exact[0]) shared.add(entry);
+    const oneReply = exact.every((entry) => entry.questionId && entry.messageId === exact[0]!.messageId)
+      && new Set(exact.map(({ questionId }) => questionId)).size === exact.length;
+    for (const entry of claimants) if (!(exact.length === 1 || oneReply) || !exact.includes(entry)) shared.add(entry);
   }
   return shared;
 }

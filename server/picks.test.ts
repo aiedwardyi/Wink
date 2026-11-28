@@ -148,10 +148,25 @@ describe("applyPicks", () => {
     expect(applyPicks("", [tweak("forum look", "make the header smaller", at(17, 10))])).toBeNull();
   });
 
+  it("keeps a long answer whole, up to the longest paragraph the note-taker reads", () => {
+    const said = `Ship the release to the beta channel first, collect crash reports for two full days, write up anything that regressed against the last build, fix the top three issues, then cut the release candidate for everyone. Do not deploy until I approve.`;
+    const { text } = applyPicks("", [pick("release plan", said, said, at(17, 10))])!;
+    expect(text).toContain(`- Picked: ${said}\n`);
+    expect(text).toContain(`- Said: "${said}"\n`);
+    expect(picksBlock(text)).toContain("Do not deploy until I approve.");
+  });
+
+  it("shows a tweak whole after a long answer", () => {
+    const key = "Which release plan should we follow for the desktop builds?";
+    const first = applyPicks("", [pick(key, "x".repeat(395), "x".repeat(395), at(17, 10))])!.text;
+    const tweaked = applyPicks(first, [{ kind: "tweak", key, said: "Do not deploy until I approve.", at: at(18, 10) }])!.text;
+    expect(picksBlock(tweaked)).toContain('+ tweaks: "Do not deploy until I approve."');
+  });
+
   it("never cuts an emoji in half", () => {
-    const said = `${"x".repeat(116)}\u{1F600} and more`;
+    const said = `${"x".repeat(396)}\u{1F600} and more`;
     const { text } = applyPicks("", [pick("forum look", "C - Reddit cards", said, at(17, 10))])!;
-    expect(text).toContain(`- Said: "${"x".repeat(116)}..."\n`);
+    expect(text).toContain(`- Said: "${"x".repeat(396)}..."\n`);
     expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
   });
 
@@ -160,6 +175,97 @@ describe("applyPicks", () => {
     expect(out.text).toMatch(/^# Decision timeline\n/);
     expect(out.text).toContain("## Older picks, before the timeline (no words kept)\n\n- GIT ROW LOOK (11-14): rows show the branch first\n");
     expect(parseTimeline(out.text).entries.map((entry) => entry.key)).toEqual(["forum look"]);
+  });
+});
+
+describe("card answers", () => {
+  // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+  const tap = (questionId: string, messageId: string, key: string, picked: string, when: number) =>
+    pick(key, picked, picked, when, { tapped: true, binding: { at: when, messageId, questionId, thread: "t1", files: [], overPictures: [], named: true } as never });
+
+  it("lands a tweak keyed like a revised card answer on the card's pick", () => {
+    const first = applyPicks("", [tap("q1", "a1", "Which theme?", "Dark", at(26, 11))])!.text;
+    const revised = pick("Theme", "Light", "Light", at(26, 12), { binding: { at: at(26, 12), messageId: "a2", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never });
+    const out = applyPicks(first, [revised, tweak("Theme", "Keep the header small", at(26, 12))])!;
+    expect(out.tweaks).toBe(1);
+    expect(picksBlock(out.text)).toContain("Keep the header small");
+  });
+
+  it("numbers a second card's colliding key within the key limit, so a tweak by that key finds it", () => {
+    const key = "For the upcoming release, which signing service should we use for the beta builds?";
+    const two = applyPicks("", [tap("q1", "a1", key, "Local signing", at(26, 12)), tap("q2", "a2", key, "Cloud signing", at(26, 12, 1))])!.text;
+    const second = currentPicks(two).find(({ picked }) => picked === "Cloud signing")!;
+    expect(second.key.length).toBeLessThanOrEqual(60);
+    const tweaked = applyPicks(two, [tweak(second.key, "use the EV certificate", at(26, 12, 2))])!.text;
+    expect(currentPicks(tweaked).map(({ picked, tweaks }) => [picked, tweaks.map(({ said }) => said)])).toEqual([["Local signing", []], ["Cloud signing", ["use the EV certificate"]]]);
+  });
+
+  it("keeps a card's tap beside a typed answer to another question under its key, in either order", () => {
+    const typed = pick("Signing service", "Local signing", "Use Local signing for desktop builds", at(26, 12, 1), { binding: { at: at(26, 12, 1), messageId: "a2", questionId: "q2", thread: "t1", files: [], overPictures: [], named: true } as never });
+    const card = tap("q1", "a1", "Signing service", "Cloud signing", at(26, 12));
+    for (const text of [applyPicks(applyPicks("", [card])!.text, [typed])!.text, applyPicks(applyPicks("", [typed])!.text, [{ ...card, at: at(26, 12, 2) }])!.text]) {
+      expect(currentPicks(text).map(({ picked }) => picked).sort()).toEqual(["Cloud signing", "Local signing"]);
+      expect(`${picksBlock(text)}\n`).toContain(": Cloud signing\n");
+    }
+  });
+
+  it("lets a newer typed card answer replace an older typed pick on its card, never a press or an older answer", () => {
+    const typed = applyPicks("", [pick("Which database?", "SQLite", "SQLite", at(26, 10), { binding: { at: at(26, 10), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never })])!.text;
+    expect(currentPicks(applyPicks(typed, [{ ...tap("q1", "a2", "Which database?", "Postgres", at(26, 11)), typed: true } as PickChange])!.text).map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", "q1"]]);
+    expect(applyPicks(typed, [{ ...tap("q1", "a0", "Which database?", "Postgres", at(26, 9)), typed: true } as PickChange])).toBeNull();
+    expect(applyPicks(typed, [tap("q1", "a2", "Which database?", "Postgres", at(26, 11))])).toBeNull();
+  });
+
+  it("keeps a typed card answer that replaced a typed pick current through a merge", () => {
+    const typed = applyPicks("", [pick("Which database?", "SQLite", "SQLite", at(26, 10), { binding: { at: at(26, 10), messageId: "a1", questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never })])!.text;
+    const revised = applyPicks(typed, [{ ...tap("q1", "a2", "Which database?", "Postgres", at(26, 11)), typed: true } as PickChange])!.text;
+    for (const merged of [mergeTimelines(revised, revised)!, mergeTimelines(typed, revised)!, mergeTimelines(revised, typed)!]) {
+      expect(currentPicks(merged).map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", "q1"]]);
+    }
+    expect(applyPicks(revised, [tap("q1", "a3", "Which database?", "SQLite", at(26, 12))])).toBeNull();
+  });
+
+  it("shows a pick an older build marked retired, and keeps the line on file", () => {
+    const text = "# Decision timeline\n\n## 2026-11-18 17:32 | memory audit fix timing | current\n- Picked: Fix tonight\n- Retired: 2026-11-19\n";
+    expect(picksBlock(text)).toContain("memory audit fix timing (11-18): Fix tonight");
+    expect(applyPicks(text, [pick("theme", "Dark", "dark", at(26, 10))])!.text).toContain("- Picked: Fix tonight\n- Retired: 2026-11-19\n");
+  });
+});
+
+describe("card answers across PCs", () => {
+  // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+  const tap = (questionId: string, messageId: string, key: string, picked: string, when: number) =>
+    pick(key, picked, picked, when, { tapped: true, binding: { at: when, messageId, questionId, thread: "t1", files: [], overPictures: [], named: true } as never });
+
+  it("keeps two cards filed under one key apart when two PCs merge", () => {
+    const desktop = applyPicks("", [tap("q1", "a1", "Signing service", "Local signing", at(25, 14, 9))])!.text;
+    const mobile = applyPicks("", [tap("q2", "a2", "Signing service", "Cloud signing", at(25, 14, 10))])!.text;
+    for (const merged of [mergeTimelines(desktop, mobile)!, mergeTimelines(mobile, desktop)!]) {
+      expect(currentPicks(merged).map(({ picked, questionId }) => [picked, questionId])).toEqual([["Local signing", "q1"], ["Cloud signing", "q2"]]);
+    }
+  });
+
+  it("keeps a card's tap and another question's typed answer under one key apart when two PCs merge", () => {
+    const mobile = applyPicks("", [tap("q1", "a1", "Signing service", "Cloud signing", at(25, 14, 9))])!.text;
+    const desktop = applyPicks("", [pick("Signing service", "Local signing", "Use Local signing for desktop builds", at(25, 14, 10), { binding: { at: at(25, 14, 10), messageId: "a2", questionId: "q2", thread: "t1", files: [], overPictures: [], named: true } as never })])!.text;
+    const merged = mergeTimelines(mobile, desktop)!;
+    expect(mergeTimelines(desktop, mobile)).toBe(merged);
+    expect(currentPicks(merged).map(({ picked, questionId }) => [picked, questionId])).toEqual([["Cloud signing", "q1"], ["Local signing", "q2"]]);
+  });
+
+  it("keeps only a card's newest answer when PCs filed its answers under different keys", () => {
+    const sent = applyPicks("", [tap("q1", "a1", "Announcement plan", "Send the release notes", at(25, 14, 9))])!.text;
+    const held = applyPicks("", [tap("q1", "a2", "Release notes", "Hold the release notes", at(25, 14, 10))])!.text;
+    const merged = mergeTimelines(sent, held)!;
+    expect(merged).toBe(mergeTimelines(held, sent));
+    expect(currentPicks(merged).map(({ picked }) => picked)).toEqual(["Hold the release notes"]);
+    expect(picksBlock(merged)).not.toContain("Send the release notes");
+  });
+
+  it("keeps a renewed tap's time when one PC saw it", () => {
+    const first = applyPicks("", [tap("q1", "a1", "When should we run checks?", "Tonight", at(24, 10))])!.text;
+    const renewed = applyPicks(first, [tap("q1", "a2", "When should we run checks?", "Tonight", at(26, 10))])!.text;
+    for (const merged of [mergeTimelines(first, renewed)!, mergeTimelines(renewed, first)!]) expect(currentPicks(merged).map(({ at }) => at)).toEqual([at(26, 10)]);
   });
 });
 
@@ -415,5 +521,149 @@ describe("all picks in the system prompt", () => {
       expect(update).not.toBeNull();
       expect(update!.length).toBeLessThan(1_000);
     }
+  });
+});
+
+describe("typed card answers", () => {
+  // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+  const answer = (messageId: string, picked: string, when: number, typed: boolean) =>
+    pick("Which database?", picked, picked, when, { tapped: true, typed, binding: { at: when, messageId, questionId: "q1", thread: "t1", files: [], overPictures: [], named: true } as never });
+
+  it("never lets a later press replace a typed card answer, here or through a merge", () => {
+    const typed = applyPicks("", [answer("a1", "Postgres", at(26, 10), true)])!.text;
+    expect(typed).toContain("- Typed: yes\n");
+    expect(typed).not.toContain("- Tapped: yes");
+    expect(applyPicks(typed, [answer("a2", "MySQL", at(26, 11), false)])).toBeNull();
+    const pressed = applyPicks("", [answer("a2", "MySQL", at(26, 11), false)])!.text;
+    for (const merged of [mergeTimelines(typed, pressed)!, mergeTimelines(pressed, typed)!]) {
+      expect(currentPicks(merged).map(({ picked, typed }) => [picked, typed])).toEqual([["Postgres", true]]);
+      expect(mergeTimelines(merged, pressed)).toBe(merged);
+    }
+  });
+
+  it("lets a newer typed answer replace a press on its card, and a press of the same option it types becomes typed", () => {
+    const pressed = applyPicks("", [answer("a1", "MySQL", at(26, 10), false)])!.text;
+    expect(currentPicks(applyPicks(pressed, [answer("a2", "Postgres", at(26, 11), true)])!.text).map(({ picked, typed }) => [picked, typed])).toEqual([["Postgres", true]]);
+    const retyped = applyPicks(pressed, [answer("a2", "MySQL", at(26, 11), true)])!.text;
+    expect(applyPicks(retyped, [answer("a3", "Postgres", at(26, 12), false)])).toBeNull();
+  });
+
+  it("keeps a typed card answer beside a later typed answer to another question under its key", () => {
+    const card = applyPicks("", [answer("a1", "Postgres", at(26, 10), true)])!.text;
+    // SAFETY: applyPicks reads only these binding fields; a verified one is minted by validatePickBinding.
+    const other = pick("Which database?", "SQLite", "Use SQLite for the desktop cache", at(26, 11), { binding: { at: at(26, 11), messageId: "a2", questionId: "q2", thread: "t1", files: [], overPictures: [], named: true } as never });
+    const text = applyPicks(card, [other])!.text;
+    expect(currentPicks(text).map(({ picked, questionId }) => [picked, questionId])).toEqual([["Postgres", "q1"], ["SQLite", "q2"]]);
+    expect(currentPicks(mergeTimelines(card, text)).map(({ picked }) => picked)).toEqual(["Postgres", "SQLite"]);
+  });
+
+  // written by review-base's applyPicks: taps, a revised tap, typed and unbound picks, a tweak, a goal and a legacy line
+  const older = `# Decision timeline
+
+The user's picks in their own words, oldest first. Auto Notes writes this file from the chat; bots read it and never edit it. A newer pick on the same question replaces the old one, which stays here struck out with a pointer to the newer pick. A tweak adds to the pick it changes. Only current picks load into the bot's prompt.
+
+## 2026-11-20 | forum look | replaced by 2026-11-22 09:00
+- Picked: ~~C - Reddit cards~~
+- Said: "go with c"
+- Binding: unbound
+
+## 2026-11-21 10:00 | Which theme? | replaced by 2026-11-21 11:00
+- Picked: ~~Dark~~
+- Said: "Dark"
+- At: 1795222800000
+- Tapped: yes
+- Thread: t1
+- Message: a1
+- Question: q1
+- Binding: verified
+
+## 2026-11-21 11:00 | Which theme? | current
+- Picked: Light
+- Said: "Light"
+- At: 1795226400000
+- Tapped: yes
+- Thread: t1
+- Message: a2
+- Question: q1
+- Binding: verified
+
+## 2026-11-22 09:00 | forum look | current
+- Picked: B - tiles
+- Over: C - Reddit cards
+- Said: "actually b"
+- At: 1795305600000
+- Thread: t1
+- Message: a3
+- Question: q2
+- Binding: verified
+- Tweak 2026-11-22 09:05: "make the tiles a bit smaller"
+
+## 2026-11-23 14:00 | Signing service | replaced by 2026-11-23 15:00
+- Picked: ~~Cloud signing~~
+- Said: "Cloud signing"
+- At: 1795410000000
+- Tapped: yes
+- Thread: t1
+- Message: a4
+- Question: q3
+- Binding: verified
+
+## 2026-11-23 15:00 | Signing service | current
+- Picked: Local signing
+- Said: "Use Local signing for desktop builds"
+- At: 1795413600000
+- Thread: t1
+- Message: a5
+- Question: q4
+- Binding: verified
+
+## 2026-11-24 10:00 | Which database? | replaced by 2026-11-24 11:00
+- Picked: ~~SQLite~~
+- Said: "SQLite"
+- At: 1795482000000
+- Tapped: yes
+- Thread: t1
+- Message: a6
+- Question: q5
+- Binding: verified
+
+## 2026-11-24 11:00 | Which database? | current
+- Picked: Postgres
+- Said: "Postgres please"
+- At: 1795485600000
+- Thread: t1
+- Message: a7
+- Question: q5
+- Binding: verified
+
+## 2026-11-24 12:00 | Glasses v1 | current
+- Picked: CEO meeting tool: person brief + top 3 competitors
+- Kind: goal
+
+## 2026-11-01 | release channel | replaced by 2026-11-25 09:00
+- Picked: ~~Release channel: stable~~
+
+## 2026-11-25 09:00 | release channel | current
+- Picked: Beta
+- Said: "beta for now"
+
+## 2026-11-25 10:00 | Where should missing values appear? | current
+- Picked: Last
+- Said: "Last"
+- At: 1795568400000
+- Tapped: yes
+- Thread: t1
+- Message: a8
+- Question: q6
+- Binding: verified
+`;
+
+  it("reads a picks file an older build wrote byte for byte, in the same order", () => {
+    expect(renderTimeline(parseTimeline(older))).toBe(older);
+    expect(parseTimeline(older).entries.some(({ typed }) => typed)).toBe(false);
+    expect(currentPicks(older).map(({ key, picked }) => [key, picked])).toEqual([
+      ["Which theme?", "Light"], ["forum look", "B - tiles"], ["Signing service", "Local signing"], ["Which database?", "Postgres"], ["release channel", "Beta"], ["Where should missing values appear?", "Last"],
+    ]);
+    expect(picksBlock(older)).toBe("Open goals the user set, in their words: build toward each until they finish or drop it, then call pin_goal with done.\n- Glasses v1 (11-24): CEO meeting tool: person brief + top 3 competitors\n\nCurrent picks, newest first: the user's own, each beating older notes unless they changed it since. Build from a pick's picture plus its tweaks, never a new option. History: memory/decisions.md (Auto Notes writes it; never edit).\n- Where should missing values appear? (11-25): Last\n- release channel (11-25): Beta\n- Which database? (11-24): Postgres\n- Signing service (11-23): Local signing\n- forum look (11-22): B - tiles + tweaks: \"make the tiles a bit smaller\" (11-22)\n- Which theme? (11-21): Light");
   });
 });

@@ -12,12 +12,12 @@ export const GOALS_PROMPT_TOKENS = 400;
 export const GOAL_MAX = 4_000;
 // Claude's tokenizer measured 2.6 chars per token on path-heavy English; other scripts run near one token per char
 const CHARS_PER_TOKEN = 2.6;
-const KEY_MAX = 60;
-const PICKED_MAX = 100;
+export const KEY_MAX = 60;
+// the longest paragraph the note-taker reads, so an accepted answer lands whole
+const PICKED_MAX = 400;
 // a goal shown in words gets at least this much; past that many goals, the oldest are listed by name
 const GOAL_TOKENS_MIN = 16;
-const SAID_MAX = 120;
-const LINE_MAX = 420;
+const SAID_MAX = PICKED_MAX;
 const TWEAKS_SHOWN = 3;
 const TWEAK_SHOWN_MAX = 80;
 const KEYS_LISTED = 40;
@@ -35,7 +35,7 @@ const DONE = "Done";
 const ID = String.raw`\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2}\.\d{3})?)?(?: \(\d+\))?`;
 const ENTRY = new RegExp(String.raw`^## (${ID}) \| (.+?) \| (?:current|replaced by (${ID}))\s*$`);
 const TWEAK = new RegExp(String.raw`^- Tweak (${ID}): "(.*)"\s*$`);
-const FIELD = /^- (Picked|Kind|Done|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Thread|Message|Question|Binding): ?(.*?)\s*$/;
+const FIELD = /^- (Picked|Kind|Done|Picture|Over|Over pictures|Said|Files|Source|At|Tapped|Typed|Thread|Message|Question|Binding): ?(.*?)\s*$/;
 const SEPARATOR = "; ";
 /** An option's letter or number before its words, like "C - Reddit cards". */
 export const LABELED = /^(?:option\s+)?([a-z]|\d{1,2})\s*[-.):]\s+/i;
@@ -60,6 +60,8 @@ export type PickEntry = {
   said?: string;
   /** Picked by tapping a card; a typed pick on the question always beats it. */
   tapped?: boolean;
+  /** A card's own answer in the user's typed words: kept apart from other questions like a tap, never beaten by one. */
+  typed?: boolean;
   files: string[];
   /** The task or room that holds the source messages and links its files. */
   thread?: string;
@@ -88,6 +90,10 @@ export type PickChange =
       binding?: PickBinding | "unbound";
       tapped?: boolean;
       legacy?: { day: string; line: string };
+      /** the note-taker's key for a card answer filed under its card's key: a tweak under it follows the answer */
+      noted?: string;
+      /** a card answer in the user's typed words, not a press of one of its options: a newer one replaces a typed pick on its card */
+      typed?: boolean;
     }
   | { kind: "tweak"; at: number; key: string; said: string }
   | { kind: "goal"; at: number; key: string; goal?: string; done?: boolean };
@@ -114,6 +120,12 @@ export const pickKey = (key: string) => key.toLowerCase().replace(/[^\p{L}\p{N}]
 
 // goals and picks never replace each other, whatever their keys
 const slotOf = (entry: { kind?: string; key: string }) => `${entry.kind === "goal" ? "goal" : "pick"}\0${pickKey(entry.key)}`;
+
+// a verified tap's card: its answers replace each other and never another card's, whatever the keys
+const cardSlot = ({ thread, questionId }: { thread?: string; questionId?: string }) => `card\0${thread}\0${questionId}`;
+const questionOf = (entry: PickEntry) => (entry.binding === "verified" && entry.thread && entry.questionId && entry.questionId !== entry.messageId ? cardSlot(entry) : undefined);
+const cardOf = (entry: PickEntry) => (entry.tapped || entry.typed ? questionOf(entry) : undefined);
+const apart = (answer: PickEntry, other: PickEntry) => Boolean(cardOf(answer) && questionOf(other) && questionOf(other) !== cardOf(answer));
 
 const stems = (text: string) => new Set(pickKey(text).split(" ").filter((word) => word.length >= 3).map((word) => word.slice(0, 4)));
 
@@ -161,6 +173,7 @@ export function parseTimeline(text: string): Timeline {
     else if (field === "Files") entry.files = list(value);
     else if (field === "Source" && /^[a-f0-9]{64}$/.test(value)) entry.source = value;
     else if (field === "Tapped" && value === "yes") entry.tapped = true;
+    else if (field === "Typed" && value === "yes") entry.typed = true;
     else if (field === "Thread" && /^[\w-]+$/.test(value)) entry.thread = value;
     else if (field === "Message" && /^[\w-]+$/.test(value)) entry.messageId = value;
     else if (field === "Question" && /^[\w-]+$/.test(value)) entry.questionId = value;
@@ -187,6 +200,7 @@ export function renderTimeline({ head, entries }: Timeline): string {
       ...(entry.source ? [`- Source: ${entry.source}`] : []),
       ...(entry.at === undefined ? [] : [`- At: ${entry.at}`]),
       ...(entry.tapped ? ["- Tapped: yes"] : []),
+      ...(entry.typed ? ["- Typed: yes"] : []),
       ...(entry.thread ? [`- Thread: ${entry.thread}`] : []),
       ...(entry.messageId ? [`- Message: ${entry.messageId}`] : []),
       ...(entry.questionId ? [`- Question: ${entry.questionId}`] : []),
@@ -221,13 +235,81 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
   let tweaks = 0;
   let replaced = 0;
   let retyped = false;
+  // a revised card answer keeps its card's key; a tweak under the note-taker's key follows it
+  const moved = new Map<string, string>();
   // a tweak said with its pick lands after it
   for (const change of [...changes].sort((a, b) => a.at - b.at || Number(a.kind === "tweak") - Number(b.kind === "tweak"))) {
     const asked = clip(change.key.replace(/\|/g, "/"), KEY_MAX);
     if (!pickKey(asked)) continue;
     const slot = slotOf({ kind: change.kind, key: asked });
-    const current = entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === slot);
-    const key = current?.key ?? asked;
+    const card = change.kind === "pick" && change.binding && change.binding !== "unbound" && change.binding.questionId !== change.binding.messageId ? change.binding : undefined;
+    if (change.kind === "pick" && change.tapped && card) {
+      // a verified tap is the user's answer to its own card, apart from every other card whatever their keys
+      const own = cardSlot(card);
+      // the user's whole answer, never cut: its last words can hold it back
+      const picked = flat(change.picked);
+      // one answer per card a reply answers, however many keys the note-taker files it under
+      if (!picked || entries.some((entry) => entry.thread === card.thread && entry.messageId === card.messageId && entry.questionId === card.questionId)) continue;
+      const pressed = entries.findLast((entry) => !entry.replacedBy && !entry.kind && entry.tapped && cardOf(entry) === own);
+      // a typed pick on this card beats a press of its options; a newer typed answer to the card replaces it
+      const typedPick = pressed ? undefined : entries.findLast((entry) => !entry.replacedBy && !entry.kind && !entry.tapped && questionOf(entry) === own);
+      if (typedPick && !change.typed) continue;
+      const mine = pressed ?? typedPick;
+      let key = mine?.key ?? asked;
+      const follow = (to: string) => {
+        if (change.noted) moved.set(slotOf({ key: clip(change.noted.replace(/\|/g, "/"), KEY_MAX) }), slotOf({ key: to }));
+      };
+      if (mine) {
+        // only a newer tap answers the card again: a replayed older one never lands
+        if (change.at <= entryTime(mine)) continue;
+        if (slotOf(mine) !== slot) moved.set(slot, slotOf(mine));
+        // the same option tapped again renews the answer as of now
+        if (flat(mine.picked) === picked) {
+          mine.at = change.at;
+          if (change.typed && mine.tapped) {
+            delete mine.tapped;
+            mine.typed = true;
+          }
+          retyped = true;
+          follow(mine.key);
+          continue;
+        }
+      } else {
+        // another question's pick under the same key stays beside it
+        for (let n = 2; entries.some((entry) => !entry.replacedBy && slotOf(entry) === slotOf({ key })); n += 1) key = `${clip(asked, KEY_MAX - ` (${n})`.length)} (${n})`;
+        if (key !== asked) moved.set(slot, slotOf({ key }));
+      }
+      const id = fresh(pickStamp(change.at));
+      if (mine) {
+        mine.replacedBy = id;
+        replaced += 1;
+      }
+      if (change.legacy) {
+        entries.push({ id: fresh(change.legacy.day), key, replacedBy: id, picked: clip(change.legacy.line, PICKED_MAX), over: [], overPictures: [], files: [], tweaks: [], extra: [] });
+        replaced += 1;
+      }
+      const entry: PickEntry = {
+        id, key, picked,
+        over: (change.over ?? []).map((option) => clip(option, PICKED_MAX).replace(/;/g, ",")).filter(Boolean),
+        overPictures: card.overPictures, said: flat(change.said), files: card.files, tweaks: [], extra: [],
+        thread: card.thread, messageId: card.messageId, questionId: card.questionId, binding: "verified", at: change.at,
+      };
+      // a typed answer is never beaten by a press, here or in a merge
+      if (change.typed) entry.typed = true;
+      else entry.tapped = true;
+      if (card.picture) entry.picture = card.picture;
+      entries.push(entry);
+      follow(key);
+      picks += 1;
+      continue;
+    }
+    // a later answer to the same question is that question's pick, whatever key the note-taker gave it; an answer to another question never replaces a card's answer by key
+    const current = (card ? entries.findLast((entry) => !entry.replacedBy && !entry.kind && questionOf(entry) === cardSlot(card) && entry.messageId !== card.messageId) : undefined)
+      ?? entries.findLast((entry) => !entry.replacedBy && slotOf(entry) === (moved.get(slot) ?? slot) && !(card && cardOf(entry)));
+    let key = current?.key ?? asked;
+    // another question's pick under the same key stays beside it, under its own label
+    if (change.kind === "pick" && !current) for (let n = 2; entries.some((entry) => !entry.replacedBy && slotOf(entry) === slotOf({ key })); n += 1) key = `${clip(asked, KEY_MAX - ` (${n})`.length)} (${n})`;
+    if (current ? slotOf(current) !== slot : key !== asked) moved.set(slot, slotOf({ key }));
     if (change.kind === "goal") {
       // a replayed batch from before the current entry never lands on it
       if (current && change.at < entryTime(current)) continue;
@@ -264,7 +346,8 @@ export function applyPicks(text: string, changes: readonly PickChange[]): { text
     const binding = change.binding === "unbound" ? "unbound" : change.binding && "verified";
     const evidence: Partial<PickBinding> = change.binding === "unbound" ? {} : change.binding ?? change;
     if (evidence.messageId && entries.some((entry) => entry.messageId === evidence.messageId && entry.thread === evidence.thread && pickKey(entry.key) === pickKey(key))) continue;
-    if (current && sameOption(current.picked, picked)) {
+    // a tap is the user's own selected words, so only the whole text names the same option
+    if (current && (tapped ? flat(current.picked) === picked : sameOption(current.picked, picked))) {
       // a re-pick whose question never names the pick keeps the verified picture and time
       const proven = binding !== "verified" || current.binding !== "verified" || evidence.named;
       if (proven && (overTap || (binding === "verified" && (current.binding === "unbound" || (current.binding === "verified" && !tapped && !current.tapped))))) {
@@ -389,7 +472,9 @@ export function mergeTimelines(a: string, b: string): string | null {
       const typed = Boolean(before.tapped) !== Boolean(entry.tapped) ? (before.tapped ? entry : before) : undefined;
       const bound = typed ?? (before.binding === "verified" ? before : entry.binding === "verified" ? entry : before.messageId ? before : entry);
       if (bound.messageId || bound.binding === "unbound") {
-        merged.set(key, { ...bound, source: key, replacedBy: undefined, tweaks: said(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra) });
+        // the same option tapped again on one PC renewed the answer's time
+        const at = bound.at !== undefined && !typed && before.at !== undefined && entry.at !== undefined ? Math.max(before.at, entry.at) : bound.at;
+        merged.set(key, { ...bound, at, source: key, replacedBy: undefined, tweaks: said(before.tweaks, entry.tweaks), extra: union(before.extra, entry.extra) });
         continue;
       }
       const both: PickEntry = {
@@ -403,6 +488,7 @@ export function mergeTimelines(a: string, b: string): string | null {
         delete both.tapped;
         both.at = entry.at;
       }
+      if (entry.typed && !both.tapped) both.typed = true;
       merged.set(key, both);
     }
   }
@@ -417,6 +503,7 @@ export function mergeTimelines(a: string, b: string): string | null {
   }
   const ids = new Set<string>();
   const current = new Map<string, PickEntry>();
+  const answers = new Map<string, PickEntry>();
   for (const entry of entries) {
     const base = entry.id.replace(/ \(\d+\)$/, "");
     let id = base;
@@ -424,12 +511,23 @@ export function mergeTimelines(a: string, b: string): string | null {
     ids.add(id);
     entry.id = id;
     entry.replacedBy = undefined;
-    const before = current.get(slotOf(entry));
+    const card = cardOf(entry);
+    const held = current.get(slotOf(entry));
+    // a key never links a card's answer to an answer to another question
+    const before = held && !apart(held, entry) && !apart(entry, held) ? held : undefined;
     if (before && entry.tapped && !before.tapped) {
       entry.replacedBy = before.id;
       continue;
     }
-    if (before) before.replacedBy = id;
+    // a card's newest answer replaces only that card's last one; another question's answer under the same key stays beside it
+    const answer = card ? answers.get(card) : undefined;
+    if (entry.tapped && answer?.typed && !answer.replacedBy) {
+      entry.replacedBy = answer.id;
+      continue;
+    }
+    if (card) answers.set(card, entry);
+    if (answer && !answer.replacedBy) answer.replacedBy = id;
+    else if (before && !(card && (before.tapped || before.typed))) before.replacedBy = id;
     current.set(slotOf(entry), entry);
   }
   const head = [...new Set(timelines.flatMap(({ head }) => timelineHead(head).split("\n")))].join("\n");
@@ -452,11 +550,13 @@ export function pickKeysList(text: string | null | undefined): string {
 }
 
 function pickLine(entry: PickEntry): string {
-  const shown = entry.tweaks.slice(-TWEAKS_SHOWN).map(({ at, said }) => `"${clip(said, TWEAK_SHOWN_MAX)}" (${monthDay(at)})`);
+  // a card answer's follow-up is the user's words on it, shown whole: its last words can hold the pick back
+  const shown = entry.tweaks.slice(-TWEAKS_SHOWN).map(({ at, said }) => `"${questionOf(entry) ? said : clip(said, TWEAK_SHOWN_MAX)}" (${monthDay(at)})`);
   const earlier = entry.tweaks.length - shown.length;
   const tweaks = shown.length ? ` + tweaks: ${shown.join(", ")}${earlier ? ` (+${earlier} earlier in memory/${PICKS_FILE})` : ""}` : "";
-  const line = `- ${pickHead(entry)}${entry.picture ? ` (${entry.picture.path})` : ""}${tweaks}`;
-  return line.length > LINE_MAX ? `${line.slice(0, LINE_MAX - 3)}...` : line;
+  const head = `- ${pickHead(entry)}${entry.picture ? ` (${entry.picture.path})` : ""}`;
+  // never cut: a later condition in a tweak shows however long the pick is
+  return `${head}${tweaks}`;
 }
 
 const pickHead = (entry: PickEntry) => (pickKey(entry.key) === pickKey(entry.picked) ? `${entry.picked} (${monthDay(entry.id)})` : `${entry.key} (${monthDay(entry.id)}): ${entry.picked}`);

@@ -230,7 +230,11 @@ beforeAll(async () => {
       req.on("data", (c) => (data += c));
       req.on("end", () => {
         lastAskUserBody = JSON.parse(data);
-        if (lastAskUserBody.question === "refuse me") {
+        if (lastAskUserBody.question === "refuse me" || lastAskUserBody.question === "no source") {
+          if (lastAskUserBody.question === "no source") {
+            res.writeHead(400, { "content-type": "application/json" });
+            return res.end(JSON.stringify({ error: "answer required" }));
+          }
           res.writeHead(403, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: "source thread does not belong to sender" }));
         }
@@ -531,6 +535,8 @@ describe("agents-proxy MCP surface", () => {
     expect(dismissed.result.content[0].text).toBe("Already closed; the user dismissed it.");
     const unknown = await callTool("ask_user", { question: "unknown", close: true });
     expect(unknown.result.content[0].text).toBe("No matching open question.");
+    const refused = await callTool("ask_user", { question: "no source", close: true });
+    expect(refused.result).toMatchObject({ isError: true, content: [{ text: "Couldn't close: answer required" }] });
   });
 
   it("forwards a fact mark so the Forum may answer first", async () => {
