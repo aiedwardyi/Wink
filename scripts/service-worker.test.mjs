@@ -82,6 +82,46 @@ function load(listeners, mode) {
   return answer && Promise.all([answer, ...waits]).then(([page]) => page);
 }
 
+/** Runs public/offline.html's scripts online, with the relay's status and the PC's own answer faked. */
+async function offlinePage({ status, pcAnswers, retriedAt = null }) {
+  const page = readFileSync(join(ROOT, "public/offline.html"), "utf8");
+  const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+  const elements = new Map();
+  const element = (id) => {
+    if (!elements.has(id)) elements.set(id, { textContent: "", hidden: false, addEventListener() {} });
+    return elements.get(id);
+  };
+  const location = { hostname: RELAY, href: `https://${RELAY}/`, reload: vi.fn() };
+  const asked = [];
+  const fetch = async (url) => {
+    asked.push(url);
+    if (url === "https://relay.wink.test/v1/status/abcdefghijklmnop") return { json: async () => status };
+    if (pcAnswers) return { ok: true };
+    throw new TypeError("Failed to fetch");
+  };
+  const saved = new Map(retriedAt === null ? [] : [["wink-offline-retry", String(retriedAt)]]);
+  const sessionStorage = { getItem: (key) => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value) };
+  for (const script of scripts) {
+    runInNewContext(script, {
+      URL,
+      Date,
+      location,
+      history: {},
+      fetch,
+      sessionStorage,
+      navigator: { onLine: true, language: "en" },
+      localStorage: { getItem: () => null },
+      document: { documentElement: {}, getElementById: element },
+      window: { addEventListener() {} },
+      setInterval() {},
+      setTimeout() {},
+    });
+  }
+  await vi.waitFor(() => expect(asked.length).toBeGreaterThan(0));
+  await new Promise((resolve) => setImmediate(resolve));
+  return { location, asked, saved, detail: element("detail"), panel: element("panel") };
+}
+
 describe("service worker", () => {
   it("registers the app shell and push handlers on tailnet and local origins", () => {
     for (const host of ["home.tail1234.ts.net", "abcdefghijklmnop.tail1234.ts.net", "127.0.0.1", "localhost"]) {
@@ -219,6 +259,7 @@ describe("service worker", () => {
         document: { documentElement: {}, getElementById: element },
         window: { addEventListener() {} },
         setInterval() {},
+        setTimeout() {},
       });
     }
     expect(location.href).toBe(`https://${RELAY}/?bot=b1&thread=t-new#top`);
@@ -241,12 +282,43 @@ describe("service worker", () => {
         document: { documentElement: {}, getElementById: () => ({ textContent: "", addEventListener() {} }) },
         window: { addEventListener() {} },
         setInterval() {},
+        setTimeout() {},
       });
     }
     const shown = { url: location.href, focus: async () => {}, postMessage: (data) => serviceWorker.onmessage({ data }) };
     const { listeners, now } = worker(RELAY, undefined, [shown]);
     await click(listeners, "/?bot=b1&thread=t-new");
     expect(location.assign).toHaveBeenCalledExactlyOnceWith(`https://${RELAY}/?bot=b1&thread=t-new&t0=${now}`);
+  });
+
+  it("loads the page again, unseen, when a load failed while the PC was up and the PC answers now", async () => {
+    const shown = await offlinePage({ status: { online: true, since: 1 }, pcAnswers: true });
+    expect(shown.asked).toEqual(["https://relay.wink.test/v1/status/abcdefghijklmnop", "/manifest.json"]);
+    expect(shown.location.reload).toHaveBeenCalledOnce();
+    expect(shown.panel.hidden).toBe(true);
+    expect(shown.detail.textContent).toBe("");
+  });
+
+  it("keeps the certificate hint when the PC is up but does not answer this phone", async () => {
+    const shown = await offlinePage({ status: { online: true, since: 1 }, pcAnswers: false });
+    expect(shown.location.reload).not.toHaveBeenCalled();
+    expect(shown.detail.textContent).toMatch(/^Your PC is online, but this page did not load/);
+    expect(shown.panel.hidden).toBe(false);
+  });
+
+  it("loads again at most once a minute, so a load that keeps failing cannot loop", async () => {
+    const shown = await offlinePage({ status: { online: true, since: 1 }, pcAnswers: true, retriedAt: Date.now() - 5_000 });
+    expect(shown.location.reload).not.toHaveBeenCalled();
+    expect(shown.detail.textContent).toMatch(/^Your PC is online, but this page did not load/);
+    expect(shown.panel.hidden).toBe(false);
+  });
+
+  it("still says the PC is asleep, without loading again, when the relay says it is offline", async () => {
+    const shown = await offlinePage({ status: { online: false }, pcAnswers: false });
+    expect(shown.asked).toEqual(["https://relay.wink.test/v1/status/abcdefghijklmnop"]);
+    expect(shown.location.reload).not.toHaveBeenCalled();
+    expect(shown.detail.textContent).toBe("Your PC is asleep or Wink is closed.");
+    expect(shown.panel.hidden).toBe(false);
   });
 
   it("lets a reachable PC answer the page load itself", async () => {
@@ -272,6 +344,7 @@ describe("service worker", () => {
       document: { documentElement: {}, getElementById: element },
       window: { addEventListener() {} },
       setInterval() {},
+      setTimeout() {},
     });
     expect(element("pick").href).toBe("https://wink.test/?pick=1");
     expect(element("pick").textContent).toBe(text);
