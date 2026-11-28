@@ -7,7 +7,7 @@
 import { z } from "zod";
 
 import { ANSWERED_IN_CHAT, answerPrefix, answersQuestion, askStates, isSentByPerson, scanQuestion, type AskState } from "../shared/open-question.ts";
-import { cardAnswer, QUOTED } from "./pick-sources.ts";
+import { cardAnswer, QUOTED, spoken } from "./pick-sources.ts";
 import { replyExcerpt } from "./replies.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { addQuestionAsk, answerQuestionAsk, isOpenAsk, lastAskIdOf, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
@@ -145,7 +145,7 @@ const flat = (text: string) => text.replace(/\s+/g, " ").trim();
 
 /** The one message from the person since `card` holding `words` as typed, or saying them outside a quotation when several hold them: what a close:true answered. */
 function chatAnswer(path: readonly Message[], card: Message, words: string): { by: Message } | { error: string } {
-  const said = flat(words);
+  const said = flat(spoken(words));
   if (!said) return { error: "answer required: the person's exact words from the message that answered it" };
   const own = answerPrefix(card);
   const body = (row: Message) => {
@@ -156,11 +156,10 @@ function chatAnswer(path: readonly Message[], card: Message, words: string): { b
     const text = row.text ?? "";
     return answersQuestion(row) && (!row.answersCard || row.answersCard === card.id) && (!text.startsWith("Re: “") || text.startsWith(own));
   });
-  // the words filing keeps, so a close never succeeds on words its pick drops
-  const holding = replies.filter((row) => flat(cardAnswer(card, row, () => path.slice(0, path.indexOf(row))).answer).includes(said));
+  // the words filing keeps, quote marks and labels aside, so a close never succeeds on words its pick drops
+  const holding = replies.filter((row) => flat(spoken(cardAnswer(card, row).answer)).includes(said));
   const saying = holding.length > 1 ? holding.filter((row) => flat(body(row).split("\n").filter((line) => !QUOTED.test(line)).join("\n")).includes(said)) : holding;
   if (saying.length === 1) return { by: saying[0]! };
-  if (!holding.length && replies.some((row) => flat(body(row)).includes(said))) return { error: "those words are a quote of earlier chat in their message, not their answer; pass the words they wrote" };
   if (!holding.length) return { error: "no message from the person since this question holds those words; copy them exactly as they typed them" };
   return { error: `${holding.length} messages since this question hold those words; pass more of the one that answered it` };
 }

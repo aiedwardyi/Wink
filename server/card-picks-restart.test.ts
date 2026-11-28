@@ -101,8 +101,7 @@ describe("card picks survive a session restart", () => {
     { name: "a tapped choice holding a long quote", question: "Which message should appear when a draft is saved?", options: [copy, "Skip"], answer: copy, send: "tap" },
     { name: "a tapped choice holding a blockquote", question: "How should we handle the release notes?", options: [approval, "Leave unchanged"], answer: approval, send: "tap" },
     { name: "a typed choice holding a blockquote", question: "How should we handle the release notes?", options: [approval, "Leave unchanged"], answer: approval, send: "typed" },
-    // a quote the user pasted under their own words is not what they said
-    { name: "a typed reply quoting an earlier message", question: "How should we handle the release notes?", options: [approval, "Leave unchanged"], answer: "Send the release notes\n> Hold everything until Friday.", send: "typed", filed: "Send the release notes", earlier: "Last week's plan: hold everything until Friday." },
+    { name: "a typed reply quoting an earlier message", question: "How should we handle the release notes?", options: [approval, "Leave unchanged"], answer: "Send the release notes\n> Hold everything until Friday.", send: "typed", filed: "Send the release notes\n[quoting chat: Hold everything until Friday.]", earlier: "Last week's plan: hold everything until Friday." },
     { name: "a tapped choice holding a secret in its blockquote", question: "Which box should the release use?", options: ["Use the staging box\n> password: Tr0ub4dor&3xQ", "Skip"], answer: "Use the staging box\n> password: Tr0ub4dor&3xQ", send: "tap", secret: "Tr0ub4dor" },
     // the letter reads clean; the option it names holds a password, only partly masked by the text redactor
     { name: "a tapped letter naming a secret option", question: "Which wifi should the kiosk join?", options: ["A) Wi-Fi password: Tr0ub4dor&3xQ", "B) Guest network"], answer: "A", send: "tap", secret: "Wi-Fi password" },
@@ -375,9 +374,9 @@ describe("every way to answer a card files it under that card", () => {
 
   const plan = "Use Staging only, and get my sign-off before publishing to Production.";
   it.each([
-    { name: "under the user's lead-in", words: `Go with this plan:\n> ${plan}` },
-    { name: "alone", words: `> ${plan}` },
-  ])("files a plan the user quotes from the chat $name whole when the bot closes the card on it, after restart", async ({ words }) => {
+    { name: "under the user's lead-in", words: `Go with this plan:\n> ${plan}`, filed: `Go with this plan: [quoting chat: ${plan}]` },
+    { name: "alone", words: `> ${plan}`, filed: `[quoting chat: ${plan}]` },
+  ])("files a plan the user quotes from the chat $name whole when the bot closes the card on it, after restart", async ({ words, filed }) => {
     const { ask, send, settle, restarted, close, card: cardOf, post, botId } = setup();
     post({ role: "bot", kind: "text", text: `My plan: ${plan}` });
     const question = "How should we deploy the release?";
@@ -387,24 +386,45 @@ describe("every way to answer a card files it under that card", () => {
     expect(cardOf(card.id)?.answeredBy).toBe(reply.id);
     await settle();
     const { prompt, picks } = await restarted();
-    const whole = words.replace(/\s+/g, " ");
-    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId])).toEqual([[whole, card.id, reply.id]]);
+    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId])).toEqual([[filed, card.id, reply.id]]);
     expect(readMemoryTopic(botId, PICKS_FILE)).toContain("get my sign-off before publishing to Production");
-    expect(`${prompt}\n`).toContain(`: ${whole}\n`);
+    expect(`${prompt}\n`).toContain(`: ${filed}\n`);
   });
 
-  it("refuses a close on words the user only quoted from the chat, and files the words a corrected close names", async () => {
+  const rollout = "Publish the entire release directly to Production.";
+  const canary = "Deploy a canary to Staging, then wait for my written approval before Production.";
+  it.each([
+    { name: "a reference under the user's answer", earlier: `Last week's rollout: ${rollout}`, words: `Use the staging slot for Friday. For reference, here is last week's rollout:\n> ${rollout}`, by: "Use the staging slot for Friday.", filed: `Use the staging slot for Friday. For reference, here is last week's rollout: [quoting chat: ${rollout}]` },
+    { name: "a reference alone", earlier: `Last week's rollout: ${rollout}`, words: `> ${rollout}`, by: rollout, filed: `[quoting chat: ${rollout}]` },
+    { name: "a plan under a plain approval", earlier: `My plan: ${canary}`, words: `Yes, go with this plan.\n> ${canary}`, by: "Yes, go with this plan.", filed: `Yes, go with this plan. [quoting chat: ${canary}]` },
+    { name: "a plan with the user's words after it", earlier: `My plan: ${canary}`, words: `Go with this plan:\n> ${canary}\nand ping me when it is live.`, by: "and ping me when it is live.", filed: `Go with this plan: [quoting chat: ${canary}] and ping me when it is live.` },
+    { name: "a quote of earlier chat the close names", earlier: "Last week's plan: hold everything until Friday.", words: "Send the release notes\n> Hold everything until Friday.", by: "Hold everything until Friday.", filed: "Send the release notes [quoting chat: Hold everything until Friday.]" },
+  ])("files $name whole with the quote labeled as a quote, after restart", async ({ earlier, words, by, filed }) => {
     const { ask, send, settle, restarted, close, card: cardOf, post } = setup();
-    post({ role: "bot", kind: "text", text: "Last week's plan: hold everything until Friday." });
-    const question = "How should we handle the release notes?";
-    const card = ask(question, ["Send them", "Leave unchanged"]);
-    const reply = send("Send the release notes\n> Hold everything until Friday.");
-    expect(close(question, "Hold everything until Friday.")).toMatchObject({ status: 400, body: { error: expect.stringContaining("quote") } });
-    expect(cardOf(card.id)?.answered).toBeUndefined();
-    expect(close(question, "Send the release notes")).toEqual({ status: 200, body: { closed: true } });
+    post({ role: "bot", kind: "text", text: earlier });
+    const question = "Which slot should Friday's rollout use?";
+    const card = ask(question, ["Production", "Staging"]);
+    const reply = send(words);
+    expect(close(question, by)).toEqual({ status: 200, body: { closed: true } });
+    expect(cardOf(card.id)?.answeredBy).toBe(reply.id);
     await settle();
-    const { picks } = await restarted();
-    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId])).toEqual([["Send the release notes", card.id, reply.id]]);
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId])).toEqual([[filed, card.id, reply.id]]);
+    expect(`${prompt}\n`).toContain(`: ${filed}\n`);
+  });
+
+  it("files the user's own answer when the chat they quote under it holds a secret, and never the secret", async () => {
+    const { ask, send, settle, restarted, close, botId } = setup();
+    send("The staging box password: Tr0ub4dor&3xQ", { actedAt: Date.now() - 3 * MINUTE });
+    const question = "Which box should the release use?";
+    const card = ask(question, ["Production", "Staging"]);
+    const reply = send("Use the staging box. Last week's note:\n> The staging box password: Tr0ub4dor&3xQ");
+    expect(close(question, "Use the staging box.")).toEqual({ status: 200, body: { closed: true } });
+    await settle();
+    const { prompt, picks } = await restarted();
+    expect(picks.map(({ picked, questionId, messageId }) => [picked, questionId, messageId])).toEqual([["Use the staging box. Last week's note:", card.id, reply.id]]);
+    expect(readMemoryTopic(botId, PICKS_FILE)).not.toContain("Tr0ub4dor");
+    expect(prompt).not.toContain("Tr0ub4dor");
   });
 
   it("files a close the bot makes after its reply's notes pass settled", async () => {

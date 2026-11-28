@@ -110,32 +110,23 @@ export const QUOTED = /^\s*>/;
 const QUOTE_MARKS = /^\s*(?:>\s?)+/;
 const plain = (text: string) => text.replace(/[*_`~]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 
-/** A reply without the blockquotes it pasted from the chat before it, unless it says nothing else or its own words lead into the quote with a colon; a blockquote the user wrote, such as a callout, is their own words. */
+export const QUOTE_LABEL = /\[quoting chat: ([^\]]*)\]/g;
+
+/** A reply's words without its quote marks and quote labels: what a close's words are matched against. */
+export const spoken = (text: string) => text.replace(QUOTE_LABEL, "$1").split("\n").map((line) => line.replace(QUOTE_MARKS, "")).join("\n");
+
+/** A reply with each blockquote it pasted from the chat before it labeled as a quote; a blockquote the user wrote, such as a callout, stays as typed. */
 function ownWords(said: string, before: () => readonly Message[]): string {
   let shown: string | undefined;
   const quotesChat = (words: string) => (shown ??= plain(before().flatMap((row) => [row.text ?? "", row.card?.subtitle ?? "", ...(row.card?.options ?? [])]).join("\n"))).includes(words);
-  const lines = said.split("\n");
-  if (lines.every((line) => !line.trim() || QUOTED.test(line))) return said.trim();
-  const kept: string[] = [];
-  for (let i = 0; i < lines.length;) {
-    let end = i;
-    while (end < lines.length && QUOTED.test(lines[end]!)) end += 1;
-    if (end === i) {
-      kept.push(lines[i++]!);
-      continue;
-    }
-    const block = lines.slice(i, end);
-    const words = plain(block.map((line) => line.replace(QUOTE_MARKS, "")).join(" "));
-    const lead = lines.slice(0, i).findLast((line) => line.trim());
-    const adopted = lead !== undefined && !QUOTED.test(lead) && /:[*_]*\s*$/.test(lead);
-    if (!words || adopted || !quotesChat(words)) kept.push(...block);
-    i = end;
-  }
-  return kept.join("\n").trim();
+  return said.replace(/^[^\S\n]*>.*(?:\n[^\S\n]*>.*)*/gm, (block) => {
+    const quote = block.split("\n").map((line) => line.replace(QUOTE_MARKS, "").trim()).filter(Boolean).join(" ");
+    return quote && quotesChat(plain(quote)) ? `[quoting chat: ${quote}]` : block;
+  }).trim();
 }
 
-/** What a reply files as its answer to `card`: the option it names word for word, else its own words. A close checks its words against this same text. */
-export function cardAnswer(card: Message, reply: Message, before: () => readonly Message[]) {
+/** What a reply files as its answer to `card`: the option it names word for word, else its words with quotes of `before` labeled. A close checks its words against this same text. */
+export function cardAnswer(card: Message, reply: Message, before: () => readonly Message[] = () => []) {
   const text = reply.text ?? "";
   const said = (text.startsWith(answerPrefix(card)) ? text.slice(answerPrefix(card).length) : text).trim();
   const choice = cardChoice(said, card.card?.options?.length ? card.card.options : labeledOptions(card.card?.subtitle));

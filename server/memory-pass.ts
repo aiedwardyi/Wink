@@ -7,7 +7,7 @@ import type { ProviderInstance } from "./contracts.ts";
 import { AGY_TEXT_MODEL, exhaustedWindow, usageLimitFromError } from "./drivers/rate-limits.ts";
 import { isSignOut } from "./drivers/signout.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
-import { labeledOptions, offersOption, replyTurns, validatePickBinding, type PickBinding, type ReplyPictures } from "./pick-sources.ts";
+import { labeledOptions, offersOption, QUOTE_LABEL, replyTurns, validatePickBinding, type PickBinding, type ReplyPictures } from "./pick-sources.ts";
 import { applyPicks, currentPicks, KEY_MAX, LABELED, parseTimeline, PICKS_FILE, pickKey, pickKeysList, sameOption, type PickChange, type PickEntry, type Picture } from "./picks.ts";
 import { loadProfileSyncSettings } from "./profile-sync.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
@@ -171,11 +171,12 @@ export function withoutBlocks(text: string): string {
 export function userTyping(text: string, dropSensitive = true, keepImages = false, whole?: "option" | "answer"): string {
   const attached = text.replace(/<attached-(image|file)\b[^>]*\/>/gi, (tag, kind) => keepImages && kind.toLowerCase() === "image" ? tag : "");
   const typed = whole === "option" ? attached : withoutBlocks(attached);
+  // a quote of earlier chat is screened apart from the user's own words, so a secret it carries costs only the quote
+  const own = whole === "answer" ? typed.replace(QUOTE_LABEL, "") : typed;
   // the whole message: a label and its value can sit in different paragraphs
-  if (dropSensitive && secretValue(typed)) return "";
+  if (dropSensitive && secretValue(own)) return "";
   if (whole === "option") return redactSecretsInText(typed.trim());
-  // replyTurns already dropped the lines it quotes from the chat; a callout the user wrote stays
-  if (whole === "answer") return redactSecretsInText(typed.trim());
+  if (whole === "answer") return redactSecretsInText(typed.replace(QUOTE_LABEL, (quote) => dropSensitive && secretValue(`${own}\n${quote}`) ? "" : quote).trim());
   const unwrapped = typed.replace(/(?<!=)"[^"\n]{81,}"|“[^”\n]{81,}”|'[^'\n]{81,}'/g, "");
   const kept = unwrapped
     .split(/\n\s*\n/)
