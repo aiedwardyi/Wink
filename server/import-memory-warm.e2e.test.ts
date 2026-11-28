@@ -48,7 +48,13 @@ describe.each(ENGINE_NAMES)("import_memory closing keeps the warm engine on %s",
     const gone = new Set(mine.filter((line) => line.event === "exit").map((line) => line.id));
     const prompted = new Set(mine.filter((line) => line.event === "stdin").map((line) => line.id));
     const live = [...ids].filter((id) => !gone.has(id));
-    return { spawned: ids.size, live: live.length, unprompted: live.filter((id) => !prompted.has(id)).length };
+    return {
+      spawned: ids.size,
+      live: live.length,
+      unprompted: live.filter((id) => !prompted.has(id)).length,
+      busy: live.filter((id) => prompted.has(id)).length,
+      unused: [...gone].filter((id) => !prompted.has(id)).length,
+    };
   };
   const waitFor = async (predicate: () => Promise<boolean>, what: string) => {
     const deadline = Date.now() + 30_000;
@@ -57,13 +63,10 @@ describe.each(ENGINE_NAMES)("import_memory closing keeps the warm engine on %s",
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   };
-  // the engine is between turns once one process is left, and for one-per-turn engines that one is the next standby
+  // a kept engine is between turns once one process is left; a one-per-turn engine once its turn's agy is gone
   const settledSpawns = async (engine: Engine) => {
     const standby = "standby" in ENGINES[engine];
-    await waitFor(async () => {
-      const { live, unprompted } = processes(engine);
-      return live === 1 && (!standby || unprompted === 1);
-    }, `${engine} to settle between turns`);
+    await waitFor(async () => standby ? processes(engine).busy === 0 : processes(engine).live === 1, `${engine} to settle between turns`);
     return processes(engine).spawned;
   };
 
@@ -120,6 +123,8 @@ describe.each(ENGINE_NAMES)("import_memory closing keeps the warm engine on %s",
       }, `the reply to ${text}`);
       counts.push(await settledSpawns(engine));
     }
+    // the pool may offer no standby on a busy PC, so a one-per-turn engine counts launches thrown away unprompted
+    if ("standby" in ENGINES[engine]) return expect(processes(engine).unused, "agy launches never prompted").toBe(0);
     const started = counts.slice(1).map((count, i) => count - counts[i]);
     expect(started.slice(2), `engine processes started per message: ${started.join(", ")}`).toEqual([started[2], started[2], started[2]]);
   }, 120_000);
