@@ -708,6 +708,18 @@ describe("pinned ask_user question", () => {
     expect(dot()).toBeNull();
   });
 
+  it("dismisses only the swiped question on a phone when a newer one takes its place mid-glide", async () => {
+    screen(true);
+    await mount({ bot: bot([question]) });
+    await pull(card()!, 200);
+    const next = { ...ask({ subtitle: "Deploy now?" }), at: 3 };
+    await rerender({ bot: bot([question, next]) });
+    expect(card()?.textContent).toContain("Deploy now?");
+    await vi.waitFor(() => expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]));
+    expect(sent("PATCH", `/api/bots/asker/cards/${next.id}`)).toEqual([]);
+    expect(card()?.textContent).toContain("Deploy now?");
+  });
+
   it("springs back from a short slow pull on a phone, still the open card", async () => {
     screen(true);
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(300);
