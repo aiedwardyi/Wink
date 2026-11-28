@@ -1,17 +1,14 @@
 import type { ChildProcess } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { createTempDirs, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
+import { createFixtureHome } from "./testing/test-home.ts";
 import { freePortBlock } from "./testing/ports.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
-
-const temps = createTempDirs();
-afterAll(() => temps.remove());
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
@@ -58,7 +55,7 @@ const prime = async (first = 100, second = 0) => {
 
 beforeEach(async () => {
   port = await freePortBlock([0, 1], 24_100, 2_000);
-  home = temps.make(join(tmpdir(), "omb-automatic-selection-"));
+  home = createFixtureHome("omb-automatic-selection-");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(join(home, "calls.txt"), "");
   writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({

@@ -11,6 +11,9 @@
 //                      | edit (a Write then a Bash, gated like the real CLI)
 //                      | wink-tool (FAKE_CLAUDE_TOOL, gated the same way; running
 //                        it writes ran-tool.txt)
+//                      | read (a Read of notes.txt in the cwd, gated the same way;
+//                        what it read goes to FAKE_CLAUDE_READ_OUT;
+//                        FAKE_CLAUDE_READ_TOOL names another read tool, e.g. LSP)
 //                      | bench-quiet (text only, no tool_use — latency floor)
 //                      | late-wake (wakes after `result` and asks for a Bash)
 //                      | subagent-wake (a subagent's final lands after `result`,
@@ -59,6 +62,9 @@
 //                      (default; applied at once, like the real CLI) | error
 //                      | none (never answered) | crash (success, then a
 //                      503-shaped exit before the turn's result)
+//   FAKE_CLAUDE_MODEL_REPLY  how set_model is answered: success (default;
+//                      echoed first as a replayed user line, like 2.1.332;
+//                      later inits and replies name the new model) | error | none
 //   FAKE_CLAUDE_USAGE  path; once it exists, usage-calls reads {first, last,
 //                      window} from it each turn: the two main calls' prompts
 //                      and the main model's window
@@ -84,6 +90,8 @@
 //                      messages, written after init in place of the reply
 //   FAKE_CLAUDE_AUTH   in (default) | out | unsupported | malformed |
 //                      inherited-api-key — what `auth status` reports
+//   FAKE_CLAUDE_AUTH_FILE  path; while it exists, its JSON is what `auth status`
+//                      prints, read per call so a test can switch accounts live
 //   FAKE_CLAUDE_PROMPT_LOG  path; every stdin message is appended as a JSON
 //                      line {pid, argv, systemPrompt, text}, so a test sees
 //                      what each turn of a retained process was sent
@@ -101,6 +109,8 @@
 //                      answers only once <dir>/<name> exists
 //   FAKE_CLAUDE_REJECT_FLAG  a flag the text helper rejects the way an older
 //                      CLI's Commander does: unknown option, exit 1
+//   FAKE_CLAUDE_VERBOSE  1: the json helper prints every message as one array,
+//                      as the real CLI does with "verbose": true in its config
 //   FAKE_CLAUDE_HOOKS  1: run SessionStart (once per process) and UserPromptSubmit
 //                      command hooks loaded the way 2.1.326 loads them: each
 //                      --setting-sources file (the last flag wins; user,project,local
@@ -115,7 +125,7 @@ import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, writeFile
 import { execSync, spawn } from "node:child_process";
 import { connect, createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 const forked = process.argv.includes("--fork-session");
 const mode = (forked ? process.env.FAKE_CLAUDE_FORK_MODE : process.env.FAKE_CLAUDE_MODE) ?? "happy";
@@ -138,7 +148,10 @@ if (argv[0] === "--version") {
   process.exit(0);
 }
 
-if (argv[0] === "auth" && argv[1] === "status") {
+const authFile = process.env.FAKE_CLAUDE_AUTH_FILE;
+if (argv[0] === "auth" && argv[1] === "status" && authFile && existsSync(authFile)) {
+  process.stdout.write(readFileSync(authFile, "utf8"), () => process.exit(0));
+} else if (argv[0] === "auth" && argv[1] === "status") {
   const auth = process.env.FAKE_CLAUDE_AUTH ?? "in";
   if (auth === "unsupported") {
     process.stderr.write("error: unknown command 'auth'\n");
@@ -158,7 +171,7 @@ if (argv[0] === "auth" && argv[1] === "status") {
 // One-shot helper mode used by generateText/reviewPermission. The prompt is
 // deliberately read from stdin so sensitive review text never appears in
 // argv or process listings.
-if (argAfter("--output-format") === "text") {
+if (argAfter("--output-format") === "json") {
   const rejected = process.env.FAKE_CLAUDE_REJECT_FLAG;
   if (rejected && argv.includes(rejected)) {
     process.stderr.write(`error: unknown option '${rejected}'\n`);
@@ -185,7 +198,11 @@ if (argAfter("--output-format") === "text") {
   if (Number.isFinite(delayMs) && delayMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
-  process.stdout.write("fake generated text\n");
+  const result = { type: "result", subtype: "success", is_error: false, result: "fake generated text", usage: { input_tokens: 2, cache_creation_input_tokens: 468, cache_read_input_tokens: 5718, output_tokens: 1436 } };
+  const reply = process.env.FAKE_CLAUDE_VERBOSE === "1"
+    ? [{ type: "system", subtype: "init", model: "claude-haiku-5-5" }, { type: "assistant", message: { content: [{ type: "text", text: "fake generated text" }] } }, result]
+    : result;
+  process.stdout.write(`${JSON.stringify(reply)}\n`);
   process.exit(0);
 }
 
@@ -254,9 +271,9 @@ if (lateRole === "speaker") {
 // exits only when stdin ends. `slow` leaves a gap between the tool result
 // and the reply so a test can steer into it.
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
-type StdinLine = { type?: string; request_id?: string; request?: { subtype?: string; settings?: { effortLevel?: string }; appendSystemPrompt?: string } };
+type StdinLine = { type?: string; request_id?: string; request?: { subtype?: string; settings?: { effortLevel?: string }; appendSystemPrompt?: string; model?: string } };
 const sessionId = forked ? (argAfter("--session-id") ?? `${argAfter("--resume")}-fork`) : (argAfter("--resume") ?? argAfter("--session-id") ?? "fake-session");
-const model = argAfter("--model") ?? "claude-fake";
+let model = argAfter("--model") ?? "claude-fake";
 let effort = argAfter("--effort");
 let dumped = false;
 let turnRunning = false;
@@ -410,12 +427,19 @@ const playNarrationScript = async () => {
 // The real CLI's order, checked against 2.1.x: a --settings ask rule beats
 // the user's allow list, which beats the permission mode; anything left
 // goes to the --permission-prompt-tool, which forwards to Orbit's broker.
+// Under the ask rules, a read tool on a path inside the cwd runs in any mode.
 const allowedBy = (rules: string | null | undefined, tool: string): boolean =>
   (rules ?? "").split(",").some((rule) => rule === tool || (rule.startsWith("mcp__") && tool.startsWith(`${rule}__`)));
-const needsPrompt = (tool: string): boolean => {
+const READ_TOOLS = ["Read", "Glob", "Grep", "LSP"];
+const insideCwd = (path: string): boolean => {
+  const rel = relative(process.cwd(), resolve(path));
+  return !rel.startsWith("..") && !isAbsolute(rel);
+};
+const needsPrompt = (tool: string, input: { [key: string]: JsonValue } = {}): boolean => {
   const settings = argAfter("--settings");
   const askRules: unknown = settings ? JSON.parse(settings)?.permissions?.ask : undefined;
   if (Array.isArray(askRules) && askRules.includes(tool)) return true;
+  if (READ_TOOLS.includes(tool) && insideCwd(String(input.file_path ?? input.path ?? "."))) return false;
   if (allowedBy(process.env.FAKE_CLAUDE_USER_ALLOW, tool) || allowedBy(argAfter("--allowedTools"), tool)) return false;
   const permissionMode = argAfter("--permission-mode");
   if (permissionMode === "bypassPermissions") return false;
@@ -498,7 +522,7 @@ const playTools = async (tools: Array<[id: string, name: string, input: { [key: 
   const denials: string[] = [];
   const useTool = async (id: string, name: string, input: { [key: string]: JsonValue }, run: () => void) => {
     out({ type: "assistant", message: { content: [{ type: "tool_use", id, name, input }] } });
-    const behavior = (argAfter("--disallowedTools") ?? "").split(",").includes(name) ? "deny" : hookDecision(name, input) ?? (needsPrompt(name) ? await askBroker(socketPath, name, input) : "allow");
+    const behavior = (argAfter("--disallowedTools") ?? "").split(",").includes(name) ? "deny" : hookDecision(name, input) ?? (needsPrompt(name, input) ? await askBroker(socketPath, name, input) : "allow");
     if (behavior !== "allow") denials.push(name);
     if (behavior === "allow") run();
     out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: behavior !== "allow" }] } });
@@ -595,6 +619,14 @@ const answerFlagSettings = (requestId: string, effortLevel: string | undefined) 
   if (how === "crash") {
     setTimeout(() => process.stderr.write("claude: API error (503): service temporarily unavailable\n", () => process.exit(5)), 100);
   }
+};
+const answerSetModel = (requestId: string, next: string | undefined) => {
+  const how = process.env.FAKE_CLAUDE_MODEL_REPLY;
+  if (how === "none") return;
+  if (how === "error") return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "unsupported" } });
+  model = next ?? model;
+  out({ type: "user", message: { role: "user", content: `<local-command-stdout>Set model to \`${model}\`</local-command-stdout>` }, session_id: sessionId, isReplay: true });
+  out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { model } } });
 };
 const logEffort = () => {
   if (process.env.FAKE_CLAUDE_EFFORT_LOG) appendFileSync(process.env.FAKE_CLAUDE_EFFORT_LOG, `${effort ?? ""}\n`);
@@ -847,6 +879,12 @@ const playTurn = (prompt: JsonValue, held = false) => {
       ["tu-write", "Write", { file_path: "made.txt", content: "hi" }, () => writeFileSync("made.txt", "hi")],
       ["tu-bash", "Bash", { command: "node -e \"require('fs').writeFileSync('ran.txt','ok')\"" }, () => writeFileSync("ran.txt", "ok")],
     ]);
+    return;
+  }
+
+  if (mode === "read") {
+    const path = join(process.cwd(), "notes.txt");
+    void playTools([["tu-read", process.env.FAKE_CLAUDE_READ_TOOL ?? "Read", { file_path: path }, () => writeFileSync(process.env.FAKE_CLAUDE_READ_OUT ?? "read.txt", readFileSync(path))]]);
     return;
   }
 
@@ -1124,6 +1162,7 @@ process.stdin.on("data", (c) => {
       const requestId = String(control.request_id ?? "");
       if (control.request?.subtype === "interrupt" && onInterrupt) onInterrupt(requestId);
       else if (control.request?.subtype === "apply_flag_settings") answerFlagSettings(requestId, control.request.settings?.effortLevel);
+      else if (control.request?.subtype === "set_model") answerSetModel(requestId, control.request.model);
       else if (control.request?.subtype === "get_usage" && process.env.FAKE_CLAUDE_GET_USAGE) {
         if (process.env.FAKE_USAGE_CALLS) appendFileSync(process.env.FAKE_USAGE_CALLS, `${process.env.FAKE_CLAUDE_GET_USAGE}\n`);
         out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: JSON.parse(readFileSync(process.env.FAKE_CLAUDE_GET_USAGE, "utf8")) } });

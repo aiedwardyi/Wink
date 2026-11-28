@@ -32,23 +32,37 @@ describe("cleanup copy", () => {
     await mount(createElement(MemoryCleanRow, { run, onUndo: vi.fn() }));
     expect(host.textContent).toContain(locale === "en" ? "Tidied Nov 4, nothing lost" : "11월 4일 정리, 빠진 내용 없음");
     expect(host.textContent).not.toContain("KB");
-    for (const part of locale === "en" ? ["5 merged", "4 replaced by newer", "20 moved to memory-history.md"] : ["5줄 합침", "4줄 최신으로 교체", "20줄 memory-history.md로 이동"]) expect(host.textContent).toContain(part);
+    for (const part of locale === "en" ? ["5 merged", "4 replaced by newer", "20 archived to memory/dreamed.md, still searchable"] : ["5줄 합침", "4줄 최신으로 교체", "20줄 memory/dreamed.md에 보관, 계속 검색돼요"]) expect(host.textContent).toContain(part);
     expect(host.querySelector(".whitespace-nowrap")?.textContent).toContain(locale === "en" ? "Undo" : "되돌리기");
-    await act(async () => root.render(createElement(MemoryTidyLine, { tidy: { runId: "r" }, run, onUndo: vi.fn() })));
+    await act(async () => root.render(createElement(MemoryTidyLine, { bot: "Ava", tidy: { runId: "r", count: 3 }, run, onUndo: vi.fn() })));
     expect(host.textContent).not.toContain("KB");
-    expect(host.textContent).toContain(locale === "en" ? "Tidied memory, nothing lost" : "메모리 정리됨, 빠진 내용 없음");
+    expect(host.textContent).toContain(locale === "en" ? "Ava: archived 3 old lines (still searchable). · Undo" : "Ava: 오래된 줄 3개 보관함 (계속 검색돼요). · 되돌리기");
     await act(async () => host.querySelector("button")!.click());
     expect(store.dispatch).toHaveBeenCalledWith({ type: "toggleSettings", open: true, memory: { cleanup: true } });
+  });
+  it("keeps the details open to a dry run whose to-do checks did not finish", async () => {
+    const dream = { mode: "dry" as const, notes: { state: "checked" as const, items: [] }, asks: { threads: 2, skipped: 1, unchecked: 2, items: [] }, runUntil: run.at, dropUntil: run.at };
+    await mount(createElement(MemoryCleanRow, { run: { ...run, dream }, onUndo: vi.fn() }));
+    expect(host.textContent).not.toContain("Nothing to move or close");
+    await act(async () => host.querySelector("button")!.click());
+    expect(host.textContent).toContain("1 busy chats not checked.");
+    expect(host.textContent).toContain("2 to-dos' PRs not checked yet.");
   });
   it("omits zero-count details", async () => {
     await mount(createElement(MemoryCleanRow, { run: { ...run, merged: 0, replaced: 0 }, onUndo: vi.fn() }));
     expect(host.textContent).not.toContain("merged");
     expect(host.textContent).not.toContain("replaced");
   });
+  it.each(["en", "ko"] as const)("words a line saved before it counted its lines without a number in %s", async (locale) => {
+    applyLocale(locale);
+    await mount(createElement(MemoryTidyLine, { bot: "Ava", tidy: { runId: "old" }, run, onUndo: vi.fn() }));
+    expect(host.textContent).not.toContain("undefined");
+    expect(host.textContent).toBe(locale === "en" ? "Tidied memory, nothing lost" : "메모리 정리됨, 빠진 내용 없음");
+  });
   it("shows Undo only for the matching undoable run, and becomes inert after Undo", async () => {
-    await mount(createElement(MemoryTidyLine, { tidy: { runId: "old" }, run, onUndo: vi.fn() }));
+    await mount(createElement(MemoryTidyLine, { bot: "Ava", tidy: { runId: "old", count: 1 }, run, onUndo: vi.fn() }));
     expect(host.querySelectorAll("button")).toHaveLength(1);
-    await act(async () => root.render(createElement(MemoryTidyLine, { tidy: { runId: "r", undoneAt: 1 }, run, onUndo: vi.fn() })));
+    await act(async () => root.render(createElement(MemoryTidyLine, { bot: "Ava", tidy: { runId: "r", count: 1, undoneAt: 1 }, run, onUndo: vi.fn() })));
     expect(host.textContent).toBe("Memory cleanup undone");
     expect(host.querySelector("button")).toBeNull();
     await act(async () => root.render(createElement(MemoryCleanRow, { run: { ...run, undoneAt: 1 }, onUndo: vi.fn() })));

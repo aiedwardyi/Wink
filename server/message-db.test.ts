@@ -20,12 +20,15 @@ import {
   searchHaystack,
   searchMessages,
   setActiveLeaf,
+  onStoredPath,
+  storedWindow,
   threadVersion,
   updateMessage,
   withMessageTransaction,
 } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
 import type { ModelSelection } from "./contracts.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 const legacy = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
@@ -41,7 +44,7 @@ const msg = (id: string, text: string, extra: Partial<Message> = {}): Message =>
 describe("message-db", () => {
   beforeEach(() => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
   });
 
@@ -221,12 +224,13 @@ describe("message-db", () => {
     expect(thread.activeLeafId).toBeNull();
   });
 
-  it("deleteThread drops the thread's change count", () => {
-    insertMessage("t4", msg("m1", "edited soon"));
-    updateMessage("t4", msg("m1", "edited"));
+  it("a thread deleted and re-created on the same rowid never repeats its version", () => {
+    insertMessage("t4", msg("m1", "first"));
+    const first = threadVersion("t4");
     deleteThread("t4");
     insertMessage("t4", msg("m1", "back"));
-    expect(threadVersion("t4")?.split(":").at(-1)).toBe("0");
+    expect(threadVersion("t4")?.split(":").at(-2)).toBe(first?.split(":").at(-2));
+    expect(threadVersion("t4")).not.toBe(first);
   });
 
   it("search is case-insensitive, escapes LIKE wildcards, and snips long text", () => {
@@ -507,6 +511,36 @@ describe("message-db", () => {
     }
     expect(work).toEqual({ runs: 6, rows: 0 });
     expect(searchMessages("green", 1).map((hit) => hit.messageId)).toEqual(["run5"]);
+  });
+
+  it("reads the active path and a window from disk as a loaded thread would", () => {
+    // flat legacy rows, then a fork at a, then a second root
+    const rows = [
+      ...["l0", "l1", "l2"].map((id) => msg(id, id)),
+      msg("a", "a", { parentId: "l2" }),
+      msg("b", "b", { parentId: "a" }),
+      msg("c", "c", { parentId: "a" }),
+      msg("d", "d", { parentId: "c" }),
+      msg("e", "e", { parentId: "b" }),
+      msg("r", "r", { parentId: null }),
+    ];
+    for (const row of rows) insertMessage("tw", row);
+    setActiveLeaf("tw", "d");
+    const ids = rows.map((row) => row.id);
+    const loaded = new Store(selection);
+    const all = loaded.messagesFor("tw");
+
+    expect([...onStoredPath("tw", ids)].sort()).toEqual(loaded.activePath("tw").map((m) => m.id).sort());
+    expect([...onStoredPath("tw", ["e", "l0", "nope"])]).toEqual(["l0"]);
+    for (const limit of [0, 1, 2, 3, 4, 50]) {
+      for (const [index, row] of all.entries()) {
+        const before = Math.floor((limit - 1) / 2);
+        const start = Math.max(0, Math.min(index - before, all.length - limit));
+        const stop = Math.min(all.length, start + limit);
+        expect(storedWindow("tw", row.id, limit), `${row.id} ${limit}`).toEqual({ messages: all.slice(start, stop), hasMore: start > 0 });
+      }
+    }
+    expect(storedWindow("tw", "nope", 4)).toBeNull();
   });
 
   it("Store round-trips branching through the DB across a restart", () => {

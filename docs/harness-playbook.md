@@ -4,15 +4,15 @@ You can run coding workers (Claude Code or Codex) in terminal panes with
 terminal_spawn, terminal_read, terminal_send and terminal_close.
 terminal_playbook returns the exact spawn commands. This is the workflow around them.
 
-Hand big jobs to workers: many steps or files, or more than about 10 minutes
-of work. You plan, write the card and check the result. Do quick asks and
-small edits yourself, and big jobs too when no worker can start or the job
-needs tools only you have, like connected apps or the browser. For a room
-ask, worker reports reach your own chat, not the room: call link_room_fix.
-Background subagents end with your turn, so work that must outlive it
-goes to a pane worker. Several tasks given at once each get their own pane worker
-in parallel instead of being queued for yourself; work the user would want to
-watch runs in panes, not background subagents.
+Hand big jobs to workers: many steps or files, or over about 10 minutes of
+work. Decide before your first edit: you plan, write the card and check the
+result, even when a skill offers to build it here or with subagents; the card
+points to its plan. Do quick asks, small edits and any part that
+needs tools only you have, like connected apps or the browser, yourself;
+a whole big job only when no worker can start. For a room ask,
+worker reports reach your own chat, not the room: call link_room_fix.
+Background subagents end with your turn. Several tasks at once each get their
+own pane worker; work the user would want to watch runs in panes.
 
 The rest loads on demand. Call terminal_playbook before you write a card or
 spawn a worker, when a worker report or pane note arrives, and before you
@@ -98,6 +98,7 @@ What to build or fix, and why. 2-5 lines. Quote the user's latest words verbatim
 - Test browsers run headless: a headed one, even off-screen, takes the user's keyboard focus mid-typing. A check that needs a real window asks first. On Windows, this prints nothing while yours run: `Get-Process chrome,msedge -EA 0 | ? { $_.MainWindowHandle -ne 0 -and $_.Path -match 'ms-playwright' }`
 - Tests and test sign-ins use a throwaway config and home folder, never the PC's real engine profiles.
 - Size heavy local runs (test browsers, servers, builds) to the PC: check cores, free memory and load first, and scale up only while it stays responsive; stop the test browsers and servers you started before your final report.
+- Big files you make (builds, installs, clips, browser profiles, data copies) stay in your worktree or `$ORBIT_SCRATCH`, never elsewhere in temp; delete the ones nobody needs before your final report.
 - Waits over 10 min: start the job hidden, then poll it in the foreground.
 - Delete by absolute path, never `cd` then relative `rm`: no rule skips its approval prompt.
 
@@ -136,24 +137,17 @@ The exact shape of its final message, plus one line: what it reused.
 
 ## Token budget
 
-- Size each card so its worker finishes under about 200k tokens of context.
-  Split research or probes from the build.
-- A new task gets a FRESH worker. CURRENT gets at most one short follow-up on
-  the same task; anything more goes to a FRESH worker in the same worktree
-  that starts from the card and its progress file.
-- Claude workers compact at about 300k and get their card and progress file back.
-  Let them; a fresh worker just for context is slower and uncached.
-- Match the model to the job when you pick a worker or subagent. Pick only from
-  engines the user is signed in to. Spread jobs across engines so no single plan
-  runs out. Tell the user each pick with a one-sentence reason.
+- Size cards so a worker finishes under about 200k tokens of context. Split research or probes from builds.
+- A new task gets a FRESH worker. CURRENT gets at most one short follow-up on it; anything more goes to a FRESH worker in the same worktree, starting from its card and progress file.
+- Claude workers compact at about 300k and get their card and progress file back. A fresh worker just for context is slower and uncached.
+- Match the model to the job per worker or subagent. Pick only from engines the user is signed in to. Spread jobs across engines so no single plan runs out. Tell the user each pick with a one-sentence reason.
   - Hardest work (architecture, hard bugs, high stakes): Opus 5.5, GPT-6.2 Sol.
-  - Code and security audits: Gemini 4 Carbon and Gemini 4 Argon, GPT-6.2 Astra; Fable 5.2 at xhigh, code audits only.
-  - Routine builds: Sonnet 5.5, GPT-6.1 Terra, Muse 1.3.
+  - Builds: Opus 5.5, then Gemini 4 Neon; routine: Sonnet 5.5, GPT-6.1 Terra, Muse 1.3.
+  - Code and security audits: GPT-6.2 Astra, GPT-6.2 Sol, then Gemini 4 Neon; Gemini 4 Carbon; Fable 5.2 at xhigh, code audits only.
+  - Design/UI: Opus 5.5 at max; Gemini 4 Neon: own version side by side when looks matter.
   - Fast work (quick answers, searches, small edits): Grok 4.7 and Gemini 4 Hydrogen, tied; Muse Ember just below them.
   - Cheapest mechanical edits: Haiku 5.5, GPT-6 Luna, Gemini 3.8 Flash.
-- Default workers to high effort. Only when the user turns max mode on, use
-  max for hard bugs, QA (Opus 5.5), verification and audits. Fable: code
-  audits only, at xhigh.
+- Default workers to high effort. Only when the user turns max mode on, use max for hard bugs, QA (Opus 5.5), verification and audits. Fable: code audits only, at xhigh.
 
 ## Audit cards
 
@@ -187,6 +181,7 @@ Record paths in the card's progress file.
 
 - Scratch and test data go in one folder per card: use `$ORBIT_SCRATCH`.
   Never reuse another card's folder.
+  Delete the big files in it that nobody needs before the report.
   Wink removes it when the pane closes; close with `keep` to hand it to the next card.
 - Keep evidence files the user still needs (sheet.png, findings) outside temp.
 - Wink removes clean worktrees a day after pane close if all commits are on a remote.

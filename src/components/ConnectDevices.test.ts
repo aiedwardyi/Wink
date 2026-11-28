@@ -68,7 +68,7 @@ describe("Devices first paint", () => {
 
   it("keeps Devices and the PC failure alert visible during the refresh probe", async () => {
     const openPc = vi.fn().mockResolvedValue(false);
-    const pc = { name: "Laptop", host: "laptop.fixture.invalid" };
+    const pc = { name: "Laptop", host: "laptop.tail1234.ts.net", relayHost: "laptopaaaaaaaaaa.wink.test" };
     vi.stubGlobal("ogb", { deviceWindow: { open: openPc } });
     store.api.mockResolvedValue({ ...body, pcs: [pc] });
     await open();
@@ -77,7 +77,7 @@ describe("Devices first paint", () => {
     store.api.mockReset();
     store.api.mockImplementation(() => new Promise(() => {}));
     await act(async () => button("Open Laptop").click());
-    expect(openPc).toHaveBeenCalledExactlyOnceWith(pc.host, pc.name);
+    expect(openPc).toHaveBeenCalledExactlyOnceWith(pc.host, pc.name, pc.relayHost);
     expect(store.api.mock.calls).toEqual([["/api/remote-link?setup=1"]]);
     expect(host.querySelector("[data-devices-settings]")).not.toBeNull();
     expect(host.querySelector("[data-pc-ready]")).not.toBeNull();

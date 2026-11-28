@@ -44,7 +44,7 @@ export function replyDestinations(bus: CommsBus, receipt: DelegationReceipt, sta
     add(channel.threadId, "reply", { ...row, kind: hasReply ? "text" : "activity", from: { botId: receipt.toBotId, name: receipt.toBotName, color: comm.withColor }, tool: hasReply ? undefined : row.tool, comm: { ...comm, peer: hasReply ? "reply" : undefined } });
   }
   if (room && sender && homeId !== sender.threadId) {
-    add(sender.threadId, "chip", { role: "bot", kind: "activity", tool: { name: `@${receipt.toBotName} finished task ${receipt.id} in ${room.name}`, ok: success }, comm: { ...comm, groupId: room.id } });
+    add(sender.threadId, "chip", { role: "bot", kind: "activity", tool: { name: `@${receipt.toBotName} finished a task in ${room.name}`, ok: success }, comm: { ...comm, groupId: room.id } });
   }
   return destinations;
 }

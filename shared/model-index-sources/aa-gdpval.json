@@ -85,12 +85,12 @@
     {
       "model": "claude-fable-5-2",
       "effort": "medium",
-      "value": 1591.16,
+      "value": 1591.13,
       "cost_per_task": 1.69,
       "cost_benchmark": "aa-gdpval",
       "cost_source": "https://artificialanalysis.ai/evaluations/gdpval-aa",
       "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-medium",
-      "retrieved_at": "2026-11-14T12:09:10.418Z",
+      "retrieved_at": "2026-11-21T05:32:15.440Z",
       "kind": "independent"
     },
     {

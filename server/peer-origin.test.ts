@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -12,10 +11,10 @@ import * as roots from "./comms-root.ts";
 import { ensureDirs } from "./config.ts";
 import { paneNotesForTurn, prepareModelContext, withoutTurnNotes } from "./context-compaction.ts";
 import { recordDelegationReceipt, resetDelegationReceipts } from "./delegation-ledger.ts";
-import { importOfferNote } from "./memory-import-offer.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
 import { roomEchoesSinceLastUserTurn, writeRoomEcho } from "./one-mind.ts";
 import type { Message } from "./store.ts";
+import { spawnTestNode } from "./testing/harness-auth.ts";
 import { buildTurnContext } from "./turn-context.ts";
 import { turnRegistry } from "./turn-registry.ts";
 
@@ -81,7 +80,7 @@ const startTurnOptions = (marker: string) => nodes(ts.isCallExpression)
 function joinedStart(guest: boolean) {
   const arrow = nodes(ts.isPropertyAssignment).find((node) => node.name.getText(source) === "startTurn" && node.initializer.getText(source).includes("transcriptText: typed"))!.initializer.getText(source);
   let captured: Record<string, unknown> = {};
-  new Function("startTurn", "joinedRoomThreads", `return ${js(arrow)}`)((_botId: string, _prompt: string, opts: Record<string, unknown>) => { captured = opts; }, new Set())("bot", "joined-thread", "prompt", "typed", () => {}, false, guest);
+  new Function("startTurn", "joinedRoomThreads", "joinedGuestThreads", `return ${js(arrow)}`)((_botId: string, _prompt: string, opts: Record<string, unknown>) => { captured = opts; }, new Set(), new Set())("bot", "joined-thread", "prompt", "typed", () => {}, false, guest, guest);
   return captured;
 }
 
@@ -110,8 +109,8 @@ function agentsEnv(mountIndex: number, scope: { commsDepth?: number; hop?: numbe
   );
   const mounts = nodes(ts.isIfStatement).filter((node) => node.thenStatement.getText(source).includes("integrations.agents = agentsIntegration("));
   const integrations: { agents?: { env: Record<string, string> } } = {};
-  new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "readOnly", "importMemory", "searchable", "works", "handoff", "agentsIntegration", mounts[mountIndex]!.getText(source))(
-    integrations, { adapter: { capabilities: { agentsMcp: true } } }, { id: "evals" }, "evals-thread", scope.commsDepth ?? 0, scope.hop ?? 0, false, { tool: false }, false, true, null, agentsIntegration,
+  new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "readOnly", "importMemory", "searchable", "works", "handoff", "agentsIntegration", "opts", "guestReadOnly", mounts[mountIndex]!.getText(source))(
+    integrations, { adapter: { capabilities: { agentsMcp: true } } }, { id: "evals" }, "evals-thread", scope.commsDepth ?? 0, scope.hop ?? 0, false, false, false, true, null, agentsIntegration, {}, false,
   );
   return integrations.agents!.env;
 }
@@ -143,9 +142,9 @@ function fold(rootId: string | null, from: "activePath" | "pathTail") {
 
 function proxyRequest(env: Record<string, string>, method: string, params?: Record<string, unknown>): Promise<any> {
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("OMB_")));
-  const script = 'import { pathToFileURL } from "node:url"; const { handle } = await import(pathToFileURL(process.argv[2])); await handle(JSON.parse(process.argv[3]));';
+  const script = 'import { pathToFileURL } from "node:url"; const { handle } = await import(pathToFileURL(process.argv[2])); await handle(JSON.parse(process.argv[3])); process.disconnect?.();';
   const request = JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
-  const proxy = spawn(process.execPath, ["--input-type=module", "-e", script, "probe", PROXY, request], { windowsHide: true, env: { ...inherited, ...env }, stdio: ["ignore", "pipe", "inherit"] });
+  const proxy = spawnTestNode(process.execPath, ["--input-type=module", "-e", script, "probe", PROXY, request], { windowsHide: true, env: { ...inherited, ...env }, stdio: ["ignore", "pipe", "inherit"] });
   return new Promise((resolve, reject) => {
     let buf = "";
     proxy.stdout!.on("data", (chunk) => { buf += chunk; });
@@ -253,11 +252,11 @@ it.each(["ask", "delegation"] as const)("gives a %s a joined room's other person
   expect(await listedTools(env)).toEqual(BASE_PEER_TOOLS);
 });
 
-it.each(["ask", "delegation"] as const)("opens 20 tools for a fresh Wink to Evals %s and proposes a routine", async (kind) => {
+it.each(["ask", "delegation"] as const)("opens 23 tools for a fresh Wink to Evals %s and proposes a routine", async (kind) => {
   privateDispatch("wink", "wink-thread", chatStart(), [ownerLine]);
   const env = peerDispatch(kind, {}, kind === "delegation");
   const tools = await listedTools(env);
-  expect(tools).toHaveLength(20);
+  expect(tools).toHaveLength(23);
   expect(tools).toEqual(expect.arrayContaining(["propose_routine", "propose_routine_action", "set_keep_going"]));
   for (const name of ["ask_bot", "delegate_bot", "create_bot", "create_channel"]) expect(tools).not.toContain(name);
   const args = { name: "Evaluation", instructions: "Check runs.", schedule: { type: "daily", time: "09:00" } };
@@ -269,12 +268,6 @@ it.each(["ask", "delegation"] as const)("opens 20 tools for a fresh Wink to Eval
 it("guards a hop started by the owner in a joined room", async () => {
   privateDispatch("wink", "wink-thread", joinedStart(false), [ownerLine]);
   expect(await listedTools(peerDispatch("ask"))).toEqual(BASE_PEER_TOOLS);
-});
-
-it("allows the built-in memory offer on a first private send", async () => {
-  const importOffer = importOfferNote();
-  privateDispatch("wink", "wink-thread", chatStart(), [ownerLine], { importOffer, text: [importOffer, ownerLine.text].join("\n\n") });
-  expect(await listedTools(peerDispatch("delegation"))).toHaveLength(20);
 });
 
 it("gives only base tools after a delivered teammate report reaches a fresh engine in replay", async () => {
@@ -396,19 +389,23 @@ it("limits peer grants to the private send and inventories turn input boundaries
   const send = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "live.adapter.sendTurn");
   expect(send).toHaveLength(2);
   expect(grants[0].getStart(source)).toBeLessThan(send[0].getStart(source));
-  const privatePayload = send[0].arguments[0] as ts.ObjectLiteralExpression;
+  expect(send[0].arguments[0]!.getText(source)).toBe("input");
+  const built = nodes(ts.isVariableDeclaration).filter((node) => node.name.getText(source) === "input" && node.initializer?.getText(source).startsWith("guestTurnInput("));
+  expect(built).toHaveLength(1);
+  expect(built[0]!.getStart(source)).toBeLessThan(grants[0].getStart(source));
+  const privatePayload = (built[0]!.initializer as ts.CallExpression).arguments[0] as ts.ObjectLiteralExpression;
   expect(privatePayload.properties.map((property) => property.name?.getText(source) ?? property.getText(source))).toEqual([
     "...(trace ? { trace } : {})", "threadId", "text", "model", "effort", "leanStartup", "resumeCursor",
-    "resumeFallback", "transcript", "system", "systemUpdate", "approval", "...(readOnly ? { readOnly } : {})", "attended", "integrations", "cwd",
+    "resumeFallback", "...(nativeReplayPrefix ? { nativeReplayPrefix } : {})", "transcript", "system", "systemUpdate", "approval", "...(readOnly ? { readOnly } : {})", "attended", "integrations", "cwd",
   ]);
   const notes = nodes(ts.isVariableDeclaration).filter((node) => node.initializer && ["turnNotes", "notes", "currentPrompt", "withLate"].includes(node.name.getText(source)))
     .map((node) => compact(node.initializer!.getText(source)))
-    .filter((initializer) => /^(?:\[\s*(?:\.\.\.accountNotes|\.\.\.\(importOffer)|\(base: string\) => \[base, \.\.\.late)/.test(initializer));
+    .filter((initializer) => /^(?:\[\s*(?:\.\.\.accountNotes|composeUserTurnPrompt)|\(base: string\) => \[base, \.\.\.late)/.test(initializer));
   expect(notes).toEqual([
-    '[ ...(importOffer ? [importOffer] : []), composeUserTurnPrompt(text, turnOpts), ...folded, ].join("\\n\\n")',
-    "[...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...syncNotes, ...recallNotes]",
+    '[composeUserTurnPrompt(text, turnOpts), ...folded].join("\\n\\n")',
+    "[...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...askNotes, ...syncNotes, ...recallNotes]",
     '(base: string) => [base, ...late, ...(notesNotice ? [notesNotice] : []), ...(memoryNotice ? [memoryNotice] : []), ...(unlandedNotice ? [unlandedNotice] : [])].join("\\n\\n")',
-    "[...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...syncNotes, ...recallNotes]",
+    "[...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId, threadId)), ...roomEchoesSinceLastUserTurn(messages, skipTranscript, turnOpts.userName, threadId, instance.driverKind, model), ...callLines, ...closedAsk, ...closes.notes(true), ...syncNotes, ...recallNotes]",
   ]);
   const dir = fileURLToPath(new URL(".", import.meta.url));
   const boundaries = readdirSync(dir, { recursive: true, encoding: "utf8" }).map((path) => path.replace(/\\/g, "/"))
@@ -456,7 +453,7 @@ it.each([true, false])("keeps the next peer guarded after a teammate note steer 
 it("rechecks the tool grant after a steer clears a fresh peer's authority", async () => {
   privateDispatch("wink", "wink-thread", chatStart(), [ownerLine]);
   const env = peerDispatch("ask");
-  expect(await listedTools(env)).toHaveLength(20);
+  expect(await listedTools(env)).toHaveLength(23);
   const steer = vi.fn(async () => {
     expect(turnRegistry.privatePeerKey("evals", "evals-thread")).toBeUndefined();
     return false;
@@ -493,7 +490,7 @@ it("marks a line as the owner's only where only the owner reaches", () => {
   const marked = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "startTurn" && /\bowner\b/.test(node.arguments[2]?.getText(source) ?? ""));
   expect(marked.map((node) => compact(node.arguments[2]!.getText(source)))).toEqual([
     "{ threadId, userMessage: userMessage ?? undefined, excludeMessageIds: excludeIds, onDispatchError: rerunIfIdle, owner: true, }",
-    "{ threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}), owner: !guest }",
+    "{ threadId, transcriptText: typed, onDispatchError: failed, ...(readOnly ? { readOnly } : {}), guest, owner: !foreign }",
     "{ ...opts, owner: true, privateOwner: true }",
   ]);
   expect(["/api/bots/wink/messages", "/api/bots/wink/messages/m1/edit"].map((path) => botRoute(path, "wink"))).toEqual([false, false]);

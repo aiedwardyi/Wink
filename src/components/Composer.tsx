@@ -67,7 +67,8 @@ import { shrunkPicture } from "@/lib/shrink-image";
 import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
-import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel } from "./PendingQuestion";
+import { foldQuestion, HiddenQuestionDot, PendingQuestionPanel, useQuestionHidden } from "./PendingQuestion";
+import { DockCard } from "./DockCard";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import {
   composerBusyChrome,
@@ -93,7 +94,7 @@ import { useRainbowBox } from "@/lib/rainbow-box";
 import { RainbowRing } from "./RainbowRing";
 import { useI18n } from "@/lib/i18n";
 import { useChatPreview } from "@/lib/chat-preview";
-import { chatMovedOn, openQuestions, pinnedQuestion } from "@/lib/open-question";
+import { chatMovedOn, openQuestions, pinnedQuestion, questionJumpId } from "@/lib/open-question";
 import { usePresence } from "@/lib/use-presence";
 import { MOTION_LARGE_MS } from "@/lib/motion";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -287,11 +288,18 @@ export function Composer({
   const chatMessages = group ? group.messages : (bot?.messages ?? []);
   const pinned = useMemo(() => pinnedQuestion(chatMessages, threadMessages), [chatMessages, threadMessages]);
   const questions = pinned ? openQuestions(chatMessages) : [];
-  // the row's arrows show an older open question until a newer one arrives
+  // the row's arrows show another open question until it is answered or dismissed; a swiped-away one gives way to a newer arrival
   const [questionPick, setQuestionPick] = useState<{ id: string; newest: string } | null>(null);
-  const question = (questionPick?.newest === pinned?.id && questions.find((open) => open.id === questionPick?.id)) || pinned;
+  const pickHidden = useQuestionHidden(questionPick?.id ?? "");
+  const question = ((!pickHidden || questionPick?.newest === pinned?.id) && questions.find((open) => open.id === questionPick?.id)) || pinned;
   const questionIndex = question ? questions.indexOf(question) : -1;
+  const jumpId = question ? questionJumpId(threadMessages, question, pinned, Boolean(group ? group.hasMore : bot?.hasMore)) : null;
   const questionMovedOn = useMemo(() => question ? chatMovedOn(chatMessages, question) : false, [chatMessages, question]);
+  const dismissQuestion = () => {
+    if (!question) return;
+    if (group) dispatch({ type: "dismissGroupCard", groupId: group.id, messageId: question.id });
+    else if (bot) dispatch({ type: "dismissCard", botId: bot.id, messageId: question.id });
+  };
   const questionAsker = question
     ? group
       ? (members?.find((member) => member.id === question.from?.botId)?.name ?? question.from?.name ?? t("chrome.aBot"))
@@ -714,6 +722,7 @@ export function Composer({
         replyToId: entry.replyToId,
         threadId: entry.draft.threadId,
         actedAt: entry.at,
+        waited: true,
         onError: () => restoreDraft(entry.draft),
       });
     } : undefined,
@@ -988,6 +997,7 @@ export function Composer({
       replyToId: next.replyToId,
       threadId: next.draft.threadId,
       actedAt: next.at,
+      waited: true,
       onError: () => {
         restoreDraft(next.draft);
         if (!mountedRef.current) return;
@@ -1240,47 +1250,49 @@ export function Composer({
           );
         }), heldSlot)}
         {/* An approval sits on the composer so a waiting bot is impossible to miss. */}
-        {approval && (
-          <div data-pending-approval className="mb-2 overflow-hidden rounded-2xl border border-accent/40 bg-card">
-            <PendingApprovalPanel pending={approval} count={approvals.length} index={0} />
-            <PendingApprovalActions
-              pending={approval}
-              threadId={threadId}
-              bot={approvalBot}
-              onCancelTurn={() => {
-                if (group) stopRoom(group.id);
-                else if (bot) dispatch({ type: "interrupt", botId: bot.id });
+        <DockCard open={Boolean(approval)}>
+          {approval && (
+            <div data-pending-approval className="mb-2 overflow-hidden rounded-2xl border border-accent/40 bg-card">
+              <PendingApprovalPanel pending={approval} count={approvals.length} index={0} />
+              <PendingApprovalActions
+                pending={approval}
+                threadId={threadId}
+                bot={approvalBot}
+                onCancelTurn={() => {
+                  if (group) stopRoom(group.id);
+                  else if (bot) dispatch({ type: "interrupt", botId: bot.id });
+                }}
+              />
+            </div>
+          )}
+        </DockCard>
+        <DockCard open={Boolean(question)} id={question?.id} onDismiss={dismissQuestion}>
+          {question && (
+            <PendingQuestionPanel
+              key={question.id}
+              message={question}
+              askerName={questionAsker}
+              count={questions.length}
+              index={questionIndex}
+              onJump={jumpId ? () => dispatch({ type: "focusMessage", threadId, messageId: jumpId }) : undefined}
+              onStep={(step, folded) => {
+                const next = questions[questionIndex + step];
+                if (!next || !pinned) return;
+                foldQuestion(next.id, folded);
+                setQuestionPick({ id: next.id, newest: pinned.id });
               }}
+              typed={text}
+              attached={attachments.length}
+              replying={Boolean(replyTo)}
+              movedOn={questionMovedOn}
+              onPick={(choice) => {
+                if (group) dispatch({ type: "answerGroupCard", groupId: group.id, messageId: question.id, answer: choice });
+                else if (bot) dispatch({ type: "answerCard", botId: bot.id, messageId: question.id, answer: choice });
+              }}
+              onDismiss={dismissQuestion}
             />
-          </div>
-        )}
-        {question && (
-          <PendingQuestionPanel
-            key={question.id}
-            message={question}
-            askerName={questionAsker}
-            count={questions.length}
-            index={questionIndex}
-            onStep={(step) => {
-              const next = questions[questionIndex + step];
-              if (!next || !pinned) return;
-              foldQuestion(next.id);
-              setQuestionPick({ id: next.id, newest: pinned.id });
-            }}
-            typed={text}
-            attached={attachments.length}
-            replying={Boolean(replyTo)}
-            movedOn={questionMovedOn}
-            onPick={(choice) => {
-              if (group) dispatch({ type: "answerGroupCard", groupId: group.id, messageId: question.id, answer: choice });
-              else if (bot) dispatch({ type: "answerCard", botId: bot.id, messageId: question.id, answer: choice });
-            }}
-            onDismiss={() => {
-              if (group) dispatch({ type: "dismissGroupCard", groupId: group.id, messageId: question.id });
-              else if (bot) dispatch({ type: "dismissCard", botId: bot.id, messageId: question.id });
-            }}
-          />
-        )}
+          )}
+        </DockCard>
         <div inert={locked}>
         <ComposerAttachments
           disabled={locked}

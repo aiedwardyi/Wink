@@ -219,18 +219,176 @@ export function backs(promise: string, sent: readonly string[]): boolean {
 
 const tokens = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
 
-/** The voice's own words back through a phone speaker: his line is a run of them. Under three words it may be either. */
-export function echoOf(heard: string, voice: string): "echo" | "maybe" | "no" {
-  const words = tokens(heard);
-  const said = tokens(voice);
-  if (!words.length) return "maybe";
-  if (!said.some((_, start) => words.every((word, i) => said[start + i] === word))) return "no";
-  return words.length >= 3 ? "echo" : "maybe";
+const NUMBER = /^(?:\p{N}+|zero|oh|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|point)$/u;
+const UNITS = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split(" ");
+const TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split(" ");
+const SCALES = new Map([["hundred", 100], ["thousand", 1_000], ["million", 1_000_000]]);
+const SPELLED: Array<[RegExp, string]> = [[/\$(\d[\d.,]*)/g, "$1 dollars"], [/(\d)\s?%/g, "$1 percent"], [/(\d)\.(?=\d)/g, "$1 point "], [/\bcan't\b/g, "can not"], [/\bwon't\b/g, "will not"], [/n't\b/g, " not"], [/'re\b/g, " are"], [/'m\b/g, " am"], [/'s\b/g, " is"], [/'ve\b/g, " have"], [/'ll\b/g, " will"], [/'d\b/g, " would"]];
+// A "not" or another number turns his line around, however close its letters are to the voice's.
+const NEGATION = /^(?:no|not|never|nothing|none|nor|neither|cannot|안|못|아니|아니요|아뇨)$|않/u;
+/** What of a word a near miss may not change: its numbers, or a "not". */
+const meaning = (word: string) => (NEGATION.test(word) ? [word] : (word.match(/\p{N}[\p{N}.]*/gu) ?? []));
+
+/** A number as its digits, said or written: "twenty five" is "25", "nine oh five" is "9:05", "two thousand" is "2,000". */
+function digitsOf(run: readonly string[]): string {
+  let out = "";
+  let big = 0;
+  let small = 0;
+  let kind = "";
+  let literal = "";
+  const put = () => {
+    if (kind) out += kind === "digits" ? literal : String(big + small);
+    big = small = 0;
+    kind = literal = "";
+  };
+  for (const word of run) {
+    const scale = SCALES.get(word);
+    if (scale === 100) small = (small || 1) * 100;
+    else if (scale) [big, small] = [big + (small || 1) * scale, 0];
+    if (scale) {
+      kind = "scale";
+      continue;
+    }
+    if (word === "point") {
+      put();
+      out += ".";
+      continue;
+    }
+    const digits = /^\p{N}+$/u.test(word);
+    const value = digits ? Number(word) : word === "oh" ? 0 : UNITS.includes(word) ? UNITS.indexOf(word) : TENS.indexOf(word) * 10;
+    // "Twenty five" and "hundred five" add up; "nine oh five" and "twenty twenty six" are read one after another.
+    if (digits || !((kind === "tens" && value < 10) || kind === "scale")) put();
+    small += value;
+    kind = digits ? "digits" : value >= 20 ? "tens" : "unit";
+    literal = word;
+  }
+  put();
+  return out;
 }
+
+/** Words as speech-to-text writes them back: contractions spelled out, a number in digits or words the same digits. */
+function heardForm(text: string): string[] {
+  const words: string[] = [];
+  let run: string[] = [];
+  const flush = () => {
+    if (run.some((word) => word !== "oh" && word !== "point")) words.push(digitsOf(run));
+    else words.push(...run);
+    run = [];
+  };
+  for (const word of tokens(SPELLED.reduce((was, [from, to]) => was.replace(from, to), text.toLowerCase().replace(/’/g, "'")))) {
+    if (NUMBER.test(word)) run.push(word);
+    else {
+      flush();
+      words.push(word);
+    }
+  }
+  flush();
+  return words;
+}
+
+/** One letter added, dropped or changed: "along" for "long", "red" for "read". */
+function nearWord(a: string, b: string): boolean {
+  if (meaning(a).join() !== meaning(b).join() || Math.min(a.length, b.length) < 3 || Math.abs(a.length - b.length) > 1) return false;
+  let head = 0;
+  while (a[head] !== undefined && a[head] === b[head]) head += 1;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a.at(-1 - tail) === b.at(-1 - tail)) tail += 1;
+  return a.length - head - tail <= 1 && b.length - head - tail <= 1;
+}
+
+/** Fewest letter edits that turn `line` into some stretch of `text`, or of its start when anchored, and the words of that stretch. */
+function editsInto(line: string, text: string, anchored = false) {
+  let row = Array.from({ length: line.length + 1 }, (_, i) => i);
+  let from = row.map(() => 0);
+  let best = { edits: row[line.length]!, from: 0, to: 0 };
+  for (let j = 0; j < text.length; j++) {
+    const next = [anchored ? j + 1 : 0];
+    const nextFrom = [anchored ? 0 : j + 1];
+    for (let i = 1; i <= line.length; i++) {
+      const swap = row[i - 1]! + (line[i - 1] === text[j] ? 0 : 1);
+      const drop = row[i]! + 1;
+      const add = next[i - 1]! + 1;
+      next[i] = Math.min(swap, drop, add);
+      nextFrom[i] = next[i] === swap ? from[i - 1]! : next[i] === drop ? from[i]! : nextFrom[i - 1]!;
+    }
+    row = next;
+    from = nextFrom;
+    if (row[line.length]! < best.edits) best = { edits: row[line.length]!, from: from[line.length]!, to: j + 1 };
+  }
+  const end = text.indexOf(" ", Math.max(best.to - 1, 0));
+  return { edits: best.edits, words: text.slice(text.lastIndexOf(" ", best.from) + 1, end < 0 ? text.length : end).split(" ") };
+}
+
+/** Each number and "not" of the line is in the words it matched. */
+function keeps(words: readonly string[], said: readonly string[]): boolean {
+  const left = said.flatMap(meaning);
+  return words.flatMap(meaning).every((word) => {
+    const at = left.indexOf(word);
+    if (at >= 0) left.splice(at, 1);
+    return at >= 0;
+  });
+}
+
+/** The line as a run of `said` from `start`: every word the same or a letter off, one in four at most when loose. */
+function runAt(words: readonly string[], said: readonly string[], start: number, loose: boolean): boolean {
+  const off = words.filter((word, i) => said[start + i] !== word).length;
+  return off * 4 <= (loose ? words.length : 0) && words.every((word, i) => said[start + i] === word || (loose && nearWord(word, said[start + i] ?? "")));
+}
+
+/** The voice's own words back through a phone speaker: his line is a run of them. Under three words it may be either. Loose takes the run as speech-to-text hears it back: one word in four a letter off, or one letter in eight dropped, added or changed, which covers a lost or extra word and Korean spacing. */
+export function echoOf(heard: string, voice: string, loose = false): "echo" | "maybe" | "no" {
+  const words = loose ? heardForm(heard) : tokens(heard);
+  const said = loose ? heardForm(voice) : tokens(voice);
+  if (!words.length) return "maybe";
+  if (said.some((_, start) => runAt(words, said, start, loose))) return words.length >= 3 ? "echo" : "maybe";
+  if (!loose || words.length < 3) return "no";
+  const line = words.join(" ");
+  const near = editsInto(line, said.join(" "));
+  return near.edits * 8 <= line.length && keeps(words, near.words) ? "echo" : "no";
+}
+
+/** How far into what the voice read its own words written back reach, in words: the most of them in order, a word lost, added or a letter off. */
+export function readTo(heard: string, voice: string): number {
+  const said = heardForm(voice);
+  let row: number[] = new Array(said.length + 1).fill(0);
+  for (const word of heardForm(heard)) {
+    const next = [0];
+    for (let j = 1; j <= said.length; j++) next[j] = Math.max(row[j]!, next[j - 1]!, row[j - 1]! + (word === said[j - 1] || nearWord(word, said[j - 1]!) ? 1 : 0));
+    row = next;
+  }
+  return row.indexOf(row[said.length]!);
+}
+
+/** What of the line is left after the voice's own next words, from word `at` of what it read on: once the read is over only those can be its voice. */
+export function readOn(heard: string, voice: string, at: number): string {
+  const words = heardForm(heard);
+  const said = heardForm(voice).slice(at);
+  const next = (line: string[]) => {
+    if (runAt(line, said, 0, true)) return true;
+    if (line.length < 3) return false;
+    const near = editsInto(line.join(" "), said.join(" "), true);
+    return near.edits * 8 <= line.join(" ").length && keeps(line, near.words);
+  };
+  let mine = words.length;
+  while (mine && !next(words.slice(0, mine))) mine -= 1;
+  if (mine === words.length) return "";
+  if (!mine) return heard;
+  for (const { index } of heard.matchAll(/[\p{L}\p{N}]+/gu)) if (heardForm(heard.slice(0, index)).length >= mine) return heard.slice(index);
+  return "";
+}
+
+const NOD = "h?m+|mhm|uh-?huh|u[hm]+|yeah|yes|yep|ok|okay|right|응|네|어";
+const BACKCHANNEL = new RegExp(`^(?:${NOD})[.!?,\\s]*$`, "i");
+const NODS = new RegExp(`^\\s*(?:(?:${NOD})(?![\\p{L}\\p{N}])[.!?,\\s]*)+`, "iu");
 
 /** "Hmm.", "Yes.": a nod while the voice talks, not a barge-in. */
 export function backchannel(heard: string): boolean {
-  return /^(?:h?m+|mhm|uh-?huh|u[hm]+|yeah|yes|yep|ok|okay|right|응|네|어)[.!?,\s]*$/i.test(heard.trim());
+  return BACKCHANNEL.test(heard.trim());
+}
+
+/** The line after any nods that open it: "Yeah. long enough to be" is its own voice behind a nod. */
+export function afterNods(heard: string): string {
+  return heard.replace(NODS, "");
 }
 
 /** The bot's reply asks again what its card asks. */

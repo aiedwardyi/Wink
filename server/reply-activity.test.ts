@@ -1,6 +1,6 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import { closeMessageDb, insertMessage, messageDatabase } from "./message-db.ts";
@@ -9,6 +9,7 @@ import { replyActivity } from "./reply-activity.ts";
 import type { Message } from "./store.ts";
 import { disconnectSyncFolder, hasJoinedSync } from "./sync-history.ts";
 import { createSyncEngine } from "./thread-sync-v2-engine.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 let seq = 0;
 const reply = (at: number, extra: Partial<Message> = {}) =>
@@ -19,7 +20,7 @@ describe("replyActivity", () => {
   const zone = process.env.TZ;
   beforeEach(() => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
     process.env.TZ = "Asia/Seoul";
   });
@@ -138,9 +139,18 @@ describe("replyActivity", () => {
     for (const hour of [9, 10, 11]) reply(local(10, 27, hour));
     expect(replyActivity(local(11, 4))).toMatchObject({ busiest: { day: "2026-10-27", count: 3 }, total: 8 });
   });
+});
 
-  it("reads 200k rows in under 50 ms", () => {
-    const now = local(11, 4);
+describe("replyActivity at 200k rows", () => {
+  const zone = process.env.TZ;
+  let now = 0;
+  // the insert alone outran the 20 s test timeout on loaded Windows runners; only the read is timed
+  beforeAll(() => {
+    closeMessageDb();
+    removeTestData(DATA_DIR);
+    mkdirSync(DATA_DIR, { recursive: true });
+    process.env.TZ = "Asia/Seoul";
+    now = local(11, 4);
     const insert = messageDatabase().prepare(
       "INSERT INTO messages (thread_id, id, at, role, kind, text, json) VALUES (?, ?, ?, ?, ?, ?, ?)",
     );
@@ -155,6 +165,13 @@ describe("replyActivity", () => {
     messageDatabase().exec("COMMIT");
     closeMessageDb();
     messageDatabase();
+  }, 120_000);
+  afterAll(() => {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  });
+
+  it("reads 200k rows in under 50 ms", () => {
     const started = performance.now();
     const activity = replyActivity(now);
     const ms = performance.now() - started;

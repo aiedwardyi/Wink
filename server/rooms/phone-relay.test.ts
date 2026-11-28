@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import ts from "typescript";
@@ -29,6 +29,7 @@ import { joinedRoute } from "./joined-routes.ts";
 import { closeJoinedDb } from "./joined.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { peopleRoute } from "./people-routes.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const COMMS = "c".repeat(48);
 const BOT = "Bearer bot-token";
@@ -108,7 +109,7 @@ function call(path: string, { method = "GET", body, session = true, relay = true
 }
 
 beforeAll(async () => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   group = store.createGroup("팀과 함께하는 아주 긴 출시 준비 대화방", [], false, undefined, undefined, { roomId: createPeopleOnlyRoom("팀과 함께하는 아주 긴 출시 준비 대화방").id }) as HostedGroup;
   configureRoomAsks({ store, hostName: () => "Edward", instance: () => null, dispatch: () => {}, stopTurn: async () => {}, endSession: async () => {} });

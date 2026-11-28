@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Reac
 import { createPortal } from "react-dom";
 import { Pause, Play, Settings } from "lucide-react";
 
-import { useStore, type Bot } from "@/state/store";
+import { api, useStore, type Bot, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { useActiveCall } from "@/lib/live-call/active";
@@ -14,11 +14,13 @@ import { markCut } from "@/lib/scroll-cut";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { guardMenuTouch, useListMenuDismiss } from "@/lib/use-hold-menu";
 import { usePresence } from "@/lib/use-presence";
+import { useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
-import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
+import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallAnswer, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
 import { BotAvatar } from "./Avatar";
 import { DetailsSwitch } from "./BotDetailsRows";
 import { MENU_CLASS } from "./MessageMenu";
+import { SegmentedRow } from "./Segmented";
 import { AccountPicker } from "./UsageAccounts";
 
 const LABEL = "shrink-0 text-[14px] text-ink";
@@ -108,6 +110,31 @@ function CallLanguage({ bot }: { bot: Bot }) {
   );
 }
 
+/** Who answers calls, app-wide: the bot itself (its reply read out) or the Gemini voice. A call on now moves over once nothing is in flight. */
+function CallAnswerRow() {
+  const { t } = useI18n();
+  const { state, dispatch } = useStore();
+  const latest = useRef(0);
+  const config = useRef(state.config);
+  config.current = state.config;
+  const value = state.config?.liveCall?.answer ?? "gemini";
+  const show = (answer?: CallAnswer) => config.current && dispatch({ type: "configStatus", config: { ...config.current, liveCall: { voice: LIVE_VOICE, ...config.current.liveCall, answer } } });
+  const pick = (answer: CallAnswer) => {
+    const mine = ++latest.current;
+    const was = config.current?.liveCall?.answer;
+    // Shown at once, so a call placed before the save lands answers as picked; only the newest pick's reply counts.
+    show(answer);
+    void api("/api/config", { method: "PATCH", body: JSON.stringify({ liveCall: { answer } }) }).then(
+      (saved: ConfigStatus) => mine === latest.current && dispatch({ type: "configStatus", config: saved }),
+      () => mine === latest.current && show(was),
+    );
+  };
+  return (
+    <SegmentedRow<CallAnswer> label={t("callMenu.answer")} value={value}
+      options={(["bot", "gemini"] as const).map((id) => ({ id, label: t(`callMenu.answer.${id}`) }))} onChange={pick} />
+  );
+}
+
 /** Every voice as a card with its vibe and a preview; three rows show, and the cut-off fourth row and fade say the rest scroll. */
 export function VoiceGrid({ label, value, onPick, playing, preview, badge }: {
   label?: string;
@@ -164,6 +191,7 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   return (
     // tabIndex keeps a press on the panel from focusing the message box under it
     <div data-call-settings="" tabIndex={-1} className={cn("flex flex-col gap-2 outline-none", className)}>
+      <CallAnswerRow />
       <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
         onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
       <Slider label={t("callMenu.volume")} value={volume} range={CALL_VOLUME} text={`${Math.round(volume * 100)}%`} onChange={setCallVolume} />
@@ -212,10 +240,13 @@ export function CallGear({ bot, className }: { bot: Bot; className?: string }) {
 export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: ReactNode; tap?: boolean }) {
   const { t } = useI18n();
   const anchor = useRef<HTMLSpanElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
   const press = useRef<{ x: number; y: number; held: boolean; timer: ReturnType<typeof setTimeout> } | null>(null);
   const [at, setAt] = useState<DOMRect | null>(null);
   const shown = usePresence(at);
   const close = useCallback(() => setAt(null), []);
+  const phone = useIsPhone();
+  useSheetSwipe(panel, Boolean(at) && phone, close);
   const open = () => anchor.current && setAt(anchor.current.getBoundingClientRect());
   const release = () => {
     if (press.current) clearTimeout(press.current.timer);
@@ -267,7 +298,7 @@ export function CallSettingsHold({ bot, children, tap }: { bot: Bot; children: R
       onTouchCancel={() => void release()}>
       {children}
       {shown.mounted && rect && createPortal(
-        <div data-call-settings-menu="" role="dialog" aria-label={t("callMenu.open")} data-closing={shown.closing || undefined} inert={shown.closing}
+        <div ref={panel} data-call-settings-menu="" role="dialog" aria-label={t("callMenu.open")} data-closing={shown.closing || undefined} inert={shown.closing}
           style={{ width, left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)), bottom: window.innerHeight - rect.top + 8, maxHeight: rect.top - 16 }}
           className={cn(MENU_CLASS, "origin-bottom-right overflow-y-auto p-3")}>
           <CallSettings bot={bot} />

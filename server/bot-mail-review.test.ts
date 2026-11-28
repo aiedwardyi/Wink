@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-import { rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CommsCallers } from "./comms-caller.ts";
@@ -14,6 +13,7 @@ import { cancelPeerApprovalsFor, resolvePeerComms } from "./peer-approval.ts";
 import { Store, type BotRecord, type Message } from "./store.ts";
 import { bootRowsNow } from "./testing/boot-rows.ts";
 import { turnRegistry } from "./turn-registry.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 let store: Store;
 let from: ReturnType<Store["createBot"]>;
@@ -23,7 +23,7 @@ const start = (turnId: string) => turnRegistry.start(turnId, { botId: from.id, t
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   _resetPending();
   _resetCommsRoots();
   store = new Store(() => ({ instanceId: "claude", model: "fake" }));
@@ -170,7 +170,7 @@ function response() {
 }
 
 function routes(askBotAndWait = vi.fn(), resolveCommsCaller?: Parameters<typeof createInternalRoutes>[0]["resolveCommsCaller"]) {
-  return createInternalRoutes({ store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
+  return createInternalRoutes({ readOnlyTurn: () => false, store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
     MAX_WORKSPACE_BOTS: 100, checkedMemberIds: (memberIds: string[]) => ({ ok: true, memberIds }),
     checkedGroupResponder: () => ({ kind: "everyone" }),
     createdBotSelection: (chief: BotRecord["modelSelection"]) => ({ ok: true, selection: { ...chief } }),

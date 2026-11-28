@@ -1,11 +1,12 @@
-import { rmSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import { readThread, replaceThread } from "./message-db.ts";
-import { bootPaneWakes } from "./pane-wake.ts";
+import { paneWakeChats } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 import type { SyncChange } from "./thread-sync-v2.ts";
+import { bootRowsNow } from "./testing/boot-rows.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = () => ({ instanceId: "claude", model: "opus" });
 const size = (threadId: string) => readThread(threadId, "").chars;
@@ -21,7 +22,7 @@ function chats(count: number, rows: number, text = (index: number) => `row ${ind
 }
 
 describe("thread cache", () => {
-  beforeEach(() => rmSync(DATA_DIR, { recursive: true, force: true }));
+  beforeEach(() => removeTestData(DATA_DIR));
 
   it("refreshes the projection after appends, forks, head changes and sync imports", () => {
     const store = new Store(selection);
@@ -48,6 +49,20 @@ describe("thread cache", () => {
     const replacement = { ...fork, text: "replaced by snapshot" };
     store.adoptSyncedTask(bot.id, { threadId, title: "Imported", createdAt: 1 }, [replacement], fork.id);
     expect(store.activePath(threadId)).toEqual([replacement]);
+  });
+
+  it("finds a synced ancestor that lands after its child's path was read", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({}, { seedMessages: false });
+    const { threadId } = bot;
+    const first = store.appendMessage(threadId, { role: "user", kind: "text", text: "first" });
+    const parent: Message = { id: "synced-parent", parentId: first.id, at: first.at + 1, role: "bot", kind: "text", text: "parent" };
+    const child: Message = { id: "synced-child", parentId: parent.id, at: first.at + 2, role: "user", kind: "text", text: "child" };
+    const row = (message: Message): SyncChange => ({ cursor: 0, kind: "row", rowId: message.id, value: message, conflict: false });
+    store.applySyncChanges(bot.id, threadId, [row(child), { cursor: 0, kind: "head", rowId: "head", value: child.id, conflict: false }]);
+    expect(store.activePath(threadId)).toEqual([child]);
+    store.applySyncChanges(bot.id, threadId, [row(parent)]);
+    expect(store.activePath(threadId)).toEqual([first, parent, child]);
   });
 
   it("drops the least recently used chats once their size passes the budget", () => {
@@ -168,12 +183,13 @@ describe("thread cache", () => {
     const bot = store.botByThread(legacy!)!;
     store.markPaneNotesDelivered(bot.id, bot.threadId, undefined);
     const wake = { botId: bot.id, threadId: bot.threadId };
+    const wakes = () => bootRowsNow([], DATA_DIR, Date.now(), [], { chats: paneWakeChats(store), deviceId: "home" }).paneWakes;
     store.messagesFor(legacy!);
-    expect(bootPaneWakes(store, "home")).toEqual([wake]);
+    expect(wakes()).toEqual([wake]);
     store.messagesFor(b!);
     store.messagesFor(c!);
     expect(store.loaded(legacy!)).toBe(false);
-    expect(bootPaneWakes(store, "home")).toEqual([wake]);
+    expect(wakes()).toEqual([wake]);
     expect(store.loaded(legacy!)).toBe(false);
   });
 

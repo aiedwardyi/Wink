@@ -104,13 +104,13 @@ describe("leaving the Forum on desktop", () => {
     expect(pane()).toBeNull();
   });
 
-  it("the side pane still closes when another chat is picked from the Forum", async () => {
+  it("the side pane follows another chat picked from the Forum", async () => {
     await openPane();
     await openForum();
     await act(async () => document.querySelector<HTMLElement>('[data-sidebar-row-id="b1"] [role=button]')!.click());
     await forumGone();
     expect(selected()).toBe("b1");
-    expect(pane()).toBeNull();
+    expect(await until(pane)).toBeTruthy();
   });
 
   it("a pane kept for another chat does not close the terminal of the chat picked from the Forum", async () => {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ import { addPerson, closeRoomsDb, createRoom, RoomError, roomPeople } from "./db
 import {
   cancelInvite, closeInvitesDb, createInvite, guestByKey, INVITE_TTL_MS, joinRoom, revokeGuestKeys, roomCode, roomInvites,
 } from "./invites.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const DAY = 24 * 60 * 60_000;
 const TAKEN = ["Edward", "Wink"];
@@ -22,7 +23,7 @@ const raw = () => new DatabaseSync(FILE());
 beforeEach(() => {
   closeInvitesDb();
   closeRoomsDb();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   mkdirSync(DATA_DIR, { recursive: true });
   vi.useFakeTimers({ toFake: ["Date"] });
   // Later every case, so the module's join bucket always starts full.

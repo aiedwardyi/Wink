@@ -49,6 +49,12 @@
 //                   | echo-gated (a happy turn that replies `echo: <input>`
 //                     and, when FAKE_MSP_GATE_FILE is set, holds the turn
 //                     open until that file exists)
+//                   | read (a read_file of notes.txt in the session's
+//                     workspace root runs unasked, like Muse with
+//                     --disable-write --disable-shell; a resumed session keeps
+//                     the root it started in unless session/resume names a
+//                     workspaceRoot, which moves it there. What it read goes to
+//                     FAKE_MSP_READ_OUT, roots to `<that path>.roots.json`)
 //   FAKE_MSP_STATE  path to a JSON file holding per-session models across
 //                   the one-process-per-turn spawns, so a switch sticks.
 //   FAKE_MSP_DUMP   path to write {argv, env, cwd} as JSON, so a test can assert
@@ -58,6 +64,13 @@
 //                   handling one inbound message and write them as a single
 //                   stdout chunk, the framing a busy real host produces.
 //   FAKE_MSP_RPC_DUMP  path to write the method sequence seen this run.
+//   FAKE_MSP_LOADED  1: every session is still loaded on the host, as Muse 1.4.25's
+//                   shared host keeps one past a restart, so a session/resume
+//                   naming workspaceRoot is refused with its error.
+//   FAKE_MSP_SESSION_ID  the id session/start opens (default fake-msp-session).
+//   FAKE_MSP_START_FAILS  1: session/start is refused.
+//   FAKE_MSP_REFUSE_MODEL  a model this host doesn't serve: session/start asking
+//                   for it opens on the default, and session/setModel to it is refused.
 //   FAKE_MSP_USAGE     JSON result for usage/read.
 //   FAKE_MSP_USAGE_CHANGED  JSON params for a usage/changed notification.
 //   FAKE_MSP_ITEMS     JSON item notifications before the scripted turn.
@@ -118,7 +131,9 @@ const recordConfig = (entry: unknown) => {
   }
 };
 
-const SESSION_ID = "fake-msp-session";
+const SESSION_ID = process.env.FAKE_MSP_SESSION_ID ?? "fake-msp-session";
+const READ_OUT = process.env.FAKE_MSP_READ_OUT;
+const sessionRoots = (): Record<string, string | null> => (READ_OUT && existsSync(`${READ_OUT}.roots.json`) ? JSON.parse(readFileSync(`${READ_OUT}.roots.json`, "utf8")) : {});
 const CONTRIBUTOR_BUILDS = ["muse-spark-1.3", "muse-spark-1.2"];
 const contributorOff = argv.some((arg, i) => arg === "--contributor-mode" && argv[i + 1] === "off");
 const TURN_ID = "fake-msp-turn-1";
@@ -331,6 +346,10 @@ function handle(msg: any) {
     }
     case "session/start": {
       if (rejectSessionMcp(msg)) break;
+      if (process.env.FAKE_MSP_START_FAILS === "1") {
+        out({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: "session/start refused" } });
+        break;
+      }
       recordConfig({
         method: "session/start",
         modelId: msg.params?.modelId ?? null,
@@ -339,10 +358,11 @@ function handle(msg: any) {
         approvalMode: msg.params?.approvalMode,
         workspaceRoot: msg.params?.approvalMode ? msg.params.workspaceRoot : undefined,
       });
-      const modelId = typeof msg.params?.modelId === "string" ? msg.params.modelId : "fake-msp-default";
+      const modelId = typeof msg.params?.modelId === "string" && msg.params.modelId !== process.env.FAKE_MSP_REFUSE_MODEL ? msg.params.modelId : "fake-msp-default";
       const models = readModels();
       models[SESSION_ID] = modelId;
       writeModels(models);
+      if (READ_OUT) writeFileSync(`${READ_OUT}.roots.json`, JSON.stringify({ ...sessionRoots(), [SESSION_ID]: msg.params?.workspaceRoot ?? null }));
       // The real host emits the notification before the result.
       out({ jsonrpc: "2.0", method: "session/started", params: { session: { sessionId: SESSION_ID, modelId }, viewCursor: "v:1" } });
       result(msg.id, { session: { sessionId: SESSION_ID, modelId }, viewCursor: "v:1" });
@@ -355,7 +375,13 @@ function handle(msg: any) {
         out({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } });
         break;
       }
+      if (process.env.FAKE_MSP_LOADED === "1" && msg.params?.workspaceRoot !== undefined) {
+        const message = "invalid session/resume params: workspaceRoot/workspaceRoots cannot relocate a session already loaded on this host; omit them to attach, or resume cold after this session unloads";
+        out({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message } });
+        break;
+      }
       const resumedId = msg.params?.sessionId ?? SESSION_ID;
+      if (READ_OUT && typeof msg.params?.workspaceRoot === "string") writeFileSync(`${READ_OUT}.roots.json`, JSON.stringify({ ...sessionRoots(), [resumedId]: msg.params.workspaceRoot }));
       result(msg.id, {
         session: { sessionId: resumedId, modelId: readModels()[resumedId] ?? "fake-msp-resumed" },
         history: { mode: "none" },
@@ -426,6 +452,8 @@ function handle(msg: any) {
         }
       }
       if (mode === "hang") return;
+      const root = mode === "read" ? sessionRoots()[msg.params?.sessionId] : undefined;
+      if (READ_OUT && typeof root === "string" && existsSync(`${root}/notes.txt`)) writeFileSync(READ_OUT, readFileSync(`${root}/notes.txt`));
       const served = readModels()[msg.params?.sessionId];
       if (process.env.FAKE_MSP_CONTRIBUTOR === "1" && !contributorOff && served && !CONTRIBUTOR_BUILDS.includes(served.replace(/-contributor$/, ""))) {
         const message = `model \`${served}\` does not exist or you lack access [request_id=fake]`;
@@ -571,6 +599,10 @@ function handle(msg: any) {
       recordConfig({ method: "session/setModel", params: msg.params ?? null });
       const target = typeof msg.params?.sessionId === "string" ? msg.params.sessionId : SESSION_ID;
       const next = msg.params?.model?.modelId;
+      if (next !== undefined && next === process.env.FAKE_MSP_REFUSE_MODEL) {
+        out({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message: `unknown model ${next}` } });
+        break;
+      }
       if (typeof next === "string") {
         const models = readModels();
         models[target] = next;

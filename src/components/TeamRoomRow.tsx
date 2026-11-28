@@ -9,7 +9,7 @@ import { CHAT_PEEK_WINDOW_SIZE, peekRows, useChatPeekRows, useChatPeekSettled, u
 import { tailWindowStart } from "@/lib/transcript-window";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { useI18n } from "@/lib/i18n";
-import { openFile } from "@/lib/open-file";
+import { openFile, tapOpen, type FileTap } from "@/lib/open-file";
 import { useRoomFilesState } from "@/lib/room-files-state";
 import { useBubbleSwipe } from "@/lib/use-bubble-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
@@ -29,6 +29,7 @@ import { FileAttachmentRow } from "./FileAttachmentRow";
 import { PersonLabel } from "./GroupPeople";
 import { JumpToLatest } from "./JumpToLatest";
 import { MediaViewerProvider, useMediaViewer } from "./MediaViewerProvider";
+import { MediaViewer } from "./MediaViewer";
 import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, MessageMenu, SelectionMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { ReplyQuote } from "./ReplyQuote";
@@ -39,10 +40,17 @@ import { MessageBoundary } from "./TurnPresence";
 export const roomPictures = (base: string, files: readonly RoomFile[]) =>
   files.filter((file) => !file.deleted && isRoomPicture(file)).map((file) => ({ src: roomFileUrl(base, file, true), name: file.name }));
 
-/** A line's deleted notes and file rows, below its words; a row opens by the one rule in the chat's pane, else downloads. */
+/** A line's deleted notes and file rows, below its words; a row opens by the one rule, a clip in the viewer, else in the chat's pane or downloads. */
 export function RoomFileRows({ base, files, threadId, className }: { base: string; files: readonly RoomFile[]; threadId?: string; className?: string }) {
   const { t } = useI18n();
+  const viewer = useMediaViewer();
+  const [shown, setShown] = useState<PreviewImage | null>(null);
   const rows = files.filter((file) => !file.deleted && !isRoomPicture(file));
+  const view = (opener: HTMLElement) => (media: PreviewImage) => {
+    if (viewer) return viewer.open(media, opener);
+    opener.focus({ preventScroll: true });
+    setShown(media);
+  };
   return (
     <>
       {files.filter((file) => file.deleted).map((file) => <div key={file.id} className="text-[13px] text-ink-secondary">{t("teamRoom.fileDeleted")}</div>)}
@@ -53,7 +61,10 @@ export function RoomFileRows({ base, files, threadId, className }: { base: strin
               key={file.id}
               type="button"
               data-room-file
-              onClick={() => openFile({ threadId, path: file.name, src: roomFileUrl(base, file, false) })}
+              onClick={(event) => {
+                const tap: FileTap = { threadId, path: file.name, src: roomFileUrl(base, file, false), type: file.type };
+                openFile(tap, tapOpen(tap) === "video" ? { view: view(event.currentTarget) } : {});
+              }}
               className="block w-full rounded-lg text-left hover:bg-raised/50"
             >
               <FileAttachmentRow file={{ path: file.id, name: file.name, size: file.bytes }} />
@@ -61,6 +72,7 @@ export function RoomFileRows({ base, files, threadId, className }: { base: strin
           ))}
         </div>
       )}
+      {shown && <MediaViewer image={shown} onClose={() => setShown(null)} />}
     </>
   );
 }

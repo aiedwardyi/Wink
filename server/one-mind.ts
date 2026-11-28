@@ -204,6 +204,8 @@ export async function myChatsRoute(req: IncomingMessage, res: ServerResponse, de
   if (!query) return json(res, 400, { error: `${SEARCH_TOOL} needs a query` });
   const owner = deps.owner();
   const text = searchOwnerChats(deps.store, ownerChats(bot, deps.sideThreads()), query, owner);
+  // a room is a shared screen: the query names the owner's private chat, so the chip stays in the 1:1
+  if (deps.store.groupByThread(source.threadId)) return json(res, 200, { text });
   deps.store.appendMessage(source.threadId, {
     role: "bot",
     kind: "activity",

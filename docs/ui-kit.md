@@ -29,6 +29,7 @@ Lint `back`: a button with a left chevron or arrow (icon or ‹ text) that is no
 | `useSettingsSwipe` | src/lib/use-settings-swipe.ts | Swipe back from a pushed page on a phone. |
 | `animate-fade-in` backdrop, `animate-pop-in` card, `usePresence` to close | src/lib/use-presence.ts | Sheets and floating cards (CreateBotSheet). |
 | `Fold` | src/components/Fold.tsx | Expand and collapse in place. |
+| `<DockCard open onDismiss id>` | src/components/DockCard.tsx | A card docked above the message box (question, approval, task recovery, sign-in). On a phone it opens and closes like the call settings sheet, and one with an x also closes on a swipe down. |
 
 ## Dialogs
 

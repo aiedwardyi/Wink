@@ -33,6 +33,7 @@
 //   board_post(kind, title, body, …)      → leave a stuck, fix, tip or handoff post on the Board
 //   hand_off()                            → a busy bot's room reply: run the asked work once it is free
 //   import_memory(decline?)               → a new chat: save the user's pasted other-AI answer to Import Memory
+//   web_read(url, own_tool_failed?)       → read a public page as text before saying it can't be read
 //
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
@@ -46,11 +47,13 @@ import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 
-import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
+import { FORUM_STUCK_RULE } from "../../shared/forum-rule.ts";
+import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, customCredentialId, isBrokeredCredentialId, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
 import { recordToolSchemas } from "../turn-timing.ts";
 import { createToolCatalog, deferOptional } from "./tool-catalog.ts";
+import { WEB_READ_TOOL, webRead } from "./web-read-tool.ts";
 
 const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
@@ -65,7 +68,7 @@ const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation"
 // The harness refuses another hop from a peer turn, so these stay unlisted there.
 const HOP_TOOLS = new Set(["ask_bot", "delegate_bot", "create_bot", "create_channel"]);
 // A room turn asked by someone without "Can make bots work": no saved keys, connected apps, bot asks, Board posts or Agentic Mode.
-export const READ_ONLY_TOOLS = new Set(["list_bots", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed"]);
+export const READ_ONLY_TOOLS = new Set(["list_bots", "check_delegation", "wait_delegation", "react", "usage_status", "list_routines", "board_search", "no_reply_needed", "web_read"]);
 const READ_ONLY = process.env.OMB_READ_ONLY_TURN === "1";
 // In-flight verify_site calls by JSON-RPC id, so notifications/cancelled can abort exactly one.
 const verifyCalls = new Map<unknown, AbortController>();
@@ -256,7 +259,7 @@ export const BOARD_TOOLS = [
   },
   {
     name: "board_post",
-    description: "Post to the Board: stuck, fix, tip or handoff. parent_id replies (a fix solves it); helped: its fix worked for you.",
+    description: `Post to the Board: stuck, fix, tip or handoff. parent_id replies (a fix solves it); helped: its fix worked for you. ${FORUM_STUCK_RULE}`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -268,7 +271,7 @@ export const BOARD_TOOLS = [
 
 const IMPORT_MEMORY_TOOL = {
   name: "import_memory",
-  description: "Saves the user's latest message, the answer they pasted from their other AI, to Import Memory, which all their bots read. Wink reads the message itself. Tell the user the returned result. decline: true when they say no to importing, so no bot offers again.",
+  description: "Saves the user's latest message, the answer they pasted from their other AI, to Import Memory, which all their bots read. Wink reads the message itself and leaves out password, key and code lines, so call it even when the paste has one. Tell the user the returned result. decline: true when they say no to importing, so no bot offers again.",
   inputSchema: { type: "object", properties: { decline: { type: "boolean" } }, additionalProperties: false },
 };
 
@@ -278,6 +281,7 @@ const TOOLS = [
   ...(process.env.OMB_OWNER_CHATS === "1" ? [SEARCH_MY_CHATS_TOOL] : []),
   ...(process.env.OMB_HAND_OFF === "1" ? [HAND_OFF_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
+  WEB_READ_TOOL,
   ...BOARD_TOOLS,
   {
     name: "list_bots",
@@ -668,6 +672,20 @@ const TOOLS = [
     },
   },
   {
+    name: "pin_goal",
+    description: "Pin a goal or spec the user set, in their words, so it stays in every turn and survives summaries. Same name updates it; done: true once finished or dropped.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        name: { type: "string", pattern: "\\S", description: "A few words, like Glasses v1." },
+        goal: { type: "string", pattern: "\\S", description: "Needed unless done." },
+        done: { type: "boolean" },
+      },
+      required: ["name"],
+    },
+  },
+  {
     name: "no_reply_needed",
     description: "Call once on a turn woken by an automated message (pane note, worker report, peer note) when the user needs nothing from it. After it returns, stop: no text, no more tool calls.",
     inputSchema: { type: "object", additionalProperties: false, properties: {} },
@@ -684,6 +702,19 @@ const TOOLS = [
         room: { type: "string", description: "Room name; omit in that room." },
       },
       required: ["sessionId", "title"],
+    },
+  },
+  {
+    name: "post_to_group",
+    description: "Post one text message as yourself in an existing group room you belong to. Call only when the owner directly asks you to post there.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        group: { type: "string", description: "The existing group's exact name." },
+        text: { type: "string", description: "The text to post." },
+      },
+      required: ["group", "text"],
     },
   },
 ];
@@ -797,6 +828,10 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   if (name === VERIFY_SITE_TOOL.name) {
     const r = await api(VERIFY_ROUTES.tool, { method: "POST", body: JSON.stringify({ entry: args.entry }), signal });
     return { text: String(r.text ?? ""), ...(r.status === "blocked" ? { isError: true } : {}) };
+  }
+  if (name === WEB_READ_TOOL.name) {
+    return await webRead(args, api, (toBotId, message) =>
+      api("/api/internal/ask-bot", { method: "POST", body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, toBotId, message, depth: DEPTH, reader: true }) }), READ_ONLY);
   }
   if (name === "report_issue") {
     const r = await api("/api/internal/team-report", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
@@ -996,7 +1031,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     const body = JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, question, choices: args.choices, ...(args.close === true && { close: true }), fact: args.fact });
     try {
       const result = await api("/api/internal/ask-user", { method: "POST", body });
-      if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : "No matching open question." };
+      if (args.close === true) return { text: result.closed ? "Closed as answered in chat." : result.settled === "answered" ? "Already closed; the user answered it." : result.settled === "dismissed" ? "Already closed; the user dismissed it." : result.settled ? "Already closed." : "No matching open question." };
       if (typeof result.notice === "string") return { text: result.notice };
       return { text: "Asked. Their answer will arrive as a new message." };
     } catch (e) {
@@ -1074,7 +1109,9 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
       }),
     });
     if (r.alreadyConfigured) {
-      const next = credentialId === "openaiImageApiKey" ? "Use generate_image." : "Continue the task.";
+      const brokerId = custom ? customCredentialId(custom.service.host) : isBrokeredCredentialId(credentialId) ? credentialId : undefined;
+      const next = credentialId === "openaiImageApiKey" ? "Use generate_image."
+        : brokerId ? `Use call_api with credential_id ${brokerId}.` : "Continue the task.";
       return { text: `${r.label ?? label} is already configured. ${next}` };
     }
     if (custom) {
@@ -1201,9 +1238,17 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
     return { text: String(r.text ?? "") };
   }
   if (name === "no_reply_needed") return { text: "ok" };
+  if (name === "pin_goal") {
+    const r = await api("/api/internal/goal", { method: "POST", body: JSON.stringify({ name: args.name, goal: args.goal, done: args.done }) });
+    return r.error ? { text: `Couldn't pin the goal: ${r.error}`, isError: true } : { text: String(r.text) };
+  }
   if (name === "link_room_fix") {
     const r = await api("/api/internal/room-fix", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
     return { text: String(r.text ?? "Linked.") };
+  }
+  if (name === "post_to_group") {
+    const r = await api("/api/internal/post-to-group", { method: "POST", body: JSON.stringify(args) });
+    return { text: String(r.text ?? "") };
   }
   return { text: `Unknown tool: ${name}`, isError: true };
 }

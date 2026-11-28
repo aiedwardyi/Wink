@@ -59,7 +59,8 @@ const sameAsker = (left: Row, right: Row) => left.from?.botId === right.from?.bo
 
 /** Every ask_user card's state. A staysOpen card waits until answered, dismissed or asked again word for word;
  * an older card closes as the person types past it or a newer card arrives. */
-export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskState> {
+/** `end` and `then` read `messages.slice(0, end)` followed by `then` without copying a long chat's path. */
+export function askStates<T extends Row>(messages: readonly T[], end = messages.length, then?: T): Map<T, AskState> {
   const states = new Map<T, AskState>();
   const asked: T[] = [];
   let open: T[] = [];
@@ -67,7 +68,9 @@ export function askStates<T extends Row>(messages: readonly T[]): Map<T, AskStat
     states.set(card, { state: "answered", reply: firstLine(text), by });
     open = open.filter((entry) => entry !== card);
   };
-  for (const message of messages) {
+  for (let index = 0; index <= end; index++) {
+    const message = index < end ? messages[index]! : then;
+    if (!message) break;
     if (isAskUserCard(message)) {
       const subtitle = message.card!.subtitle?.trim();
       for (const older of open) {

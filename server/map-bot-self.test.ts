@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -10,23 +11,29 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { MapSnapshot } from "../shared/map-pane.ts";
 import { listenLocal } from "./phone-relay/testing/net.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { coldLoading } from "./cold-thread.ts";
+import type { TailRequest } from "./cold-thread-worker.ts";
 import { createWorkerMap } from "./map-pane.ts";
 import { DATA_DIR } from "./config.ts";
 import { SendSequencer } from "./send-idempotency.ts";
+import { serverSendClock } from "./send-clock.ts";
 import { cancelQueuedSends } from "./steer-queue.ts";
 import { Store, type BotRecord, type Message, type StoreChange } from "./store.ts";
 import { messageDatabase, withMessageTransaction } from "./message-db.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { completedTool } from "./tool-activity.ts";
 import type { SyncChange } from "./thread-sync-v2.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const roots: string[] = [];
 const servers: Server[] = [];
 const streams: ServerResponse[] = [];
+const heldLoads: (() => Promise<void>)[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
   for (const stream of streams.splice(0)) stream.end();
   for (const server of servers.splice(0)) { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); }
+  for (const release of heldLoads.splice(0)) await release();
   for (const root of roots.splice(0)) await removeTempDir(root);
 });
 
@@ -106,7 +113,7 @@ it("shows the bot as a row with the files its own turn edited in a git folder", 
 
 it("reads only the rows that wrote files, then loads a long chat off the server thread", async () => {
   const { root } = repo();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   const write = (store: Store, threadId: string, path: string) => {
     const { id: _id, at: _at, ...row } = edited([join(root, path)]);
     store.appendMessage(threadId, row);
@@ -134,41 +141,92 @@ it("reads only the rows that wrote files, then loads a long chat off the server 
   expect(store.messagesFor(bot.threadId)).toEqual(setup.messagesFor(bot.threadId));
 });
 
-// A chat several pages long that wrote a file, open in Map from a store that has not loaded it, its load's page reads held until `release`.
+function holdChatLoad(threadId: string) {
+  const post = Worker.prototype.postMessage;
+  const requests: TailRequest[] = [];
+  const pages: (() => void)[] = [];
+  let holding = true;
+  const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, request: TailRequest, transfer) {
+    if ("threadId" in request && request.threadId === threadId) {
+      requests.push(request);
+      if (holding && "after" in request) {
+        pages.push(() => post.call(this, request, transfer));
+        return;
+      }
+    }
+    post.call(this, request, transfer);
+  });
+  const release = async () => {
+    holding = false;
+    for (const page of pages.splice(0)) page();
+    await coldLoading(threadId);
+  };
+  heldLoads.push(async () => {
+    try { await release(); } finally { spy.mockRestore(); }
+  });
+  return { requests, release };
+}
+
+it("releases every held chat page in request order", async () => {
+  const worker = new Worker(`
+    const { parentPort } = require("node:worker_threads");
+    const pages = [];
+    parentPort.on("message", ({ after }) => {
+      if (after !== undefined) pages.push(after);
+      else {
+        parentPort.postMessage(pages);
+        parentPort.close();
+      }
+    });
+  `, { eval: true });
+  const reply = once(worker, "message");
+  const { release } = holdChatLoad("thread");
+  worker.postMessage({ threadId: "thread", after: 0 });
+  worker.postMessage({ threadId: "thread", after: 1_024 });
+  await release();
+  worker.postMessage({});
+  expect(await reply).toEqual([[0, 1_024]]);
+});
+
+// A chat longer than one page, open in Map with its first load request held.
 async function loadingChat(more?: (setup: Store, bot: BotRecord) => void) {
   const { root } = repo();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
   writeFileSync(join(root, "file.ts"), "const first = 2;\n");
   const { id: _id, at: _at, ...row } = edited([join(root, "file.ts")]);
   setup.appendMessage(bot.threadId, row);
-  for (let n = 0; n < 5_000; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `step ${n}` });
+  withMessageTransaction(() => {
+    for (let n = 0; n < 5_000; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "text", text: `step ${n}` });
+  });
   more?.(setup, bot);
   const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
-  const post = Worker.prototype.postMessage;
-  const held: Array<() => void> = [];
-  let holding = true;
-  const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, request: { threadId?: string; after?: number }, transfer) {
-    if (holding && request.threadId === bot.threadId && request.after !== undefined) held.push(() => post.call(this, request, transfer));
-    else post.call(this, request, transfer);
-  });
-  onTestFinished(() => spy.mockRestore());
+  const { requests, release } = holdChatLoad(bot.threadId);
   const map = await open([], undefined, undefined, { store, botId: bot.id });
   await map.until(data => data.workers.length > 0);
   map.close();
-  await vi.waitFor(() => expect(held).toHaveLength(1));
-  const release = () => {
-    holding = false;
-    for (const read of held.splice(0)) read();
-  };
+  expect(requests).toContainEqual(expect.objectContaining({ after: 0 }));
   return { store, bot, release };
 }
 
-function sendRoute(store: Store, startTurn: (botId: string, text: string, opts: { sendId?: string }) => Promise<unknown>, pullSyncedThread: () => void, turnClaimed = false) {
+// chats Store read whole while unloaded: the server thread freezing on a heavy chat
+function wholeReads(store: Store): string[] {
+  const reads: string[] = [];
+  // SAFETY: thread() is Store's whole read of a chat into its cache; the test only watches it.
+  const whole = store as unknown as { thread(threadId: string): unknown };
+  const thread = whole.thread.bind(store);
+  whole.thread = (threadId) => {
+    if (!store.loaded(threadId)) reads.push(threadId);
+    return thread(threadId);
+  };
+  return reads;
+}
+
+function sendRoute(store: Store, startTurn: (botId: string, text: string, opts: { sendId?: string; actedAt?: number }) => Promise<unknown>, turnClaimed = false) {
   const noop = () => {};
   const routes = createBotChatRoutes({
-    cfg: {}, store, threadSyncGate: { enabled: false }, sendSequencer: new SendSequencer(), startTurn, pullSyncedThread, noteTalked: noop,
+    cfg: {}, store, threadSyncGate: { enabled: false }, sendSequencer: new SendSequencer(), startTurn, pullSyncedThread: noop, noteTalked: noop,
     ensureChatLatency: noop, markChatLatency: noop, resolveReplyTarget: () => undefined, botHasActiveTurn: () => turnClaimed, instanceForBot: () => null,
     busyResumeThreads: new Set(), quick: { accountReady: () => true },
   } as unknown as Parameters<typeof createBotChatRoutes>[0]);
@@ -181,49 +239,112 @@ function sendRoute(store: Store, startTurn: (botId: string, text: string, opts: 
   };
 }
 
-it("starts a send made while Map loads the chat before the load lands", async () => {
-  const { store, bot, release } = await loadingChat();
+it("shows a send made while Map loads the chat once, stamped as a loaded chat would be, without reading it on the server thread", async () => {
+  const now = Date.now() + 1_000;
+  const { store, bot, release } = await loadingChat((setup, made) => {
+    setup.appendMessage(made.threadId, { role: "bot", kind: "text", text: "stamped ahead", at: now + 30_000 });
+  });
+  const reads = wholeReads(store);
   const loadedAtTurn: boolean[] = [];
-  // the load runs on from the send's pull, so a route that waits for it fails here rather than hangs
-  const send = sendRoute(store, async (_botId, text, { sendId }) => {
+  const send = sendRoute(store, async (_botId, text, { sendId, actedAt }) => {
     loadedAtTurn.push(store.loaded(bot.threadId));
-    return { message: store.appendMessage(bot.threadId, { role: "user", kind: "text", text, sendId }) };
-  }, release);
+    return { message: store.appendMessage(bot.threadId, { role: "user", kind: "text", text, sendId, actedAt }) };
+  });
+  const clock = [vi.spyOn(Date, "now").mockReturnValue(now), vi.spyOn(performance, "now").mockReturnValue(0)];
   const sendId = randomUUID();
-  const { status, data } = await send(bot.id, { text: "sent right after Map opened", sendId });
-  expect(loadedAtTurn).toEqual([false]);
+  const actedAt = now + 60_000;
+  const sent = send(bot.id, { text: "sent right after Map opened", sendId, actedAt });
+  await release();
+  const { status, data } = await sent;
+  expect(reads).toEqual([]);
+  expect(loadedAtTurn).toEqual([true]);
   expect(status).toBe(202);
-  await vi.waitFor(() => expect(store.loaded(bot.threadId)).toBe(true));
-  expect(store.messagesFor(bot.threadId).filter(message => message.sendId === sendId).map(message => message.id)).toEqual([data.message.id]);
+  const lines = store.messagesFor(bot.threadId).filter(message => message.sendId === sendId);
+  expect(lines.map(message => message.id)).toEqual([data.message.id]);
   expect(store.activeLeaf(bot.threadId)).toBe(data.message.id);
+  expect(lines[0]!.actedAt).toBe(Math.min(actedAt, serverSendClock(store.messagesFor(bot.threadId).filter(message => message.sendId !== sendId))));
+  expect(lines[0]!.actedAt).toBe(now + 30_001);
+  for (const spy of clock) spy.mockRestore();
 });
 
-it("answers a retry of a send stored before Map opened by its key while Map loads the chat", async () => {
+it("caps a send stamped ahead by the clock it arrived at, while Map's load of the chat moves past it", async () => {
+  const { store, bot, release } = await loadingChat();
+  // later than every stored row, so only the clock caps the stamp
+  const now = Date.now() + 1_000;
+  const reads = wholeReads(store);
+  const send = sendRoute(store, async (_botId, text, { sendId, actedAt }) =>
+    ({ message: store.appendMessage(bot.threadId, { role: "user", kind: "text", text, sendId, actedAt }) }));
+  const wall = vi.spyOn(Date, "now").mockReturnValue(now);
+  const elapsed = vi.spyOn(performance, "now").mockReturnValue(0);
+  const sendId = randomUUID();
+  const sent = send(bot.id, { text: "stamped ahead of this clock", sendId, actedAt: now + 60_000 });
+  // the clock moves once the route has read it; a route that reads it only after the load is caught by the stamp below
+  await vi.waitFor(() => expect(elapsed).toHaveBeenCalled(), { timeout: 1_000 }).catch(() => {});
+  wall.mockReturnValue(now + 500);
+  await release();
+  const { status, data } = await sent;
+  wall.mockRestore();
+  elapsed.mockRestore();
+  expect(status).toBe(202);
+  expect(reads).toEqual([]);
+  expect(store.row(bot.threadId, data.message.id)?.actedAt).toBe(now);
+});
+
+it("lands an unkeyed send while Map's load of the chat is held, stamped past its newest row, without reading it on the server thread", async () => {
+  const now = Date.now() + 1_000;
+  const { store, bot, release } = await loadingChat((setup, made) => {
+    setup.appendMessage(made.threadId, { role: "bot", kind: "text", text: "stamped ahead", at: now + 30_000 });
+  });
+  const reads = wholeReads(store);
+  const loadedAtTurn: boolean[] = [];
+  const send = sendRoute(store, async (_botId, text, { actedAt }) => {
+    loadedAtTurn.push(store.loaded(bot.threadId));
+    return { message: store.appendMessage(bot.threadId, { role: "user", kind: "text", text, actedAt }) };
+  });
+  const clock = [vi.spyOn(Date, "now").mockReturnValue(now), vi.spyOn(performance, "now").mockReturnValue(0)];
+  const sent = send(bot.id, { text: "an unkeyed line", actedAt: now + 60_000 });
+  // the line is stored before Map's page lands, as a direct write was: a second viewer and the Timeline rail see it with the load
+  await vi.waitFor(() => expect(loadedAtTurn).toEqual([false]), { timeout: 5_000 });
+  await release();
+  const { status, data } = await sent;
+  for (const spy of clock) spy.mockRestore();
+  expect(status).toBe(202);
+  expect(reads).toEqual([]);
+  const lines = store.messagesFor(bot.threadId).filter((message) => message.text === "an unkeyed line");
+  expect(lines.map((message) => message.id)).toEqual([data.message.id]);
+  expect(lines[0]!.actedAt).toBe(now + 30_001);
+});
+
+it("answers a retry of a send stored before Map opened by its key once Map's load lands", async () => {
   const sendId = randomUUID();
   let stored: Message | undefined;
   const { store, bot, release } = await loadingChat((setup, made) => {
     stored = setup.appendMessage(made.threadId, { role: "user", kind: "text", text: "sent before Map opened", sendId });
   });
+  const reads = wholeReads(store);
   const startTurn = vi.fn(async () => ({}));
-  const send = sendRoute(store, startTurn, release);
-  const retry = await send(bot.id, { text: "sent before Map opened", sendId });
-  expect(store.loaded(bot.threadId)).toBe(false);
-  expect(retry).toMatchObject({ status: 202, data: { message: { id: stored!.id } } });
-  await expect(send(bot.id, { text: "something else", sendId })).rejects.toMatchObject({ status: 409 });
+  const send = sendRoute(store, startTurn);
+  const retry = send(bot.id, { text: "sent before Map opened", sendId, actedAt: Date.now() });
+  await release();
+  expect(await retry).toMatchObject({ status: 202, data: { message: { id: stored!.id } } });
+  await expect(send(bot.id, { text: "something else", sendId, actedAt: Date.now() })).rejects.toMatchObject({ status: 409 });
   expect(startTurn).not.toHaveBeenCalled();
-  await vi.waitFor(() => expect(store.loaded(bot.threadId)).toBe(true));
+  expect(reads).toEqual([]);
+  expect(store.messagesFor(bot.threadId).filter(message => message.sendId === sendId).map(message => message.id)).toEqual([stored!.id]);
 });
 
-it("queues a send made while a turn waits for Map's load without reading the chat", async () => {
+it("queues a send made while a turn waits for Map's load without reading the chat on the server thread", async () => {
   const { store, bot, release } = await loadingChat();
   onTestFinished(() => void cancelQueuedSends(bot.id));
-  const send = sendRoute(store, vi.fn(), () => {}, true);
-  const { status, data } = await send(bot.id, { text: "one more thing", sendId: randomUUID() });
-  expect(store.loaded(bot.threadId)).toBe(false);
+  const reads = wholeReads(store);
+  const send = sendRoute(store, vi.fn(), true);
+  const sent = send(bot.id, { text: "one more thing", sendId: randomUUID(), actedAt: Date.now() });
+  await release();
+  const { status, data } = await sent;
+  expect(reads).toEqual([]);
   expect(status).toBe(202);
   expect(data).toMatchObject({ queued: true });
-  release();
-  await vi.waitFor(() => expect(store.loaded(bot.threadId)).toBe(true));
+  expect(store.loaded(bot.threadId)).toBe(true);
 });
 
 it("answers a slim switch back to a chat Map is loading without reading it, and sends its frame only while the bot is on it", async () => {
@@ -252,8 +373,8 @@ it("answers a slim switch back to a chat Map is loading without reading it, and 
   expect(await switchTo(bot.threadId)).toBe(bot.threadId);
   expect(chat()).toEqual([]);
   expect(await switchTo(sibling)).toBe(sibling);
-  release();
-  await vi.waitFor(() => expect(store.loaded(bot.threadId)).toBe(true));
+  await release();
+  expect(store.loaded(bot.threadId)).toBe(true);
   // the bot left the chat before it loaded, so that frame was never built
   expect(chat()).toEqual([]);
   expect(await switchTo(bot.threadId)).toBe(bot.threadId);
@@ -261,39 +382,27 @@ it("answers a slim switch back to a chat Map is loading without reading it, and 
   expect(broadcast.mock.calls.map(([payload]) => payload.bot.threadId)).toEqual([sibling, sibling, bot.threadId]);
 });
 
-it("keeps serving while it reads an unloaded chat's write rows from a large database", async () => {
+it("reads an unloaded chat's write rows on a worker before the chat loads", async () => {
   const { root } = repo();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
   writeFileSync(join(root, "file.ts"), "const first = 2;\n");
   const { id: _id, at: _at, ...row } = edited([join(root, "file.ts")]);
   setup.appendMessage(bot.threadId, row);
-  const database = messageDatabase();
-  const insert = database.prepare("INSERT INTO messages (thread_id, id, at, role, kind, text, json) VALUES ('other', ?, 0, 'bot', 'activity', NULL, ?)");
-  const json = JSON.stringify({ id: "r", at: 0, role: "bot", kind: "activity", tool: { name: "Bash", ok: true, detail: { output: ["x".repeat(4_000)] } } });
-  database.exec("BEGIN");
-  for (let n = 0; n < 40_000; n++) insert.run(`r${n}`, json);
-  database.exec("COMMIT");
   const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
-  const loaded = store.loaded.bind(store);
-  const waits: number[] = [];
-  // Map asks whether the chat is loaded right before it reads the chat: a callback queued then must not wait on the read.
-  vi.spyOn(store, "loaded").mockImplementation(threadId => {
-    const queued = performance.now();
-    setImmediate(() => waits.push(performance.now() - queued));
-    return loaded(threadId);
-  });
+  const { requests } = holdChatLoad(bot.threadId);
   const map = await open([], undefined, undefined, { store, botId: bot.id });
   const shown = await map.until(data => data.workers.length > 0);
   map.close();
   expect(shown.workers[0].files.map(file => file.path)).toEqual(["file.ts"]);
-  expect(Math.max(...waits)).toBeLessThan(50);
+  expect(requests).toContainEqual(expect.objectContaining({ writes: true }));
+  expect(store.loaded(bot.threadId)).toBe(false);
 });
 
 it("reads no note for panes edited after every note of an unloaded chat", async () => {
   const folders = [repo().root, repo().root];
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
   for (let n = 0; n < 200; n++) setup.appendMessage(bot.threadId, { role: "bot", kind: "note", text: `done ${n}`, at: Date.now() - 60_000 });
@@ -318,7 +427,7 @@ it("reads no note for panes edited after every note of an unloaded chat", async 
 // Two rows whose edits left no change, so each reason reads every note since 0, and `count` notes about other panes.
 function cleanPanes(count: number) {
   const folders = [repo().root, repo().root];
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
   for (const root of folders) {
@@ -336,20 +445,15 @@ function cleanPanes(count: number) {
   return { store: new Store(() => ({ instanceId: "claude", model: "opus" })), botId: bot.id };
 }
 
-it("keeps serving while it reads clean rows' reasons from an unloaded chat's notes", async () => {
-  const real = cleanPanes(10_000);
-  const loaded = real.store.loaded.bind(real.store);
-  const waits: number[] = [];
-  vi.spyOn(real.store, "loaded").mockImplementation(threadId => {
-    const queued = performance.now();
-    setImmediate(() => waits.push(performance.now() - queued));
-    return loaded(threadId);
-  });
+it("reads clean rows' reasons from an unloaded chat's notes on a worker", async () => {
+  const real = cleanPanes(200);
+  const threadId = real.store.bot(real.botId)!.threadId;
+  const { requests } = holdChatLoad(threadId);
   const map = await open([], undefined, undefined, real);
   expect((await map.until(() => true)).workers).toEqual([]);
   map.close();
-  await vi.waitFor(() => expect(loaded(real.store.bot(real.botId)!.threadId)).toBe(true));
-  expect(Math.max(...waits)).toBeLessThan(50);
+  expect(requests).toContainEqual(expect.objectContaining({ notesSince: 0 }));
+  expect(real.store.loaded(threadId)).toBe(false);
 });
 
 it("reads an unloaded chat's write rows and notes once across Map reads of clean rows", async () => {
@@ -378,7 +482,7 @@ const selfRow = (root: string) => `self-${createHash("sha256").update(root).dige
 
 it("moves the bot's row when a synced patch moves its write to another checkout of an unloaded chat", async () => {
   const [a, b] = [repo().root, repo().root];
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   for (const root of [a, b]) writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
@@ -394,7 +498,7 @@ it("moves the bot's row when a synced patch moves its write to another checkout 
 
 it("shows the bot's row once a synced completion gives a pending tool of an unloaded chat its write", async () => {
   const { root } = repo();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
@@ -409,7 +513,7 @@ it("shows the bot's row once a synced completion gives a pending tool of an unlo
 
 it("follows the bot to a new task mid-turn, and back to the chat whose tool completed meanwhile", async () => {
   const [a, b] = [repo().root, repo().root];
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   for (const root of [a, b]) writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
@@ -430,7 +534,7 @@ it("follows the bot to a new task mid-turn, and back to the chat whose tool comp
 
 it("shows a write a sync pull commits after the Map refresh it set off inside its transaction", async () => {
   const { root } = repo();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   writeFileSync(join(root, "file.ts"), "const edited = 2;\n");
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
@@ -461,7 +565,7 @@ it("shows a write a sync pull commits after the Map refresh it set off inside it
 });
 
 it("reads nothing off the server thread for a bot on a brand-new task", async () => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   const setup = new Store(() => ({ instanceId: "claude", model: "opus" }));
   const bot = setup.createBot({}, { seedMessages: false });
   const store = new Store(() => ({ instanceId: "claude", model: "opus" }));

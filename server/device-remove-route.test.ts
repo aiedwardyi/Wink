@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
@@ -9,6 +9,8 @@ import { z } from "zod";
 
 import { writeDeviceRecord } from "./device-sync.ts";
 import { waitForExit } from "./testing/cleanup.ts";
+import { spawnTestNode } from "./testing/harness-auth.ts";
+import { createFixtureHome } from "./testing/test-home.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const HOUR = 60 * 60_000;
@@ -29,7 +31,7 @@ async function freePort(): Promise<number> {
 }
 
 function makeHome() {
-  const home = mkdtempSync(join(tmpdir(), "device-remove-route-"));
+  const home = createFixtureHome("device-remove-route-");
   mkdirSync(join(home, "data"));
   mkdirSync(join(home, "ui"));
   writeFileSync(join(home, "ui/index.html"), "<h1>shell</h1>");
@@ -55,7 +57,7 @@ function makeHome() {
 
 async function start(home: string, port: number, extra: Record<string, string>) {
   stderr = "";
-  child = spawn(process.execPath, [join(root, "server/index.ts")], {
+  child = spawnTestNode(process.execPath, [join(root, "server/index.ts")], {
     cwd: root,
     env: {
       PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
@@ -70,9 +72,12 @@ async function start(home: string, port: number, extra: Record<string, string>) 
   child.stderr!.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
   const token = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`token timed out: ${stderr}`)), 30_000);
-    child!.once("message", (value) => {
+    // The first message is the test-home handshake (spawnTestNode); the token follows.
+    child!.on("message", (value) => {
+      const message = z.object({ type: z.literal("orbit:api-token"), token: z.string() }).safeParse(value);
+      if (!message.success) return;
       clearTimeout(timer);
-      resolve(z.object({ type: z.literal("orbit:api-token"), token: z.string() }).parse(value).token);
+      resolve(message.data.token);
     });
     child!.once("exit", () => {
       clearTimeout(timer);

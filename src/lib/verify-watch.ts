@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { VERIFY_ROUTES, verifyCardStale, type VerifyCardData, type VerifyCounts, type VerifyIssue, type VerifyTile } from "../../shared/live-verify";
 import { request } from "@/lib/api-request";
-import { checkThread, closeShow, showCheck } from "@/lib/show-pane";
+import { checkThread, closeShow, followPane, showCheck, showMap, showMedia, showTimeline, showWorkers, type PaneTool } from "@/lib/show-pane";
 import type { Message } from "@/state/store";
 import { trackFeature, trackScreen } from "./usage-stats";
 
@@ -42,6 +42,28 @@ export function toggleVerifyWatch(next: VerifyWatchOpen) {
 export function closePane() {
   closeVerifyWatch();
   closeShow();
+}
+
+/** A tool from the pane's tabs, its tool list or its Alt key. Check fronts the checker open in this chat, else opens the chat's last check when it can show one. */
+export function openPaneTool(tool: PaneTool, threadId: string, card: VerifyCardData | undefined, phone = false) {
+  if (tool === "workers") showWorkers(threadId);
+  else if (tool === "media") showMedia(threadId);
+  else if (tool === "map") showMap(threadId);
+  else if (tool === "timeline") showTimeline(threadId);
+  else if (open?.threadId === threadId) showCheck(threadId);
+  else if (card && canWatch(card, phone)) openVerifyWatch({ threadId, owner: card.owner, live: verifyCardAction(card, phone && !card.doc) === "live" });
+}
+
+/** Whether the Check tab can open this check: live while it runs, its replay once done. A phone watches a doc check live; only a site check waits for the end. */
+export function canWatch(card: VerifyCardData | undefined, phone = false) {
+  const action = card && verifyCardAction(card, phone && !card.doc);
+  return action === "live" || action === "watch";
+}
+
+/** A desktop chat switch: the checker stays with its chat while the pane goes along to the next one, and reopens the next chat's own check when Check is where it lands. */
+export function followChat(threadId: string, map: boolean, card: VerifyCardData | undefined) {
+  closeVerifyWatch();
+  if (followPane(threadId, map, canWatch(card)) === "check") openPaneTool("check", threadId, card);
 }
 
 export function useVerifyWatch(): VerifyWatchOpen | null {

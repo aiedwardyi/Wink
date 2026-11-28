@@ -5,7 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 
 import { MAILBOX_RECEIPT_LIMIT, MAILBOX_RECEIPT_WINDOW_MS, type ReceiptRow } from "./mailbox-receipts.ts";
-import { notesBackOn } from "./message-db.ts";
+import { activePathBackOn, notesBackOn, quickAsksOn } from "./message-db.ts";
+import { bootPaneWakes, type PaneWakeChat } from "./pane-wake.ts";
 import type { Message } from "./store.ts";
 import { reportNotes } from "./unlanded.ts";
 
@@ -20,6 +21,8 @@ export interface BootReadInput {
   notices: { migration: string; conflict: string[] };
   /** Chats whose orbit-msg reports the unlanded header reads after paint. */
   reportThreads: string[];
+  /** Chats that track pane note delivery, and this device's id that marks a local note. */
+  paneWakes: { chats: PaneWakeChat[]; deviceId: string };
 }
 
 export interface BootRows {
@@ -33,9 +36,11 @@ export interface BootRows {
   handed: Array<{ threadId: string; id: string }>;
   /** Each report thread's note rows newest first, as far as unlanded.ts reads them. */
   reports: Array<{ threadId: string; notes: Message[] }>;
+  /** Chats with stored local pane notes never delivered, in bot order. */
+  paneWakes: Array<{ botId: string; threadId: string }>;
 }
 
-const EMPTY: BootRows = { receipts: [], migration: [], conflicts: [], asks: [], peerCards: [], handed: [], reports: [] };
+const EMPTY: BootRows = { receipts: [], migration: [], conflicts: [], asks: [], peerCards: [], handed: [], reports: [], paneWakes: [] };
 
 /** Runs in boot-reads-worker.ts on its own read-only handle; never call it on the thread that serves the app. */
 export function findBootRows(input: BootReadInput): BootRows {
@@ -77,28 +82,14 @@ export function findBootRows(input: BootReadInput): BootRows {
           .all(threadId, threadId, threadId, JSON.stringify(input.notices.conflict)) as Array<{ id: string }>).map((row) => row.id),
       }))
       : [];
-    // SAFETY: Each query selects the message table's typed ids and time.
-    const asks = input.askThreads.flatMap((threadId) => {
-      const found = db.prepare(`SELECT id, at FROM messages WHERE thread_id = ? AND role = 'user' AND kind = 'text'
-        AND json_extract(json, '$.quick.state') = 'asked'
-        AND id NOT IN (SELECT json_extract(json, '$.quick.askId') FROM messages WHERE thread_id = ? AND role = 'bot' AND kind = 'text'
-          AND json_extract(json, '$.quick.askId') IS NOT NULL)`).all(threadId, threadId) as Array<{ id: string; at: number }>;
-      // without a saved leaf main reads the path whole (Store.activePath), so every ask stays
-      if (!found.length || !db.prepare("SELECT 1 FROM thread_state WHERE thread_id = ? AND active_leaf_id IS NOT NULL").get(threadId)) return found.map((row) => ({ threadId, ...row }));
-      // only asks on the active path: main walks back until it sees each one, so an ask on a dropped branch would walk it to the root
-      // SAFETY: The query selects the message table's typed id.
-      const onPath = new Set((db.prepare(`WITH RECURSIVE path(id) AS (
-          SELECT active_leaf_id FROM thread_state WHERE thread_id = ?
-          UNION SELECT json_extract(m.json, '$.parentId') FROM messages m JOIN path ON m.id = path.id WHERE m.thread_id = ?
-        ) SELECT id FROM path WHERE id IN (SELECT value FROM json_each(?))`).all(threadId, threadId, JSON.stringify(found.map((row) => row.id))) as Array<{ id: string }>).map((row) => row.id));
-      return found.filter((row) => onPath.has(row.id)).map((row) => ({ threadId, ...row }));
-    });
+    const asks = input.askThreads.flatMap((threadId) => quickAsksOn(db, threadId).map((row) => ({ threadId, ...row })));
     // SAFETY: Both queries select the message table's typed thread id and id.
     const peerCards = db.prepare(`SELECT thread_id AS threadId, id FROM messages WHERE kind = 'options'
       AND json_extract(json, '$.card.requestId') IS NOT NULL AND json_extract(json, '$.card.tool') IN ('ask_bot', 'delegate_bot')`).all() as BootRows["peerCards"];
     const handed = db.prepare("SELECT thread_id AS threadId, id FROM messages WHERE json_extract(json, '$.comm.read.state') = 'handed'").all() as BootRows["handed"];
     const reports = input.reportThreads.map((threadId) => ({ threadId, notes: [...reportNotes(notesBackOn(db, threadId))] }));
-    return { receipts, migration, conflicts, asks, peerCards, handed, reports };
+    const paneWakes = bootPaneWakes(input.paneWakes.chats, (threadId) => activePathBackOn(db, threadId) ?? [], input.paneWakes.deviceId);
+    return { receipts, migration, conflicts, asks, peerCards, handed, reports, paneWakes };
   } finally {
     db.close();
   }

@@ -295,6 +295,20 @@ describe("image save", () => {
     assert.equal(imageSaveName("not a url"), "image.png");
   });
 
+  it("names a linked image after its file, not the route", async () => {
+    const linked = (filePath) => `http://127.0.0.1:8799/api/threads/t-1/linked-file?path=${encodeURIComponent(filePath)}`;
+    assert.equal(imageSaveName(linked("C:\\bots\\marketing\\banner.png")), "banner.png");
+    assert.equal(imageSaveName(linked("/out/launch hero.jpg")), "launch hero.jpg");
+    assert.equal(imageSaveName("http://127.0.0.1:8799/api/threads/t-1/linked-file"), "image.png");
+    const asked = [];
+    await saveImageCopy(linked("C:\\bots\\marketing\\banner.png"), {
+      dialog: { showSaveDialog: async (_window, options) => (asked.push(options.defaultPath), { canceled: true }) },
+      downloads: dir,
+      window: {},
+    });
+    assert.deepEqual(asked, [path.join(dir, "banner.png")]);
+  });
+
   it("names data URL saves from their media type", () => {
     assert.equal(imageSaveName("data:image/jpeg;base64,/9j/4AAQ"), "image.jpg");
     assert.equal(imageSaveName("data:image/png;base64,iVBORw0KGgo="), "image.png");

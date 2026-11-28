@@ -75,7 +75,7 @@ it("lists every startTurn caller with its RootStart kind", () => {
     { call: "bot.id, TASK_RESUME_PROMPT", kind: "automatic", marker: "cardContinuation: true" },
     { call: "botId, prompt", kind: "automatic", marker: "automationSource: triggerSource" },
     { call: "source.bot.id, line", kind: "automatic", marker: "automationSource" },
-    { call: "botId, prompt", kind: "human", marker: "owner: !guest" },
+    { call: "botId, prompt", kind: "human", marker: "owner: !foreign" },
     { call: "entry.botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
     { call: "entry.botId, prompt", kind: "automatic", marker: "cardContinuation: true" },
     { call: "botId, prompt", kind: "automatic", marker: "cardContinuation: true" },

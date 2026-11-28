@@ -50,7 +50,7 @@ const REACTION_FRAME_BYTES = 192 * 1024;
 const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|name|react|notice|bots|bot-send|bot-picture|asks\/[\w-]{1,64}\/cancel|bots\/([\w-]{1,64})\/remove)$/;
 const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", name: "POST", react: "POST", notice: "POST", bots: "POST", "bot-send": "POST", "bot-picture": "POST", "remove-bot": "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
-const SHORT = /^[2-9A-HJ-NP-Z]{6}$/i;
+const SHORT = /^[2-9A-HJ-NP-Z]{6}(?:[2-9A-HJ-NP-Z]{2})?$/i;
 const JOIN_STATUS = {
   busy: 429,
   "no-invite": 404,

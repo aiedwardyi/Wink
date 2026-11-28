@@ -38,6 +38,24 @@ it("plays a 150-line, four-chunk replay in about 5 s", () => {
   expect(length).toBeLessThanOrEqual(5_300);
 });
 
+it("reads a replay's chunks top to bottom, one after another, though the run read them side by side", () => {
+  const show = new VerifyDocShow(false), opened = new Map<number, number>();
+  show.plan([text(150), band(4, 1, 40, "start"), band(5, 41, 80, "start"), band(6, 81, 120, "start"), band(9_000, 1, 40, "done"), band(9_001, 121, 150, "start"), band(11_000, 41, 80, "done"), band(12_500, 81, 120, "done"), band(16_000, 121, 150, "done")], 19_000, false);
+  play(show, (_, open) => { for (const from of open.keys()) if (!opened.has(from)) opened.set(from, show.clock); });
+  const at = [1, 41, 81, 121].map(from => opened.get(from)!);
+  at.slice(1).forEach((ms, i) => expect(ms - at[i]!).toBeGreaterThanOrEqual(600));
+});
+
+it("closes each chunk before the next one opens, even a short chunk after a long one", () => {
+  const show = new VerifyDocShow(false), opened = new Map<number, number>(), closed = new Map<number, number>();
+  show.plan([text(420), band(4, 1, 400, "start"), band(5, 401, 410, "start"), band(6, 411, 420, "start"), band(9_000, 1, 400, "done"), band(9_001, 401, 410, "done"), band(9_002, 411, 420, "done")], 9_002, false);
+  play(show, step => {
+    for (const mark of step.marks) if (mark.kind === "doc-chunk") (mark.state === "done" ? closed : opened).set(mark.from as number, show.clock);
+  });
+  expect(opened.get(401)!).toBeGreaterThanOrEqual(closed.get(1)!);
+  expect(opened.get(411)!).toBeGreaterThanOrEqual(closed.get(401)!);
+});
+
 it("glides each cursor quickly and rests only on a quote it marked", () => {
   const show = new VerifyDocShow(false), last = new Map<string, { end: number; quote: boolean }>();
   let reading = 0, quote = 0;
@@ -77,6 +95,26 @@ it("keeps every cursor on a line of a chunk being checked, one per checker, each
   // Numbering's rules ran once at the start: it reads only the chunk open then, and visits the later one just to mark its hit.
   expect([...kinds.get(1)!].sort()).toEqual(["grammar", "names", "numbering", "spelling", "translation"]);
   expect([...kinds.get(31)!].sort()).toEqual(["grammar", "names", "numbering!", "spelling", "translation"]);
+});
+
+const paragraph = "이 문단은 줄바꿈 없이 이어집니다. 문서의 끝도 스크롤해서 볼 수 있어야 합니다. ".repeat(500).slice(0, 16_000) + " 끝";
+it.each([["one paragraph", [paragraph]], ["a heading and a paragraph", ["Opening heading", paragraph]]])("sweeps the front down the rows of a last line that wraps to hundreds: %s", (_, doc) => {
+  const show = new VerifyDocShow(false), fronts: number[] = [];
+  show.plan([{ ms: 0, kind: "doc-text", lines: doc, pageStarts: [] }, band(20, 1, doc.length, "start"), band(1_000, 1, doc.length, "done")], 1_000, false, 45);
+  play(show, () => fronts.push(show.front()!));
+  fronts.slice(1).forEach((front, i) => expect(front).toBeGreaterThanOrEqual(fronts[i]!));
+  expect(fronts[fronts.length >> 1]).toBeGreaterThan(doc.length + 0.3);
+  expect(Math.max(...fronts)).toBeGreaterThan(doc.length + 0.99);
+});
+
+it("shows the numbering cursor on the chunk its rules ran with, then lets it go, when the show skims the rows a phone draws", () => {
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} ${"of a paragraph that wraps on a phone ".repeat(12)}`);
+  const show = new VerifyDocShow(false);
+  let numbering = 0;
+  show.plan([{ ms: 0, kind: "doc-text", lines: long, pageStarts: [] }, band(20, 1, 30, "start"), band(30, 31, 60, "start"), band(9_000, 1, 30, "done"), band(9_001, 31, 60, "done")], 9_001, false, 45);
+  play(show, () => { if ([...show.cursors.values()].some(c => c.kind === "numbering")) numbering++; });
+  expect(numbering).toBeGreaterThan(10);
+  expect([...show.cursors.values()].filter(c => c.kind === "numbering")).toEqual([]);
 });
 
 it("lands a finding when its checker's cursor reaches the quote, before the chunk closes", () => {

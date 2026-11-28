@@ -3,14 +3,14 @@
 // server on each engine's fake CLI, under Auto and Ask, and reads what the
 // CLI received.
 import type { ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const fake = (name: string) => join(SERVER_DIR, "testing", name);
@@ -98,10 +98,11 @@ describe("every engine states what it may do", () => {
   const dumpDir = (engine: Engine) => join(home, "dumps", engine);
   const files = (engine: Engine) => {
     const dir = dumpDir(engine);
-    return existsSync(dir) ? readdirSync(dir).map((file) => ({ file, text: readFileSync(join(dir, file), "utf8") })) : [];
+    // fake-claude writes dump.json.<pid>.tmp then renames it, so a listing can name a file that is gone by the read
+    return existsSync(dir) ? readdirSync(dir).filter((file) => !file.endsWith(".tmp")).map((file) => ({ file, text: readFileSync(join(dir, file), "utf8") })) : [];
   };
   const sendAndRead = async (engine: Engine, path: string, text: string) => {
-    rmSync(dumpDir(engine), { recursive: true, force: true });
+    removeTestData(dumpDir(engine));
     mkdirSync(dumpDir(engine), { recursive: true });
     expect((await api("POST", path, { text })).status).toBe(202);
     const deadline = Date.now() + 20_000;
@@ -130,7 +131,7 @@ describe("every engine states what it may do", () => {
   };
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), "omb-turn-access-"));
+    home = createFixtureHome("omb-turn-access-");
     mkdirSync(join(home, ".orbit"), { recursive: true });
     const instances = Object.fromEntries(ENGINE_NAMES.map((engine) => {
       const spec = ENGINES[engine];
@@ -168,7 +169,7 @@ describe("every engine states what it may do", () => {
 
   afterAll(async () => {
     await waitForExit(child, { signal: "SIGTERM" });
-    await removeTempDir(home);
+    removeTestData(home);
   });
 
   it.each(ENGINE_NAMES)("%s under Auto and Ask, in a 1:1 and a room", async (engine) => {

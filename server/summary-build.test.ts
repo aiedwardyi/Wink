@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCompaction, isFallbackSummary, planCompaction, prepareModelContext } from "./context-compaction.ts";
 import type { Message } from "./store.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer } from "./summary-build.ts";
+import { createSummaryRepair } from "./summary-repair.ts";
 import { TYPED_VALUES_HEADER } from "./typed-values.ts";
 import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
 
@@ -254,6 +255,51 @@ describe("summary build after settle", () => {
 
     expect(generateText).not.toHaveBeenCalled();
     expect(appended).toEqual([]);
+  });
+
+  it("repairs a fallback over @ words in one pass, then builds, so the send makes no call", async () => {
+    const words = ["@tsv", "@Marketing", "@($t", "@notes/plan.md"];
+    // the Claude CLI answers its file-mention notice instead of summarizing when a bare @ reaches it
+    const generateText = vi.fn(async (prompt: string) =>
+      /@(?!\u200B)/.test(prompt) ? "I could not find a file named tsv." : `SUMMARY\nkept ${[...new Set(prompt.match(/@\u200B\S+/g))].join(" ")}`);
+    const { threads, appended, build, store, sendPrepares } = setup(generateText);
+    const repair = createSummaryRepair({
+      store,
+      instanceFor: async () => ({ driverKind: "claude", generateText, textModel: "claude-haiku-5-5", textTimeoutMs: 90_000 }),
+      busy: () => false,
+      taskRecordText: () => "Goal: build",
+      userName: () => "User",
+    });
+    threads.set("t", [
+      message("m1", "post it to @Marketing and read @notes/plan.md"),
+      message("m2", "ran gh pr list --jq '[.number] | @tsv' and $long = @($t -split ',')", { role: "bot" }),
+      ...overBudgetThread("a"),
+      message("send", "next question"),
+    ]);
+    const { prepared } = await sendPrepares("t", "send", { summarize: undefined });
+    if (prepared.status !== "ready" || !isFallbackSummary(prepared.compaction!.summary)) throw new Error("the fixture did not land a fallback");
+    threads.get("t")!.push({ id: "fallback", at: 2_000, role: "bot", kind: "compaction", compaction: prepared.compaction! }, ...overBudgetThread("b"));
+    const onSettled = async () => {
+      build.onSettled("bot", "t");
+      repair.onSettled("bot", "t");
+      await Promise.all([build.idle(), repair.idle()]);
+    };
+
+    await onSettled();
+    expect(generateText).toHaveBeenCalledOnce();
+    expect(appended).toHaveLength(1);
+    expect(appended[0]!.compaction.coveredThroughId).toBe(prepared.compaction!.coveredThroughId);
+    for (const word of words) expect(appended[0]!.compaction.summary).toContain(word.replace("@", "@\u200B"));
+
+    await onSettled();
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(appended).toHaveLength(2);
+    expect(appended[1]!.compaction.previousCompactionId).toBe(appended[0]!.id);
+    threads.get("t")!.push(message("next", "next question"));
+    const { prepared: next, summarize } = await sendPrepares("t", "next");
+    expect(summarize).not.toHaveBeenCalled();
+    expect(next).toMatchObject({ status: "ready", compactionId: appended[1]!.id });
+    repair.dispose();
   });
 
   it("lands nothing when the leaf moved", async () => {
@@ -1205,8 +1251,11 @@ describe("summary build wiring", () => {
     expect(index).toContain("const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));");
     expect(index).toContain("grace: graceInputs, onWait: onSummaryWait");
     expect(index.split("90_000, () => summarizesOnEstimate(planBeforeSummary), {")).toHaveLength(3);
-    expect(index.indexOf("const summaryWaitMs = await summaryBuild.settle(")).toBeLessThan(index.indexOf("  const prepared = await prepareContext("));
-    expect(index).toContain("const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);");
+    const settle = index.indexOf("const summaryWaitMs = codexHistory ? 0 : await summaryBuild.settle(");
+    expect(settle).toBeGreaterThan(index.indexOf("async function startClaimedTurn("));
+    expect(settle).toBeLessThan(index.indexOf("  const prepared = nativeReplay ?? await prepareContext("));
+    expect(index).toContain("const usePlannedContext = summarySkipped || codexHistory;");
+    expect(index).toContain("const prepared = nativeReplay ?? await prepareContext(activeMessages, summaryWaitMs, usePlannedContext ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);");
     expect(index).toContain("requestText: systemUpdate + text, recycle: summaryGrace.recycle || systemRecycle");
     expect(index).toContain("const finalGrace = summarySkipped ? planSummaryGrace(finalGraceInputs) : null;");
     expect(index).toMatch(/summaryBuild\.dispose\(\);\s*summaryRepair\.dispose\(\);/);
@@ -1215,7 +1264,7 @@ describe("summary build wiring", () => {
   it("the 1:1 send's inline call runs on the deadline left after the wait; the room path is unchanged", () => {
     const sends = index.split("summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),");
     expect(sends).toHaveLength(2);
-    expect(sends[0]!.lastIndexOf("const summaryWaitMs = await summaryBuild.settle(")).toBeGreaterThan(sends[0]!.lastIndexOf("async function startClaimedTurn("));
+    expect(sends[0]!.lastIndexOf("const summaryWaitMs = codexHistory ? 0 : await summaryBuild.settle(")).toBeGreaterThan(sends[0]!.lastIndexOf("async function startClaimedTurn("));
     expect(index).toContain("summarize: instance.generateText ? (prompt) => instance.generateText!(prompt) : undefined,");
   });
 

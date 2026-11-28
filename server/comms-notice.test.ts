@@ -1,9 +1,10 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { postCommsNotice, postRefusalNotice, refusalText } from "./comms-notice.ts";
 import { _resetCommsRoots, rootForStart } from "./comms-root.ts";
 import { DATA_DIR } from "./config.ts";
 import { Store } from "./store.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const PAUSED = "Bot messaging limit reached. Send a message to reset it.";
 const UNAVAILABLE = "Bot messaging paused. Send a message to reset it.";
@@ -15,7 +16,7 @@ let key = 0;
 const lines = (threadId: string) => store.messagesFor(threadId).filter((row) => row.tool?.name?.startsWith("Bot messaging"));
 
 beforeEach(() => {
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   _resetCommsRoots();
   store = new Store(() => ({ instanceId: "claude", model: "fake" }));
   bot = store.createBot();

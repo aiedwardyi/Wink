@@ -72,15 +72,19 @@ function localNoteBack(newestFirst: Iterable<Message>, deliveredId: string | und
   return false;
 }
 
-/** Open chats whose stored local pane notes were never delivered; reads only each chat's tail. */
-export function bootPaneWakes(store: Pick<Store, "bots" | "taskByThread" | "activePathBack">, deviceId: string): Array<{ botId: string; threadId: string }> {
+export interface PaneWakeChat { botId: string; threadId: string; deliveredId: string | null; skippedId?: string }
+
+/** Open chats that track pane note delivery, in bot order. */
+export function paneWakeChats(store: Pick<Store, "bots" | "taskByThread">): PaneWakeChat[] {
   return store.bots.flatMap((bot) => {
     const task = store.taskByThread(bot.id, bot.threadId);
-    const deliveredId = task?.paneNotesDeliveredId;
-    return deliveredId !== undefined && localNoteBack(store.activePathBack(bot.threadId), deliveredId ?? undefined, deviceId, task?.paneNotesSkippedId)
-      ? [{ botId: bot.id, threadId: bot.threadId }]
-      : [];
+    return task?.paneNotesDeliveredId === undefined ? [] : [{ botId: bot.id, threadId: bot.threadId, deliveredId: task.paneNotesDeliveredId, skippedId: task.paneNotesSkippedId }];
   });
+}
+
+/** The chats whose stored local pane notes were never delivered; reads only each chat's tail. */
+export function bootPaneWakes(chats: PaneWakeChat[], back: (threadId: string) => Iterable<Message>, deviceId: string): Array<{ botId: string; threadId: string }> {
+  return chats.flatMap(({ botId, threadId, deliveredId, skippedId }) => (localNoteBack(back(threadId), deliveredId ?? undefined, deviceId, skippedId) ? [{ botId, threadId }] : []));
 }
 
 interface Pending {

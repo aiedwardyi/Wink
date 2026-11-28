@@ -1,6 +1,6 @@
 // Renderer bridge. contextIsolation stays on; the renderer only ever sees
 // this narrow surface (window.ogb), never Node or ipcRenderer itself.
-const { contextBridge, ipcRenderer, webUtils } = require("electron");
+const { contextBridge, ipcRenderer, webFrame, webUtils } = require("electron");
 
 const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args).catch((error) => {
   const message = String(error?.message ?? error);
@@ -167,6 +167,8 @@ contextBridge.exposeInMainWorld("ogb", {
   setUnreadCount: (count) => ipcRenderer.send("desktop:unread-count", count),
   /** Windows taskbar progress: indeterminate while any bot turn is running. */
   setTaskbarBusy: (busy) => ipcRenderer.send("desktop:taskbar-busy", busy === true),
+  /** Window zoom (Ctrl/Cmd +/-), which devicePixelRatio folds in with the display scale. */
+  zoomFactor: () => webFrame.getZoomFactor(),
   /** Open image preview takes Ctrl/Cmd +/-/0 until it closes. */
   imageZoom: {
     own: (owned) => ipcRenderer.send("image-zoom:own", owned === true),
@@ -187,7 +189,7 @@ contextBridge.exposeInMainWorld("ogb", {
   },
   /** Another PC's Orbit in its own sandboxed window; focuses it when already open. */
   deviceWindow: {
-    open: (host, name) => invoke("device-window:open", host, name),
+    open: (host, name, relayHost) => invoke("device-window:open", host, name, relayHost),
   },
   /** Native folder picker for a bot's working folder; null when cancelled. */
   pickFolder: (current) => invoke("desktop:pick-folder", current),
@@ -196,7 +198,7 @@ contextBridge.exposeInMainWorld("ogb", {
   exportDiagnostics: () => invoke("desktop:export-diagnostics"),
   errorReportConsent: () => invoke("error-reports:get"),
   setErrorReportConsent: (enabled) => invoke("error-reports:set", enabled),
-  captureErrorReport: (site) => ipcRenderer.send("error-reports:capture", site),
+  captureErrorReport: (site, detail) => ipcRenderer.send("error-reports:capture", site, detail),
   /** Open a local file or folder from a chat link in its default app, or reveal it
    * when its type could run. The chat bubble shows the rejection text
    * verbatim, so strip the "Error invoking remote method" wrapper
