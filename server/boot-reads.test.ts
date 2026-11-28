@@ -24,6 +24,7 @@ const userData = join(home, "user-data");
 const spyLog = join(home, "main-sql.jsonl");
 const syncFolder = join(home, "sync");
 const BIG = 50_000;
+const TAIL = 5_000;
 const WINDOW_MS = 30_000;
 const scope = { pane: "pane-1", teacher: "teacher-1" };
 const mailId = randomUUID();
@@ -31,6 +32,7 @@ let child: ChildProcess;
 let stderr = "";
 let botId = "";
 let threadId = "";
+let teacherThread = "";
 let servingAt = 0;
 
 type Statement = { t: number; sql: string; params: string[]; rows?: number; at: string | null; via?: string[]; plan?: string[] };
@@ -43,13 +45,18 @@ function seed(): void {
   store.patchBot(bot.id, { notifications: false, composio: false });
   const small = store.createBot({ name: "Small" }, { seedMessages: false });
   store.patchBot(small.id, { notifications: false, composio: false });
+  const teacher = store.createBot({ name: "Teacher" }, { seedMessages: false });
+  store.patchBot(teacher.id, { notifications: false, composio: false });
+  store.markPaneNotesDelivered(teacher.id, teacher.threadId, undefined);
   store.flushSaves();
+  teacherThread = teacher.threadId;
   botId = bot.id;
   threadId = bot.threadId;
   const cutoverAt = Date.now() - 86_400_000;
   writeFileSync(join(DATA_DIR, "thread-sync-v2-cutover.json"), JSON.stringify({ version: 2, cutoverAt }));
+  const deviceId = saveProfileSyncSettings(DATA_DIR, { ...loadProfileSyncSettings(DATA_DIR), folder: syncFolder }).deviceId;
   const sync = createThreadSyncV2Store({
-    store, dataDir: DATA_DIR, deviceId: saveProfileSyncSettings(DATA_DIR, { ...loadProfileSyncSettings(DATA_DIR), folder: syncFolder }).deviceId, folder: () => null, enabled: () => false, target: () => null, bots: () => [],
+    store, dataDir: DATA_DIR, deviceId, folder: () => null, enabled: () => false, target: () => null, bots: () => [],
     running: () => false, project: (message) => message, imported: () => {}, maintenance: () => {}, bootReads: async () => ({ migration: [], conflicts: [] }),
   })!;
   void sync.close();
@@ -86,6 +93,19 @@ function seed(): void {
   leaf.run(threadId, parentId);
   insert.run(small.threadId, ask.id, ask.at, ask.role, ask.kind, ask.text, JSON.stringify(ask));
   leaf.run(small.threadId, ask.id);
+  // a pane note left undelivered behind a long run of bot rows: the boot wake walks back to the user's turn
+  let tail: string | null = null;
+  const tailRows: Array<Partial<Message> & { id: string }> = [
+    { id: "pane-ask", role: "user", kind: "text", text: "Run worker" },
+    ...Array.from({ length: TAIL }, (_, index) => ({ id: `pane-row-${index}`, role: "bot" as const, kind: "text" as const, text: `working ${index}` })),
+    { id: "pane-note", role: "bot", kind: "note", text: "[pane worker01] DONE: verified", origin: deviceId },
+  ];
+  for (const [index, message] of tailRows.entries()) {
+    const row: Partial<Message> & { id: string; at: number } = { at: start + index, parentId: tail, ...message };
+    insert.run(teacher.threadId, row.id, row.at, row.role!, row.kind!, row.text ?? null, JSON.stringify(row));
+    tail = row.id;
+  }
+  leaf.run(teacher.threadId, tail);
   const task = bot.tasks![0]!;
   db.prepare("INSERT INTO sync_v2_store VALUES (?, ?, ?, ?, ?, 0, 1, 0)").run(threadId, bot.id, "sync-big", task.title, task.createdAt);
   db.prepare("INSERT INTO sync_v2_notices VALUES (?, 0)").run(threadId);
@@ -179,6 +199,17 @@ function rows(): Map<string, Message> {
   }
 }
 
+// each wake leaves its turn's rows under the note, or a failed-wake line when the stub engine refuses the turn
+function woken(): number {
+  const db = new DatabaseSync(join(DATA_DIR, "messages.db"), { readOnly: true });
+  try {
+    // SAFETY: COUNT(*) returns one integer row.
+    return (stderr.match(/pane wake failed/g)?.length ?? 0) + (db.prepare("SELECT COUNT(*) AS n FROM messages WHERE thread_id = ? AND json_extract(json, '$.parentId') = 'pane-note'").get(teacherThread) as { n: number }).n;
+  } finally {
+    db.close();
+  }
+}
+
 function notices(): number {
   const db = new DatabaseSync(join(DATA_DIR, "messages.db"), { readOnly: true });
   try {
@@ -230,6 +261,12 @@ describe("boot reads of messages.db", () => {
     expect(scans(statements().filter((row) => row.t < servingAt))).toEqual([]);
   });
 
+  it("before serving, the main thread walks no chat's tail for pane wakes", () => {
+    const walks = new Set(statements().filter((row) => row.t < servingAt && row.params.includes(teacherThread))
+      .map((row) => `main-thread walk of a cold chat before serving: ${row.sql.replace(/\s+/g, " ").trim()} (${[row.at, ...(row.via ?? [])].join(" < ")}). Find the wake in server/boot-reads-worker.ts after paint (ARCH-STARTUP).`));
+    expect([...walks]).toEqual([]);
+  });
+
   it("handles each boot marker once by the end of the first 30 s", async () => {
     const response = await harnessFetch(`${base}/api/mailbox`, {
       method: "POST",
@@ -250,9 +287,10 @@ describe("boot reads of messages.db", () => {
         queued: Boolean(marks.get("mark-ask")?.queueId),
         card: marks.get("mark-card")?.card?.dismissed,
         handed: marks.get("mark-handed")?.comm?.read?.state,
+        woken: woken(),
       };
     };
-    const want = { notice: false, noticeRow: 1, reparented: "mark-mail", ask: true, queued: true, card: true, handed: "read" };
+    const want = { notice: false, noticeRow: 1, reparented: "mark-mail", ask: true, queued: true, card: true, handed: "read", woken: 1 };
     while (Date.now() < servingAt + WINDOW_MS && JSON.stringify(handled()) !== JSON.stringify(want)) await new Promise((resolve) => setTimeout(resolve, 250));
     expect(handled()).toEqual(want);
     const notes = new DatabaseSync(join(DATA_DIR, "messages.db"), { readOnly: true });
@@ -266,6 +304,7 @@ describe("boot reads of messages.db", () => {
   it("for 30 s after serving, reads only keyed or bounded rows on the main thread", async () => {
     await vi.waitFor(() => expect(logged().at(-1)!.t).toBeGreaterThanOrEqual(servingAt + WINDOW_MS), { timeout: WINDOW_MS + 5_000, interval: 500 });
     expect(unbounded(statements().filter((row) => row.t >= servingAt && row.t < servingAt + WINDOW_MS))).toEqual([]);
+    expect(woken()).toBe(1);
   }, WINDOW_MS + 10_000);
 
   it("reads the first page's cold chat tails and sync change log off the main thread", () => {
@@ -277,6 +316,6 @@ describe("boot rows", () => {
   it("settle to empty rows when a shutdown before paint skips the read", async () => {
     const { bootReads, skipBootReads } = await import("./boot-reads.ts");
     skipBootReads();
-    expect(await bootReads()).toEqual({ receipts: [], migration: [], conflicts: [], asks: [], peerCards: [], handed: [], reports: [] });
+    expect(await bootReads()).toEqual({ receipts: [], migration: [], conflicts: [], asks: [], peerCards: [], handed: [], reports: [], paneWakes: [] });
   });
 });
