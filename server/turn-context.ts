@@ -526,8 +526,8 @@ function replayPreamble(input: TurnContextInput): string {
 
 const MEMORY_FOLDERS = 4;
 const MEMORY_NAMES = 2;
-export const MAX_MEMORY_PLAN_BYTES = 4096;
-const MEMORY_PLAN_PREFIX = "Read first, your plan: ";
+export const MAX_MEMORY_RECORDED_BYTES = 4096;
+const MEMORY_RECORDED_PREFIX = "Recorded files, newest first: ";
 function localPath(ref: string, cwd: string | undefined): string | null {
   const path = ref.trim();
   if (!path || /^\w{2,}:\/\//.test(path)) return null;
@@ -536,40 +536,36 @@ function localPath(ref: string, cwd: string | undefined): string | null {
   return cwd ? resolve(cwd, path) : null;
 }
 
-/** Files the bot recorded as its plan: artifacts labeled or named plan. Never a path read out of the goal or step text. */
-export function planFiles(artifacts: readonly RecordedFile[], cwd?: string): string[] {
-  const refs = artifacts.filter((item) => /plan/i.test(item.label) || /plan/i.test(basename(item.ref))).map((item) => item.ref);
-  return [...new Set(refs.map((ref) => localPath(ref, cwd)).filter((path): path is string => path !== null))];
-}
-
 export interface MemoryBlockInput {
-  /** saved or recorded file paths, oldest first */
+  /** saved file paths, oldest first */
   files: readonly string[];
   cwd?: string;
-  plans?: readonly string[];
+  /** paths the bot recorded with update_task_state, newest first */
+  recorded?: readonly string[];
   /** the open-work line unlanded.ts built */
   work?: string;
   home?: string;
 }
 
-function memoryPlanLines(paths: readonly string[]): string[] {
+function memoryRecordedLines(paths: readonly string[]): string[] {
   const shown: string[] = [];
-  let bytes = Buffer.byteLength(MEMORY_PLAN_PREFIX);
+  let bytes = Buffer.byteLength(MEMORY_RECORDED_PREFIX);
   for (const path of paths) {
     bytes += Buffer.byteLength(path) + (shown.length ? 2 : 0);
-    if (bytes > MAX_MEMORY_PLAN_BYTES) break;
+    if (bytes > MAX_MEMORY_RECORDED_BYTES) break;
     shown.push(path);
   }
   const more = paths.length - shown.length;
-  return [...shown.length ? [MEMORY_PLAN_PREFIX + shown.join("; ")] : [], ...more ? [`+${more} more plan paths`] : []];
+  return [...shown.length ? [MEMORY_RECORDED_PREFIX + shown.join("; ")] : [], ...more ? [`+${more} more recorded files`] : []];
 }
 
-/** Paths only: plan refs, the newest MEMORY_FOLDERS folders, then a count of the rest. */
+/** Paths only: recorded refs, then the newest MEMORY_FOLDERS folders, then a count of the rest. */
 export function memoryBlock(input: MemoryBlockInput): string {
+  const recorded = new Set(input.recorded);
   const newest = new Map<string, true>();
   for (const ref of input.files) {
     const path = localPath(ref, input.cwd);
-    if (!path) continue;
+    if (!path || recorded.has(path)) continue;
     newest.delete(path);
     newest.set(path, true);
   }
@@ -590,12 +586,12 @@ export function memoryBlock(input: MemoryBlockInput): string {
   const rest = [...folders.values()].slice(MEMORY_FOLDERS);
   if (rest.length) shown.push(`+${rest.length} older folders (${rest.reduce((total, folder) => total + folder.count, 0)} files)`);
   const lines = [
-    ...memoryPlanLines(input.plans ?? []),
+    ...memoryRecordedLines(input.recorded ?? []),
     ...(shown.length ? [`Files, newest ${MEMORY_FOLDERS} folders: ${shown.join("; ")}`] : []),
     ...(input.work ? [input.work] : []),
   ];
   if (!lines.length) return "";
-  return redactSecretsInText(["[Wink memory - open these before answering about the plan or what is built or merged, or starting new work:]", ...lines].join("\n"));
+  return redactSecretsInText(["[Wink memory - open these before answering about what is built or merged, or starting new work:]", ...lines].join("\n"));
 }
 
 type RecordedFile = { ref: string; label: string };
@@ -609,13 +605,12 @@ export interface ChatMemoryInput {
 
 /** memoryBlock for a chat: the record on this PC, plus what synced rows recorded or wrote. */
 export function chatMemory(input: ChatMemoryInput): string {
-  const rows = input.messages.flatMap((message) => message.recorded ?? []);
-  const recorded = [...input.record?.artifacts ?? [], ...rows];
+  const recorded = [...input.record?.artifacts ?? [], ...input.messages.flatMap((message) => message.recorded ?? [])]
+    .map((item) => localPath(item.ref, input.cwd)).filter((path): path is string => path !== null).reverse();
   return memoryBlock({
-    files: (input.record?.artifacts ?? []).map((item) => item.ref)
-      .concat(input.messages.flatMap((message) => [...(message.recorded ?? []).map((item) => item.ref), ...message.tool?.writes ?? []])),
+    files: input.messages.flatMap((message) => message.tool?.writes ?? []),
     cwd: input.cwd,
-    plans: planFiles(recorded, input.cwd),
+    recorded: [...new Set(recorded)],
     work: input.work,
   });
 }

@@ -1123,22 +1123,23 @@ describe("context compaction e2e", () => {
     expect(prompt).toContain("tree inspected");
   }, 30_000);
 
-  it("names its recorded plan and shots folder after a fresh session, and adds nothing to the next turn", async () => {
+  it("names its recorded files after a fresh session, and adds nothing to the next turn", async () => {
     const send = async (text: string) => {
       expect((await api("POST", `/api/bots/${MARKETING.botId}/messages`, { text })).status).toBe(202);
       await waitFor(async () => (await botById(MARKETING.botId))?.busy === false);
     };
     const launch = join(home, "launch");
-    const pinned = (prompt: string) => prompt.match(/^Read first, your plan: (.*)$/m)?.[1]?.split("; ");
+    const recordedLine = (prompt: string) => prompt.match(/^Recorded files, newest first: (.*)$/m)?.[1]?.split("; ") ?? [];
     rmSync(claudeDumpPath, { force: true });
     await send("post thursday");
     const dump = JSON.parse(readFileSync(claudeDumpPath, "utf8"));
     const fresh = { dump, prompt: String(dump.prompt.message.content) };
     expect(fresh.dump.argv).not.toContain("--resume");
-    // a path in step text rides in the task record, never on the plan line
-    expect(pinned(fresh.prompt)).toEqual([join(launch, "paste", "03-thursday.md")]);
+    const shots = Array.from({ length: 11 }, (_, index) => join(launch, "real-shots", `workers-${index + 1}.png`));
+    expect(recordedLine(fresh.prompt)).toEqual(expect.arrayContaining([join(launch, "paste", "03-thursday.md"), ...shots]));
+    // a path in step text rides in the task record, never on the recorded line
+    expect(recordedLine(fresh.prompt)).not.toContain(join(launch, "My Drive", "release.md"));
     expect(fresh.prompt).toContain(`Follow ${join(launch, "My Drive", "release.md")}`);
-    expect(fresh.prompt).toMatch(/real-shots 11 \(workers-11\.png, workers-10\.png\)/);
     expect(fresh.prompt).not.toContain("search_my_chats");
     expect(fresh.dump.mcpConfig.mcpServers.agents.env.OMB_OWNER_CHATS).not.toBe("1");
     await send("and friday?");

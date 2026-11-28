@@ -74,8 +74,7 @@ it("carries recorded files to the other PC on V1 sync", () => {
   expect(uploadThread(host("pc-a", onA), "marketing", "t1")).toBe("written");
   expect(pullThread(host("pc-b", onB), "bot", "marketing", "t1")).toBe("imported");
   const text = memoryOnB(onB.get("t1")!.messages);
-  expect(text).toContain(`Read first, your plan: ${plan}`);
-  expect(text).toContain(`${join(launch, "real-shots")} 11 (workers-11.png, workers-10.png)`);
+  expect(text).toContain(`Recorded files, newest first: ${[...shots].reverse().join("; ")}; ${plan}`);
 });
 
 it.each([false, true])("carries recorded files to the other PC on V2 sync, late call %s", async (late) => {
@@ -89,8 +88,7 @@ it.each([false, true])("carries recorded files to the other PC on V2 sync, late 
   await a.flush(scope);
   await b.pull(scope);
   const text = memoryOnB((await b.scan(scope.threadId)).messages);
-  expect(text).toContain(`Read first, your plan: ${plan}`);
-  expect(text).toContain(`${join(launch, "real-shots")} 11 (workers-11.png, workers-10.png)`);
+  expect(text).toContain(`Recorded files, newest first: ${[...shots].reverse().join("; ")}; ${plan}`);
 });
 
 it("scrubs a credential from a recorded label before it reaches the other PC", async () => {
