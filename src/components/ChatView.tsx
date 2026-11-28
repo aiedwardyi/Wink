@@ -1036,7 +1036,7 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
     `bot:${bot.id}:${bot.threadId}`,
     bot.messages,
   );
-  const selectReply = useReplyFocus(pickReply);
+  const selectReply = useReplyFocus(pickReply, scrollRef);
   useReplyTargetInView(scrollRef, replyTo?.id);
   // Profile patches sync the pin to other devices.
   const togglePin = (message: Message) => {

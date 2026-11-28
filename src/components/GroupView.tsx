@@ -999,7 +999,7 @@ export const GroupView = memo(function GroupView({ group: live, hidden = false }
     `group:${group.id}:${group.threadId}`,
     group.messages,
   );
-  const selectReply = useReplyFocus(pickReply);
+  const selectReply = useReplyFocus(pickReply, scrollRef);
   useReplyTargetInView(scrollRef, replyTo?.id);
   // Profile patches sync the pin to other devices.
   const togglePin = (message: Message) => {

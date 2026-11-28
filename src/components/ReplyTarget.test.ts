@@ -31,9 +31,11 @@ const room: Group = {
   unread: false, createdAt: 1, setupCompletedAt: 1, messages,
 };
 
-// happy-dom has no layout: the transcript is a window `view.height` tall over 2000px of rows, and the target row sits at `rowTop`.
+// happy-dom has no layout: the transcript is a window `view.height` tall over 2000px of rows, less the reply strip once it shows, and the target row sits at `rowTop`.
 const view = { height: 400, rowTop: 380 };
 const ROW_HEIGHT = 50;
+const STRIP_HEIGHT = 50;
+const edge = () => view.height - (document.querySelector('[aria-label="Cancel reply"]') ? STRIP_HEIGHT : 0);
 const scrollTops = new WeakMap<Element, number>();
 const transcript = () => document.querySelector<HTMLElement>("[data-orbit-transcript]")!;
 const observers: { callback: () => void; targets: Element[] }[] = [];
@@ -60,9 +62,9 @@ beforeEach(() => {
     set(this: HTMLElement, top: number) { scrollTops.set(this, Math.max(0, Math.round(top))); },
   });
   Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get(this: HTMLElement) { return isTranscript(this) ? 2000 : 0; } });
-  Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get(this: HTMLElement) { return isTranscript(this) ? view.height : 0; } });
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get(this: HTMLElement) { return isTranscript(this) ? edge() : 0; } });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    if (isTranscript(this)) return DOMRect.fromRect({ y: 0, height: view.height });
+    if (isTranscript(this)) return DOMRect.fromRect({ y: 0, height: edge() });
     if (this.closest('[data-mid="target"]')) return DOMRect.fromRect({ y: view.rowTop - transcript().scrollTop, height: ROW_HEIGHT });
     return DOMRect.fromRect({});
   });
@@ -120,10 +122,21 @@ const targetBottom = () => view.rowTop + ROW_HEIGHT - transcript().scrollTop;
 describe.each(["chat", "group"] as const)("the message a %s reply answers", (kind) => {
   it("stays above the reply strip", async () => {
     view.height = 400;
-    view.rowTop = 380;
+    view.rowTop = 330;
     await mount(kind);
     await reply();
-    expect(targetBottom()).toBeLessThanOrEqual(view.height);
+    expect(transcript().scrollTop).toBe(30);
+    expect(targetBottom()).toBeLessThanOrEqual(edge());
+  });
+
+  it("leaves the chat put when the message already ran past the bottom", async () => {
+    view.height = 400;
+    view.rowTop = 1200;
+    await mount(kind);
+    await reply();
+    expect(transcript().scrollTop).toBe(0);
+    await resize(200);
+    expect(transcript().scrollTop).toBe(0);
   });
 
   it("stays above a phone keyboard that opens after the tap", async () => {
@@ -133,16 +146,16 @@ describe.each(["chat", "group"] as const)("the message a %s reply answers", (kin
     await reply();
     expect(transcript().scrollTop).toBe(0);
     await resize(300);
-    expect(targetBottom()).toBeLessThanOrEqual(view.height);
+    expect(targetBottom()).toBeLessThanOrEqual(edge());
   });
 
   it("stays above the keyboard after the strip already moved it", async () => {
     view.height = 400;
-    view.rowTop = 380.4;
+    view.rowTop = 330.4;
     await mount(kind);
     await reply();
     await resize(200);
-    expect(targetBottom()).toBeLessThanOrEqual(view.height + 1);
+    expect(targetBottom()).toBeLessThanOrEqual(edge() + 1);
   });
 
   it("leaves the chat put when nothing is being replied to", async () => {
