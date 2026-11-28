@@ -70,7 +70,7 @@ export class EngineLogin {
   private timeoutMs: number;
   private captureMs: number;
 
-  constructor(timeoutMs = 5 * 60_000, captureMs = 10_000) {
+  constructor(timeoutMs = 15 * 60_000, captureMs = 10_000) {
     this.timeoutMs = timeoutMs;
     this.captureMs = captureMs;
   }

@@ -335,7 +335,7 @@ describe("call token", () => {
     expect([voice(1), voice(2)]).toEqual(["Aoede", "Alnilam"]);
   });
 
-  it("a bot's own picks win over the app voice and language, and calm rides the brief", async () => {
+  it("a bot's own picks win over the app voice and language, and a saved calm style is ignored", async () => {
     const h = harness({ liveCall: { voice: "Aoede" } });
     h.store.patchBot(h.bot.id, { call: { voice: "Sulafat", style: "calm", language: "ko", speed: 0.8 } });
     const { data } = await h.post("token", { locale: "en" });
@@ -344,7 +344,7 @@ describe("call token", () => {
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Sulafat");
     expect(setup.inputAudioTranscription).toEqual({ languageCodes: ["ko", "en"] });
     expect(setup.systemInstruction.parts[0].text).toContain("On screen your voice is called Sulafat");
-    expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Calm. Speak slowly");
+    expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Natural.");
   });
 
   it("a pick mid-call opens a fresh session in the new voice that knows the call so far", async () => {
@@ -366,8 +366,8 @@ describe("call token", () => {
     const swapped = await h.post("token", { callId: first.data.callId, swap: true, call: { voice: "Erinome", style: "calm" } });
     const setup = h.sent(1).bidiGenerateContentSetup;
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
-    expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Calm.");
-    expect(swapped.data).toMatchObject({ voice: "Erinome", style: "calm" });
+    expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Natural.");
+    expect(swapped.data).toMatchObject({ voice: "Erinome", style: "normal" });
     await h.post("token", { callId: first.data.callId, call: { voice: "Puck" } });
     expect(h.sent(2).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
   });
@@ -382,7 +382,7 @@ describe("call token", () => {
     await h.post("token", { callId: first.data.callId, resume: true });
     const setup = h.sent(h.fetch.mock.calls.length - 1).bidiGenerateContentSetup;
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
-    expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Calm.");
+    expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Natural.");
   });
 
   it("a same-bot call resumes with the voice and language it started with, not the bot's newer ones", async () => {
@@ -415,8 +415,8 @@ describe("call token", () => {
   it("a new call speaks with the picks it carries, before the bot's own save lands", async () => {
     const h = harness();
     const { data } = await h.post("token", { call: { voice: "Fenrir", style: "lively" } });
-    expect(data).toMatchObject({ voice: "Fenrir", style: "lively" });
-    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("bright, upbeat");
+    expect(data).toMatchObject({ voice: "Fenrir", style: "normal" });
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).not.toContain("bright, upbeat");
   });
 
   it("mints a 1-use token with the setup locked in and never returns the key", async () => {
@@ -855,19 +855,13 @@ describe("c-3a2c5539c0ea only chat talk reaches the call", () => {
 });
 
 describe("call styles", () => {
-  it("each style sends its own delivery: pace, pitch and length, at one speaking volume", async () => {
-    const sent: Record<string, string> = {};
+  it("every call sends the Normal delivery, whatever style was saved", async () => {
     for (const style of CALL_STYLES) {
       const h = harness();
       await h.post("token", { call: { style } });
-      sent[style] = (h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string).split("\n\n").at(-1)!;
+      const last = (h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string).split("\n\n").at(-1)!;
+      expect(last).toMatch(/^VOICE: Natural\..*everyday pace and pitch/);
     }
-    expect(new Set(Object.values(sent)).size).toBe(3);
-    expect(sent.calm).toMatch(/^VOICE: Calm\..*slowly.*low in your range.*one short sentence/);
-    expect(sent.normal).toMatch(/^VOICE: Natural\..*everyday pace and pitch/);
-    expect(sent.lively).toMatch(/^VOICE: Lively\..*quickly.*lifted pitch.*Two quick sentences/);
-    for (const style of ["calm", "lively"]) expect(sent[style]).toContain("normal speaking volume");
-    expect(sent.calm).not.toMatch(/softly|quiet late-night/);
   });
 });
 

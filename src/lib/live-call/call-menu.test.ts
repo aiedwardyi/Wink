@@ -70,23 +70,25 @@ async function started(voice = "Alnilam", ready = true) {
 afterEach(() => { vi.useRealTimers(); });
 
 describe("call menu picks mid-call", () => {
-  it("speed, style and this device's volume reach the next words heard without a new session", async () => {
+  it("speed and this device's volume reach the next words heard without a new session", async () => {
     const { call, posts, audio } = await started();
     call.retune({ speed: 0.8 });
-    call.retune({ speed: 0.8, style: "calm" });
-    call.retune({ speed: 0.8, style: "calm" }, 0.5);
+    call.retune({ speed: 0.7 });
+    call.retune({ speed: 0.7 }, 0.5);
     expect(audio.tunes.slice(-3)).toEqual([[0.8, 1], [0.7, 1], [0.7, 0.5]]);
     await flush();
-    expect(posts.filter((post) => post.body.swap)).toHaveLength(1);
+    expect(posts.filter((post) => post.body.swap)).toHaveLength(0);
   });
 
-  it("c-3a2c5539c0ea every style plays at one level, each at its own pace", async () => {
-    const { call, audio } = await started();
+  it("c-3a2c5539c0ea a saved style never changes the pace or opens a new session", async () => {
+    const { call, audio, posts } = await started();
     for (const style of ["calm", "normal", "lively"] as const) call.retune({ style });
-    expect(audio.tunes.slice(-3)).toEqual([[0.88, 1], [1, 1], [1.1, 1]]);
+    expect(audio.tunes.slice(-3)).toEqual([[1, 1], [1, 1], [1, 1]]);
     call.retune({ speed: 1.3, style: "lively" });
     call.retune({ speed: 0.7, style: "calm" });
     expect(audio.tunes.slice(-2)).toEqual([[1.3, 1], [0.7, 1]]);
+    await flush();
+    expect(posts.filter((post) => post.body.swap)).toHaveLength(0);
   });
 
   it("a voice picked between lines is the voice of the next line", async () => {

@@ -22,11 +22,10 @@ export const CALL_SPEED = { min: 0.7, max: 1.3, step: 0.1 } as const;
 export type CallPrefs = { voice?: LiveVoice; speed?: number; style?: CallStyle; language?: "en" | "ko" };
 // Gemini Live speaks near -17 LUFS; this brings it to about -20, calm beside speech in other apps. Every style plays at this one level.
 export const OUTPUT_GAIN = 0.7;
-// Live has no rate, pitch or energy field, so a style is how the voice is told to speak, at its own pitch-kept pace; volume is the device's own slider.
 // Told "slowly" or "quickly", Live keeps its pace (day-1117 clips: 256 vs 237 wpm), so the pace is played, not asked for.
-export const STYLE_PACE: Record<CallStyle, number> = { calm: 0.88, normal: 1, lively: 1.1 };
-export function callPace(prefs: Pick<CallPrefs, "speed" | "style">): number {
-  const pace = (prefs.speed ?? 1) * STYLE_PACE[prefs.style ?? "normal"];
+// The menu no longer offers a style; one saved as calm or lively is ignored: every call speaks Normal.
+export function callPace(prefs: Pick<CallPrefs, "speed">): number {
+  const pace = prefs.speed ?? 1;
   return Math.round(Math.min(CALL_SPEED.max, Math.max(CALL_SPEED.min, pace)) * 100) / 100;
 }
 export const STYLE_LINES: Record<CallStyle, string> = {
