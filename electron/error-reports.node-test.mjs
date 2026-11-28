@@ -32,7 +32,7 @@ async function fixture(t, options = {}) {
   });
   await new Promise((resolve) => receiver.listen(0, "127.0.0.1", resolve));
   let time = Date.UTC(2026, 9, 28, 1, 23, 45);
-  const config = { userData: dir, dsn: `http://public@127.0.0.1:${receiver.address().port}/1`, build: "1.0.212", platform: "win32", arch: "x64", now: () => time, uptime: () => 100, ...options };
+  const config = { userData: dir, dsn: `http://public@127.0.0.1:${receiver.address().port}/1`, build: "1.0.212", platform: "win32", arch: "x64", now: () => time, uptime: () => 100, chunks: CHUNKS, ...options };
   const reporters = [];
   const open = () => {
     const reporter = createErrorReports(config);
@@ -50,6 +50,7 @@ async function fixture(t, options = {}) {
 }
 
 const failure = { process: "renderer", code: "UNKNOWN_ERROR", site: 1 };
+const CHUNKS = new Set(["index-AbC_12.js", "vendor-Xy.js"]);
 
 const source = (file) => fs.readFileSync(new URL(file, import.meta.url), "utf8");
 
@@ -312,7 +313,7 @@ test("exact Sentry store bytes contain only permitted facts; all privacy fixture
   const request = f.received[0];
   assert.equal(request.url, "/api/1/store/?sentry_version=7&sentry_key=public");
   assert.deepEqual(request.headers, { "content-type": "application/json", "content-length": String(Buffer.byteLength(request.body)), host: `127.0.0.1:${f.config.dsn.match(/:(\d+)\//)[1]}`, connection: "close" });
-  assert.equal(request.body, JSON.stringify({ event_id: report.reportId, timestamp: Date.UTC(2026, 9, 28, 1) / 1000, message: "UNKNOWN_ERROR", release: "1.0.212", tags: { platform: "win32", arch: "x64", process: "renderer", site: "1" }, extra: { schema: 1, exitCode: 0, count: privateText.length, uptimeBucket: 1 } }));
+  assert.equal(request.body, JSON.stringify({ event_id: report.reportId, timestamp: Date.UTC(2026, 9, 28, 1) / 1000, message: "UNKNOWN_ERROR", release: "1.0.212", tags: { platform: "win32", arch: "x64", process: "renderer", site: "1" }, extra: { schema: 2, exitCode: 0, count: privateText.length, uptimeBucket: 1 } }));
   const bytes = JSON.stringify(request);
   for (const text of privateText) assert.equal(bytes.includes(text), false, text);
   assert.match(report.reportId, /^[a-f0-9]{32}$/);
@@ -742,10 +743,103 @@ test("spoofed IPC senders, subframes, origins and renderer sites are rejected", 
   handlers.get("error-reports:capture")(trusted, privateText[7]);
   assert.equal(captures.length, 0);
   handlers.get("error-reports:capture")(trusted, 2);
-  assert.deepEqual(captures, [{ process: "renderer", code: "UNKNOWN_ERROR", site: 2 }]);
+  assert.deepEqual(captures, [{ process: "renderer", code: "UNKNOWN_ERROR", site: 2, errorName: "", frame: "" }]);
   assert.equal(handlers.get("error-reports:set")(trusted, true), true);
   const app = new EventEmitter();
   installErrorReportCapture(app, reports, () => owner);
   app.emit("render-process-gone", {}, owner, { exitCode: 9, reason: privateText[6] });
   assert.deepEqual(captures.at(-1), { process: "renderer", code: "RENDERER_GONE", site: 3, exitCode: 9 });
+});
+
+const trustedOwner = () => {
+  const frame = { url: "http://127.0.0.1:9311/" };
+  return { frame, owner: { mainFrame: frame, isDestroyed: () => false, getURL: () => frame.url } };
+};
+
+test("renderer errors report only the error name and app bundle frame", async (t) => {
+  const { registerErrorReportIpc } = await import("./error-report-capture.mjs");
+  const f = await fixture(t);
+  const { frame, owner } = trustedOwner();
+  const handlers = new Map();
+  registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, f.reporter, () => owner, () => "http://127.0.0.1:9311", { chunks: CHUNKS });
+  const capture = (site, detail) => handlers.get("error-reports:capture")({ sender: owner, senderFrame: frame }, site, detail);
+  const message = `${privateText[5]} ${privateText[2]}\n    at http://127.0.0.1:9311/assets/secret-plan.js:9:9`;
+  const stack = `TypeError: ${message}\n    at https://evil.test/assets/other.js:7:7\n    at render (http://127.0.0.1:9311/assets/index-AbC_12.js:1:2345)\n    at http://127.0.0.1:9311/assets/vendor-Xy.js:3:4`;
+  capture(1, { name: "TypeError", message, stack });
+  await f.reporter.flush();
+  assert.equal(f.received.length, 0);
+  f.reporter.setConsent(true);
+  capture(1, { name: "TypeError", message, stack });
+  capture(2, { name: "", message: privateText[6], stack: "" });
+  await f.reporter.flush();
+  await f.reporter.flush();
+  assert.equal(f.received.length, 2);
+  const [body, rejection] = f.received.map((request) => JSON.parse(request.body));
+  assert.deepEqual(body.tags, { platform: "win32", arch: "x64", process: "renderer", site: "1", errorName: "TypeError", frame: "index-AbC_12.js:1:2345" });
+  assert.deepEqual(body.fingerprint, ["UNKNOWN_ERROR", "1", "TypeError", "index-AbC_12.js:1:2345"]);
+  assert.equal(body.extra.schema, 2);
+  const bytes = JSON.stringify(f.received);
+  for (const text of [...privateText, "secret-plan", "evil.test", "vendor-Xy", "127.0.0.1:9311/"]) assert.equal(bytes.includes(text), false, text);
+  assert.deepEqual(rejection.tags, { platform: "win32", arch: "x64", process: "renderer", site: "2" });
+  assert.equal("fingerprint" in rejection, false);
+});
+
+test("renderer reports keep only built-in error names and frames in chunks this build ships", async (t) => {
+  const { registerErrorReportIpc } = await import("./error-report-capture.mjs");
+  const f = await fixture(t);
+  const { frame, owner } = trustedOwner();
+  const handlers = new Map();
+  const inputs = [];
+  const reports = { capture: (input) => { inputs.push(input); f.reporter.capture(input); } };
+  registerErrorReportIpc({ handle() {}, on: (name, callback) => handlers.set(name, callback) }, reports, () => owner, () => "http://127.0.0.1:9311", { chunks: CHUNKS });
+  f.reporter.setConsent(true);
+  const capture = (name, url) => handlers.get("error-reports:capture")({ sender: owner, senderFrame: frame }, 1, { name, message: "x", stack: `${name}: x\n    at render (${url}:1:2)` });
+  class DiaryError extends Error {}
+  DiaryError.prototype.name = "MinsuDiaryError";
+  const names = [new DiaryError("x").name, "SecretPlanException", "C:\\Users\\minsu\\SecretError", privateText[5], "Error: 민수"];
+  for (const name of names) capture(name, "http://127.0.0.1:9311/assets/index-AbC_12.js");
+  const urls = ["blob:http://127.0.0.1:9311/index-AbC_12.js", "blob:http://127.0.0.1:9311/3f0c5a1e-4b2d-4c3e-9f1a-2b3c4d5e6f70", "http://127.0.0.1:9311/assets/minsu-diary.js", "http://127.0.0.1:9311/minsu/index-AbC_12.js", "file:///C:/Users/minsu/index-AbC_12.js", "data:text/javascript,index-AbC_12.js", "chrome-extension://abcdef/assets/index-AbC_12.js", "https://evil.test/assets/index-AbC_12.js"];
+  for (const url of urls) capture("TypeError", url);
+  for (const name of ["TypeError", "AbortError", "DOMException", "NotAllowedError"]) capture(name, "http://127.0.0.1:9311/assets/vendor-Xy.js");
+  assert.deepEqual(inputs.map((input) => input.frame), [...names.map(() => "index-AbC_12.js:1:2"), ...urls.map(() => ""), ...Array(4).fill("vendor-Xy.js:1:2")]);
+  f.reporter.stop();
+  assert.deepEqual(f.queue().records.map(({ report }) => [report.errorName, report.frame, report.count]), [["", "index-AbC_12.js:1:2", names.length], ["TypeError", "", urls.length], ["TypeError", "vendor-Xy.js:1:2", 1], ["AbortError", "vendor-Xy.js:1:2", 1], ["DOMException", "vendor-Xy.js:1:2", 1], ["NotAllowedError", "vendor-Xy.js:1:2", 1]]);
+  const reopened = f.open();
+  for (let i = 0; i < 5; i++) await reopened.flush();
+  assert.equal(f.received.length, 5);
+  const bytes = JSON.stringify(f.received);
+  for (const text of ["Minsu", "minsu", "SecretPlan", privateText[5], "민수", "blob", "3f0c5a1e", "evil.test", "abcdef"]) assert.equal(bytes.includes(text), false, text);
+});
+
+test("a hand-written queue entry with a crafted error name or frame never sends", async (t) => {
+  const f = await fixture(t);
+  f.reporter.setConsent(true);
+  f.reporter.capture({ ...failure, errorName: "TypeError", frame: "index-AbC_12.js:1:2" });
+  f.reporter.stop();
+  const [record] = f.queue().records;
+  assert.deepEqual([record.report.errorName, record.report.frame], ["TypeError", "index-AbC_12.js:1:2"]);
+  const crafted = [{ errorName: "MinsuDiaryError" }, { errorName: "SecretPlanException" }, { frame: "minsu-diary.js:1:2" }, { frame: "secret_plan.mjs:3:4" }];
+  const records = crafted.map((patch, i) => ({ ...record, report: { ...record.report, ...patch, reportId: String(i).repeat(32) } }));
+  fs.writeFileSync(path.join(f.dir, "error-report-queue.json"), JSON.stringify({ records: [...records, record] }));
+  const reopened = f.open();
+  await reopened.flush();
+  await reopened.flush();
+  assert.deepEqual(f.received.map((request) => JSON.parse(request.body).event_id), [record.report.reportId]);
+});
+
+test("shipped chunks are the JavaScript files in the packaged UI's assets folder", async (t) => {
+  const { shippedChunks } = await import("./error-report-capture.mjs");
+  const ui = fs.mkdtempSync(path.join(scratch, "ui-"));
+  t.after(() => fs.rmSync(ui, { recursive: true, force: true }));
+  assert.deepEqual([...shippedChunks(ui)], []);
+  fs.mkdirSync(path.join(ui, "assets"));
+  for (const name of ["index-AbC_12.js", "pdf.worker-Q1.mjs", "index-AbC_12.css", "font-Z9.woff2"]) fs.writeFileSync(path.join(ui, "assets", name), "");
+  assert.deepEqual([...shippedChunks(ui)].sort(), ["index-AbC_12.js", "pdf.worker-Q1.mjs"]);
+});
+
+test("main checks renderer frames and queued reports against the same shipped chunks", () => {
+  const main = source("./main.mjs");
+  assert.match(main, /const rendererChunks = app\.isPackaged \? shippedChunks\(path\.join\(process\.resourcesPath, "ui"\)\) : new Set\(\);/);
+  assert.match(main, /createErrorReports\(\{[^\n]*chunks: rendererChunks \}\);/);
+  assert.match(main, /registerErrorReportIpc\(ipcMain, [^\n]*chunks: rendererChunks \}\);/);
 });

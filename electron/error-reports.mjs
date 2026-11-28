@@ -46,7 +46,7 @@ export function crashReportsEnv(dsn) {
   return endpoint ? { WINK_CRASH_REPORTS: endpoint.origin, WINK_CRASH_PROJECT: endpoint.pathname.split("/")[2] } : {};
 }
 
-export function createErrorReports({ userData, dsn, build, platform, arch, now = Date.now, uptime = process.uptime, bootTime = () => Date.now() - os.uptime() * 1000 }) {
+export function createErrorReports({ userData, dsn, build, platform, arch, chunks = new Set(), now = Date.now, uptime = process.uptime, bootTime = () => Date.now() - os.uptime() * 1000 }) {
   const pref = path.join(userData, "error-report-consent.json");
   const queue = path.join(userData, "error-report-queue.json");
   // Opt-out purges reports, but must not reset the daily upload limit.
@@ -83,7 +83,7 @@ export function createErrorReports({ userData, dsn, build, platform, arch, now =
   };
   const trim = () => {
     const time = now();
-    records = records.filter((item) => validErrorReport(item?.report)
+    records = records.filter((item) => validErrorReport(item?.report, chunks)
       && Number.isFinite(item.created) && item.created > time - TTL && item.created <= time
       && Number.isInteger(item.attempts) && item.attempts >= 0 && item.attempts <= 35
       && Number.isFinite(item.next) && item.next >= 0 && item.next <= time + TTL)
@@ -101,9 +101,9 @@ export function createErrorReports({ userData, dsn, build, platform, arch, now =
     try {
       if (!enabled()) return;
       trim();
-      const report = makeErrorReport(input, { build, platform, arch, now: now(), uptime: uptime(), reportId: randomBytes(16).toString("hex") });
+      const report = makeErrorReport(input, { build, platform, arch, chunks, now: now(), uptime: uptime(), reportId: randomBytes(16).toString("hex") });
       if (!report) return;
-      const existing = records.find((item) => !item.attempts && item.report.code === report.code && item.report.site === report.site && item.report.build === report.build && item.report.platform === report.platform);
+      const existing = records.find((item) => !item.attempts && item.report.code === report.code && item.report.site === report.site && item.report.errorName === report.errorName && item.report.frame === report.frame && item.report.build === report.build && item.report.platform === report.platform);
       if (existing) existing.report.count = Math.min(10000, existing.report.count + 1);
       else records = [...records, { report, created: now(), attempts: 0, next: now() }].slice(-100);
       dirty = true;

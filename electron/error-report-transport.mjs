@@ -23,7 +23,8 @@ export function errorReportEndpoint(dsn) {
 export function errorReportBytes(report) {
   return JSON.stringify({
     event_id: report.reportId, timestamp: report.utcHour * 3600, message: report.code, release: report.build,
-    tags: { platform: report.platform, arch: report.arch, process: report.process, site: String(report.site) },
+    tags: { platform: report.platform, arch: report.arch, process: report.process, site: String(report.site), ...report.errorName && { errorName: report.errorName }, ...report.frame && { frame: report.frame } },
+    ...(report.errorName || report.frame) && { fingerprint: [report.code, String(report.site), report.errorName, report.frame] },
     extra: { schema: report.schema, exitCode: report.exitCode, count: report.count, uptimeBucket: report.uptimeBucket },
   });
 }
