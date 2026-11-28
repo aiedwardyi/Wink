@@ -953,6 +953,12 @@ describe("call lines and end", () => {
     expect(JSON.parse(readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim()).start).toEqual(start);
   });
 
+  it("keeps the stats when the live voice is one this build does not list", async () => {
+    const h = harness();
+    expect((await h.post("end", { callId: "c-0123456789ab", stats: { ms: 9_000, start: { voiceLive: "Nova" } } })).data).toEqual({ ok: true });
+    expect(JSON.parse(readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim()).start).toEqual({ voiceLive: "Nova" });
+  });
+
   it("the stats line names the voice the call used", async () => {
     const h = harness({ liveCall: { voice: "Alnilam" } });
     const { callId } = (await h.post("token")).data;

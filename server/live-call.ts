@@ -91,7 +91,7 @@ const statsSchema = z.object({
   closeCodes: z.array(z.number().int()).max(32),
   usage: z.object({ input: count, output: count, total: count }).partial(),
   // ms from the tap to each start step; states only, never speech text
-  start: z.object({ setupMs: ms, greet: z.enum(["sent", "dropped"]), greetMs: ms, ctx: z.string().max(16), paused: z.boolean(), noSound: z.boolean(), heardMs: ms, answerMs: ms, audioMs: ms, playMs: ms, volume: z.number().min(0).max(1), voiceAsked: z.enum(LIVE_VOICES), voiceLive: z.enum(LIVE_VOICES) }).partial(),
+  start: z.object({ setupMs: ms, greet: z.enum(["sent", "dropped"]), greetMs: ms, ctx: z.string().max(16), paused: z.boolean(), noSound: z.boolean(), heardMs: ms, answerMs: ms, audioMs: ms, playMs: ms, volume: z.number().min(0).max(1), voiceAsked: z.enum(LIVE_VOICES), voiceLive: z.string().max(32) }).partial(),
 }).partial();
 const endSchema = z.object({ callId: z.string().regex(CALL_ID), stats: statsSchema });
 
