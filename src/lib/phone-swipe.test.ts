@@ -673,9 +673,9 @@ describe("useSheetSwipe up", () => {
     vi.restoreAllMocks();
   });
 
-  it("closes on a long upward drag from the header and swallows the click", () => {
+  it("closes on a long upward drag from the header and swallows the click", async () => {
     const end = swipe("#head", [500, 490, 420, 340]);
-    expect(close).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(end.defaultPrevented).toBe(true);
   });
 
@@ -696,13 +696,13 @@ describe("useSheetSwipe up", () => {
     expect(end.defaultPrevented).toBe(false);
   });
 
-  it("lets a list that can still scroll down scroll, and dismisses from its end", () => {
+  it("lets a list that can still scroll down scroll, and dismisses from its end", async () => {
     list(600, 100);
     swipe("#row", [500, 490, 420, 340]);
-    expect(close).not.toHaveBeenCalled();
+    expect(sheet().style.translate).toBe("");
     list(600, 400);
     swipe("#row", [500, 490, 420, 340]);
-    expect(close).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
   });
 
   it("closes without following the finger under reduced motion", () => {

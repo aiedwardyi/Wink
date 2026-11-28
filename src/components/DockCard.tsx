@@ -1,10 +1,10 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
-import { useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
+import { clearSheetMotion, useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
 import { usePresence } from "@/lib/use-presence";
 
-/** A card docked above the message box: on a phone it opens and closes on the call settings sheet's motion, and with onDismiss a swipe down does what its x does. */
+/** A card docked above the message box: on a phone it opens and closes on the call settings sheet's motion, and with onDismiss a swipe down does what its x does, the card riding the finger over the message box. */
 export function DockCard({ open, onDismiss, id, className, children }: { open: boolean; onDismiss?: () => void; id?: string; className?: string; children: ReactNode }) {
   const phone = useIsPhone();
   const card = useRef<HTMLDivElement>(null);
@@ -18,8 +18,7 @@ export function DockCard({ open, onDismiss, id, className, children }: { open: b
   // a new id is the next card in the same place: at rest, not where a swipe let go of the last one
   useLayoutEffect(() => {
     if (!open) return;
-    card.current?.style.removeProperty("translate");
-    card.current?.style.removeProperty("transition");
+    clearSheetMotion(card.current);
   }, [id, open]);
   if (!mounted || (closing && !phone)) return null;
   return (

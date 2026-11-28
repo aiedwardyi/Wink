@@ -55,6 +55,15 @@
   to { opacity: 0; }
 }
 
+/* A docked card a finger drags (useSheetSwipe) leaves the composer tray's clip and rides over the message box. */
+[data-composer-tray]:has([data-dock-card][data-sheet-moving]) {
+  overflow: visible;
+}
+[data-dock-card][data-sheet-moving] {
+  position: relative;
+  z-index: 1;
+}
+
 /* usePresence keeps a closed surface mounted this long; it must not catch taps meanwhile */
 [data-closing] {
   animation: fade-out var(--motion-fast) var(--ease-exit) forwards;

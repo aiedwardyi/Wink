@@ -122,7 +122,7 @@ it.each([true, false])("only closes on a downward swipe at the top on phone=%s",
   expect(panel.dataset.closing).toBeUndefined();
   list.scrollTop = 0;
   const atTop = await swipe(list);
-  expect(panel.dataset.closing).toBe(phone ? "true" : undefined);
+  await vi.waitFor(() => expect(panel.dataset.closing).toBe(phone ? "true" : undefined));
   expect(atTop[1]!.defaultPrevented).toBe(phone);
   expect(onCall).not.toHaveBeenCalled();
 });
@@ -202,7 +202,7 @@ it("closes the compact menu on a phone swipe down from the top row, and keeps it
   expect(panel.dataset.closing).toBeUndefined();
   const top = panel.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Answered by"]')!;
   await swipe(top);
-  expect(panel.dataset.closing).toBe("true");
+  await vi.waitFor(() => expect(panel.dataset.closing).toBe("true"));
 });
 
 it("fits the panel and its volume slider on a phone", async () => {

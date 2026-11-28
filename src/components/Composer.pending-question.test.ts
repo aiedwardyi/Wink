@@ -698,13 +698,26 @@ describe("pinned ask_user question", () => {
     await mount({ bot: bot([question]) });
     if (form === "row") await shrink();
     await pull(form === "row" ? row()! : card()!, 200);
-    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]);
+    await vi.waitFor(() => expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]));
     expect(sent("POST", "/api/bots/asker/messages")).toEqual([]);
     await rerender({ bot: bot([{ ...question, card: { ...question.card!, dismissed: true } }]) });
     expect(pin()!.closest("[data-dock-card]")!.hasAttribute("data-closing")).toBe(true);
-    expect(pin()!.closest<HTMLElement>("[data-dock-card]")!.style.translate).toBe("0 200px");
+    // it glided off the screen before the dismiss, so its fade plays out of sight
+    expect(pin()!.closest<HTMLElement>("[data-dock-card]")!.style.translate).toBe(`0 ${200 + window.innerHeight}px`);
     await vi.waitFor(() => expect(pin()).toBeNull());
     expect(dot()).toBeNull();
+  });
+
+  it("dismisses only the swiped question on a phone when a newer one takes its place mid-glide", async () => {
+    screen(true);
+    await mount({ bot: bot([question]) });
+    await pull(card()!, 200);
+    const next = { ...ask({ subtitle: "Deploy now?" }), at: 3 };
+    await rerender({ bot: bot([question, next]) });
+    expect(card()?.textContent).toContain("Deploy now?");
+    await vi.waitFor(() => expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]));
+    expect(sent("PATCH", `/api/bots/asker/cards/${next.id}`)).toEqual([]);
+    expect(card()?.textContent).toContain("Deploy now?");
   });
 
   it("springs back from a short slow pull on a phone, still the open card", async () => {
