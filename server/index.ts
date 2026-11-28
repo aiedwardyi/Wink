@@ -709,6 +709,7 @@ googleAccount.onIdToken(googlePhotoChanged);
  * but the compare costs nothing to make safe. */
 const commsCallers = new CommsCallers();
 const importPins = importMemoryPins();
+const importGate = importTurnGate(turnRegistry);
 function authorizedComms(header: string | string[] | undefined, path: string): boolean {
   return commsCallers.allows(header, path, bootToken);
 }
@@ -3388,6 +3389,7 @@ function markThreadInterrupted(threadId: string, botId: string, epoch: number) {
   const live = liveTurnIdByThread.get(threadId);
   if (live) interruptedTurnIds.add(live);
   pendingInterruptThreads.mark(threadId, botId, epoch);
+  importGate.stop(threadId);
 }
 
 function bindInterruptedTurn(threadId: string, turnId: string | undefined, botId: string, epoch: number) {
@@ -3653,6 +3655,7 @@ const watchdog = new TurnWatchdog({
     );
     finalizeDelegationWatch(turn.threadId, false, "", "Delegated turn stalled and was stopped");
     const stalledTurnId = turnRegistry.current(turn.threadId)?.turnId;
+    importGate.stop(turn.threadId);
     turnUsage.delete(turn.threadId);
     roomStallCompletions.stall(turn.threadId);
     // ACP interruption settles within five seconds; other adapters settle
@@ -4954,6 +4957,7 @@ bus.subscribe((event: RuntimeEvent) => {
   if (event.turnId) {
     if (settleMail(store, event.threadId, event.turnId, event.ok, event.stopReason ?? undefined)) paneWake.noteArrived(sourceBotId ?? "", event.threadId);
     turnRegistry.settle(event.turnId);
+    importGate.settled(event.threadId, event.turnId);
     usageBoard.turnSettled(event.turnId, event.ok);
   }
   drainQueuedSends();
@@ -8784,7 +8788,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           ownerChat: ({ botId, threadId }) => { const bot = store.bot(botId); return Boolean(bot && ownerChats(bot, notOwnerChats()).includes(threadId)); },
           messages: (threadId) => store.activePath(threadId),
           // the chat's one token outlives its turns: the turn running now must be the one the per-turn rule opened
-          open: importTurnGate(turnRegistry),
+          open: importGate,
         });
         for (const bot of store.bots) void memoryLookup.refresh(bot.id);
         return;

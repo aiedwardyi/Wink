@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { aboutYouRoutes, aboutYouSources, ABOUT_YOU_MAX_PASTE, declineImport } from "./about-you.ts";
+import { aboutYouRoutes, aboutYouSources, ABOUT_YOU_MAX_PASTE, declineImport, importDeclined } from "./about-you.ts";
 import { DATA_DIR } from "./config.ts";
 import { importMemoryPins } from "./import-memory-pin.ts";
 import { importMemoryRoute, importMemoryTool, importTurnGate, noteSendLocale, type ImportMemoryDeps } from "./memory-import-offer.ts";
@@ -150,6 +150,56 @@ describe("import_memory saves through the Settings path", () => {
       expect(JSON.parse(raw).text).toContain("Settings > Import Memory still works");
       expect(aboutYouSources()).toEqual([]);
     }
+  });
+
+  it("a stopped or stalled turn's engine saves nothing, even under a newer turn that may save", async () => {
+    const turns = new TurnRegistry();
+    const gate = importTurnGate(turns);
+    turns.start("u1", { botId: "b1", threadId: "t1", owner: "user", depth: 0, importMemory: true });
+    gate.stop("t1");
+    turns.start("u2", { botId: "b1", threadId: "t1", owner: "user", depth: 0, importMemory: true });
+    expect((await call({}, [typed(paste)], true, gate)).text).toContain("Settings > Import Memory still works");
+    expect(aboutYouSources()).toEqual([]);
+  });
+
+  it("Stop closes the save before the engine exits, also mid-request", async () => {
+    const turns = new TurnRegistry();
+    const gate = importTurnGate(turns);
+    turns.start("u1", { botId: "b1", threadId: "t1", owner: "user", depth: 0, importMemory: true });
+    const body = new Readable({ read() {} });
+    let raw = "";
+    const res = { writeHead: () => {}, setHeader: () => {}, end: (text: string) => { raw = text; } } as unknown as ServerResponse;
+    const done = importMemoryRoute(Object.assign(body, { headers: {} }) as unknown as IncomingMessage, res, {
+      caller: () => ({ botId: "b1", threadId: "t1" }), ownerChat: () => true, messages: () => [typed(paste)], open: gate,
+    });
+    await new Promise((r) => setImmediate(r));
+    gate.stop("t1");
+    body.push("{}");
+    body.push(null);
+    await done;
+    expect(JSON.parse(raw).text).toContain("Settings > Import Memory still works");
+    expect((await call({}, [typed(paste)], true, gate)).text).toContain("Settings > Import Memory still works");
+    expect((await call({ decline: true }, [typed(paste)], true, gate)).text).toContain("Settings > Import Memory still works");
+    expect(aboutYouSources()).toEqual([]);
+    expect(importDeclined()).toBe(false);
+  });
+
+  it("a live turn still saves", async () => {
+    const turns = new TurnRegistry();
+    turns.start("u1", { botId: "b1", threadId: "t1", owner: "user", depth: 0, importMemory: true });
+    expect((await call({}, [typed(paste)], true, importTurnGate(turns))).text).toContain("Import Memory says: Added 2 new.");
+  });
+
+  it("reopens once the stopped engine reports turn.completed", async () => {
+    const turns = new TurnRegistry();
+    const gate = importTurnGate(turns);
+    turns.start("u1", { botId: "b1", threadId: "t1", owner: "user", depth: 0, importMemory: true });
+    gate.stop("t1");
+    turns.start("u2", { botId: "b1", threadId: "t1", owner: "user", depth: 0, importMemory: true });
+    gate.settled("t1", "u2");
+    expect((await call({}, [typed(paste)], true, gate)).text).toContain("Settings > Import Memory still works");
+    gate.settled("t1", "u1");
+    expect((await call({}, [typed(paste)], true, gate)).text).toContain("Import Memory says: Added 2 new.");
   });
 
   it("lists only the saved facts, never a flagged line", async () => {

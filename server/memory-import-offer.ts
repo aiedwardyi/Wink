@@ -67,13 +67,25 @@ const RECAP = {
   ko: "그다음 지금 알게 된 내용을 말해 주세요: 저장된 사실 목록에서 가장 구체적인 것 최대 5개를 짧은 글머리표로 (목록이 적으면 더 적게). 저장된 사실 목록에 있는 것만 쓰고, 덧붙이지 마세요. 한국어로, 자연스러운 존댓말로 쓰세요.",
 };
 
-// bound to the turn id seen at entry: a later turn, however eligible, never stands in for a settled one
-export function importTurnGate(turns: Pick<TurnRegistry, "current">): ImportMemoryDeps["open"] {
-  return ({ botId, threadId }) => {
+// bound to the turn id seen at entry: a later turn, however eligible, never stands in for a settled one.
+// Stop and a stall end a turn before its engine exits; the call carries no turn, so the chat stays closed until turn.completed.
+export function importTurnGate(turns: Pick<TurnRegistry, "current">) {
+  const stopped = new Map<string, Set<string>>();
+  const open: ImportMemoryDeps["open"] = ({ botId, threadId }) => {
     const origin = turns.current(threadId);
-    if (origin?.botId !== botId || origin.importMemory !== true) return null;
-    return () => turns.current(threadId)?.turnId === origin.turnId;
+    if (origin?.botId !== botId || origin.importMemory !== true || stopped.has(threadId)) return null;
+    return () => !stopped.has(threadId) && turns.current(threadId)?.turnId === origin.turnId;
   };
+  return Object.assign(open, {
+    stop(threadId: string): void {
+      const turnId = turns.current(threadId)?.turnId;
+      if (turnId) stopped.set(threadId, (stopped.get(threadId) ?? new Set()).add(turnId));
+    },
+    settled(threadId: string, turnId: string): void {
+      const held = stopped.get(threadId);
+      if (held?.delete(turnId) && !held.size) stopped.delete(threadId);
+    },
+  });
 }
 
 export async function importMemoryRoute(req: IncomingMessage, res: ServerResponse, deps: ImportMemoryDeps): Promise<void> {

@@ -119,7 +119,7 @@ it("tracks room and continuation turns on their captured accounts", async () => 
   expect(await busy()).toEqual([["claude", 0], ["acct_studio", 1]]);
 
   const settled = compile(`${settle}`);
-  const scope = { event: { threadId: "room-1", turnId: "turn-room", ok: true }, settleMail: () => false, store: {}, paneWake: {}, sourceBotId: "atlas", turnRegistry: { settle() {} }, usageBoard: s.usageBoard };
+  const scope = { event: { threadId: "room-1", turnId: "turn-room", ok: true }, settleMail: () => false, store: {}, paneWake: {}, sourceBotId: "atlas", turnRegistry: { settle() {} }, importGate: { settled() {} }, usageBoard: s.usageBoard };
   await settled(scope);
   expect(await busy()).toEqual([["claude", 0], ["acct_studio", 0]]);
 
