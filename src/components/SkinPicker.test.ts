@@ -1,4 +1,5 @@
 import "./ProfileFields.test-dom.ts";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,6 +61,7 @@ const folded = () => act(async () => { await new Promise((done) => setTimeout(do
 
 async function mount(skin: SkinId = "precision", locale: "en" | "ko" = "en") {
   vi.stubGlobal("localStorage", window.localStorage);
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   localStorage.removeItem("omb-skins-tried");
   persistPreference(locale);
   applySkin(skin);
@@ -459,13 +461,20 @@ describe("Moving tiles", () => {
     expect(running).toHaveLength(0);
   });
 
-  it("gives every animated tile a phone still", () => {
-    const scenes = join(dirname(fileURLToPath(import.meta.url)), "..", "scenes");
-    const phone = readFileSync(join(scenes, "scenes.css"), "utf8").split("@media (orientation: portrait)")[1] ?? "";
+  it("starts every animated tile on its scene's first frame at every phone width", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const fix = "rerun scripts/measure-tile-stills.mjs, with --capture first if a scene's first frame changed";
+    // SAFETY: scripts/measure-tile-stills.mjs writes this shape.
+    const { stills, widths } = JSON.parse(readFileSync(join(root, "scripts/tile-stills.json"), "utf8")) as { stills: Record<string, string>; widths: Record<string, Record<string, number>> };
+    expect(Object.keys(widths), fix).toEqual(["360", "375", "390", "393", "412", "430", "900x1000"]);
+    const over: string[] = [];
     for (const skin of animated) {
-      expect(phone, "capture the scene's first frame in a 390 px phone tile as tiles/<skin>-tall.jpg").toContain(`[data-skin="${skin}"] > [data-mini-thread] { background-image: url("./tiles/${skin}-tall.jpg"); }`);
-      expect(existsSync(join(scenes, "tiles", `${skin}-tall.jpg`))).toBe(true);
+      const file = ["jpg", "png"].map((ext) => join(root, "src/scenes/tiles", `${skin}-tall.${ext}`)).find((path) => existsSync(path));
+      expect(file, `${skin} has no still: ${fix}`).toBeDefined();
+      expect(createHash("sha256").update(readFileSync(file!)).digest("hex").slice(0, 16), `${skin}'s still changed: ${fix}`).toBe(stills[skin]);
+      for (const [width, jump] of Object.entries(widths)) if (!(jump[skin]! <= 0.1)) over.push(`${skin} at ${width}: ${jump[skin]}`);
     }
+    expect(over, `tiles that jump from their still: ${fix}`).toEqual([]);
   });
 });
 

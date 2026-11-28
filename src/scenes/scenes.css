@@ -48,10 +48,10 @@ main[data-snow-still] [data-snowcap]::before { transition: none; }
 }
 
 /* A cool sky wash at the top of the chat; static, painted once by the compositor. */
-main[data-scene="snow"] > [data-chat-scene], [data-mini-scene="snow"][data-live] {
+main[data-scene="snow"] > [data-chat-scene], [data-mini-scene="snow"]:is([data-live], [data-still]) {
   background-image: radial-gradient(130% 75% at 50% -12%, color-mix(in srgb, #7d9be0 22%, var(--color-app)) 0%, transparent 72%);
 }
-[data-skin="snow"] main[data-scene="snow"] > [data-chat-scene], [data-skin="snow"] > [data-mini-thread] > [data-mini-scene][data-live] {
+[data-skin="snow"] main[data-scene="snow"] > [data-chat-scene], [data-skin="snow"] > [data-mini-thread] > [data-mini-scene]:is([data-live], [data-still]) {
   background-image: linear-gradient(180deg, color-mix(in srgb, #8fa9d6 34%, var(--color-app)) 0%, color-mix(in srgb, #8fa9d6 10%, var(--color-app)) 38%, transparent 70%);
 }
 
@@ -69,8 +69,8 @@ main[data-scene="snow"] > [data-chat-scene], [data-mini-scene="snow"][data-live]
 @media (orientation: portrait) {
   [data-skin="lagoon-night"] > [data-mini-thread] { background-image: url("./tiles/lagoon-night-tall.jpg"); }
   [data-skin="lagoon"] > [data-mini-thread] { background-image: url("./tiles/lagoon-tall.jpg"); }
-  [data-skin="snow-night"] > [data-mini-thread] { background-image: url("./tiles/snow-night-tall.jpg"); }
-  [data-skin="snow"] > [data-mini-thread] { background-image: url("./tiles/snow-tall.jpg"); }
+  [data-skin="snow-night"] > [data-mini-thread] { background-image: url("./tiles/snow-night-tall.png"); }
+  [data-skin="snow"] > [data-mini-thread] { background-image: url("./tiles/snow-tall.png"); }
   [data-skin="neon-grid"] > [data-mini-thread] { background-image: url("./tiles/neon-grid-tall.jpg"); }
   [data-skin="samurai-ink"] > [data-mini-thread] { background-image: url("./tiles/samurai-ink-tall.jpg"); }
   [data-skin="night-rain"] > [data-mini-thread] { background-image: url("./tiles/night-rain-tall.jpg"); }
@@ -86,3 +86,8 @@ main[data-scene="snow"] > [data-chat-scene], [data-mini-scene="snow"][data-live]
 [data-mini-scene="snow"] { --mini-scale: 0.3; }
 /* Snow's flakes are see-through, so its running tile covers the still's own flakes. */
 [data-mini-scene="snow"][data-live] { background-color: var(--color-app); }
+/* A phone's scene is laid out at its still's size whatever the tile's width, and covers the thread as the still does (MiniScene sets --mini-cover), so the still is its first frame. */
+@media (orientation: portrait) {
+  [data-skin] > [data-mini-thread] { overflow: hidden; }
+  [data-mini-scene] { top: 50%; left: 50%; width: calc(69px / var(--mini-scale)); height: calc(78px / var(--mini-scale)); transform: translate(-50%, -50%) scale(calc(var(--mini-scale) * var(--mini-cover, 1))); transform-origin: 50% 50%; }
+}
