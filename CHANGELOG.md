@@ -2,6 +2,25 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.310] - 2026-11-29
+
+### Changed
+- The call settings menu is smaller.
+- On Windows, Install Codex is one tap with no Node, and a failed install says what to do.
+- The install window says what it is installing first.
+
+### Fixed
+- The message you reply to stays above the message box.
+- Every Reply puts the cursor in the message box.
+- The sign-in card clears once you are signed in, and the sign-in code box waits 15 minutes.
+- Card answers survive a restart.
+- Bots keep their plan, saved files and own work after a fresh session.
+- A quick ping while the bot is replying gets an answer again.
+- On the phone, docked cards follow your finger when dragged down.
+- On the phone, a page that fails to load while the PC is up loads again once the PC answers.
+- On the phone, the Quick picker closes on a swipe up, and its Dark look stays dark on light themes.
+- On the phone, animated theme tiles start without a jump.
+
 ## [1.0.309] - 2026-11-28
 
 ### Fixed
