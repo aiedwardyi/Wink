@@ -74,3 +74,13 @@ it("keeps an unread Gemini account hidden when another account has quota", async
   expect(host.querySelector('[data-account-row="gemini"]')).toBeNull();
   expect(host.querySelector('[data-account-row="gemini-plan"] [data-cells]')).not.toBeNull();
 });
+
+it.each(["signed-out", "cli-missing", "unknown"] as const)("a Gemini reading with sign-in %s: hidden only once signed out", async (signIn) => {
+  const gemini = h.board!.engines.find((engine) => engine.engine === "gemini")!;
+  expect(gemini.accounts[0]!.windows.length).toBeGreaterThan(0);
+  gemini.accounts[0]!.signIn = signIn;
+  await render();
+  // Only a confirmed sign-out hides the reading; an unconfirmed state keeps the last real one, as on base.
+  if (signIn === "signed-out") expect(host.querySelector('[data-usage-engine="gemini"]')).toBeNull();
+  else expect(host.querySelector('[data-usage-engine="gemini"]')).not.toBeNull();
+});

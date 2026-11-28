@@ -7,7 +7,7 @@ import type { VerifyCardData } from "../../shared/live-verify";
 import { applyLocale } from "@/lib/i18n";
 import { noteMemoryFrame } from "@/lib/memory-clean-events";
 import { useRightSlot, type SlotPanel } from "@/lib/right-slot";
-import { closeShow, showItem, showMap, useCheckThread, useShowItem, type ShowItem } from "@/lib/show-pane";
+import { closeShow, closeTab, paneTabs, showCheck, showItem, showMap, showMedia, showTimeline, tabKey, useCheckThread, useShowItem, useTimelineThread, type ShowItem } from "@/lib/show-pane";
 import { closeVerifyWatch, openVerifyWatch, toggleVerifyWatch, useVerifyWatch } from "@/lib/verify-watch";
 import { applyPicks, parseTimeline } from "../../server/picks";
 import { ShowPane } from "./ShowPane";
@@ -51,7 +51,7 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); closeShow(); closeVerifyWatch(); applyLocale("en"); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); closeShow(); closeVerifyWatch(); for (const tab of paneTabs("t1")) closeTab("t1", tabKey(tab), null); applyLocale("en"); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const render = (props: Parameters<typeof ShowPane>[0]) => act(async () => root.render(createElement(ShowPane, props)));
 const until = async (done: () => boolean | undefined) => {
@@ -238,7 +238,7 @@ it("hosts the checker with its Maximize and pane toggle in the header", async ()
   expect(host.querySelectorAll(".show-pane-head [data-show-pane-button]")).toHaveLength(1);
   expect(host.querySelectorAll('button[aria-label="Maximize"]')).toHaveLength(1);
   expect(host.querySelector(".verify-watch-bar button[aria-label='Close']")).toBeNull();
-  expect(host.querySelector("aside")!.hasAttribute("data-wide")).toBe(false);
+  expect(host.querySelector("aside")!.hasAttribute("data-wide")).toBe(true);
   await act(async () => button("Maximize")!.click());
   expect(host.querySelector(".verify-watch-frame")!.hasAttribute("data-maximized")).toBe(true);
 });
@@ -249,7 +249,7 @@ it("docks files wide and closes from the header", async () => {
   const aside = host.querySelector("aside")!;
   expect(aside.hasAttribute("data-wide")).toBe(true);
   expect(aside.classList.contains("md:animate-panel-slide")).toBe(true);
-  expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Show");
+  expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("a.png");
   await act(async () => host.querySelector<HTMLButtonElement>(".show-pane-head [data-show-pane-button]")!.click());
   let shown: ShowItem | null = item("x", "image");
   function Probe() { shown = useShowItem(); return null; }
@@ -263,7 +263,7 @@ it.each([false, true])("closes from the far right of the header, phone %s", asyn
   await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
   const head = document.querySelector(".show-pane-head")!;
   const buttons = [...head.querySelectorAll<HTMLButtonElement>(":scope > button")];
-  expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(phone ? ["Close"] : ["Maximize", "Show and media"]);
+  expect(buttons.map((each) => each.getAttribute("aria-label"))).toEqual(phone ? ["Open a tool", "Close"] : ["Open a tool", "Maximize", "Show and media"]);
   expect(head.lastElementChild).toBe(buttons.at(-1));
   expect(head.querySelector(".lucide-chevron-right")).toBeNull();
   await act(async () => buttons.at(-1)!.click());
@@ -273,13 +273,76 @@ it.each([false, true])("closes from the far right of the header, phone %s", asyn
   expect(shown).toBeNull();
 });
 
+const phoneMotion = (reduced = false) => vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width") || reduced && query.includes("reduced-motion"), addEventListener() {}, removeEventListener() {} })));
+
+it("a right swipe on a phone slides the pane off to the right and closes it with the Bot Details tick; a short drag springs back", async () => {
+  phoneMotion();
+  const vibrate = vi.fn();
+  Object.defineProperty(navigator, "vibrate", { configurable: true, value: vibrate });
+  await act(async () => showItem(item("C:\\w\\a.png", "image")));
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  const aside = document.querySelector<HTMLElement>("aside.show-pane")!;
+  const stage = aside.querySelector(".show-stage")!;
+  await touch("touchstart", [[100, 300]], stage, 400);
+  await touch("touchmove", [[140, 302]], stage, 200);
+  expect(aside.style.transform).toMatch(/^translate3d\(40px/);
+  await touch("touchend", [], stage, 200);
+  await until(() => !aside.style.transform);
+  expect(aside.style.transform).toBe("");
+  expect(vibrate).not.toHaveBeenCalled();
+  await touch("touchstart", [[100, 300]], stage, 400);
+  await touch("touchmove", [[200, 300]], stage);
+  await touch("touchmove", [[300, 300]], stage);
+  await touch("touchend", [], stage);
+  expect(aside.style.transform).toMatch(new RegExp(`^translate3d\\(${window.innerWidth}px`));
+  await until(() => vibrate.mock.calls.length > 0);
+  expect(vibrate).toHaveBeenCalledWith(10);
+  let shown: ShowItem | null = item("x", "image");
+  function Probe() { shown = useShowItem(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(shown).toBeNull();
+  Reflect.deleteProperty(navigator, "vibrate");
+});
+
+it("a right swipe under reduced motion closes the phone pane without the slide", async () => {
+  phoneMotion(true);
+  await act(async () => showItem(item("C:\\w\\a.png", "image")));
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  const aside = document.querySelector<HTMLElement>("aside.show-pane")!;
+  const stage = aside.querySelector(".show-stage")!;
+  await touch("touchstart", [[100, 300]], stage, 400);
+  await touch("touchmove", [[300, 300]], stage);
+  expect(aside.style.transform).toBe("");
+  await touch("touchend", [], stage);
+  let shown: ShowItem | null = item("x", "image");
+  function Probe() { shown = useShowItem(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(shown).toBeNull();
+});
+
+it("a right swipe on the desktop pane does nothing", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+  await act(async () => showItem(item("C:\\w\\a.png", "image")));
+  await render({ item: item("C:\\w\\a.png", "image"), hidden: false });
+  const aside = host.querySelector<HTMLElement>("aside.show-pane")!;
+  const stage = aside.querySelector(".show-stage")!;
+  await touch("touchstart", [[100, 300]], stage, 400);
+  await touch("touchmove", [[300, 300]], stage);
+  expect(aside.style.transform).toBe("");
+  await touch("touchend", [], stage);
+  let shown: ShowItem | null = null;
+  function Probe() { shown = useShowItem(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(shown).not.toBeNull();
+});
+
 it("speaks Korean", async () => {
   applyLocale("ko");
   await render({ item: item("C:\\w\\sync-flow.html", "page"), hidden: false });
-  expect(host.querySelector('[role="tab"]')?.textContent).toBe("보기");
+  expect(button("도구 열기")).not.toBeNull();
   expect(button("새로고침")).not.toBeNull();
   expect(button("보기와 미디어")).not.toBeNull();
-  expect(host.querySelectorAll(".show-pane-head > button")).toHaveLength(2);
+  expect(host.querySelectorAll(".show-pane-head > button")).toHaveLength(3);
 });
 
 it("shares one pane with the checker, and Bot Details still takes the spot", async () => {
@@ -301,13 +364,15 @@ it("shares one pane with the checker, and Bot Details still takes the spot", asy
   await act(async () => root.render(createElement(Slot)));
   expect(seen.at(-1)).toEqual([false, false]);
   const app = readFileSync("src/App.tsx", "utf8");
-  expect(app).toContain('...(watch || show || media || mapping || crewThread || timelineThread ? ["show" as const] : [])');
+  expect(app).toContain("const paneThreads = [watch?.threadId, show?.threadId, media, mapping, crewThread, timelineThread, toolsThread];");
+  expect(app).toContain('...(paneThreads.some(Boolean) ? ["show" as const] : [])');
 });
 
 const tabs = () => [...document.querySelectorAll(".show-pane-tabs [role='tab']")].map((tab) => tab.textContent);
 const selected = () => host.querySelector(".show-pane-tabs [aria-selected='true']")?.textContent;
 const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>(".show-pane-tabs [role='tab']")].find((el) => el.textContent === name)!;
 const source = { threadId: "t1", messages: [], hasMore: false };
+const openTabs = () => act(async () => { showItem(item("C:\\w\\a.png", "image")); for (const open of [showMedia, showCheck, showMap, showTimeline]) open("t1"); closeShow(); });
 const probe = async (read: () => void) => {
   const box = createRoot(document.createElement("div"));
   function Probe() { read(); return null; }
@@ -316,25 +381,29 @@ const probe = async (read: () => void) => {
 };
 
 it("has no Check tab without a check", async () => {
+  await openTabs();
   await render({ item: item("C:\\w\\a.png", "image"), source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Map", "Timeline"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Map", "Timeline"]);
 });
 
 it("renders the Map tab in Korean with the surrounding labels", async () => {
   await act(async () => applyLocale("ko"));
+  await openTabs();
   await render({ item: item("C:\\w\\a.png", "image"), source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["보기", "미디어", "맵", "타임라인"]);
+  expect(tabs()).toEqual(["a.png", "미디어", "맵", "타임라인"]);
 });
 
 it("the checker opens on Check, and Show keeps its file", async () => {
   const shown = item("C:\\w\\a.png", "image");
+  await openTabs();
   await act(async () => showItem(shown));
+  await render({ item: shown, source, botId: "b1", hidden: false });
   await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
   let check: string | null = null;
   await probe(() => { check = useCheckThread(); });
   expect(check).toBe("t1");
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check", "Map", "Timeline"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Check", "Map", "Timeline"]);
   expect(selected()).toBe("Check");
   const aside = host.querySelector("aside")!;
   expect(aside.dataset.tab).toBe("check");
@@ -345,18 +414,19 @@ it("the checker opens on Check, and Show keeps its file", async () => {
 it("switching tabs keeps the check alive and never reloads Show's file", async () => {
   const shown = item("C:\\w\\a.png", "image");
   await act(async () => showItem(shown));
+  await render({ item: shown, source, botId: "b1", hidden: false });
   await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
   const img = host.querySelector("img")!;
   const checker = host.querySelector(".verify-watch-frame:not(.show-frame)")!;
-  await act(async () => tab("Show").click());
+  await act(async () => tab("a.png").click());
   let check: string | null = "x";
   let watching = false;
   await probe(() => { check = useCheckThread(); watching = Boolean(useVerifyWatch()); });
   expect(check).toBeNull();
   expect(watching).toBe(true);
   await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, botId: "b1", hidden: false });
-  expect(selected()).toBe("Show");
+  expect(selected()).toBe("a.png");
   expect(host.querySelector("aside")!.dataset.tab).toBe("show");
   expect(host.querySelector("img")).toBe(img);
   expect(host.querySelector(".verify-watch-frame:not(.show-frame)")).toBe(checker);
@@ -369,8 +439,9 @@ it("switching tabs keeps the check alive and never reloads Show's file", async (
 
 it("the Check tab opens the chat's finished check", async () => {
   const done = { ...card, live: undefined, replay: ["run-0"] };
+  await openTabs();
   await render({ item: item("C:\\w\\a.png", "image"), card: done, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check", "Map", "Timeline"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Check", "Map", "Timeline"]);
   await act(async () => tab("Check").click());
   let watching: unknown = null;
   await probe(() => { watching = useVerifyWatch(); });
@@ -397,10 +468,43 @@ it("speaks Korean on the Check tab", async () => {
   expect(selected()).toBe("검사");
 });
 
-it("hides only Show and Check behind the other tabs, never the Media list", () => {
+it("keeps Check behind the other tabs like any kept tab, never display: none, which replays the pane's fade-in", async () => {
+  const shown = item("C:\\w\\a.png", "image");
+  await act(async () => showItem(shown));
+  await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
+  const open = () => [...host.querySelectorAll("aside > .verify-watch-frame:not([data-kept])")].map((body) => body.matches(".show-frame") ? "a.png" : "Check");
+  expect(open()).toEqual(["Check"]);
+  await act(async () => tab("a.png").click());
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, botId: "b1", hidden: false });
+  expect(open()).toEqual(["a.png"]);
+  expect(readFileSync("src/components/ShowPane.css", "utf8")).not.toMatch(/\.show-pane[^{}]*>[^{}]*\{[^}]*display:\s*none/);
+});
+
+it("a kept site check stops drawing until its tab is open again", async () => {
+  const shown = item("C:\\w\\a.png", "image");
+  await act(async () => showItem(shown));
+  await act(async () => openVerifyWatch({ threadId: "t1", owner: "bot", live: false }));
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
+  await act(async () => tab("a.png").click());
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, source, botId: "b1", hidden: false });
+  const frames = vi.spyOn(globalThis, "requestAnimationFrame");
+  await act(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  expect(frames).toHaveBeenCalledTimes(2);
+  await render({ item: shown, watch: { card, threadId: "t1", live: false }, check: true, source, botId: "b1", hidden: false });
+  await until(() => frames.mock.calls.length > 2);
+});
+
+it("a phone tap near an unselected tab's x opens the tab: its x takes no tap and the label reaches under it", () => {
+  const phone = readFileSync("src/components/ShowPane.css", "utf8").split("@media (max-width: 767px)")[1]!;
+  expect(phone).toMatch(/\.show-pane-tab:not\(\[data-selected\]\) \.show-pane-tab-close \{ pointer-events: none; \}/);
+  expect(phone).toMatch(/\.show-pane-tab > \[role="tab"\]::after \{[^}]*inset: -6px -22px -6px 0/);
+});
+
+it("the pane head's buttons point and take focus like the chat header's", () => {
   const css = readFileSync("src/components/ShowPane.css", "utf8");
-  const rule = css.slice(css.indexOf(".show-pane:not([data-tab"), css.indexOf("{ display: none; }"));
-  expect(rule).toContain('.show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane, .show-workers, .timeline-pane)');
+  expect(css).toMatch(/\.show-pane-head \.verify-watch-icon \{[^}]*cursor: default/);
+  expect(css).toMatch(/\.show-pane-head \.verify-watch-icon:focus-visible \{[^}]*color: var\(--color-ink-secondary\)/);
 });
 
 it("keeps Maximize and Close in the pane: tabs scroll instead of growing the row, and the sheet starts under the Windows caption", () => {
@@ -408,7 +512,8 @@ it("keeps Maximize and Close in the pane: tabs scroll instead of growing the row
   const row = css.match(/^\.show-pane-tabs \{[^}]*\}/m)![0];
   expect(row).toContain("min-width: 0");
   expect(row).toContain("overflow-x: auto");
-  expect(css).toMatch(/\.show-pane-tabs button \{[^}]*flex-shrink: 0[^}]*white-space: nowrap[^}]*outline-offset: -2px/);
+  expect(css).toMatch(/\.show-pane-tab \{[^}]*flex-shrink: 0[^}]*white-space: nowrap/);
+  expect(css).toMatch(/\.show-pane-tab > \[role="tab"\] \{[^}]*outline-offset: -2px/);
   expect(css).toContain('html[data-orbit-caption="win32"] .verify-watch.show-pane { top: var(--orbit-caption-height); }');
 });
 
@@ -420,10 +525,11 @@ it("the tab row never scrolls up and down: the phone tap area hangs past the but
 it("a phone gets the Check tab for a running doc check, not a running site check", async () => {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
   const running = { ...card, status: "running" as const, live: true as const, replay: [] };
+  await openTabs();
   await render({ item: item("C:\\w\\a.png", "image"), card: running, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Map", "Timeline"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Map", "Timeline"]);
   await render({ item: item("C:\\w\\a.png", "image"), card: { ...running, doc: { pages: 2, lines: 40, chunks: [0, 2] } }, source, botId: "b1", hidden: false });
-  expect(tabs()).toEqual(["Show", "Media", "Check", "Map", "Timeline"]);
+  expect(tabs()).toEqual(["a.png", "Media", "Check", "Map", "Timeline"]);
 });
 
 it.each([["en", "Save a copy"], ["ko", "사본 저장"]] as const)("saves the shown file through the desktop dialog in %s", async (locale, label) => {
@@ -511,6 +617,7 @@ it("draws the bot's picks on the Timeline canvas, oldest day first, each pick ci
   expect(outs).toBe(10);
   expect(strokes("ring")).toBe(2 * 5);
   expect(strokes("strike")).toBe(2 * outs);
+  expect(strokes("tick")).toBe(0);
   expect(strokes("link")).toBe(4);
   expect(strokes("replaced")).toBe(0);
   const fold = forum.querySelector<HTMLButtonElement>("[data-timeline-replaced]")!;
@@ -781,6 +888,28 @@ it("sorts a text-only pick by its day, below an older day's timed pick", async (
   expect(named("Forum").querySelector("time")).toBeNull();
 });
 
+it("a right drag on a phone that starts on the tab strip or the Timeline canvas stays theirs: the pane neither moves nor closes", async () => {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
+  pickList();
+  await act(async () => showTimeline("t1"));
+  await openTimeline("b-phone-swipe");
+  await until(() => Boolean(document.querySelector(".timeline-canvas")));
+  const aside = document.querySelector<HTMLElement>("aside.show-pane")!;
+  for (const from of [document.querySelector(".show-pane-tabs [role='tab']")!, document.querySelector(".timeline-canvas")!]) {
+    await touch("touchstart", [[100, 300]], from, 400);
+    await touch("touchmove", [[200, 300]], from);
+    expect(aside.style.transform).toBe("");
+    await touch("touchmove", [[300, 300]], from);
+    await touch("touchend", [], from);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
+    expect(aside.style.transform).toBe("");
+  }
+  let thread: string | null = null;
+  function Probe() { thread = useTimelineThread(); return null; }
+  await act(async () => root.render(createElement(Probe)));
+  expect(thread).toBe("t1");
+});
+
 it("moves with scroll and a drag, zooms with Ctrl+scroll and a pinch, and shows the zoom in the corner", async () => {
   pickList();
   await openTimeline("b-move");
@@ -836,6 +965,100 @@ it("keeps a pinch's move at the canvas edge, and moves the canvas with the arrow
   expect(view()[1]).toBeCloseTo(y - 40);
 });
 
+const glideSetup = async (botId: string, mounting = false) => {
+  const frames = new Map<number, FrameRequestCallback>();
+  let next = 0;
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((frame) => (frames.set(++next, frame), next));
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => void frames.delete(id));
+  if (mounting) {
+    const many = "# Decision timeline\n\n" + Array.from({ length: 40 }, (_, i) => `## 2026-10-${String(1 + (i % 28)).padStart(2, "0")} ${10 + Math.floor(i / 28)}:00 | Question ${i} | current\n- Picked: A${i}\n- Over: B${i}\n`).join("\n");
+    picks(() => new Response(JSON.stringify({ name: "decisions.md", text: many, entries: parseTimeline(many).entries }), { status: 200 }));
+  } else pickList();
+  await openTimeline(botId);
+  await until(() => picked().length > 0);
+  const canvas = host.querySelector<HTMLElement>(".timeline-canvas")!;
+  const sheet = host.querySelector<HTMLElement>(".timeline-sheet")!;
+  Object.defineProperties(canvas, { clientWidth: { value: 400 }, clientHeight: { value: 600 } });
+  // a sheet that grows with the rows mounted, so older rows landing above can move the view
+  Object.defineProperties(sheet, { offsetWidth: { value: 1000 }, offsetHeight: mounting ? { get: () => 100 * picked().length } : { value: 2000 } });
+  const y = () => Number(/translate\(-?[\d.]+px, (-?[\d.]+)px\)/.exec(sheet.style.transform)![1]);
+  const chip = (end: string) => host.querySelector<HTMLElement>(`.timeline-canvas > [data-end="${end}"]`)!;
+  const tap = (end: string) => act(async () => { chip(end).dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
+  const play = async (ms: number) => {
+    const seen: number[] = [];
+    for (let at = 0; at <= ms; at += 40) {
+      const due = [...frames.values()];
+      frames.clear();
+      await act(async () => { due.forEach((frame) => frame(at)); });
+      seen.push(y());
+    }
+    return seen;
+  };
+  return { canvas, frames, y, tap, play };
+};
+
+it("glides from the top to the newest pick and back to the oldest, through the positions between", async () => {
+  const { y, tap, play } = await glideSetup("b-glide");
+  expect(y()).toBe(0);
+  await tap("newest");
+  const down = await play(600);
+  expect(down.at(-1)).toBe(-1120);
+  expect(down.filter((at) => at < 0 && at > -1120).length).toBeGreaterThan(3);
+  expect(down).toEqual(down.toSorted((a, b) => b - a));
+  await tap("oldest");
+  const up = await play(600);
+  expect(up.at(-1)).toBe(44);
+  expect(up.filter((at) => at > -1120 && at < 44).length).toBeGreaterThan(3);
+});
+
+it("stops the glide at once when a wheel or a drag takes over", async () => {
+  const { canvas, frames, y, tap, play } = await glideSetup("b-glide-stop");
+  await tap("newest");
+  await play(120);
+  const held = y();
+  expect(held).toBeLessThan(0);
+  expect(held).toBeGreaterThan(-1120);
+  await act(async () => {
+    canvas.dispatchEvent(Object.defineProperties(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 10 }), { ctrlKey: { value: false }, clientX: { value: 0 }, clientY: { value: 0 } }));
+  });
+  expect(frames.size).toBe(0);
+  expect(y()).toBe(held - 10);
+  await tap("oldest");
+  await play(80);
+  await act(async () => { canvas.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, clientX: 100, clientY: 100, pointerId: 1, pointerType: "touch" })); });
+  expect(frames.size).toBe(0);
+});
+
+it("jumps instead under reduced motion", async () => {
+  const { frames, y, tap } = await glideSetup("b-glide-still");
+  const media = window.matchMedia;
+  // SAFETY: reducedMotion() reads only .matches.
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => query === "(prefers-reduced-motion: reduce)" ? { matches: true } as MediaQueryList : media.call(window, query));
+  await tap("newest");
+  expect(y()).toBe(-1120);
+  expect(frames.size).toBe(0);
+});
+
+it("jumps onto the oldest pick under reduced motion when older rows are still to mount", async () => {
+  const { y, tap } = await glideSetup("b-glide-mount-still", true);
+  expect(picked().length).toBe(8);
+  const media = window.matchMedia;
+  // SAFETY: reducedMotion() reads only .matches.
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => query === "(prefers-reduced-motion: reduce)" ? { matches: true } as MediaQueryList : media.call(window, query));
+  await tap("oldest");
+  expect(picked().length).toBe(40);
+  expect(picked()[0]?.querySelector(".timeline-key")?.textContent).toBe("Question 0");
+  expect(y()).toBe(44);
+});
+
+it("glides onto the oldest pick when older rows are still to mount", async () => {
+  const { y, tap, play } = await glideSetup("b-glide-mount", true);
+  await tap("oldest");
+  expect(picked().length).toBe(40);
+  expect((await play(600)).at(-1)).toBe(44);
+  expect(y()).toBe(44);
+});
+
 it("draws the newest picks first and the rest a batch a frame", async () => {
   const many = "# Decision timeline\n\n" + Array.from({ length: 40 }, (_, i) => `## 2026-10-${String(1 + (i % 28)).padStart(2, "0")} ${10 + Math.floor(i / 28)}:00 | Question ${i} | current\n- Picked: A${i}\n- Over: B${i}\n`).join("\n");
   picks(() => new Response(JSON.stringify({ name: "decisions.md", text: many, entries: parseTimeline(many).entries }), { status: 200 }));
@@ -846,7 +1069,7 @@ it("draws the newest picks first and the rest a batch a frame", async () => {
   expect(picked().length).toBe(8);
   expect(picked().at(-1)?.querySelector(".timeline-key")?.textContent).toBe("Question 27");
   // the ends wear the hint bar's own class, pinned to the pane, not drawn on the sheet
-  const ends = () => [...host.querySelectorAll(".timeline-canvas > p.timeline-hint[data-end]")].map((label) => [label.getAttribute("data-end"), label.textContent]);
+  const ends = () => [...host.querySelectorAll(".timeline-canvas > button.timeline-hint[data-end]")].map((label) => [label.getAttribute("data-end"), label.textContent]);
   expect(ends()).toEqual([["oldest", "Oldest"], ["newest", "Newest"]]);
   expect(host.querySelector(".timeline-sheet .timeline-hint")).toBeNull();
   while (frames.length) await act(async () => frames.shift()!(0));
@@ -1097,6 +1320,7 @@ it.each([
   const outs = host.querySelectorAll(".timeline-pane[data-sample] [data-timeline-out]").length;
   expect(outs).toBeGreaterThan(0);
   expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=strike]").length).toBe(2 * outs);
+  expect(host.querySelectorAll(".timeline-pane[data-sample] .timeline-ink [data-ink=tick]")).toHaveLength(0);
   expect(host.querySelector(".timeline-pane[data-sample] .timeline-canvas")?.closest("[inert]")).toBeNull();
   expect(picked()).toHaveLength(0);
   expect(host.querySelector(".timeline-search")).toBeNull();

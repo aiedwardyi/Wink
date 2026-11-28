@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -11,6 +11,7 @@ import { _resetSteerQueue, drainSteeredMessages, queueRoomParticipation, type Ro
 import { Store, type GroupRecord } from "../store.ts";
 import { askById, closeAsksDb, configureRoomAsks, createAsk, hostedTurnRefused, startAsk, type HostedGroup, type RoomAsk } from "./asks.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./db.ts";
+import { removeTestData } from "../testing/test-home.ts";
 
 const index = ts.createSourceFile("index.ts", readFileSync(join(import.meta.dirname, "..", "index.ts"), "utf8").replace(/\r\n/g, "\n"), ts.ScriptTarget.Latest, true);
 const js = (code: string) => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
@@ -60,7 +61,7 @@ beforeEach(() => {
   closeRoomsDb();
   closeAsksDb();
   _resetSteerQueue();
-  rmSync(DATA_DIR, { recursive: true, force: true });
+  removeTestData(DATA_DIR);
   store = new Store(() => ({ instanceId: "fake", model: "m" }));
   botId = store.patchBot(store.createBot().id, { name: "Wink" })!.id;
   group = store.createGroup("Team", [botId], false, undefined, undefined, { roomId: createRoom("Team").id }) as HostedGroup;

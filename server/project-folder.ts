@@ -7,7 +7,7 @@ import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative } from "node:path";
 
-import { validateBotCwd } from "./bot-cwd.ts";
+import { validateBotCwd, validateBotCwdAsync } from "./bot-cwd.ts";
 import { scoutProject } from "./project-scout.ts";
 import { WORKSPACES_DIR } from "./workspace.ts";
 
@@ -29,6 +29,8 @@ export type ProjectFolderInput = {
   continuation?: boolean;
   scoutName?: (cwd: string) => string | null;
   isPrivateWorkspace?: (cwd: string) => boolean;
+  /** Folder checks already made by checkProjectFolders, by the path as written. */
+  checked?: ReadonlyMap<string, string | null>;
 };
 
 const PATH_IN_TEXT =
@@ -137,9 +139,30 @@ const CHAT_STOPWORDS = new Set([
   "말고",
 ]);
 
+// one resolve's folder checks by path and folders by line: a long chat names the same few folders thousands of times, and stat'ing each held the server ~300 ms per send
+let checkedFolders: Map<string, string | null> | undefined;
+let foldersInText: Map<string, string[]> | undefined;
+
 function existingFolder(input: string): string | null {
+  const known = checkedFolders?.get(input);
+  if (known !== undefined) return known;
   const checked = validateBotCwd(input);
-  return checked.ok ? checked.cwd : null;
+  const folder = checked.ok ? checked.cwd : null;
+  checkedFolders?.set(input, folder);
+  return folder;
+}
+
+/** Runs `resolve` with each folder checked once, starting from the checks already made. */
+function checkingFoldersOnce<T>(resolve: () => T, checked?: ReadonlyMap<string, string | null>): T {
+  if (checkedFolders) return resolve();
+  checkedFolders = new Map(checked);
+  foldersInText = new Map();
+  try {
+    return resolve();
+  } finally {
+    checkedFolders = undefined;
+    foldersInText = undefined;
+  }
 }
 
 function stripTrailingPunctuation(value: string): string {
@@ -268,7 +291,8 @@ function folderExcluded(
   });
 }
 
-function extractPaths(text: string): string[] {
+/** The paths a line names, as written. */
+function pathsInText(text: string): string[] {
   const found: string[] = [];
   for (const match of text.matchAll(PATH_IN_TEXT)) {
     let raw = stripTrailingPunctuation(match[1] ?? "");
@@ -279,9 +303,20 @@ function extractPaths(text: string): string[] {
         continue;
       }
     }
+    found.push(raw);
+  }
+  return found;
+}
+
+function extractPaths(text: string): string[] {
+  const known = foldersInText?.get(text);
+  if (known) return known;
+  const found: string[] = [];
+  for (const raw of pathsInText(text)) {
     const folder = existingFolder(raw);
     if (folder) found.push(folder);
   }
+  foldersInText?.set(text, found);
   return found;
 }
 
@@ -493,7 +528,23 @@ export function projectNotesPrompt(path: string | undefined): string {
     : "";
 }
 
+/** Checks the folders a resolve reads, off the server thread: a long chat names ~1,700 paths, and stat'ing them on it held the server ~150 ms per send. */
+export async function checkProjectFolders(input: ProjectFolderInput): Promise<ReadonlyMap<string, string | null>> {
+  const paths = new Set([...(input.recentPaths ?? []), ...cueTexts(input).flatMap(pathsInText)]);
+  if (input.remembered) paths.add(input.remembered);
+  const checked = new Map<string, string | null>();
+  await Promise.all([...paths].map(async (path) => {
+    const result = await validateBotCwdAsync(path);
+    checked.set(path, result.ok ? result.cwd : null);
+  }));
+  return checked;
+}
+
 export function resolveProjectFolder(input: ProjectFolderInput): ProjectFolderResolution {
+  return checkingFoldersOnce(() => resolveFolder(input), input.checked);
+}
+
+function resolveFolder(input: ProjectFolderInput): ProjectFolderResolution {
   const scoutName = memoScout(input.scoutName ?? defaultScoutName);
   const isPrivateWorkspace = input.isPrivateWorkspace ?? defaultPrivateWorkspace;
   if (input.pin?.trim()) return { cwd: input.pin, source: "pin" };
@@ -554,9 +605,9 @@ export function applyResolvedProjectFolder(input: ProjectFolderInput & {
 }): string | undefined {
   const scoutName = memoScout(input.scoutName ?? defaultScoutName);
   const isPrivateWorkspace = input.isPrivateWorkspace ?? defaultPrivateWorkspace;
-  const resolved = resolveProjectFolder({ ...input, scoutName });
+  const resolved = checkingFoldersOnce(() => resolveFolder({ ...input, scoutName }), input.checked);
   if (resolved.source === "named" && resolved.cwd) input.remember(resolved.cwd);
-  else if (input.forget && rememberedRuledOut(input, scoutName, isPrivateWorkspace)) {
+  else if (input.forget && checkingFoldersOnce(() => rememberedRuledOut(input, scoutName, isPrivateWorkspace), input.checked)) {
     input.forget();
   }
   return resolved.cwd ?? undefined;

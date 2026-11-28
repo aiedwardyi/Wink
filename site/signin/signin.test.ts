@@ -65,11 +65,13 @@ const calls: FetchCall[] = [];
 const probes: string[] = [];
 const buttons: Array<{ theme: string; text: string; shape: string }> = [];
 let renders = 0;
+let autoSelectOff = 0;
 
 function installGoogle(gisError?: string): void {
   inits.length = 0;
   prompts.length = 0;
   renders = 0;
+  autoSelectOff = 0;
   buttons.length = 0;
   vi.stubGlobal("google", {
     accounts: {
@@ -89,6 +91,9 @@ function installGoogle(gisError?: string): void {
           prompts.push(listener);
         },
         cancel(): void {},
+        disableAutoSelect(): void {
+          autoSelectOff += 1;
+        },
       },
     },
   });
@@ -408,6 +413,19 @@ describe("phone sign-in page", () => {
     expect(document.getElementById("pick")?.hidden).toBe(true);
   });
 
+  it("after Sign Out, turns off Google's quiet sign-in and waits for the button instead of reopening the last PC", async () => {
+    localStorage.setItem(LAST_PC, LABEL_A);
+    open("/?signedout=1", [{ label: LABEL_A, name: "Ada" }]);
+    await vi.waitFor(() => expect(renders).toBe(1));
+    expect(autoSelectOff).toBe(1);
+    expect(probes).toHaveLength(0);
+    expect(prompts).toHaveLength(0);
+    expect(inits[0]?.auto_select).toBe(false);
+    expect(location.href).not.toContain("/pair");
+    inits[0]?.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1&n=Ada")));
+  });
+
   it("titles the PC list Choose a PC with no sign-in wording", async () => {
     open("/?pick=1", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }]);
     inits[0]!.callback({ credential: DIR_TOKEN });
@@ -707,12 +725,20 @@ describe("entering a PC's code", () => {
     box.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
+  const link = () => document.getElementById("usecode") as HTMLButtonElement;
+  const boxesHidden = () => document.getElementById("boxes")!.hidden;
+  const reveal = () => {
+    if (!link().hidden) link().click();
+  };
+
   function enter(text: string): void {
+    reveal();
     if (document.activeElement === document.body) boxes()[0]!.focus();
     for (const ch of text) typeKey(ch);
   }
 
   function paste(text: string, into = 0): void {
+    reveal();
     const box = boxes()[into]!;
     box.focus();
     const event = Object.assign(new Event("paste", { bubbles: true, cancelable: true }), { clipboardData: { getData: () => text } });
@@ -726,11 +752,437 @@ describe("entering a PC's code", () => {
   const focused = () => boxes().findIndex((box) => box === document.activeElement);
   const live = { [LOOKUP]: { status: 200, body: { label: LABEL_A } }, [CHECK]: { status: 204 } } satisfies Record<string, Answer>;
 
-  it("shows the code boxes on a cold start only", () => {
+  const TYPED = "wink-signin-typed";
+  const RETURN = `/signin?pc=${LABEL_A}&m=${M}`;
+  const offered = () => !document.getElementById("code")!.hidden;
+
+  function noGoogle(url: string): void {
+    vi.useFakeTimers();
+    document.body.innerHTML = MARKUP;
+    history.replaceState(null, "", url);
+    vi.stubGlobal("WINK_SIGNIN", { clientId: CLIENT, base: BASE });
+    vi.stubGlobal("google", undefined);
+    runInThisContext(SCRIPT);
+  }
+
+  // A browser where Google sign-in cannot finish (Meta's glasses web view): a typed code comes back here and must not wait on Google.
+  it("remembers the PC a typed code reached, and its return leg offers that PC's code form at once", async () => {
+    open("/signin", []);
+    answer(live);
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    expect(localStorage.getItem(TYPED)).toBe(LABEL_A);
+    open(RETURN, [{ label: LABEL_A, name: "Ada" }]);
+    expect(offered()).toBe(true);
+    expect(link().hidden).toBe(false);
+    expect(link().textContent).toBe("Use a code from Wink on your PC");
+    expect(boxesHidden()).toBe(true);
+    await vi.waitFor(() => expect(prompts).toHaveLength(1));
+  });
+
+  it("offers a typed PC's code form while Google's prompt stays silent, and it stays", async () => {
+    localStorage.setItem(TYPED, LABEL_A);
+    open(RETURN, [{ label: LABEL_A, name: "Ada" }]);
+    expect(offered()).toBe(true);
+    await vi.waitFor(() => expect(prompts).toHaveLength(1));
+    // Google never answers the prompt.
+    expect(offered()).toBe(true);
+    link().click();
+    expect(location.href).toBe(pair(LABEL_A, ""));
+    expect(boxesHidden()).toBe(true);
+    expect(localStorage.getItem(LAST_PC)).toBeNull();
+  });
+
+  const onLens = () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("aspect-ratio") }));
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/UQ1A.240205.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.6778.135 Mobile Safari/537.36");
+  };
+  const lensPage = (label: string) => `https://${label}.${BASE}/glasses`;
+
+  it("sends a typed code on the glasses to the PC's lens page, since Google cannot finish there", async () => {
+    onLens();
+    open("/signin", []);
+    answer(live);
+    enter("ABCDEF");
+    await vi.waitFor(() => expect(location.href).toBe(lensPage(LABEL_A)));
+    expect(localStorage.getItem(TYPED)).toBe(LABEL_A);
+    expect(localStorage.getItem(LAST_PC)).toBeNull();
+  });
+
+  it("reopens the typed PC's lens page on the next visit from the glasses, so no letters are said again", async () => {
+    onLens();
+    localStorage.setItem(TYPED, LABEL_A);
+    open("/signin", []);
+    await vi.waitFor(() => expect(location.href).toBe(lensPage(LABEL_A)));
+    expect(probes).toHaveLength(1);
+    expect(probes[0]).toContain(`https://${LABEL_A}.${BASE}/app-icon.svg`);
+  });
+
+  it.each([
+    ["Choose another PC", "/signin?pick=1", "up"],
+    ["a signed out visit", "/signin?signedout=1", "up"],
+    ["a PC that is off", "/signin", "down"],
+  ])("reopens no typed PC on the glasses for %s", async (_, url, probe) => {
+    onLens();
+    localStorage.setItem(TYPED, LABEL_A);
+    open(url, [], undefined, probe);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(location.href).not.toContain("/glasses");
+  });
+
+  it("tells the glasses apart with the PC's pair page check", () => {
+    const query = /matchMedia\?\.\("([^"]+)"\)/;
+    const pairPage = readFileSync(join(ROOT, "public/pair.html"), "utf8");
+    expect(SCRIPT.match(query)?.[1]).toBeTruthy();
+    expect(SCRIPT.match(query)?.[1]).toBe(pairPage.match(query)?.[1]);
+    expect(SCRIPT).toContain("/\\bwv\\b/.test(navigator.userAgent)");
+    expect(SCRIPT).toContain("/Android/.test(navigator.userAgent)");
+  });
+
+  it("still lets Google open a typed PC", async () => {
+    localStorage.setItem(TYPED, LABEL_A);
+    open(RETURN, [{ label: LABEL_A, name: "Ada" }]);
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    inits[0]!.callback({ credential: PC_TOKEN });
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, `#g=${PC_TOKEN}`)));
+  });
+
+  it.each<[string, Pc[] | "fail", string | undefined]>([
+    ["the account does not own the PC", [{ label: LABEL_B, name: "Zed" }], undefined],
+    ["the relay cannot be reached", "fail", undefined],
+    ["Google cannot load", [{ label: LABEL_A, name: "Ada" }], GIS_BOOM],
+  ])("keeps a typed PC's code form when the return leg stops because %s", async (_, body, gisError) => {
+    localStorage.setItem(TYPED, LABEL_A);
+    open(RETURN, body, gisError);
+    expect(offered()).toBe(true);
+    if (!gisError) {
+      await vi.waitFor(() => expect(inits).toHaveLength(1));
+      inits[0]!.callback({ credential: PC_TOKEN });
+    }
+    await vi.waitFor(() => expect(status().className).toBe("status error"));
+    expect(offered()).toBe(true);
+    link().click();
+    expect(location.href).toBe(pair(LABEL_A, ""));
+  });
+
+  it("offers a typed PC's code form before its Google script would load, and after it never does", async () => {
+    localStorage.setItem(TYPED, LABEL_A);
+    noGoogle(RETURN);
+    expect(offered()).toBe(true);
+    await vi.advanceTimersByTimeAsync(15_100);
+    expect(status().textContent).toBe(GOOGLE_DOWN);
+    expect(offered()).toBe(true);
+    link().click();
+    expect(location.href).toBe(pair(LABEL_A, ""));
+  });
+
+  it("takes a typed code on a first visit whose Google script never loads", async () => {
+    noGoogle("/signin");
+    expect(link().hidden).toBe(false);
+    expect(offered()).toBe(true);
+    answer(live);
+    enter("ABCDEF");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(location.href).toBe(pair(LABEL_A, "?g=1"));
+    expect(localStorage.getItem(TYPED)).toBe(LABEL_A);
+  });
+
+  it("opens the boxes when a first visit's Google script never loads", async () => {
+    noGoogle("/signin");
+    expect(boxesHidden()).toBe(true);
+    await vi.advanceTimersByTimeAsync(15_100);
+    expect(status().textContent).toBe(GOOGLE_DOWN);
+    expect(boxesHidden()).toBe(false);
+  });
+
+  // An ordinary PC link, or another PC's typed code: sign-in looks as it always did.
+  it.each([["no code was typed", null], ["the code reached another PC", LABEL_B]])(
+    "offers no code form on a return leg where %s",
+    async (_, typedTo) => {
+      if (typedTo) localStorage.setItem(TYPED, typedTo);
+      open(RETURN, [{ label: LABEL_A, name: "Ada" }]);
+      await vi.waitFor(() => expect(prompts).toHaveLength(1));
+      prompts[0]!(hiddenMoment());
+      expect(renders).toBe(1);
+      expect(offered()).toBe(false);
+      open(RETURN, [{ label: LABEL_B, name: "Zed" }]);
+      await vi.waitFor(() => expect(inits).toHaveLength(1));
+      inits[0]!.callback({ credential: PC_TOKEN });
+      await vi.waitFor(() => expect(status().className).toBe("status error"));
+      expect(offered()).toBe(false);
+      vi.unstubAllGlobals();
+      noGoogle(RETURN);
+      await vi.advanceTimersByTimeAsync(15_100);
+      expect(status().textContent).toBe(GOOGLE_DOWN);
+      expect(offered()).toBe(false);
+    },
+  );
+
+  it("offers the code on a cold start only", () => {
     open("/signin", []);
     expect(document.getElementById("code")?.hidden).toBe(false);
     open(`/signin?pc=${LABEL_A}&m=${M}`, [{ label: LABEL_A, name: "Ada" }]);
     expect(document.getElementById("code")?.hidden).toBe(true);
+  });
+
+  it.each(["/signin?code=ABCDEF", "/signin#code=ABCDEF"])("starts with the boxes open on a link that carries a code: %s", (url) => {
+    open(url, []);
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(boxes()).toHaveLength(6);
+    expect(shown()).toBe("|||||");
+  });
+
+  it("keeps the boxes out of sight behind a link a keyboard can reach", () => {
+    open("/signin", []);
+    expect(link().tagName).toBe("BUTTON");
+    expect(link().type).toBe("button");
+    expect(link().hidden).toBe(false);
+    expect(link().tabIndex).toBe(0);
+    expect(link().textContent).toBe("Use a code from Wink on your PC");
+    expect(link().classList.contains("privacy")).toBe(true);
+    expect(boxesHidden()).toBe(true);
+    expect(document.querySelector("#code .quiet")).toBeNull();
+  });
+
+  it("shows the boxes with the cursor in the first one on a single tap of the link", () => {
+    open("/signin", []);
+    link().click();
+    expect(link().hidden).toBe(true);
+    expect(boxesHidden()).toBe(false);
+    expect(boxes()).toHaveLength(6);
+    expect(focused()).toBe(0);
+  });
+
+  it("opens on a paste right after the link tap, with no further click", async () => {
+    open("/signin", []);
+    answer(live);
+    link().click();
+    const event = Object.assign(new Event("paste", { bubbles: true, cancelable: true }), { clipboardData: { getData: () => "abcdef" } });
+    document.activeElement!.dispatchEvent(event);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+    expect(asked.map((call) => call.url)).toEqual([LOOKUP, CHECK]);
+  });
+
+  const covered = () => document.getElementById("code")?.classList.contains("trying");
+  const inert = () => document.getElementById("code")?.hasAttribute("inert");
+
+  function stubNavigation(): EventTarget {
+    const navigation = new EventTarget();
+    vi.stubGlobal("navigation", navigation);
+    return navigation;
+  }
+
+  it("keeps the boxes see-through and inert while a remembered PC opens", async () => {
+    stubNavigation();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    expect(covered()).toBe(true);
+    expect(inert()).toBe(true);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    document.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(covered()).toBe(true);
+    expect(inert()).toBe(true);
+  });
+
+  it("shows usable boxes when the open is stopped and the page stays", async () => {
+    const navigation = stubNavigation();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    navigation.dispatchEvent(new Event("navigateerror"));
+    expect(covered()).toBe(false);
+    expect(inert()).toBe(false);
+    expect(boxes()).toHaveLength(6);
+    expect(boxes().every((box) => !box.disabled)).toBe(true);
+  });
+
+  it("does not cover the boxes where the page cannot hear a stopped open", () => {
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    expect(covered()).toBe(false);
+    expect(inert()).toBe(false);
+  });
+
+  it("opens the boxes with the cursor in the first one when a remembered PC's open is stopped", async () => {
+    const navigation = stubNavigation();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    expect(boxesHidden()).toBe(true);
+    navigation.dispatchEvent(new Event("navigateerror"));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(focused()).toBe(0);
+  });
+
+  it("opens the boxes when the remembered PC does not answer", async () => {
+    stubNavigation();
+    vi.useFakeTimers();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }], undefined, "timeout");
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(boxesHidden()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+  });
+
+  it("keeps the boxes behind the link while a remembered PC opens where the page cannot hear a stopped open", async () => {
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    expect(boxesHidden()).toBe(true);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    expect(boxesHidden()).toBe(true);
+    expect(link().hidden).toBe(false);
+  });
+
+  it.each([
+    ["/signin?code=ABCDEF", false],
+    ["/signin#code=ABCDEF", false],
+    ["/signin?code=ABCDEF", true],
+    ["/signin#code=ABCDEF", true],
+  ])("keeps the boxes behind the link while a remembered PC opens from a link that carries a code: %s, Navigation API %s", async (url, nav) => {
+    if (nav) stubNavigation();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open(url, [{ label: LABEL_B, name: "Zed" }]);
+    expect(boxesHidden()).toBe(true);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    expect(boxesHidden()).toBe(true);
+    expect(link().hidden).toBe(false);
+  });
+
+  it.each(["/signin?code=ABCDEF", "/signin#code=ABCDEF"])("opens the boxes on a link that carries a code when the remembered PC is offline: %s", async (url) => {
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open(url, [{ label: LABEL_B, name: "Zed" }], undefined, "down");
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(shown()).toBe("|||||");
+  });
+
+  it("opens the boxes when a bookmark changes an open sign-in page to a code link", () => {
+    open("/signin", []);
+    expect(boxesHidden()).toBe(true);
+    history.replaceState(null, "", "/signin#code=ABCDEF");
+    window.dispatchEvent(new Event("hashchange"));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(boxes()).toHaveLength(6);
+    expect(boxes().every((box) => !box.disabled)).toBe(true);
+  });
+
+  it("opens the boxes when the remembered PC is offline where the page cannot hear a stopped open", async () => {
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }], undefined, "down");
+    await vi.waitFor(() => expect(inits).toHaveLength(1));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+  });
+
+  async function chooseAda(probe = "up"): Promise<void> {
+    open("/signin", [{ label: LABEL_A, name: "Ada" }, { label: LABEL_B, name: "Zed" }], undefined, probe);
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(document.querySelectorAll("#list button")).toHaveLength(2));
+    expect(boxesHidden()).toBe(true);
+    document.querySelector<HTMLButtonElement>("#list button")!.click();
+  }
+
+  it("opens the boxes with the cursor in the first one when a chosen PC is offline", async () => {
+    await chooseAda("down");
+    await vi.waitFor(() => expect(status().textContent).toBe("Ada is offline."));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(focused()).toBe(0);
+  });
+
+  it("opens the boxes with the cursor in the first one when a chosen PC's open is stopped", async () => {
+    const navigation = stubNavigation();
+    await chooseAda();
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1&n=Ada")));
+    expect(boxesHidden()).toBe(true);
+    navigation.dispatchEvent(new Event("navigateerror"));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(focused()).toBe(0);
+  });
+
+  it("opens the boxes with the cursor in the first one when the PC list answers 503", async () => {
+    open("/signin", []);
+    answer({ [`https://relay.${BASE}/v1/pcs`]: { status: 503, body: { error: "unavailable" } } });
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(status().textContent).toBe(OFFLINE));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(focused()).toBe(0);
+  });
+
+  it.each([
+    ["the PC list cannot be reached", "fail" as const, undefined, OFFLINE],
+    ["no PC is signed in", [] as Pc[], undefined, EMPTY],
+    ["Google sign-in breaks", [] as Pc[], GIS_BOOM, GOOGLE_DOWN],
+  ])("opens the boxes with the cursor in the first one when %s", async (_why, body, gisError, said) => {
+    open("/signin", body, gisError);
+    inits[0]?.callback({ credential: DIR_TOKEN });
+    await vi.waitFor(() => expect(status().textContent).toBe(said));
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
+    expect(focused()).toBe(0);
+  });
+
+  it.each<[string, Answer, string]>([
+    ["answers 503", { status: 503, body: { error: "unavailable" } }, OFFLINE],
+    ["cannot be reached", "fail", OFFLINE],
+    ["comes back empty", { status: 200, body: [] }, EMPTY],
+  ])("keeps the cursor and the typed letters when the PC list %s after the boxes were opened", async (_why, late, said) => {
+    open("/signin", []);
+    answer(live);
+    const routed = globalThis.fetch;
+    let settle!: () => void;
+    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
+      url === `https://relay.${BASE}/v1/pcs`
+        ? new Promise<Response>((resolve, reject) => {
+            settle = () => (late === "fail" ? reject(new TypeError("offline")) : resolve(new Response(JSON.stringify(late.body), { status: late.status })));
+          })
+        : routed(url, init),
+    );
+    inits[0]!.callback({ credential: DIR_TOKEN });
+    enter("AB");
+    expect(focused()).toBe(2);
+    await vi.waitFor(() => expect(settle).toBeTypeOf("function"));
+    settle();
+    await vi.waitFor(() => expect(status().textContent).toBe(said));
+    expect(shown()).toBe("A|B||||");
+    expect(focused()).toBe(2);
+    enter("CDEF");
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
+  });
+
+  it("shows the boxes when Back restores the page after a remembered PC opened", async () => {
+    stubNavigation();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }]);
+    await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_B, "?g=1")));
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: false }));
+    expect(covered()).toBe(true);
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(covered()).toBe(false);
+    expect(inert()).toBe(false);
+    expect(boxes()).toHaveLength(6);
+  });
+
+  it("shows the boxes when the remembered PC does not answer, and not before", async () => {
+    stubNavigation();
+    vi.useFakeTimers();
+    localStorage.setItem(LAST_PC, LABEL_B);
+    open("/signin", [{ label: LABEL_B, name: "Zed" }], undefined, "timeout");
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(covered()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(covered()).toBe(false);
+    expect(inert()).toBe(false);
+    expect(boxes()).toHaveLength(6);
   });
 
   it("is six boxes that ask the phone for a one-time code, and no Open button", () => {
@@ -738,16 +1190,21 @@ describe("entering a PC's code", () => {
     expect(boxes()).toHaveLength(6);
     expect(boxes().every((box) => box.autocomplete === "one-time-code" && box.maxLength !== 1)).toBe(true);
     expect(boxes().every((box) => box.getAttribute("enterkeyhint") === "go")).toBe(true);
-    expect(document.querySelector("#code button")).toBeNull();
+    expect(document.querySelector("#boxes button")).toBeNull();
     expect(boxes().map((box) => box.getAttribute("aria-label"))).toEqual([1, 2, 3, 4, 5, 6].map((n) => `Code ${n}`));
   });
 
   it("looks like the group join boxes", () => {
     const tsx = readFileSync(join(ROOT, "src/components/CodeBoxes.tsx"), "utf8");
-    expect(tsx).toContain("size-11 rounded-lg border border-hairline/60 bg-inset text-center font-mono text-[18px] font-semibold");
+    expect(tsx).toContain("h-11 min-w-0 flex-1 rounded-lg border border-hairline/60 bg-inset text-center font-mono text-[18px] font-semibold");
     const rule = CSS.match(/\.boxes input \{([^}]*)\}/)?.[1] ?? "";
     for (const part of ["width: 44px", "height: 44px", "border-radius: var(--radius-lg)", "var(--hairline) 60%", "var(--inset)", "text-align: center", "font: 600 18px ui-monospace"]) expect(rule).toContain(part);
     expect(CSS).toMatch(/\.boxes \{[^}]*gap: 8px/);
+  });
+
+  it("paints no selection or tap mark over a box, so its letter stays readable", () => {
+    expect(CSS).toMatch(/\.boxes input::selection \{[^}]*background: transparent;/);
+    expect(CSS.match(/\.boxes input \{([^}]*)\}/)?.[1]).toContain("-webkit-tap-highlight-color: transparent");
   });
 
   it("rounds the boxes like the app's group join boxes in the skin this page matches", () => {
@@ -885,6 +1342,8 @@ describe("entering a PC's code", () => {
     expect(shown()).toBe("|||||");
     expect(boxes().every((box) => !box.disabled)).toBe(true);
     expect(focused()).toBe(0);
+    expect(boxesHidden()).toBe(false);
+    expect(link().hidden).toBe(true);
     answer(live);
     enter("ABCDEF");
     await vi.waitFor(() => expect(location.href).toBe(pair(LABEL_A, "?g=1")));
@@ -960,6 +1419,7 @@ describe("entering a PC's code", () => {
     expect(focused()).toBe(0);
     expect(status().textContent).toBe("");
     expect(status().className).toBe("status");
+    expect(boxesHidden()).toBe(false);
   });
 
   it("does not pull focus into the boxes when Back restores the page after a listed PC", async () => {

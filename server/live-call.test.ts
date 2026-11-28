@@ -18,12 +18,19 @@ import { Store } from "./store.ts";
 import { addQuestionAsk, answerQuestionAsk, mergeTaskAsks } from "./task-asks.ts";
 import { seedTaskResumePacket } from "./task-state-fold.ts";
 import type { TaskResumePacket } from "./task-state.ts";
-import { workspaceDir } from "./workspace.ts";
+import { picksPrompt, workspaceDir } from "./workspace.ts";
+import { promptTokens } from "./picks.ts";
 import { markRelaySocket } from "./phone-relay/via.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./rooms/db.ts";
 import { addJoinedEntries, closeJoinedDb, joinedEntries, saveJoined } from "./rooms/joined.ts";
 
 const KEY = "AIzaTEST-not-a-real-key-0123456789";
+const sameBot = vi.hoisted(() => ({ loads: 0 }));
+// Counts loads of the same-bot voice setup: a Gemini voice call must never pull it in.
+vi.mock("./same-bot-call.ts", async (importOriginal) => {
+  sameBot.loads += 1;
+  return importOriginal();
+});
 const dirs: string[] = [];
 afterEach(() => { closeRoomsDb(); closeJoinedDb(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
@@ -52,6 +59,15 @@ function harness(opts: { key?: string; reply?: () => Response; liveCall?: AppCon
 }
 
 describe("call token", () => {
+  // First, so nothing earlier has asked for a same-bot call.
+  it("loads the same-bot code only when a same-bot call asks for its voice", async () => {
+    const h = harness();
+    expect((await h.post("token")).status).toBe(200);
+    expect(sameBot.loads).toBe(0);
+    expect((await h.post("token", { mode: "bot" })).status).toBe(200);
+    expect(sameBot.loads).toBe(1);
+  });
+
   it("gives the voice the live waiting asks and forbids an empty to-do answer", async () => {
     const h = harness();
     const now = Date.now();
@@ -170,6 +186,29 @@ describe("call token", () => {
     await h.post("lines", { callId: data.callId, lines: [{ who: "voice", text: "Anything else?" }, { who: "user", text: " " }] });
     expect(settled).toHaveBeenCalledTimes(1);
   });
+  it("gives a same-bot call a voice that only reads: no brief, no tools, the picked voice", async () => {
+    const h = harness({ liveCall: { voice: "Alnilam" } });
+    const { status, data } = await h.post("token", { mode: "bot" });
+    expect(status).toBe(200);
+    expect(data).toMatchObject({ callId: expect.stringMatching(CALL_ID), engine: "gemini", voice: "Alnilam", locale: "en" });
+    const setup = h.sent().bidiGenerateContentSetup;
+    expect(setup.tools).toBeUndefined();
+    expect(setup).toMatchObject({ model: `models/${LIVE_MODEL}`, inputAudioTranscription: {}, outputAudioTranscription: {}, sessionResumption: {} });
+    const text = setup.systemInstruction.parts[0].text as string;
+    expect(text).toContain("You are only the voice of Juno");
+    expect(text).toContain("[READ]");
+    expect(text).not.toContain("fix the login page");
+    expect(text).not.toContain("STATUS:");
+  });
+
+  it("keeps the Gemini brief for a room call even when asked for the same bot", async () => {
+    const roomTail = vi.fn(() => ({ name: "Launch", caller: "Edward", people: [], tail: "Minji: Safari broke" }));
+    const h = harness({ roomTail });
+    expect((await h.post("token", { mode: "bot", room: { id: "launch", kind: "host" } })).status).toBe(200);
+    expect(h.sent().bidiGenerateContentSetup.tools).toEqual([{ functionDeclarations: LIVE_TOOLS }]);
+    expect(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain("Minji: Safari broke");
+  });
+
   it("uses one room snapshot for validation and the brief", async () => {
     const roomTail = vi.fn().mockReturnValueOnce({ name: "Launch", caller: "Edward", people: [], tail: "Minji: Safari broke" });
     const h = harness({ roomTail });
@@ -346,6 +385,26 @@ describe("call token", () => {
     expect(setup.systemInstruction.parts[0].text).toContain("VOICE: Calm.");
   });
 
+  it("a same-bot call resumes with the voice and language it started with, not the bot's newer ones", async () => {
+    const h = harness();
+    const first = await h.post("token", { mode: "bot", call: { voice: "Erinome", language: "ko" } });
+    h.store.patchBot(h.bot.id, { call: { voice: "Puck", language: "en" } });
+    const resumed = await h.post("token", { mode: "bot", callId: first.data.callId, resume: true, locale: "en" });
+    expect(resumed.data).toMatchObject({ voice: "Erinome", locale: "ko" });
+    expect(h.sent(1).bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Erinome");
+    await h.post("end", { callId: first.data.callId, stats: {} });
+    expect(JSON.parse(readFileSync(join(h.dir, CALL_PICKS_FILE), "utf8"))).toEqual({});
+  });
+
+  it("a same-bot swap speaks with the picks it carries, and a resume after it keeps them", async () => {
+    const h = harness();
+    const first = await h.post("token", { mode: "bot", call: { voice: "Erinome" } });
+    const swapped = await h.post("token", { mode: "bot", callId: first.data.callId, swap: true, call: { voice: "Puck", language: "ko" } });
+    expect(swapped.data).toMatchObject({ voice: "Puck", locale: "ko" });
+    const resumed = await h.post("token", { mode: "bot", callId: first.data.callId, resume: true });
+    expect(resumed.data).toMatchObject({ voice: "Puck", locale: "ko" });
+  });
+
   it("a finished call leaves no picks behind", async () => {
     const h = harness();
     const first = await h.post("token", { call: { voice: "Fenrir" } });
@@ -481,6 +540,19 @@ describe("call token", () => {
     expect(notes).toContain("Likes short answers");
     expect(notes).toContain('- forum look (11-17): C - Reddit cards + tweaks: "make the header smaller" (11-17)');
     expect(notes).not.toContain("plain list");
+  });
+
+  it("brief keeps the 300-token picks cap while the chat prompt shows every pick", async () => {
+    const h = harness();
+    const bot = h.store.createBot({ name: "Picker" }, { seedMessages: false });
+    mkdirSync(join(workspaceDir(bot.id), "memory"), { recursive: true });
+    const entries = Array.from({ length: 78 }, (_, n) => `## 2026-11-${10 + Math.floor(n / 20)} ${String(10 + (n % 20)).padStart(2, "0")}:00 | topic number ${n} | current\n- Picked: Option ${n} - plain words\n- Said: "option ${n}"\n`);
+    writeFileSync(join(workspaceDir(bot.id), "memory", "decisions.md"), `# Decision timeline\n\n${entries.join("\n")}`);
+    await h.post("token", {}, bot.id);
+    const brief = String(h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text);
+    const notes = brief.slice(brief.indexOf("YOUR NOTES:\n") + "YOUR NOTES:\n".length, brief.indexOf("RECENT CHAT:"));
+    expect(promptTokens(notes)).toBeLessThanOrEqual(300);
+    expect(picksPrompt(bot.id).split("\n").filter((line) => line.startsWith("- topic number"))).toHaveLength(78);
   });
 
   it("brief answers the question asked first; role and notes never decline it", async () => {
@@ -653,7 +725,19 @@ describe("brief caps", () => {
     const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
     const notes = brief.split("YOUR NOTES:\n")[1]!.split("\n\nRECENT CHAT:")[0]!;
     expect(notes).toContain("- note 0 ");
+    expect(notes).toContain("- note 189 ");
     expect(Buffer.byteLength(notes, "utf8")).toBeLessThanOrEqual(NOTES_MAX_BYTES);
+  });
+
+  it("gives a call the 200 lines of an over-cap MEMORY.md a chat loads, newest included", async () => {
+    const h = harness();
+    mkdirSync(workspaceDir(h.bot.id), { recursive: true });
+    writeFileSync(join(workspaceDir(h.bot.id), "MEMORY.md"), Array.from({ length: 250 }, (_, i) => `- note ${i}`).join("\n"));
+    await h.post("token");
+    const brief = h.sent().bidiGenerateContentSetup.systemInstruction.parts[0].text as string;
+    const notes = brief.split("YOUR NOTES:\n")[1]!.split("\n\nRECENT CHAT:")[0]!;
+    expect(notes.split("\n").filter((line) => line.startsWith("- note "))).toHaveLength(200);
+    expect(notes).toContain("- note 249");
   });
 });
 
@@ -860,6 +944,19 @@ describe("call lines and end", () => {
     expect((await h.post("end", { callId: "c-0123456789ab", stats: full })).data).toEqual({ ok: true });
     const lines = readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(lines).toEqual([{ receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...stats }, { receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...full }]);
+  });
+
+  it("keeps the start steps and drops speech text from them", async () => {
+    const h = harness();
+    const start = { setupMs: 900, greetMs: 900, heardMs: 4_100, answerMs: 5_200, audioMs: 5_300, playMs: 5_350, greet: "sent", ctx: "running", paused: false, noSound: false, volume: 0.6, voiceAsked: "Puck", voiceLive: "Aoede" };
+    await h.post("end", { callId: "c-0123456789ab", stats: { ms: 9_000, start: { ...start, text: "hello there" } } });
+    expect(JSON.parse(readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim()).start).toEqual(start);
+  });
+
+  it("keeps the stats when the live voice is one this build does not list", async () => {
+    const h = harness();
+    expect((await h.post("end", { callId: "c-0123456789ab", stats: { ms: 9_000, start: { voiceLive: "Nova" } } })).data).toEqual({ ok: true });
+    expect(JSON.parse(readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim()).start).toEqual({ voiceLive: "Nova" });
   });
 
   it("the stats line names the voice the call used", async () => {

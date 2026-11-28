@@ -14,6 +14,9 @@ import forumClip from "@/assets/whats-new/1.0.282-forum.webp";
 import forumLightClip from "@/assets/whats-new/1.0.282-forum-light.webp";
 import picksClip from "@/assets/whats-new/1.0.287-timeline.webp";
 import forumFirstClip from "@/assets/whats-new/1.0.287-forum.webp";
+import paneClip from "@/assets/whats-new/1.0.302-pane.mp4";
+import quickClip from "@/assets/whats-new/1.0.303-quick.mp4";
+import quickMotionClip from "@/assets/whats-new/1.0.304-quick.mp4";
 import { newerRelease } from "../../shared/release-order";
 import type { LocaleId } from "./i18n";
 import type { SkinId } from "./skins";
@@ -21,7 +24,7 @@ import type { SkinId } from "./skins";
 type Copy = Record<LocaleId, string>;
 
 /** What Show me opens in this chat. */
-export type WhatsNewTarget = "memory" | "map" | "models" | "workers" | "timeline" | "forum" | { skins: SkinId[] };
+export type WhatsNewTarget = "memory" | "map" | "models" | "workers" | "timeline" | "forum" | "pane" | "quick" | { skins: SkinId[] };
 
 /** Every tile after 1.0.278 is a moving clip plus a Show me that opens the feature; whats-new.test.ts enforces it. `how` and `still` only keep older tiles as they shipped. */
 export type WhatsNewTile = { clip: string; lightClip?: string; still?: true; title: Copy; line: Copy } & ({ show: WhatsNewTarget } | { how: Copy });
@@ -164,6 +167,59 @@ export const RELEASE_NOTES: Record<string, WhatsNewEntry | WhatsNewNone> = {
     more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
   },
   "1.0.288": { tile: "none", reason: "Launch-day fixes; no feature tile this release." },
+  "1.0.289": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.290": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.291": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.292": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.293": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.294": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.295": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.296": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.297": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.298": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.299": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.300": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.301": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.302": {
+    title: { en: "New in Wink 1.0.302", ko: "Wink 1.0.302 새 기능" },
+    tiles: [
+      {
+        clip: paneClip,
+        title: { en: "Side pane tabs", ko: "사이드 패널 탭" },
+        line: { en: "Open only the tabs you need. Drag to reorder, drag the edge to resize.", ko: "필요한 탭만 열어요. 끌어서 순서를 바꾸고, 가장자리를 끌어 크기를 조절해요." },
+        show: "pane",
+      },
+    ],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
+  "1.0.303": {
+    title: { en: "New in Wink 1.0.303", ko: "Wink 1.0.303 새 기능" },
+    tiles: [
+      {
+        clip: quickClip,
+        title: { en: "Quick model picker", ko: "빠른 모델 선택" },
+        line: { en: "A fourth picker style: pick model and effort in one step. Max glows in the model's color.", ko: "네 번째 선택 방식: 모델과 추론 강도를 한 번에 골라요. 최대로 고르면 모델 색으로 빛나요." },
+        show: "quick",
+      },
+    ],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
+  "1.0.304": {
+    title: { en: "New in Wink 1.0.304", ko: "Wink 1.0.304 새 기능" },
+    tiles: [
+      {
+        clip: quickMotionClip,
+        title: { en: "Quick model picker", ko: "빠른 모델 선택" },
+        line: { en: "A fourth picker style: pick model and effort in one step. Max glows in the model's color.", ko: "네 번째 선택 방식: 모델과 추론 강도를 한 번에 골라요. 최대로 고르면 모델 색으로 빛나요." },
+        show: "quick",
+      },
+    ],
+    more: { en: "And more in the release notes", ko: "그 밖의 변경은 릴리스 노트에서" },
+  },
+  "1.0.305": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.306": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.307": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
+  "1.0.308": { tile: "none", reason: "Fixes and polish; no feature tile this release." },
 };
 
 /** The releases with tiles; a no-tile record has nothing to show. */

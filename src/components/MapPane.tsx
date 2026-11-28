@@ -35,7 +35,7 @@ const CodeRow = memo(function CodeRow({ line, source }: { line: MapDiffLine; sou
   return <div className="map-code-row" data-kind={line.kind}><u>{line.line}</u><b>{line.kind === "add" ? "+" : line.kind === "remove" ? "-" : ""}</b><code>{tokens?.length ? tokens.map((token, i) => token.color ? <span key={i} style={{ color: token.color }}>{token.content}</span> : token.content) : line.text || " "}</code></div>;
 });
 
-export function MapPane({ botId, maximized = false, active = true }: { botId: string; maximized?: boolean; active?: boolean }) {
+export function MapPane({ botId, maximized = false, active = true, kept }: { botId: string; maximized?: boolean; active?: boolean; kept?: boolean }) {
   const { locale } = useI18n();
   const c = copy[locale];
   const [snapshot, setSnapshot] = useState<MapSnapshot>(EMPTY);
@@ -100,10 +100,11 @@ export function MapPane({ botId, maximized = false, active = true }: { botId: st
     return cache.current.diffs;
   };
 
+  // A tab kept behind another drops its stream but keeps what it drew, so coming back shows no loading line.
+  useEffect(() => setReady(false), [base, link]);
   useEffect(() => {
     liveReady.current = false;
     if (!active) return;
-    setReady(false);
     let stream: EventSource;
     let reopen: ReturnType<typeof setTimeout> | undefined;
     const connect = () => {
@@ -205,6 +206,8 @@ export function MapPane({ botId, maximized = false, active = true }: { botId: st
   // Git rows ask after the tree and the code: each row runs git and gh, and asked together they held both back by seconds.
   const [rows, setRows] = useState(false);
   if (!rows && worker && (paths || lost || !repoWorker) && (loaded || failed || !worker.git || !chosen.path)) setRows(true);
+  // The server answers Git rows only for an open stream, which a kept Map reopens on the way back.
+  const streamed = active && liveReady.current;
   const step = loaded ? loaded.step : shown && shown === worker?.path ? { reason: worker.reason, editedAt: worker.editedAt } : undefined;
   const unfold = (line: number) => {
     if (!loaded || held) return;
@@ -242,7 +245,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId: st
   const codeRow = (line: MapDiffLine, key: React.Key, of = tokens) => <CodeRow key={key} line={line} source={of} />;
   const crumbs = shown ? [paths ? repo?.name : "", ...shown.split("/")].filter(Boolean) : [];
 
-  return <section className="verify-watch-frame map-pane" tabIndex={-1} onKeyDown={move} data-maximized={maximized || undefined} data-expanded={fills || undefined} data-map-worker={worker?.id} data-map-path={chosen.path} data-map-edit={worker?.editedAt}>
+  return <section className="verify-watch-frame map-pane" tabIndex={-1} onKeyDown={move} data-maximized={maximized || undefined} data-kept={kept} data-expanded={fills || undefined} data-map-worker={worker?.id} data-map-path={chosen.path} data-map-edit={worker?.editedAt}>
     {!ready ? <p className="map-empty" role="status">{c.loading}</p> : !worker ? <p className="map-empty" role="status">{connectionFailed || snapshot.error ? failure : c.empty}</p> : <>
       <header className="map-head">
         <div ref={menuRef} className="map-worker-menu">
@@ -263,7 +266,7 @@ export function MapPane({ botId, maximized = false, active = true }: { botId: st
         {index && (source?.git || index.size > 0) && <MapTree index={index} workers={onTree} team={team} slots={slots.current} clashes={clashes} current={current} selected={chosen.path} follow={chosen.follow} labels={c.tree} onOpen={open} />}
       </div>
       <MapSplit target={topRef} rows />
-      <MapGitFlow base={base} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} open={active} active={active && rows} />
+      <MapGitFlow base={base} workers={snapshot.workers} slots={slots.current} worker={worker.id} all={team} open={streamed} active={streamed && rows} />
       {worker.git && files.length > 0 && <>
         <MapSplit target={topRef} />
         <div ref={barRef} className="map-crumbs">

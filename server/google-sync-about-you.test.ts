@@ -1,5 +1,4 @@
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,6 +8,7 @@ import { GoogleAccount, type GoogleSession } from "./google-account.ts";
 import { createGoogleSync, type GoogleSync } from "./google-sync.ts";
 import { loadOrCreateSyncWorkspace, loadProfileSyncSettings, saveProfileSyncSettings, syncedInFolder } from "./profile-sync.ts";
 import { FakeDrive } from "./testing/fake-drive.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 import type { AboutYouView, BotSpec, TestArgs, TestResult } from "./testing/google-sync-pc.ts";
 
 const CLIENT = { id: "client-id-test", secret: "client-secret-test" };
@@ -126,7 +126,7 @@ const ALONE = ["MEMORY.md", "MEMORY.synced"];
 const shown = (view: AboutYouView) => view.sources.map(({ source, facts }) => `${source} · ${facts.length}`).sort();
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "orbit-google-about-you-"));
+  root = mkdtempSync(join(testHome(), "orbit-google-about-you-"));
   drive = new FakeDrive();
   drive.pageSize = 1000;
   pcs = [];
@@ -134,7 +134,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   for (const pc of pcs) await pc.close();
-  rmSync(root, { recursive: true, force: true });
+  removeTestData(root);
 });
 
 describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
@@ -215,7 +215,7 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
     expect(saved(b)).toBe(saved(a));
   });
 
-  // two PCs with 150 facts each meet: the Memory page lists all 300, the prompt the newest 200
+  // two PCs with 150 facts each meet on the same day: the Memory page lists all 300, the prompt the first 200
   async function bigMerge(): Promise<{ a: PC; b: PC; first: string; second: string }> {
     const a = makePC("a");
     const b = makePC("b");
@@ -234,7 +234,7 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
       expect(view.files).toEqual(ALONE);
       const prompt = promptFacts(view);
       expect(prompt).toHaveLength(200);
-      expect(prompt.filter((line) => line.startsWith(`- ${second} fact`))).toHaveLength(150);
+      expect(prompt.filter((line) => line.startsWith(`- ${first} fact`))).toHaveLength(150);
     }
     return { a, b, first, second };
   }
@@ -261,7 +261,7 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
     }
   });
 
-  it("counts a fact listed under two sources once toward the import cap", async () => {
+  it("keeps every import past the cap, and a fact listed under two sources takes one prompt line", async () => {
     const a = makePC("a");
     const b = makePC("b");
     const sharedFacts = Array.from({ length: 120 }, (_, i) => `Shared fact ${i}.`);
@@ -277,7 +277,7 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
     await rounds(4);
     for (const pc of [a, b]) {
       const view = await pc.aboutYou();
-      expect(shown(view)).toEqual(["ChatGPT · 120", "Claude · 120", "Gemini · 80"]);
+      expect(shown(view)).toEqual(["ChatGPT · 120", "Claude · 120", "Gemini · 81"]);
       expect(promptFacts(view)).toHaveLength(200);
     }
   });
@@ -466,8 +466,8 @@ describe("Import Memory between Google PCs", { timeout: 180_000 }, () => {
 
       await b.close();
       pcs = pcs.filter((pc) => pc !== b);
-      rmSync(b.dataDir, { recursive: true, force: true });
-      b = makePC("b");
+      // a fresh data folder, as a reinstall leaves
+      b = makePC("b-reinstalled");
       await addBack(b);
       await start(b);
       await rounds(6);

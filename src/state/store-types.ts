@@ -4,7 +4,7 @@ import type { BotAvatarChoice, BotAvatarCrop } from "../../shared/bot-avatar";
 import type { RoutineRequestCardData } from "../../shared/routine-request";
 import type { RoutineRunCardData } from "../../shared/routine-run";
 import type { ToolDetail } from "../../shared/tool-detail";
-import type { CallPrefs, LiveVoice } from "../../shared/live-call";
+import type { CallAnswer, CallPrefs, LiveVoice } from "../../shared/live-call";
 import type { Routine, RoutineRun } from "@/lib/routines";
 import type { NotificationTarget, TerminalAttentionReason } from "@/lib/notify";
 import type { SidebarOrder } from "@/lib/sidebar-order";
@@ -25,6 +25,8 @@ export interface OptionCardData {
   askUser?: true;
   /** an ask_user card that waits until answered; older ones closed when typed past */
   staysOpen?: true;
+  /** an ask_user card: the asking turn's last text; absent when that turn wrote none */
+  replyId?: string;
   /** permission asks: the tool being requested (drives the approval box) */
   tool?: string;
   /** why auto mode stopped to ask anyway */
@@ -87,7 +89,7 @@ export interface Message {
     ok?: boolean;
     spoken?: string;
     lines?: string[];
-    tidy?: { runId: string; undoneAt?: number };
+    tidy?: { runId: string; count?: number; undoneAt?: number };
     summary?: string;
     durationMs?: number;
     detail?: ToolDetail;
@@ -105,6 +107,8 @@ export interface Message {
   roomEcho?: { groupId: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
+  /** The new-bot offer reply that carries the Import Memory prompt. */
+  importOffer?: true;
   call?: import("../../shared/live-call").CallTag;
   /** Client-only accepted send; replaced by the canonical transcript row. */
   placeholder?: true;
@@ -143,6 +147,13 @@ export interface Message {
   /** steer-queue entry this drained user line came from. Pending chips
    * match on this id, not on equal text. Absent on ordinary sends. */
   queueId?: string;
+  /** When the person acted; a queue or card persistence can land the row later. */
+  actedAt?: number;
+  /** Waited below the turn (after this turn, sync hold, Send now): drawn where it landed, not by actedAt. */
+  waited?: boolean;
+  /** One past every send the sending window knew: orders two lines the server stamped alike. */
+  sendSeq?: number;
+  sentAfterId?: string | null;
 }
 
 export type GroupDefaultResponder =
@@ -373,16 +384,21 @@ export interface TerminalAttention {
 
 export type TerminalAttentionMap = Record<string, TerminalAttention>;
 
+/** Lists by engine base, plus "engines" for the sections. seed: "browser" marks a browser's old local copy sent up once. */
+export type UsageOrderStatus = { orders: Record<string, string[]>; seed?: "browser"; rev?: number } | null;
+
 /** GET /api/config - configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
   xai?: { configured: boolean };
   gemini?: { configured: boolean; introSeen?: boolean };
-  liveCall?: { voice: LiveVoice };
+  liveCall?: { voice: LiveVoice; answer?: CallAnswer };
   openaiCompat?: { configured: boolean };
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   box: { configured: boolean };
   vps: { configured: boolean; sshAlias: string };
   rooms: { turnTimeoutMinutes: number };
+  /** The order dragged on Usage and Connections, kept by this Wink; null until one is saved. */
+  usageOrder?: UsageOrderStatus;
   localVm: { mode: "shared" | "per-bot"; maxInstances: number };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
    * a voice, which is what it takes to actually speak. The key itself is
@@ -401,7 +417,7 @@ export interface ConfigStatus {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "gemini" | "liveCall" | "openaiCompat" | "composio" | "box" | "vps" | "rooms" | "localVm" | "tts" | "imageGen" | "anthropic" | "vertex" | "customKeys" | "profile" | "features"
+  "xai" | "gemini" | "liveCall" | "openaiCompat" | "composio" | "box" | "vps" | "rooms" | "usageOrder" | "localVm" | "tts" | "imageGen" | "anthropic" | "vertex" | "customKeys" | "profile" | "features"
 >;
 
 /** How an engine gets installed - declared by its driver, mirrors
@@ -411,7 +427,7 @@ export interface EngineInstall {
   command?: Partial<Record<"darwin" | "win32" | "linux", string>>;
   docsUrl?: string;
   signInCommand?: string;
-  login?: { args: string[]; deviceArgs?: string[]; env?: Record<string, string>; authHosts?: string[] };
+  login?: { args: string[]; deviceArgs?: string[]; deviceEnv?: Record<string, string>; env?: Record<string, string>; authHosts?: string[] };
   logout?: string[];
   needsNode?: boolean;
 }
@@ -419,12 +435,15 @@ export interface EngineInstall {
 export interface RateLimitReport {
   windows: RateLimitWindow[];
   observedAt: string;
+  ageMs?: number;
 }
 
 /** One row of GET /api/instances - the model picker's data. */
 export interface InstanceInfo {
   loginState?: "pending" | "complete" | "failed" | "cancelled";
-  loginCapture?: { url?: string; code?: string; inputGeneration?: number };
+  /** The pending sign-in opened its browser on the PC. */
+  loginOpensBrowser?: boolean;
+  loginError?: string;
   instanceId: string;
   driverKind: string;
   accountOf?: string;
@@ -546,7 +565,7 @@ export interface AppState {
   } | null;
   /** 1:1 queue-fallback lines waiting for drain; keyed by threadId.
    * Each entry is identified by the server queueId, not by text. */
-  pendingQueued: Record<string, Array<{ queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync" }>>;
+  pendingQueued: Record<string, Array<{ queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync"; waited?: boolean; sendSeq?: number; sentAfterId?: string | null }>>;
   /** queueIds whose drain frame beat the POST continuation. One-shot and
    * bounded to a short event window so other clients cannot grow it forever. */
   consumedQueueIds: Record<string, true>;
@@ -618,6 +637,9 @@ export type Action =
       groupId: string;
       text: string;
       actedAt?: number;
+      waited?: boolean;
+      sendSeq?: number;
+      sentAfterId?: string | null;
       sendId?: string;
       replyToId?: string;
       threadId?: string;
@@ -648,9 +670,14 @@ export type Action =
       /** Wait for the running turn instead of steering into it. */
       after?: boolean;
       queueId?: string;
+      actedAt?: number;
+      sendSeq?: number;
+      sentAfterId?: string | null;
       onError?: () => void;
+      /** The send will never run though nothing threw: Stop took it back (stopped), or its turn could not start. */
+      onRejected?: (stopped: boolean) => void;
     }
-  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync" }
+  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; at?: number; sendId?: string; replyToId?: string; reason?: "sync"; waited?: boolean; sendSeq?: number; sentAfterId?: string | null }
   | { type: "sendQueuedNow"; botId: string; threadId: string; queueId: string }
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "cancelQueued"; botId: string; threadId: string; queueId: string }

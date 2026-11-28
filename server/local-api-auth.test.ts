@@ -1,12 +1,13 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import type { ChildProcess } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { waitForExit } from "./testing/cleanup.ts";
+import { spawnHarness } from "./testing/harness-auth.ts";
+import { createFixtureHome } from "./testing/test-home.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TRANSCRIPT = "Synthetic legal case transcript: private fixture F01.";
@@ -14,9 +15,7 @@ let child: ChildProcess;
 let base: string;
 
 beforeAll(async () => {
-  const scratch = process.env.OMB_DATA_DIR ?? tmpdir();
-  mkdirSync(scratch, { recursive: true });
-  const home = mkdtempSync(join(scratch, "local-api-auth-"));
+  const home = createFixtureHome("local-api-auth-");
   const data = join(home, "data");
   mkdirSync(data);
   writeFileSync(join(data, "config.json"), JSON.stringify({
@@ -39,7 +38,7 @@ beforeAll(async () => {
   const port = address.port;
   await new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()));
   base = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, [join(ROOT, "server", "index.ts")], {
+  child = spawnHarness(process.execPath, [join(ROOT, "server", "index.ts")], {
     cwd: ROOT,
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),

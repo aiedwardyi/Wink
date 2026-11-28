@@ -1,16 +1,57 @@
 .show-pane { --head: 40px; flex-direction: column; align-items: stretch; }
 .show-pane-head { display: flex; flex-shrink: 0; align-items: center; gap: 4px; height: var(--head); padding: 10px 6px 0 12px; }
 /* Tabs that do not fit scroll and fade at the edge like Segmented, so the Maximize and Close buttons stay in the pane. */
-.show-pane-tabs { display: flex; min-width: 0; padding: 2px; border-radius: 8px; background: var(--color-inset); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
-.show-pane-tabs button { flex-shrink: 0; height: 26px; padding: 0 14px; border-radius: 6px; color: var(--color-ink-secondary); font-size: 12px; white-space: nowrap; outline-offset: -2px; cursor: default; }
-.show-pane-tabs button[aria-selected="true"] { background: var(--color-raised); color: var(--color-ink); font-weight: 500; box-shadow: 0 1px 2px rgb(0 0 0 / .2); }
+.show-pane-tabs { position: relative; display: flex; min-width: 0; padding: 2px; border-radius: 8px; background: var(--color-inset); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+/* A tab keeps room for its close x, so the x showing on hover never moves the row. */
+.show-pane-tab { position: relative; display: flex; flex-shrink: 0; align-items: center; height: 26px; border-radius: 6px; color: var(--color-ink-secondary); font-size: 12px; white-space: nowrap; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+@media (hover: hover) { .show-pane-tab:hover { color: var(--color-ink); } }
+.show-pane-tab[data-selected] { background: var(--color-raised); color: var(--color-ink); font-weight: 500; box-shadow: 0 1px 2px rgb(0 0 0 / .2); }
+.show-pane-tab > [role="tab"] { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 168px; height: 100%; padding: 0 2px 0 10px; outline-offset: -2px; cursor: default; }
+.show-pane-tab > [role="tab"] > span { overflow: hidden; text-overflow: ellipsis; }
+.show-pane-tab-close { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 18px; height: 18px; margin-right: 4px; border-radius: 4px; color: var(--color-ink-secondary); opacity: 0; cursor: default; }
+.show-pane-tab:focus-within .show-pane-tab-close { opacity: 1; }
+@media (hover: hover) {
+  .show-pane-tab:hover .show-pane-tab-close { opacity: 1; }
+  .show-pane-tab-close:hover { background: var(--color-control); color: var(--color-ink); }
+}
+.show-pane-tab[data-slot] { visibility: hidden; }
+.show-pane-tab[data-ghost] { position: fixed; z-index: 60; background: var(--color-raised); color: var(--color-ink); scale: 1.03; box-shadow: 0 8px 24px rgb(0 0 0 / .35); pointer-events: none; will-change: translate; }
+/* A page's frame would swallow the pointer mid-drag. */
+html[data-pane-dragging] iframe { pointer-events: none; }
+.verify-watch-icon[aria-expanded="true"] { background: var(--color-control); color: var(--color-ink); }
+/* The head's buttons are the chat header's icon buttons on a panel: one box, hover and focus ring. */
+@media (min-width: 768px) {
+  .show-pane-head .verify-watch-icon { width: 30px; height: 30px; cursor: default; }
+  .show-pane-head .verify-watch-icon:focus-visible { background: none; color: var(--color-ink-secondary); }
+  .show-pane-head .verify-watch-icon[aria-expanded="true"] { background: var(--color-raised); color: var(--color-ink); }
+}
+@media (min-width: 768px) and (hover: hover) {
+  .show-pane-head .verify-watch-icon:hover { background: var(--color-raised); color: var(--color-ink); }
+}
+.show-pane-tools { display: flex; flex: 1; flex-direction: column; align-items: center; gap: 10px; padding-top: 16vh; }
+.show-pane-tools > p { color: var(--color-ink-secondary); font-size: 12px; }
+.show-pane-edge::before, .show-pane-edge::after { content: ""; position: absolute; inset-block: 0; opacity: 0; pointer-events: none; transition: opacity var(--motion-fast) var(--ease-standard); }
+/* right over the pane's 1px border */
+.show-pane-edge::before { left: 2px; width: 1px; background: color-mix(in oklab, var(--color-ink-secondary) 45%, var(--color-hairline)); }
+.show-pane-edge::after { z-index: -1; left: -8px; width: 21px; background: radial-gradient(closest-side, color-mix(in oklab, var(--color-accent) 22%, transparent), transparent); }
+.show-pane-grip { position: absolute; top: 50%; left: 0; width: 5px; height: 32px; margin-top: -16px; border-radius: 999px; background: var(--color-ink-secondary); opacity: 0; scale: 1 .6; transition: opacity var(--motion-fast) var(--ease-standard), scale var(--motion-fast) var(--ease-standard); }
+@media (hover: hover) {
+  /* A pointer only passing over waits a beat, so crossing the edge never flashes the grip. */
+  .show-pane-edge:hover::before, .show-pane-edge:hover > .show-pane-grip { opacity: 1; scale: 1; transition-delay: var(--motion-fast); }
+}
+.show-pane-edge:has(> :focus-visible)::before, .show-pane-grip:focus-visible { opacity: 1; scale: 1; }
+.show-pane-edge[data-drag]::before, .show-pane-edge[data-drag]::after, .show-pane-edge[data-drag] > .show-pane-grip { opacity: 1; transition-delay: 0s; }
+.show-pane-edge[data-drag]::before { background: var(--color-ink-secondary); }
+.show-pane-edge[data-drag] > .show-pane-grip { scale: 1 1.2; background: var(--color-ink); }
+@container verify-watch (max-width: 659px) {
+  .show-pane-edge { display: none; }
+}
 .show-pane > .verify-watch-frame { flex: 0 1 auto; margin-top: 8px; max-height: calc(100% - var(--head) - 20px); }
 .show-pane > .verify-watch-frame[data-maximized], .show-pane > .show-frame, .show-pane > .show-media, .show-pane > .show-workers { min-height: calc(100% - var(--head) - 20px); }
-.show-pane-tabs button:disabled { opacity: .45; }
 /* A click on the file already showing; an inset ring above the frame, since the pane sits flush against the window edge. */
 .show-pane.arrival-glow::before { z-index: 1; animation-duration: 1.2s; box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--color-accent) 92%, transparent), inset 0 0 14px 3px color-mix(in oklab, var(--color-accent) 60%, transparent); }
-/* Show and Check stay mounted behind the other tabs, so the file never reloads and the check keeps streaming. */
-.show-pane:not([data-tab="show"]) > .show-frame, .show-pane:not([data-tab="check"]) > .verify-watch-frame:not(.show-frame, .show-media, .map-pane, .show-workers, .timeline-pane) { display: none; }
+/* A tab opened before stays mounted behind the open one: no reload, its scroll kept, and no layout while the pane resizes. */
+.show-pane > [data-kept] { position: absolute; inset: var(--head) 0 0; visibility: hidden; content-visibility: hidden; }
 .show-pane > .map-pane, .show-pane > .timeline-pane { min-height: calc(100% - var(--head) - 20px); }
 
 .show-frame-icon { flex-shrink: 0; color: var(--color-ink-secondary); }
@@ -50,9 +91,16 @@
 @media (max-width: 767px) {
   .verify-watch.show-pane { position: fixed; inset: 0; z-index: 50; width: 100%; margin: 0; padding-top: env(safe-area-inset-top); border-left-width: 0; box-shadow: none; }
   .show-pane-head { height: auto; padding: 6px 0 0 12px; }
-  .show-pane-tabs button, .show-media-kinds button { height: 32px; }
-  .show-pane-tabs button { position: relative; padding-inline: 9px; }
-  .show-pane-tabs button::after { content: ""; position: absolute; inset: -6px 0; }
+  .show-pane-tab, .show-media-kinds button { height: 32px; }
+  .show-pane-tab > [role="tab"] { position: relative; padding-left: 9px; }
+  /* The label's tap area runs under its hidden x, so a tap there opens the tab. */
+  .show-pane-tab > [role="tab"]::after { content: ""; position: absolute; inset: -6px -22px -6px 0; }
+  /* No hover on touch, so the open tab keeps its x. */
+  .show-pane-tab[data-selected] .show-pane-tab-close { opacity: 1; }
+  /* A tap focuses its tab first, and focus-within would show the x under the finger: only the open tab's x takes a tap. */
+  .show-pane-tab:not([data-selected]) .show-pane-tab-close { pointer-events: none; }
+  .show-pane-tab-close { position: relative; }
+  .show-pane-tab-close::after { content: ""; position: absolute; inset: -7px -4px; }
   .show-pane > .verify-watch-frame { margin: 6px 0 0; max-height: none; min-height: 0; flex: 1; border-width: 1px 0 0; border-radius: 0; }
   /* The sheet also covers a narrow desktop window, where the native buttons sit over its top right. */
   html[data-orbit-caption="win32"] .verify-watch.show-pane { top: var(--orbit-caption-height); }

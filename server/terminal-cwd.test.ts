@@ -1,13 +1,14 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { resolveBotTerminalFolder } from "./terminal-cwd.ts";
 import { WORKSPACES_DIR, workspaceDir } from "./workspace.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 describe("resolveBotTerminalFolder", () => {
   beforeEach(() => {
-    rmSync(WORKSPACES_DIR, { recursive: true, force: true });
+    removeTestData(WORKSPACES_DIR);
   });
 
   it("uses an existing local project folder", () => {

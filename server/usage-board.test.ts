@@ -7,6 +7,7 @@ import type { UsageBoard, UsageBoardFrame } from "../src/lib/usage-board.ts";
 import type { RateLimitsReport } from "./rate-limits-store.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
+import { createUsageRefresh } from "./usage-refresh.ts";
 import { codexRateLimitWindows } from "./drivers/rate-limits.ts";
 
 type Deps = Parameters<typeof createUsageBoard>[0];
@@ -91,6 +92,15 @@ afterEach(() => {
 });
 
 describe("usage board", () => {
+  it("keeps a background note limit out of displayed usage", async () => {
+    const s = setup();
+    s.rateLimits.set("claude", { observedAt: new Date(now).toISOString(), windows: [], noteLimit: { resetsAt: null } });
+    expect(account(await s.board.read())).toMatchObject({ windows: [], observedAt: null });
+    const observed = report(30);
+    s.rateLimits.set("claude", { ...observed, noteLimit: { resetsAt: null } });
+    expect(account(await s.board.read())).toMatchObject({ windows: [{ usedPercent: 30 }, { usedPercent: 40 }], observedAt: now });
+  });
+
   it("drops an old identity's queued history before it drains", async () => {
     const s = setup();
     s.rows()[0].status = { state: "available", authenticated: true, account: "old@example.test" };
@@ -115,6 +125,34 @@ describe("usage board", () => {
     expect(account(after).history).toEqual({ fine: [], coarse: [] });
     expect(after.full).toBe(true);
     expect(after.revision).toBeGreaterThan(before.revision);
+  });
+
+  it.each(["muse", "gemini", "claudeAgent"])("drops %s usage on a sign-out that never knew an address", async (driverKind) => {
+    const s = setup();
+    s.setRows([{ ...s.rows()[0], driverKind, status: { state: "available", authenticated: true } }]);
+    s.accept("claude", report(100));
+    await settle();
+    const before = await s.board.read();
+    expect(account(before).windows[0].usedPercent).toBe(100);
+    s.setRows([{ ...s.rows()[0], status: { state: "available", authenticated: false } }]);
+    const after = await s.board.read(before.cursor);
+    expect(account(after).windows).toEqual([]);
+    expect(s.rateLimits.has("claude")).toBe(false);
+  });
+
+  it("keeps usage when a sign-in's address first shows or goes missing from one check", async () => {
+    const s = setup();
+    s.setRows([{ ...s.rows()[0], driverKind: "gemini", status: { state: "available", authenticated: true } }]);
+    s.accept("claude", report(100));
+    await settle();
+    let cursor = (await s.board.read()).cursor;
+    for (const status of [{ account: "ed@example.test" }, {}, { account: "ed@example.test" }]) {
+      s.setRows([{ ...s.rows()[0], status: { state: "available", authenticated: true, ...status } }]);
+      const read = await s.board.read(cursor);
+      expect(account(read).windows[0].usedPercent).toBe(100);
+      cursor = read.cursor;
+    }
+    expect(s.rateLimits.has("claude")).toBe(true);
   });
 
   it.each([undefined, 1440])("records Codex aliases with primary duration %s", async (windowDurationMins) => {
@@ -331,6 +369,18 @@ describe("usage board", () => {
     expect(JSON.stringify(await s.board.handle("/api/usage/board"))).not.toContain(local);
   });
 
+  it("counts a ready sign-in another login replaced, with neither login on the board", async () => {
+    const s = setup();
+    s.rows()[0].status = { state: "available", authenticated: true, account: "first@example.test" };
+    s.board.touch();
+    expect(account(await s.board.read()).login).toBeUndefined();
+    s.rows()[0].status = { state: "available", authenticated: true, account: "second@example.test" };
+    s.board.touch();
+    const value = await s.board.read();
+    expect(account(value)).toMatchObject({ signIn: "ready", login: 1 });
+    expect(JSON.stringify(value)).not.toMatch(/first@|second@/);
+  });
+
   it("answers full after an account is removed or signs in as someone else", async () => {
     const s = setup();
     s.accept(added, report());
@@ -491,6 +541,74 @@ describe("usage board", () => {
     expect(account(await s.board.read()).signIn).toBe("draining");
   });
 
+  it("shows payment due over a stale reading until a send or usage read on that account succeeds", async () => {
+    const s = setup();
+    s.accept("claude", report(93));
+    s.board.paymentDue("claude");
+    expect(account(await s.board.read())).toMatchObject({ signIn: "payment-due", windows: [{ usedPercent: 93 }, { usedPercent: 40 }] });
+    expect(account(await s.board.read(), added).signIn).toBe("ready");
+    s.board.turnStarted({ turnId: "t-1", botId: "atlas", accountId: "claude", generation: 0 });
+    s.board.turnSettled("t-1", false);
+    expect(account(await s.board.read()).signIn).toBe("payment-due");
+    s.board.turnStarted({ turnId: "t-2", botId: "atlas", accountId: "claude", generation: 0 });
+    s.board.turnSettled("t-2", true);
+    expect(account(await s.board.read()).signIn).toBe("ready");
+    s.board.paymentDue("claude");
+    now += 60_000;
+    s.accept("claude", report(94));
+    expect(account(await s.board.read()).signIn).toBe("ready");
+    s.board.paymentDue("claude");
+    s.rows()[0].generation = 1;
+    expect(account(await s.board.read()).signIn).toBe("ready");
+  });
+
+  it("drops payment due when the built-in slot signs out or signs in as someone else", async () => {
+    const s = setup();
+    const row = s.rows()[0]!;
+    const as = (who: string) => { row.status = { state: "available", authenticated: true, account: `${who}@example.test`, accountIdentity: `uuid-${who}` }; };
+    as("a");
+    s.accept("claude", report(93));
+    s.board.paymentDue("claude");
+    expect(account(await s.board.read()).signIn).toBe("payment-due");
+    row.status = { state: "available", authenticated: false };
+    expect(account(await s.board.read()).signIn).toBe("signed-out");
+    as("b");
+    expect(account(await s.board.read())).toMatchObject({ signIn: "ready", windows: [] });
+    s.board.paymentDue("claude");
+    as("c");
+    expect(account(await s.board.read()).signIn).toBe("ready");
+    // A login that never names itself still loses the mark on sign-out.
+    row.status = { state: "available", authenticated: true };
+    s.board.paymentDue("claude");
+    expect(account(await s.board.read()).signIn).toBe("payment-due");
+    row.status = { state: "available", authenticated: false };
+    await s.board.read();
+    row.status = { state: "available", authenticated: true };
+    expect(account(await s.board.read()).signIn).toBe("ready");
+    expect(row.generation).toBe(0);
+  });
+
+  it("keeps payment due through a failed refresh or a reading observed before it", async () => {
+    const s = setup();
+    const saved = report(93, now - 3_600_000);
+    s.rateLimits.set("claude", saved);
+    // A restart: the board loads the saved reading but has not seen it reported.
+    const board = createUsageBoard(s.deps);
+    now += 1_000;
+    board.paymentDue("claude");
+    now += 1_000;
+    const refresh = createUsageRefresh({ platform: "linux", now: () => now, claude: async () => { throw new Error("network"); } });
+    const failed = await refresh("claudeAgent", { instanceId: "claude" }, saved);
+    expect(failed).toMatchObject({ report: saved, status: "no_observation" });
+    // The refresh route hands the board whatever report the refresh returned.
+    board.recordReport("claude", failed.report!);
+    expect(account(await board.read())).toMatchObject({ signIn: "payment-due", windows: [{ usedPercent: 93 }, { usedPercent: 40 }] });
+    board.recordReport("claude", report(95, now - 1_500));
+    expect(account(await board.read()).signIn).toBe("payment-due");
+    board.recordReport("claude", report(96, now));
+    expect(account(await board.read()).signIn).toBe("ready");
+  });
+
   it("reads a missing CLI as not installed and an unchecked account as unknown, never as signed out", async () => {
     const s = setup();
     const missing = { state: "unavailable" as const, reason: "`claude` CLI not found", cliMissing: true };
@@ -636,5 +754,78 @@ describe("usage board", () => {
       { seq: 1, at: origin + 1, kind: "limit", accountId: "claude", window: "five_hour" },
       { seq: 2, at: origin + 3, kind: "reset", accountId: "claude", window: "five_hour" },
     ]);
+  });
+});
+
+describe("one sign-in, one row", () => {
+  const signedIn = (account: string, accountIdentity?: string) => ({ state: "available" as const, authenticated: true, account, accountIdentity });
+  function twins() {
+    const s = setup();
+    s.names.set("claude", { id: "claude", engine: "claude", number: 1, nickname: "hitecledtx", name: "hitecledtx" });
+    s.names.set(added, { id: added, engine: "claude", number: 2, nickname: "getwinkdev", name: "getwinkdev" });
+    s.rows()[0].status = signedIn("getwinkdev@example.test");
+    s.rows()[1].status = signedIn(" GetWinkDev@example.test ", "uuid-getwinkdev");
+    s.main(added);
+    s.accept("claude", report(50));
+    s.accept(added, report(51));
+    return s;
+  }
+  const names = (board: UsageBoard) => board.engines[0]!.accounts.map((row) => row.name);
+
+  it("shows a base signed in as an added account once, under the added account's name and numbers", async () => {
+    const s = twins();
+    const board = await s.board.read();
+    expect(board.engines[0]!.accounts.map((row) => row.id)).toEqual([added]);
+    expect(account(board, added)).toMatchObject({ name: "getwinkdev", nickname: "getwinkdev", main: true, windows: [{ usedPercent: 51 }, { usedPercent: 40 }] });
+    expect(board.engines[0]!.duplicates).toEqual(["claude"]);
+    expect(JSON.stringify(board)).not.toContain("hitecledtx");
+  });
+
+  it("matches on the account uuid when both rows report one, else on the email", async () => {
+    const s = twins();
+    s.rows()[0].status = signedIn("getwinkdev@example.test", "uuid-other");
+    expect(names(await s.board.read())).toEqual(["hitecledtx", "getwinkdev"]);
+    s.rows()[0].status = signedIn("getwinkdev@example.test", "uuid-getwinkdev");
+    expect(names(await s.board.read())).toEqual(["getwinkdev"]);
+  });
+
+  it("keeps the base's own nickname when its sign-in matches no added account", async () => {
+    const s = twins();
+    s.rows()[0].status = signedIn("hitecledtx@example.test");
+    const board = await s.board.read();
+    expect(names(board)).toEqual(["hitecledtx", "getwinkdev"]);
+    expect(board.engines[0]!.duplicates).toBeUndefined();
+    s.rows()[0].status = { state: "available", authenticated: false, account: "getwinkdev@example.test" };
+    expect(names(await s.board.read())).toEqual(["hitecledtx", "getwinkdev"]);
+  });
+
+  it("keeps the base's row while it is Main, has a busy bot or runs workers", async () => {
+    const s = twins();
+    s.main("claude");
+    expect(names(await s.board.read())).toEqual(["hitecledtx", "getwinkdev"]);
+    expect(account(await s.board.read()).main).toBe(true);
+    s.main(added);
+    s.board.turnStarted({ turnId: "t", botId: "atlas", accountId: "claude", generation: 0 });
+    expect(names(await s.board.read())).toEqual(["hitecledtx", "getwinkdev"]);
+    s.board.turnSettled("t");
+    const run = { botId: "atlas", paneId: "pane-1", label: "ATLAS-1", engine: "claude" as const, accountId: "claude", accountGeneration: 0, state: "busy" as const };
+    s.runs.mockResolvedValue({ known: true, runs: [run] });
+    expect(account(await s.board.read()).workers).toHaveLength(1);
+    s.runs.mockResolvedValue({ known: false, reason: "timeout" });
+    expect(names(await s.board.read())).toEqual(["hitecledtx", "getwinkdev"]);
+    s.runs.mockResolvedValue({ known: true, runs: [] });
+    expect(names(await s.board.read())).toEqual(["getwinkdev"]);
+  });
+
+  it("answers full after a folded row comes back, so it returns with its history", async () => {
+    const s = twins();
+    await settle();
+    const folded = await s.board.read();
+    s.main("claude");
+    const shown = await s.board.read(folded.cursor);
+    expect(names(shown)).toEqual(["hitecledtx", "getwinkdev"]);
+    const next = await s.board.read(shown.cursor);
+    expect(next.full).toBe(true);
+    expect(account(next).history.fine).not.toEqual([]);
   });
 });

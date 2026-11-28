@@ -413,6 +413,61 @@ function global:prompt {
   return ["-NoLogo", ...(noProfile ? ["-NoProfile"] : []), "-NoExit", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
 }
 
+// Bash 4.4+ (for PS0) and zsh mark each prompt and each command start as workerShellArgs does for PowerShell, without its command hash; any other shell stays unmarked.
+const BASH_MARKS = [
+  'if [ -n "$ORBIT_SHELL_LOGIN" ]; then',
+  '  unset ORBIT_SHELL_LOGIN',
+  '  [ -r /etc/profile ] && . /etc/profile',
+  '  for __orbit_rc in ~/.bash_profile ~/.bash_login ~/.profile; do [ -r "$__orbit_rc" ] && { . "$__orbit_rc"; break; }; done',
+  '  unset __orbit_rc',
+  'else',
+  '  [ -r /etc/bash.bashrc ] && . /etc/bash.bashrc',
+  '  [ -r ~/.bashrc ] && . ~/.bashrc',
+  'fi',
+  'if (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 404 )); then',
+  '  __orbit_mark=0',
+  '  __orbit_prompt() { local __orbit_status=$?; __orbit_mark=$((__orbit_mark + 1)); printf \'\\033]133;D;%s;%s\\007\' "$ORBIT_PANE" "$__orbit_mark"; return $__orbit_status; }',
+  '  PROMPT_COMMAND="__orbit_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"',
+  '  PS0="\\e]133;C;$ORBIT_PANE;\\a$PS0"',
+  'fi',
+].join("\n");
+// Each file sources the user's own from their ZDOTDIR, then hands the next file back to this folder; the last one leaves theirs set.
+const zshFile = (name, extra = []) => [
+  ...(name === ".zshenv" ? ['ORBIT_ZDOTDIR="$ZDOTDIR"'] : []),
+  'ZDOTDIR="${ORBIT_USER_ZDOTDIR:-$HOME}"',
+  `[[ -r "$ZDOTDIR/${name}" ]] && . "$ZDOTDIR/${name}"`,
+  ...(name === ".zlogin" ? [] : ['ORBIT_USER_ZDOTDIR="$ZDOTDIR"', 'ZDOTDIR="$ORBIT_ZDOTDIR"']),
+  ...extra,
+].join("\n");
+const ZSH_MARKS = {
+  ".zshenv": zshFile(".zshenv", ['[[ -o interactive ]] || ZDOTDIR="$ORBIT_USER_ZDOTDIR"']),
+  ".zprofile": zshFile(".zprofile"),
+  ".zshrc": zshFile(".zshrc", [
+    "typeset -gi __orbit_mark=0",
+    "__orbit_precmd() { __orbit_mark+=1; printf '\\033]133;D;%s;%s\\007' \"$ORBIT_PANE\" \"$__orbit_mark\"; }",
+    "__orbit_preexec() { printf '\\033]133;C;%s;\\007' \"$ORBIT_PANE\"; }",
+    "autoload -Uz add-zsh-hook && add-zsh-hook precmd __orbit_precmd && add-zsh-hook preexec __orbit_preexec",
+    '[[ -o login ]] || ZDOTDIR="$ORBIT_USER_ZDOTDIR"',
+  ]),
+  ".zlogin": zshFile(".zlogin"),
+};
+
+/** Args and env that load the user's own startup files and then the prompt marks; null for a shell without them. */
+export function unixShellMarks(shell, dir, login, env) {
+  const name = path.basename(shell).replace(/\.exe$/i, "");
+  if (name === "bash") return { args: ["--rcfile", path.join(dir, "orbit.bash")], env: login ? { ORBIT_SHELL_LOGIN: "1" } : {} };
+  if (name === "zsh") return { args: login ? ["-l"] : [], env: { ZDOTDIR: path.join(dir, "zsh"), ORBIT_USER_ZDOTDIR: env.ZDOTDIR || env.HOME || "" } };
+  return null;
+}
+
+export function writeShellMarks(root = os.tmpdir()) {
+  const dir = fs.mkdtempSync(path.join(root, "orbit-shell-"));
+  fs.writeFileSync(path.join(dir, "orbit.bash"), BASH_MARKS + "\n", { mode: 0o600 });
+  fs.mkdirSync(path.join(dir, "zsh"), { mode: 0o700 });
+  for (const [name, text] of Object.entries(ZSH_MARKS)) fs.writeFileSync(path.join(dir, "zsh", name), text + "\n", { mode: 0o600 });
+  return dir;
+}
+
 // X10/RXVT (ESC [ M + 3 bytes), SGR (ESC [ < ... M/m), focus (ESC [ I/O).
 // X10 trailing bytes bypass the CSI parser as printable text, so without
 // this they would read as typed input.
@@ -978,6 +1033,17 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     }).catch(() => {});
     return snapshot;
   };
+  // A job the shell left running outlives the prompt that showed it idle; read only when an account action asks.
+  const shellsWithChildren = async (shells) => {
+    if (!processes) return shells.length;
+    try {
+      const table = await processes.list();
+      const slack = platform === "win32" ? 0 : 999;
+      return shells.filter((session) => !Number.isInteger(session.pty.pid) || paneDescendants(table, session.pty.pid, session.startedAt, now(), slack).size > 0).length;
+    } catch {
+      return shells.length;
+    }
+  };
   const retireQuietly = (session, forceKill = false, keepNotes = false) => {
     void retire(session, forceKill, keepNotes).catch(() => {});
   };
@@ -1239,11 +1305,19 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       return;
     }
     session.pty = pty;
+    // The retry can land in the other place, and nothing rewrites the record until the bot types again.
+    if (session.botPane) paneRuns?.ranLocally(session.id, !pty.hosted?.());
     watchExit(session);
     if (Number.isInteger(pty.pid)) {
       try { setPriority(pty.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}
     }
     for (const text of session.command && !queued.includes(session.command) ? [session.command, ...queued] : queued) typeIntoPane(session, text);
+  };
+  let marksDir = null;
+  // A folder that can't be written leaves the shell unmarked, so its panes stay unknown.
+  const shellMarks = (shell, paneEnv) => {
+    try { marksDir ??= writeShellMarks(); } catch { return null; }
+    return unixShellMarks(shell, marksDir, platform === "darwin", paneEnv);
   };
   const start = async ({ key, event, input, folder, cwd, cancelPromise, botPane = false, worker = null }) => {
     const shell = platform === "win32"
@@ -1265,13 +1339,16 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     if (nick) {
       const scratch = path.resolve(scratchRoot, `wink-${nick}`);
       try {
-        await fs.promises.mkdir(scratch, { recursive: true });
+        // Only a folder Wink makes gets its mark: one already there may be a user's.
+        if (await fs.promises.mkdir(scratch, { recursive: true })) paneCleanup?.mark?.(scratch);
         for (const key of Object.keys(paneEnv)) if (/^(?:TEMP|TMP|TMPDIR)$/i.test(key)) delete paneEnv[key];
         Object.assign(paneEnv, { ORBIT_SCRATCH: scratch, TEMP: scratch, TMP: scratch, TMPDIR: scratch });
       } catch {}
     }
     if (botPane) await withClaudePaneEnv(Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) }));
-    const shellArgs = platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : platform === "darwin" && !managed ? ["-l"] : [];
+    const marks = platform !== "win32" && botPane && !managed ? shellMarks(shell, paneEnv) : null;
+    if (marks) Object.assign(paneEnv, marks.env);
+    const shellArgs = platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : marks ? marks.args : platform === "darwin" && !managed ? ["-l"] : [];
     const options = { name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32" };
     const local = () => loadPty().spawn(shell, shellArgs, options);
     // A bot pane runs in the worker host when one is connected; it never waits for one.
@@ -1300,7 +1377,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (!session.botPane) return;
       const [kind, markerId, value] = osc.startsWith("133;") ? osc.slice(4).split(";") : [];
       if (markerId !== session.id) return;
-      if (kind === "C" && /^[A-Za-z0-9+/]{43}=$/.test(value)) {
+      // A Unix shell's start mark carries no hash: it matches no command Wink typed.
+      if (kind === "C" && (value === "" || /^[A-Za-z0-9+/]{43}=$/.test(value))) {
         session.marked = true;
         session.shellExecuting = true;
         // Input consumed by a program never reaches the shell's reader.
@@ -1408,7 +1486,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         watchStalls(session);
       }
       if (session.botPane) paneRuns?.started({ id: session.id, botId: session.botId, teacher: session.teacher, label: session.label, cwd: session.cwd, baseHead: session.baseHead, spawnedAt: session.spawnedAt, session: session.workerFinished ? undefined : session.workerSession?.run,
-        worker: { engine: session.engine, executable: session.workerEngine, account: session.workerAccount, shell: session.shell, remote: session.remote } });
+        worker: { engine: session.engine, executable: session.workerEngine, account: session.workerAccount, shell: session.shell, remote: session.remote, local: session.pty.hosted?.() ? null : true } });
     }
     if (echo) session.pendingInputEcho = `${session.pendingInputEcho}${echo}`.slice(-INPUT_ECHO_LIMIT);
     if (session.respawn) {
@@ -1743,18 +1821,26 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       return count;
     },
-    livePanesForAccount(accountId) {
+    async livePanesForAccount(accountId) {
       let count = 0;
       let unknown = reservedPanes;
       const generations = {};
+      const prompts = [];
       for (const session of sessions.values()) {
         if (!session.botPane || session.retired || session.exitCode !== null || active.get(session.key) !== session.id) continue;
-        if (!session.workerAccount) { if (!session.workerAccountKnown) unknown++; continue; }
+        // Only a shell whose prompt marks show it idle is known to run no worker: a command Wink sent or the user started may run one on a login the host can't name.
+        if (!session.workerAccount) {
+          if (session.workerAccountKnown) continue;
+          if (session.command || session.worker || session.shellExecuting || !session.marked) unknown++;
+          else prompts.push(session);
+          continue;
+        }
         if (session.workerFinished || session.workerAccount.id !== accountId) continue;
         count++;
         const generation = session.workerAccount.generation;
         generations[generation] = (generations[generation] ?? 0) + 1;
       }
+      if (prompts.length) unknown += await shellsWithChildren(prompts);
       return { count, unknown, generations };
     },
     sendBot(botId, input, { person = false } = {}) {
@@ -1851,6 +1937,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Session ids cross the local proxy boundary.
       if (!match.ambiguous && typeof sessionId === "string" && wasClosedPane(botId, sessionId)) return Promise.resolve({ alreadyClosed: true });
+      // A pane a worker host out of reach may still run has no session here; its record goes, so nothing brings it back.
+      const held = match.ambiguous ? null : resolveBotSession(paneRuns?.heldBy(botId) ?? [], sessionId).session;
+      if (held && paneRuns.closed(held.id)) return Promise.resolve({ alreadyClosed: true });
       throw new Error("Unknown terminal");
     },
     async openForBot(botId, input = {}, recovery = null) {
@@ -2007,6 +2096,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (disposal) return disposal;
       disposed = true;
       paneCleanup?.dispose();
+      if (marksDir) fs.rm(marksDir, { recursive: true, force: true }, () => {});
       if (stallTimer) clearInterval(stallTimer);
       active.clear();
       const stopping = [...sessions.values()];

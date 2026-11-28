@@ -1,0 +1,16 @@
+{
+ "name": "calibration",
+ "base": "37614f2abb7dbc6652f99ff9208ffaf0d935fb6e",
+ "prereg": "recall-top2-v3",
+ "arms": [
+  {
+   "name": "sham",
+   "sham": true,
+   "patch": "sham.patch"
+  },
+  {
+   "name": "reversed",
+   "patch": "reversed.patch"
+  }
+ ]
+}

@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { turnWords } from "../shared/turn-index.ts";
@@ -7,6 +7,7 @@ import type { ModelSelection } from "./contracts.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
 import { turnIndex } from "./turn-index.ts";
+import { removeTestData } from "./testing/test-home.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-sonnet-5" });
 const user = (text: string, extra: Partial<Message> = {}) => ({ role: "user" as const, kind: "text" as const, text, ...extra });
@@ -14,7 +15,7 @@ const user = (text: string, extra: Partial<Message> = {}) => ({ role: "user" as 
 describe("turn index", () => {
   beforeEach(() => {
     closeMessageDb();
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    removeTestData(DATA_DIR);
     mkdirSync(DATA_DIR, { recursive: true });
   });
 

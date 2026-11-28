@@ -1,8 +1,8 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { newerRelease } from "../../shared/release-order";
+import { clipFacts } from "./testing/whats-new-clips";
 import { tilesOnly, unseenRelease, WHATS_NEW, type WhatsNewEntry } from "./whats-new";
 
 describe("unseen release notes", () => {
@@ -43,22 +43,6 @@ it("calls a worker 작업자 in Korean, as the rest of the app does", () => {
   expect(WHATS_NEW["1.0.263"].tiles[0].title.ko).toContain("작업자");
 });
 
-/** Frames of an animated WebP; 0 for a still one, null when the file is not a WebP. */
-function webpFrames(clip: string): number | null {
-  const bytes = readFileSync(join(".", clip));
-  if (bytes.toString("latin1", 0, 4) !== "RIFF" || bytes.toString("latin1", 8, 12) !== "WEBP") return null;
-  let animated = false;
-  let frames = 0;
-  for (let at = 12; at + 8 <= bytes.length; ) {
-    const size = bytes.readUInt32LE(at + 4);
-    const kind = bytes.toString("latin1", at, at + 4);
-    if (kind === "ANIM") animated = true;
-    if (kind === "ANMF") frames++;
-    at += 8 + size + (size & 1);
-  }
-  return animated ? frames : 0;
-}
-
 const ENFORCE_AFTER = "1.0.278";
 
 function stale(entries: Record<string, WhatsNewEntry>): string[] {
@@ -71,8 +55,8 @@ function stale(entries: Record<string, WhatsNewEntry>): string[] {
         tile.still && "is marked still",
         !("show" in tile && tile.show) && "has no show target",
         ...clips.map((clip) => {
-          const frames = webpFrames(clip);
-          return frames === null ? `${clip} is not a WebP` : frames < 2 ? `${clip} is not animated` : null;
+          const facts = clipFacts(join(".", clip));
+          return facts === null ? `${clip} is not a WebP or MP4` : facts.durations.length < 2 ? `${clip} is not animated` : null;
         }),
       ].filter(Boolean);
       if (why.length) found.push(`What's New tile ${version} needs a moving clip and a show target that opens the feature (see WhatsNewTile in src/lib/whats-new.ts): "${tile.title.en}" ${why.join(", ")}`);

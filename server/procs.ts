@@ -24,6 +24,8 @@ import { findCliCandidates, preferCli, resolveCliSpawn, type ResolvedSpawn } fro
 import { accountLaunch, type AccountContext } from "./account-policy.ts";
 import { shareUserSetup } from "./account-shared-setup.ts";
 
+export { killCliTree } from "./kill-cli-tree.ts";
+
 type AccountLaunchOptions = { account?: AccountContext; accountDriver?: string };
 type DirectStart = (launch: ResolvedSpawn, env: NodeJS.ProcessEnv) => (ResolvedSpawn & { env: NodeJS.ProcessEnv }) | null;
 
@@ -200,38 +202,6 @@ export function describeSpawnFailure(err: NodeJS.ErrnoException, cli: string, cw
   if (err.code === "ENAMETOOLONG" || err.code === "E2BIG")
     return { message: `spawn failed: command line too long for this OS (\`${cli}\`)`, setup: false };
   return { message: `spawn failed: ${err.message}`, setup: false };
-}
-
-/** Stop a CLI and every process it spawned (MCP proxies included). */
-export function killCliTree(child: ChildProcess, stopped?: () => void): void {
-  const pid = child.pid;
-  if (!pid || child.exitCode !== null || child.signalCode !== null) { stopped?.(); return; }
-
-  if (process.platform === "win32") {
-    execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, (err, _stdout, stderr) => {
-      if (!err) { stopped?.(); return; }
-      // The CLI can finish before taskkill starts.
-      if (child.exitCode !== null && err.code === 128 && /not found|not exist/i.test(String(stderr))) { stopped?.(); return; }
-      try {
-        // taskkill is unavailable or the tree lookup failed. At least stop
-        // the process we own instead of leaving the entire turn running.
-        child.kill();
-      } catch {
-        /* already gone */
-      }
-    });
-    return;
-  }
-  try {
-    process.kill(-pid, "SIGTERM");
-    stopped?.();
-  } catch {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      /* already gone */
-    }
-  }
 }
 
 /** Per-turn broker channel: unix socket on POSIX, named pipe on Windows

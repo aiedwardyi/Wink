@@ -16,6 +16,7 @@ function setGlobal(key: string, value: unknown) {
 setGlobal("window", happy);
 setGlobal("document", happy.document);
 setGlobal("navigator", happy.navigator);
+setGlobal("location", happy.location);
 setGlobal("HTMLElement", happy.HTMLElement);
 setGlobal("HTMLInputElement", happy.HTMLInputElement);
 setGlobal("HTMLButtonElement", happy.HTMLButtonElement);

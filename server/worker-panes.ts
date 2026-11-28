@@ -58,7 +58,9 @@ export async function workerLaunchResponse(access: TerminalBridgeAccess | null, 
 }
 
 export async function livePanesForAccount(access: TerminalBridgeAccess | null, accountId: string, fetchImpl: typeof fetch = fetch) {
-  if (!access || !isInstanceId(accountId)) return { count: 0, unknown: 1, generations: {} };
+  // Bot panes open only through the bridge: without one, as in the browser-only launch, there are none.
+  if (!access) return { count: 0, unknown: 0, generations: {} };
+  if (!isInstanceId(accountId)) return { count: 0, unknown: 1, generations: {} };
   try {
     const response = await fetchImpl(`${access.url}/v1/terminal/account-panes?accountId=${encodeURIComponent(accountId)}`, {
       headers: { authorization: `Bearer ${terminalPaneCountsGrant(access.token)}` }, redirect: "error", signal: AbortSignal.timeout(5_000),

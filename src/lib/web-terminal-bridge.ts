@@ -214,7 +214,7 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     close();
     const abort = new AbortController();
     stream = abort;
-    const qs = sessionId ? `?${new URLSearchParams({ sessionId })}` : "";
+    const qs = `?${new URLSearchParams(sessionId ? { sessionId } : { main: "1" })}`;
     return new Promise((resolve, reject) => {
       let first = true;
       void (async () => {
@@ -361,7 +361,8 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     const controller = new AbortController();
     paneRequest = controller;
     try {
-      return await request(`${base}?panes=1`, { signal: controller.signal }).catch(() => null);
+      // Uncached: Chromium would queue it behind the workspace's identical read still waiting on headers.
+      return await request(`${base}?panes=1`, { signal: controller.signal, cache: "no-store" }).catch(() => null);
     } finally {
       if (paneRequest === controller) paneRequest = null;
     }
@@ -387,8 +388,8 @@ export function createWebTerminalBridge(botId: string): WebTerminalBridge {
     panes = now;
   };
 
-  const readBot = async (id: string) => {
-    const snapshot = await request(`/api/bots/${encodeURIComponent(id)}/terminal`);
+  const readBot = async (id: string, options?: { panesOnly?: boolean }) => {
+    const snapshot = await request(`/api/bots/${encodeURIComponent(id)}/terminal${options?.panesOnly ? "?panes=1" : ""}`);
     if (id === botId && Array.isArray(snapshot?.panes)) panes = new Set(snapshot.panes.filter((pane: { main: boolean }) => !pane.main).map((pane: { sessionId: string }) => pane.sessionId));
     return snapshot;
   };

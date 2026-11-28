@@ -12,6 +12,7 @@ const FOLLOW_MS = 10 * 60_000;
 const NICK_RE = /^[A-Z0-9][A-Z0-9-]{0,63}$/;
 const KEEP_RE = /^(?:rel-|nm-)|^(?:relay-deploy|release-gate)$/i;
 const BACKUP_RE = /^\.pane-cleanup-/i;
+const MARK = ".wink-scratch";
 const RECHECK = new Set(["dirty", "unpushed"]);
 const SETTLE_MS = 50;
 // Past this many waiting changes of its own a busy folder is walked again instead of remembered change by change.
@@ -135,6 +136,13 @@ async function writtenSince(file, since, stats, walk) {
   return false;
 }
 
+function through(names, file) {
+  for (let end = file.length; end > 0; end = file.lastIndexOf(path.sep, end - 1)) if (names.has(file.slice(0, end))) return true;
+  return false;
+}
+
+const into = (target, name, link) => !!link && !contains(target, name) && (contains(target, link.destination) || (!!link.real && contains(target, link.real)));
+
 async function resolvePin(file) {
   try { return await fsp.realpath(file); } catch (error) {
     if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error;
@@ -255,7 +263,7 @@ export async function readCleanupPins(dataDir) {
   return pins;
 }
 
-export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot = path.join(home, "orbit-wt"), pinned = [], now = Date.now, retryMs = 60_000, schedule = setTimeout, cancel = clearTimeout, setPriority = os.setPriority, instance = process.defaultApp ? process.env.OMB_USER_DATA || "dev" : "app", budget = SWEEP_BUDGET, peakFile = null, warn = () => {} }) {
+export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot = path.join(home, "orbit-wt"), pinned = [], now = Date.now, retryMs = 60_000, schedule = setTimeout, cancel = clearTimeout, setPriority = os.setPriority, instance = process.defaultApp ? process.env.OMB_USER_DATA || "dev" : "app", budget = SWEEP_BUDGET, peakFile = null, cpu = () => 0, warn = () => {} }) {
   tempRoot = resolveTempRoot(tempRoot);
   const git = (cwd, args) => runGit(cwd, args, setPriority);
   const file = path.join(home, ".orbit", "pane-ledger.json");
@@ -290,7 +298,10 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     try { return await run(context); } finally {
       live.delete(context);
       if (stopped || !context.index || context.index.stale || context.index.doubt) context.close();
-      else linkIndex = context.index;
+      else {
+        linkIndex = context.index;
+        linkIndex.rest = cpu();
+      }
     }
   };
   const save = () => {
@@ -322,7 +333,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     await record(kind, target, { ...detail, reason });
   };
   const scratchFor = async (entry, norm) => {
-    const name = nick(entry.label);
+    const name = entry.orphan ? path.basename(entry.scratch).slice(5) : nick(entry.label);
     if (!name || !path.isAbsolute(entry.tempRoot)) return null;
     const target = path.resolve(entry.tempRoot, `wink-${name}`);
     return await norm(path.dirname(target)) === await norm(entry.tempRoot) && target === entry.scratch ? target : null;
@@ -331,8 +342,15 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     const label = nick(entry.label);
     // One memo per recheck: sharing it across rechecks would hide a re-pointed junction.
     const parents = new Map();
-    for (const pane of await panes()) if (nick(pane.label) === label || contains(target, await normalizeAsync(pane.cwd, parents)) || contains(target, await normalizeAsync(await resolvePin(pane.cwd), parents))) return true;
+    for (const pane of await panes()) if ((label && nick(pane.label) === label) || contains(target, await normalizeAsync(pane.cwd, parents)) || contains(target, await normalizeAsync(await resolvePin(pane.cwd), parents))) return true;
     return false;
+  };
+  // A mark names the Wink and the folder it was made for, so a copied mark or another Wink's is not this one's.
+  const ours = async (scratch, norm) => {
+    try {
+      const mark = JSON.parse(await fsp.readFile(path.join(scratch, MARK), "utf8"));
+      return mark.instance === instance && await norm(mark.scratch) === await norm(scratch);
+    } catch { return false; }
   };
   const finishScratch = async (target, owner, norm) => {
     const normalized = await norm(target);
@@ -368,6 +386,9 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
         return;
       }
       if (!await directory(target)) return;
+      // A folder no pane owned goes only if this Wink made it and nothing wrote to it for a day.
+      if (entry.orphan && !await ours(target, context.norm)) { entry.scratchDone = true; return; }
+      if (entry.orphan && await writtenSince(target, now() - DAY_MS, context.stats, { left: Infinity })) { entry.closedAt = now(); return; }
       const linked = await linkedInto(target, context);
       if (linked) return kept(entry, target, linked.reason, linked);
       if (!await unlinkLinks(target, new Set(), current)) return;
@@ -390,7 +411,26 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       } else warn(error);
     }
   };
-  const drop = (index, name) => { for (const key of index.links.keys()) if (contains(name, key)) index.links.delete(key); };
+  const hold = (counts, name, delta, self = false) => {
+    for (let end = self ? name.length : name.lastIndexOf(path.sep); end > 0; end = name.lastIndexOf(path.sep, end - 1)) {
+      const dir = name.slice(0, end);
+      const count = (counts.get(dir) ?? 0) + delta;
+      if (count) counts.set(dir, count);
+      else counts.delete(dir);
+    }
+  };
+  const forget = (index, name) => {
+    const link = index.links.get(name);
+    if (!link) return;
+    index.links.delete(name);
+    hold(index.holders, name, -1);
+    hold(index.targets, link.destination, -1, true);
+  };
+  // Most changes are files; only a folder holding links needs the scan.
+  const drop = (index, name) => {
+    forget(index, name);
+    if (index.holders.has(name)) for (const key of index.links.keys()) if (contains(name, key)) forget(index, key);
+  };
   const inspect = async (context, file, name, top = null, deep = true, section = null) => {
     const { index, cache, stats } = context;
     if (index.skip && contains(index.skip.name, name)) { index.skip.seen = true; return; }
@@ -405,7 +445,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       index.sections.delete(name);
     }
     if (gone) return drop(index, name);
-    if (!stat?.isSymbolicLink()) index.links.delete(name);
+    if (!stat?.isSymbolicLink()) forget(index, name);
     if (!stat) return;
     if (stat.isSymbolicLink()) {
       stats.links++;
@@ -419,9 +459,12 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       const link = { file, destination: await normalizeAsync(destination, index.parents), real };
       const before = index.links.get(name);
       if (!before || before.destination !== link.destination || before.real !== link.real) {
-        index.relinked = true;
+        index.relinked.set(name, !!before);
         index.touched = true;
       }
+      if (before) hold(index.targets, before.destination, -1, true);
+      else hold(index.holders, name, 1);
+      hold(index.targets, link.destination, 1, true);
       index.links.set(name, link);
       return;
     }
@@ -472,7 +515,9 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     const lost = () => { if (base) note(base, true); else index.doubt ||= "lost"; };
     // A root is watched one level deep with a watcher per top folder, so deleting one floods no other.
     const watcher = fs.watch(dir, { recursive: !!base }, (type, rel) => {
-      if (!["rename", "change"].includes(type)) index.doubt ||= "event";
+      // Watching a resting index past what building it cost is dearer than building it again.
+      if (index === linkIndex && cpu() - index.rest > index.cost) { linkIndex = null; shut(index); }
+      else if (!["rename", "change"].includes(type)) index.doubt ||= "event";
       else if (rel == null) lost();
       // A deleted folder's watcher names its own path without end.
       else if (path.isAbsolute(rel)) { watcher.close(); lost(); }
@@ -501,9 +546,10 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   };
   const watched = (index, file) => index.roots.some((root) => contains(root.normalized, file) && (!root.temp || path.relative(root.normalized, file).startsWith("wink-")));
   const build = async (context, roots, key, skip) => {
-    const index = { key, roots: [], links: new Map(), changes: new Map(), waiting: new Map(), parents: new Map(), stale: !WATCH, doubt: false, touched: false, relinked: false, watchers: [], sections: new Map(), skip };
+    const index = { key, roots: [], links: new Map(), holders: new Map(), targets: new Map(), changes: new Map(), waiting: new Map(), parents: new Map(), stale: !WATCH, doubt: false, touched: false, relinked: new Map(), watchers: [], sections: new Map(), skip };
     context.index = index;
     context.stats.builds++;
+    const spent = cpu();
     const { dirs } = context.stats;
     const begun = performance.now();
     for (const root of roots) index.roots.push({ ...root, normalized: await normalizeAsync(root.file, index.parents), id: await rootId(root.file) });
@@ -516,6 +562,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       context.built.dirs += context.stats.dirs - dirs;
       context.built.ms += performance.now() - begun;
     }
+    index.cost = cpu() - spent;
   };
   const refresh = async (context, normalized, links) => {
     const { index } = context;
@@ -526,7 +573,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
       if (index.doubt) return;
       index.touched = false;
-      index.relinked = false;
+      index.relinked.clear();
       if (index.skip && index.skip.name !== normalized) {
         const { file, name, seen } = index.skip;
         index.skip = null;
@@ -553,11 +600,12 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
         if (deep) { drop(index, name); walked.add(name); }
         await inspect(context, file, name, null, deep, relative.includes(path.sep) ? null : root);
       }
-      // A re-pointed link can redirect any target resolved through it.
-      if (links && index.relinked) for (const [name, link] of index.links) await inspect(context, link.file, name, null, false);
+      // A re-pointed link only redirects links that already resolve away from their destination; a new one can also land on a direct link's path.
+      const added = new Set([...index.relinked].filter(([name, was]) => !was && index.targets.has(name)).map(([name]) => name));
+      if (links && index.relinked.size) for (const [name, link] of index.links) if (link.real !== link.destination || (added.size && through(added, link.destination))) await inspect(context, link.file, name, null, false);
       if (!index.touched) return;
     }
-    index.doubt ||= "unsettled";
+    // A busy PC never goes quiet, so the last pass stands: a link it moved into the target is in the index.
   };
   const resolveLinks = async ({ index, stats }) => {
     // Only a link through another link or out of the watched folders can be re-pointed unseen.
@@ -603,7 +651,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
         context.index.sections.delete(normalized);
         context.index.skip = { file: target, name: normalized, seen: true };
       }
-      for (const [name, link] of context.index.links) if (!contains(normalized, name) && (contains(normalized, link.destination) || (link.real && contains(normalized, link.real)))) return { reason: "linked", link: link.file };
+      for (const [name, link] of context.index.links) if (into(normalized, name, link)) return { reason: "linked", link: link.file };
       return null;
     } catch (error) {
       // A walk cut short leaves an index that misses links.
@@ -793,6 +841,15 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   };
   // A worktree no pane ever opened in has no row; the repos the ledger knows list them.
   const discover = async ({ norm }) => {
+    // Scratch this Wink made that no row owns waits a day like a closed pane.
+    const owned = new Set();
+    for (const entry of entries) if (entry.scratch) owned.add(await norm(entry.scratch));
+    let found = [];
+    try { found = await fsp.readdir(tempRoot, { withFileTypes: true }); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    for (const { name } of found.filter((item) => item.isDirectory() && item.name.startsWith("wink-"))) {
+      const scratch = path.join(tempRoot, name);
+      if (!owned.has(await norm(scratch)) && await ours(scratch, norm)) entries.push({ id: `scratch:${scratch}`, instance, cwd: scratch, tempRoot, scratch, label: name.slice(5), openedAt: now(), closedAt: now(), keep: false, reported: false, worktreeDone: true, orphan: true });
+    }
     const repos = new Set(entries.map((entry) => entry.repo).filter(Boolean));
     if (!repos.size) return;
     const root = await norm(worktreeRoot);
@@ -862,6 +919,9 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       entries.push({ id: session.id, instance, botId: session.botId, label: session.label, cwd: session.cwd, tempRoot: root, scratch: nick(session.label) ? path.resolve(root, `wink-${nick(session.label)}`) : null, openedAt: now(), closedAt: null, keep: false, reported: false });
       save();
       peak?.live(entries.filter((entry) => !entry.closedAt && entry.instance === instance).length);
+    },
+    mark(scratch) {
+      try { fs.writeFileSync(path.join(scratch, MARK), JSON.stringify({ instance, scratch }), { mode: 0o600 }); } catch (error) { warn(error); }
     },
     exited(session) {
       const entry = entries.findLast((candidate) => candidate.id === session.id);
@@ -949,6 +1009,7 @@ export function createPaneCleanupWorker({ warn = () => {}, instance = process.de
   worker.unref();
   return {
     opened: (session) => post({ type: "opened", session: pick(session) }),
+    mark: (scratch) => post({ type: "mark", scratch }),
     exited: (session) => post({ type: "exited", session: pick(session) }),
     closed: (session, keep = false) => call("closed", { session: pick(session), keep }),
     start(openPanes) {
@@ -973,14 +1034,17 @@ if (!isMainThread && workerData?.paneCleanup) {
     asks.set(id, resolve);
     parentPort.postMessage({ type: "panes", id });
   });
-  const cleanup = createPaneCleanup({ ...options, peakFile: path.join(dataDir, "worker-peak.json"), pinned: () => readCleanupPins(dataDir), warn: (error) => parentPort.postMessage({ type: "warn", error: error?.stack || String(error) }) });
-  parentPort.on("message", async ({ type, id, session, keep, panes: open }) => {
+  // The worker has its thread to itself, so that thread's CPU at rest is what the watchers cost.
+  const cpu = () => { const { user, system } = process.threadCpuUsage(); return (user + system) / 1_000; };
+  const cleanup = createPaneCleanup({ ...options, cpu, peakFile: path.join(dataDir, "worker-peak.json"), pinned: () => readCleanupPins(dataDir), warn: (error) => parentPort.postMessage({ type: "warn", error: error?.stack || String(error) }) });
+  parentPort.on("message", async ({ type, id, session, keep, scratch, panes: open }) => {
     if (type === "panes") {
       asks.get(id)?.(open);
       asks.delete(id);
       return;
     }
     if (type === "opened") cleanup.opened(session);
+    else if (type === "mark") cleanup.mark(scratch);
     else if (type === "exited") cleanup.exited(session);
     else if (type === "start") cleanup.start(panes);
     else if (type === "closed") await cleanup.closed(session, keep);

@@ -179,6 +179,8 @@ declare global {
       setUnreadCount?(count: number): void;
       /** Windows taskbar progress while any bot turn is running. */
       setTaskbarBusy?(busy: boolean): void;
+      /** Window zoom factor (Ctrl/Cmd +/-); devicePixelRatio is this times the display scale. */
+      zoomFactor?(): number;
       /** Open image preview takes Ctrl/Cmd +/-/0 until it closes. */
       imageZoom?: {
         own(owned: boolean): void;
@@ -204,7 +206,7 @@ declare global {
       }) => void): () => void;
       /** Another PC's Orbit in its own sandboxed window; focuses it when already open. */
       deviceWindow?: {
-        open(host: string, name: string): Promise<boolean>;
+        open(host: string, name: string, relayHost?: string): Promise<boolean>;
       };
       /** Native folder picker; resolves null when the user cancels. */
       pickFolder?(current?: string): Promise<string | null>;
@@ -213,7 +215,8 @@ declare global {
       exportDiagnostics?(): Promise<string | null>;
       errorReportConsent?(): Promise<boolean | null>;
       setErrorReportConsent?(enabled: boolean): Promise<boolean>;
-      captureErrorReport?(site: number): void;
+      /** A report keeps only the error name and bundle frame from the detail. */
+      captureErrorReport?(site: number, detail: { name: string; message: string; stack: string }): void;
       /** Opens a local file in its default app, or reveals it when its
        * type could run. A relative link passes its bot folder as `base`,
        * and the file must stay inside it. */

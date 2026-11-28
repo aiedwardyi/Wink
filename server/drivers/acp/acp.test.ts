@@ -30,6 +30,7 @@ import { ProviderRegistry } from "../../harness/registry.ts";
 import * as procs from "../../procs.ts";
 import { createWarmPool, type WarmPool } from "../warm-pool.ts";
 import { acpConnection } from "./connection.ts";
+import { AGENTS_IDENTITY, AGENTS_PROXY, CATALOG_ONLY, listAgentsTools, schemaChars } from "../../testing/agents-tools.ts";
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -1139,19 +1140,34 @@ describe("SPEED4 warm session reuse (fake CLI)", () => {
     expect(rpc.filter((m) => m === "initialize").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("preserves billing across warm reuse", async () => {
+  it("reads billing at most once a minute across warm reuse", async () => {
     process.env.FAKE_ACP_BILLING_END = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
-    await createWarm("happy");
-    const t1 = await instance.adapter.sendTurn({ threadId: "t-bill", text: "one" });
-    await recorder.until((e) => e.type === "turn.completed" && e.turnId === t1.turnId);
-    await recorder.until((e) => e.type === "account.rate-limits.updated");
-    const sessionId = sessionIdFor(t1.turnId);
-    const t2 = await instance.adapter.sendTurn({ threadId: "t-bill", text: "two", resumeCursor: sessionId });
-    await recorder.until((e) => e.type === "turn.completed" && e.turnId === t2.turnId);
-    // Second billing update for the follow-up turn.
-    await recorder.until(
-      (e) => e.type === "account.rate-limits.updated" && e.turnId === t2.turnId,
-    );
+    process.env.FAKE_ACP_RPC_DUMP = join(scratch, "bill-rpc.json");
+    writeFileSync(process.env.FAKE_ACP_RPC_DUMP, "[]");
+    const realNow = Date.now.bind(Date);
+    let skew = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    try {
+      await createWarm("happy");
+      const billed = (turnId: string) => recorder.events.some((e) => e.type === "account.rate-limits.updated" && e.turnId === turnId);
+      const turn = async (text: string, resumeCursor?: string) => {
+        const { turnId } = await instance.adapter.sendTurn({ threadId: "t-bill", text, resumeCursor });
+        await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+        return turnId;
+      };
+      const t1 = await turn("one");
+      expect(billed(t1)).toBe(true);
+      const sessionId = sessionIdFor(t1);
+      const t2 = await turn("two", sessionId);
+      expect(billed(t2)).toBe(false);
+      expect((await settledRpc()).filter((m) => m === "_x.ai/billing")).toHaveLength(1);
+      skew = 60_000;
+      const t3 = await turn("three", sessionId);
+      expect(billed(t3)).toBe(true);
+      expect((await settledRpc()).filter((m) => m === "_x.ai/billing")).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("preserves permission asks on a warm follow-up", async () => {
@@ -1501,6 +1517,28 @@ describe("ACP turns (fake CLI)", () => {
     expect(JSON.parse(readFileSync(`${dump}.cwd.json`, "utf8"))).toBe(scratch);
     const servers = JSON.parse(readFileSync(`${dump}.mcp.json`, "utf8"));
     expect(servers).toContainEqual(expect.objectContaining({ name: "agents", command: "C:\\tools\\agent-server.exe" }));
+  });
+
+  // Grok already reaches MCP tools through its own search_tool and use_tool
+  // (test/fixtures/recorded/grok/agents-allow-rule.json), so the catalog stays
+  // an opt-in here: ORBIT_WINK_TOOL_CATALOG=1 for the eval arm.
+  it.each(["", "0", "1"])("leaves Grok's agents tools to Grok's own tool search with catalog flag %s", async (flag) => {
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", flag);
+    await create(GrokAgentDriver);
+    const dump = join(scratch, "grok-catalog.json");
+    process.env.FAKE_ACP_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-grok-catalog", text: "hi", model: "grok-4.5", cwd: scratch, integrations: { agents: { command: process.execPath, args: [AGENTS_PROXY], env: AGENTS_IDENTITY } } });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    // SAFETY: the fake ACP CLI dumps session/new mcpServers as acp/core.ts built them
+    const servers = JSON.parse(readFileSync(`${dump}.mcp.json`, "utf8")) as { name: string; env: { name: string; value: string }[] }[];
+    const env = Object.fromEntries(servers.find((server) => server.name === "agents")!.env.map(({ name, value }) => [name, value]));
+    expect(env.OMB_WINK_TOOL_CATALOG).toBe(flag === "1" ? "1" : undefined);
+    if (flag === "") {
+      const tools = await listAgentsTools(env);
+      expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(CATALOG_ONLY));
+      expect(schemaChars(tools), "Wink's agents tool schemas Grok can search grew; measure before raising").toBeLessThanOrEqual(25_800);
+    }
+    vi.unstubAllEnvs();
   });
 
   it("emits each assistant text block before the tool that follows it", async () => {

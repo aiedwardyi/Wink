@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { AccountContext } from "./account-policy.ts";
-import type { InstanceConfigMap } from "./contracts.ts";
+import type { InstanceConfigMap, ProviderSnapshot } from "./contracts.ts";
 
 export const ACCOUNT_DRIVERS: readonly string[] = ["claudeAgent", "codex", "grokAgent"];
 const ACCOUNT_ID = /^acct_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -22,6 +22,8 @@ const stateSchema = z.object({
   version: z.literal(1), accounts: z.array(recordSchema), retired: z.array(z.string().regex(ACCOUNT_ID)),
   defaults: z.record(z.string().refine(isInstanceId), z.string().refine(isInstanceId)).optional(),
   drains: z.record(z.string().refine(isInstanceId), drainSchema).optional(),
+  // Bases the user signed out; while another account of the engine is listed, Usage and Connections leave them out.
+  signedOut: z.array(z.string().refine(isInstanceId)).optional(),
 }).strict();
 export type AccountDrain = z.infer<typeof drainSchema>;
 type SavedAccount = z.infer<typeof recordSchema>;
@@ -45,6 +47,14 @@ function plainDirectory(path: string, create: boolean) {
   if (!stat.isDirectory() || stat.isSymbolicLink() || canonical(realpathSync(path)) !== canonical(join(realpathSync(dirname(path)), basename(path)))) {
     throw new AccountError("Account home must not use a link or alias");
   }
+}
+
+export const MISSING_HOME: ProviderSnapshot = Object.freeze({ state: "available", authenticated: false, accountAuthenticated: false });
+
+// A saved home that went missing reads as signed out until Sign In creates it again (AccountService.openHome).
+// Only the home itself counts: when it exists, the provider's own auth check answers.
+export function missingAccountHome(account: AccountContext): boolean {
+  try { return ACCOUNT_ID.test(account.id) && !lstatSync(account.home, { throwIfNoEntry: false }); } catch { return false; }
 }
 
 export class AccountService {
@@ -73,11 +83,13 @@ export class AccountService {
     try {
       this.state = stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8")));
       this.validate(this.state);
-      if (this.state.accounts.length) {
+      const present = (path: string) => lstatSync(path, { throwIfNoEntry: false });
+      if (this.state.accounts.length && present(this.root)) {
         plainDirectory(this.root, false);
         for (const row of this.state.accounts) {
-          plainDirectory(this.home(row.id), false);
-          if (this.base(row.of).driver === "codex") plainDirectory(join(this.home(row.id), "state"), false);
+          const home = this.home(row.id);
+          if (present(home)) plainDirectory(home, false);
+          if (this.base(row.of).driver === "codex" && present(join(home, "state"))) plainDirectory(join(home, "state"), false);
         }
       }
       this.publish();
@@ -143,20 +155,27 @@ export class AccountService {
       }
       const drains = { ...this.state.drains };
       delete drains[id];
-      this.commit({ ...this.state, defaults, drains,
+      this.commit({ ...this.marked(id, true), defaults, drains,
         accounts: this.state.accounts.filter((row) => row.id !== id),
         retired: this.get(id) ? [...this.state.retired, id] : this.state.retired,
       });
     });
   }
 
-  list(): Array<{ id: string; of: string; driverKind: string; generation: number; existing: boolean; state: SavedAccount["state"]; error?: string }> {
+  list(): Array<{ id: string; of: string; driverKind: string; generation: number; existing: boolean; state: SavedAccount["state"]; error?: string; userSignedOut?: true }> {
     if (this.error) return [{ id: "accounts", of: "accounts", driverKind: "accounts", generation: 0, existing: false, state: "stopped", error: this.error }];
     return Object.entries(this.bases()).filter(([, entry]) => entry.enabled !== false && ACCOUNT_DRIVERS.includes(entry.driver))
-      .flatMap(([of, entry]) => [
-        { id: of, of, driverKind: entry.driver, generation: 0, existing: true, state: "ready" as const },
-        ...this.records.filter((row) => row.of === of).map((row) => ({ id: row.id, of, driverKind: entry.driver, generation: row.generation, existing: false, state: row.state })),
-      ]);
+      .flatMap(([of, entry]) => {
+        const base: ReturnType<AccountService["list"]>[number] = { id: of, of, driverKind: entry.driver, generation: 0, existing: true, state: "ready" };
+        if (this.state.signedOut?.includes(of)) base.userSignedOut = true;
+        return [base, ...this.records.filter((row) => row.of === of).map((row) => ({ id: row.id, of, driverKind: entry.driver, generation: row.generation, existing: false, state: row.state }))];
+      });
+  }
+
+  /** Any enabled engine signs in from its base; only ACCOUNT_DRIVERS also add accounts. */
+  isBase(id: string) {
+    const bases = this.bases();
+    return isInstanceId(id) && Object.hasOwn(bases, id) && bases[id].enabled !== false;
   }
 
   add(of: string): Promise<AccountRecord> {
@@ -202,7 +221,34 @@ export class AccountService {
     });
   }
 
+  /** A base the user signed out, or signed back in; any other id is left alone. */
+  markSignedOut(id: string, signedOut: boolean): Promise<void> {
+    if (this.error) return Promise.resolve();
+    return this.change(() => {
+      const next = this.marked(id, signedOut);
+      if (next !== this.state) this.commit(next);
+    });
+  }
+
+  // The only path that brings a missing saved home back: Sign In on an account still in the store.
+  openHome(id: string) {
+    const row = this.require(id);
+    for (const path of [this.root, row.home, ...this.base(row.of).driver === "codex" ? [join(row.home, "state")] : []]) {
+      plainDirectory(path, !lstatSync(path, { throwIfNoEntry: false }));
+    }
+  }
+
   validateBases(bases = this.bases()) { if (!this.error) this.validate(this.state, bases); }
+
+  private marked(id: string, signedOut: boolean): State {
+    const bases = this.bases();
+    const marks = this.state.signedOut ?? [];
+    if (this.get(id) || !Object.hasOwn(bases, id) || !ACCOUNT_DRIVERS.includes(bases[id].driver) || marks.includes(id) === signedOut) return this.state;
+    const next = signedOut ? [...marks, id] : marks.filter((mark) => mark !== id);
+    const state: State = { ...this.state, signedOut: next };
+    if (!next.length) delete state.signedOut;
+    return state;
+  }
 
   private require(id: string): AccountRecord {
     const row = this.get(id);

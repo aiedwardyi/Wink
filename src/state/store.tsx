@@ -26,7 +26,7 @@ import { answerText } from "../../shared/open-question";
 import { canAnswerCard } from "@/lib/open-question";
 import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
-import { currentCall } from "@/lib/call";
+import { currentCall, turnCompleted } from "@/lib/call";
 import { queueCancelled } from "@/lib/live-call/active";
 import { showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
@@ -43,10 +43,14 @@ import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
 import { joinedRoomIdOf, roomFileRefusal } from "@/lib/team-rooms";
+import { noteJoinedFrame } from "@/lib/joined-rooms";
 import { BOARD_CHANGED_EVENT, isForumSelection } from "@/lib/board";
 import { closeGroupArchive, groupTaskTicket, showGroupTask } from "@/lib/group-archive";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
+import { noteDispatch, reportChatSwitch } from "@/lib/chat-switch-diag";
 import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
+import { relaySignInSite } from "@/lib/devices-setup";
+import { leaveSignedOut, sessionLive, sessionState } from "@/lib/signed-out";
 import { trackReplyText, trackStream } from "@/lib/usage-stats";
 import { trackAction } from "@/lib/usage-stats-actions";
 import { holdReload } from "@/lib/reload-hold";
@@ -63,8 +67,11 @@ import {
   dropIdleAcceptedThinking,
   forgetAcceptedSend,
   hasAcceptedThinking,
+  nextSendSeq,
+  noteServerTime,
   receiptRejectsAcceptedSend,
   rememberAcceptedSend,
+  sendClock,
   settleAcceptedSend,
   shouldDropQueueChip,
 } from "@/lib/send-accept";
@@ -190,6 +197,60 @@ function consumeFocus(state: AppState, threadId?: string): AppState {
   const focus = state.focusMessage;
   if (!focus || focus.consumed || (threadId !== undefined && focus.threadId !== threadId)) return state;
   return { ...state, focusMessage: { ...focus, consumed: true } };
+}
+
+// a late ping can lower the estimate while an earlier line in this chat is still on its way
+function threadSendClock(state: AppState, threadId: string, messages?: readonly Message[]): number {
+  let at = sendClock(messages);
+  for (const send of state.acceptedSends[threadId] ?? []) {
+    if (!send.after && !send.waited) at = Math.max(at, send.at ?? 0);
+  }
+  for (const send of state.pendingQueued[threadId] ?? []) {
+    if (!send.waited && send.reason !== "sync") at = Math.max(at, send.at ?? 0);
+  }
+  return at;
+}
+
+// one sent time and send order per line, kept through Send now, so a reload draws it where it was drawn
+type SendStamps = { sequences: Map<string, number>; times: Map<string, number> };
+
+function reserveSend(stamps: SendStamps, threadId: string, at: number, knownSeq: number, seq: number | undefined, waited?: boolean) {
+  const previousSeq = stamps.sequences.get(threadId) ?? 0;
+  const sendSeq = seq ?? Math.max(knownSeq, previousSeq + 1);
+  stamps.sequences.set(threadId, Math.max(sendSeq, previousSeq));
+  if (!waited) stamps.times.set(threadId, Math.max(at, stamps.times.get(threadId) ?? 0));
+  return { actedAt: at, sendSeq };
+}
+
+function stampSend(state: AppState, send: Extract<Action, { type: "send" }>, stamps: SendStamps): typeof send {
+  const bot = state.bots.find((candidate) => candidate.id === send.botId);
+  const threadId = send.threadId ?? bot?.threadId ?? "";
+  const messages = bot && bot.threadId === threadId ? visibleMessages(bot) : undefined;
+  const held = send.queueId ? state.pendingQueued[threadId]?.find((entry) => entry.queueId === send.queueId) : undefined;
+  const at = send.actedAt ?? held?.at ?? Math.max(threadSendClock(state, threadId, messages), stamps.times.get(threadId) ?? 0);
+  const knownSeq = nextSendSeq(bot?.threadId === threadId ? bot.messages : undefined, state.acceptedSends[threadId], state.pendingQueued[threadId]);
+  // null means "first line of the chat", so an unloaded transcript sends no anchor and falls back to time order
+  const anchor = !messages || (bot?.hasMore && !messages.length) ? undefined : messages.at(-1)?.id ?? null;
+  return {
+    ...send,
+    ...reserveSend(stamps, threadId, at, knownSeq, send.sendSeq ?? held?.sendSeq, send.after || held?.waited || held?.reason === "sync"),
+    sentAfterId: send.sentAfterId !== undefined ? send.sentAfterId : held ? held.sentAfterId : anchor,
+  };
+}
+
+function stampGroupSend(state: AppState, send: Extract<Action, { type: "sendGroup" }>, stamps: SendStamps): typeof send {
+  const group = state.groups.find((candidate) => candidate.id === send.groupId);
+  const threadId = send.threadId ?? group?.threadId ?? "";
+  const releasingHold = send.waited && group && !group.hosted;
+  const messages = group?.threadId === threadId ? group.messages : undefined;
+  const at = (releasingHold ? undefined : send.actedAt) ?? Math.max(threadSendClock(state, threadId, messages), stamps.times.get(threadId) ?? 0);
+  const waited = releasingHold ? undefined : send.waited;
+  return {
+    ...send,
+    ...reserveSend(stamps, threadId, at, nextSendSeq(messages, state.acceptedSends[threadId]), send.sendSeq, waited),
+    waited,
+    sentAfterId: group?.hosted ? undefined : !releasingHold && send.sentAfterId !== undefined ? send.sentAfterId : messages?.at(-1)?.id ?? null,
+  };
 }
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -772,7 +833,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         pendingQueued: {
           ...state.pendingQueued,
-          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, at: action.at, sendId: action.sendId, replyToId: action.replyToId, reason: action.reason }],
+          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, at: action.at, sendId: action.sendId, replyToId: action.replyToId, reason: action.reason, waited: action.waited, sendSeq: action.sendSeq, sentAfterId: action.sentAfterId }],
         },
       };
     }
@@ -818,7 +879,9 @@ export function reducer(state: AppState, action: Action): AppState {
           sendId,
           kind: paint.kind,
           text: action.text,
-          at: Date.now(),
+          at: action.actedAt ?? sendClock(bot.messages),
+          sendSeq: action.sendSeq,
+          sentAfterId: action.sentAfterId,
           after: action.after,
         }),
       };
@@ -842,7 +905,10 @@ export function reducer(state: AppState, action: Action): AppState {
           sendId,
           kind: paint.kind,
           text: action.text,
-          at: Date.now(),
+          at: action.actedAt ?? sendClock(group.messages),
+          sendSeq: action.sendSeq,
+          sentAfterId: action.sentAfterId,
+          waited: action.waited,
           replyToId: action.replyToId,
           posting: true,
         }),
@@ -1069,9 +1135,9 @@ export const initialState: AppState = {
  * smaller page can leave a first screen with only a handful of bubbles. */
 export const MESSAGE_PAGE = 200;
 
-export function api(path: string, init?: RequestInit): Promise<any> {
-  const call = request(path, init);
-  const method = init?.method?.toUpperCase() ?? "GET";
+export function api(...args: Parameters<typeof request>): Promise<any> {
+  const call = request(...args);
+  const method = args[1]?.method?.toUpperCase() ?? "GET";
   return method === "GET" || method === "HEAD" ? call : holdReload(call);
 }
 
@@ -1136,6 +1202,7 @@ const DispatchContext = createContext<React.Dispatch<Action> | null>(null);
 const StoreContext = createContext<{
   state: AppState;
   dispatch: React.Dispatch<Action>;
+  reconnectLive: () => void;
   /** Commit any debounced profile edits before an operation reads the bot. */
   flushBotPatches: (botId: string) => Promise<void>;
   /** `passive` re-probes without starting WSL; true allows WSL; default reads the last check. */
@@ -1146,9 +1213,28 @@ const StoreContext = createContext<{
 
 const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 
+// Every path that moves the open chat goes through here (CHAT-JUMP diag).
+function tracedReducer(state: AppState, action: Action): AppState {
+  const next = reducer(state, action);
+  if (state.selectedId && next.selectedId !== state.selectedId) reportChatSwitch(action, state.selectedId, next.selectedId);
+  return next;
+}
+
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [state, rawDispatch] = useReducer(reducer, initialState, withCachedSnapshot);
+  const [state, reactDispatch] = useReducer(tracedReducer, initialState, withCachedSnapshot);
+  const rawDispatch = useCallback((action: Action) => {
+    noteDispatch(action);
+    reactDispatch(action);
+  }, []);
   const stateRef = useRef(state);
+  const reconnectLiveRef = useRef<(() => void) | null>(null);
+  const reconnectLive = useCallback(() => {
+    trackStream(false);
+    rawDispatch({ type: "connected", value: false });
+    reconnectLiveRef.current?.();
+  }, []);
+  const sendStamps = useRef<SendStamps>({ sequences: new Map(), times: new Map() });
+  if (stateRef.current !== state) sendStamps.current.times.clear();
   const viewedReplies = useRef(createViewedReplies());
   stateRef.current = state;
   useMascotMotionExpiry(state.mascotMotion?.nonce, rawDispatch);
@@ -1398,7 +1484,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       searchLanding.current = null;
     };
 
-    const wrapped: React.Dispatch<Action> = (rawAction) => {
+    const wrapped: React.Dispatch<Action> = (dispatched) => {
+      const rawAction: Action = dispatched.type === "send" ? stampSend(stateRef.current, dispatched, sendStamps.current) : dispatched.type === "sendGroup" ? stampGroupSend(stateRef.current, dispatched, sendStamps.current) : dispatched;
       const action =
         (rawAction.type === "send" || rawAction.type === "sendGroup") && !rawAction.sendId
           ? { ...rawAction, sendId: crypto.randomUUID() }
@@ -1482,7 +1569,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "send": {
-          const actedAt = Date.now();
+          const actedAt = action.actedAt;
           // persist through the existing card route so an older server that
           // does not auto-dismiss still hides the quiz on this client
           if (quizBeforeSend) persistCard(action.botId, quizBeforeSend.id, { dismissed: true });
@@ -1513,6 +1600,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 deliver: action.after ? "after" : undefined,
                 queueId: action.queueId,
                 actedAt,
+                sendSeq: action.sendSeq,
+                sentAfterId: action.sentAfterId,
                 locale: activeLocale(),
               }),
             });
@@ -1531,6 +1620,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   await api(`/api/bots/${action.botId}/queue/${body.queueId}`, { method: "DELETE" }).catch(() => null);
                 await restoreStopped(body?.cancelled === true || Boolean(deleted?.send));
               }
+              action.onRejected?.(Boolean(pending.stop || body?.cancelled));
               return;
             }
             retainDraft = Boolean(body?.queued || body?.message?.quick);
@@ -1556,10 +1646,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 threadId: body.threadId,
                 queueId: body.queueId,
                 text: action.text,
-                at: accepted?.at ?? Date.now(),
+                // the server's sent time, not this window's clock
+                at: typeof body.actedAt === "number" ? body.actedAt : accepted?.at ?? Date.now(),
                 sendId,
+                sendSeq: action.sendSeq,
+                sentAfterId: body.sentAfterId !== undefined ? body.sentAfterId : action.sentAfterId,
                 replyToId: action.replyToId,
                 reason: body.reason === "sync" ? "sync" : undefined,
+                waited: action.after || undefined,
               });
               if (body.reason === "sync") rawDispatch({ type: "sendRejected", botId: action.botId, threadId: body.threadId, sendId });
             }
@@ -1587,7 +1681,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               if (typeof threadId === "string") {
                 rawDispatch({ type: "sendRejected", botId: action.botId, threadId, sendId });
               }
-              if (await restoreStopped(false)) return;
+              if (await restoreStopped(false)) return action.onRejected?.(true);
               showError(error);
               action.onError?.();
             })
@@ -1685,14 +1779,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "answerGroupCard": {
-          const actedAt = Date.now();
           const room = stateRef.current.groups.find((group) => group.id === action.groupId);
           const messages = room?.messages ?? [];
           if (!canAnswerCard(messages, action.messageId)) break;
           const asked = messages.find((m) => m.id === action.messageId);
           const text = asked ? answerText(messages, asked, action.answer) : action.answer;
+          const send = stampGroupSend(stateRef.current, { type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: action.messageId }, sendStamps.current);
           void holdReload(persistGroupCard(action.groupId, action.messageId, { answered: action.answer })
-            .then((open) => { if (open) wrapped({ type: "sendGroup", groupId: action.groupId, text, threadId: room?.threadId, cardId: action.messageId, actedAt }); }));
+            .then((open) => { if (open) wrapped(send); }));
           break;
         }
         case "dismissGroupCard":
@@ -1845,7 +1939,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // Rooms hold follow-ups in the composer; this POST never returns queued.
           const sending = api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
-            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId, actedAt: action.actedAt ?? Date.now() }),
+            body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId, cardId: action.cardId, actedAt: action.actedAt ?? sendClock(stateRef.current.groups.find((group) => group.id === action.groupId)?.messages), waited: action.waited, sendSeq: action.sendSeq, sentAfterId: action.sentAfterId }),
           })
             .then((body) => {
               if (receiptRejectsAcceptedSend(body)) {
@@ -2084,6 +2178,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         replyToId,
         threadId,
         actedAt: at,
+        waited: true,
         onError: () => void recoverFailedComposerSend({ draftId, revision, sendId, text, requestText, replyToId, threadId, attachments }),
       });
     }
@@ -2482,6 +2577,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             // flush any buffered tail before clearing so no tokens are lost
             flushDeltas();
             clearStream(event.threadId, "completed", event.ok !== false);
+            turnCompleted(event.threadId);
           } else if (event.type === "turn.started" || event.type === "turn.retrying") {
             if (!isReplacementTurnStart(liveTurns.current, event.threadId, event.turnId, event.createdAt)) break;
             liveTurns.current = liveTurnIdAfter(liveTurns.current, event.threadId, event);
@@ -2559,7 +2655,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
     const stopLive = openLiveEvents({
       wakeQuietMs: window.ogb ? 0 : LIVE_EVENTS_WAKE_QUIET_MS,
+      onServerTime: noteServerTime,
       onOpen: () => {
+        sessionLive();
         trackStream(true);
         rawDispatch({ type: "connected", value: true });
         usageBoardReconnected();
@@ -2569,6 +2667,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       onError: () => {
         trackStream(false);
         rawDispatch({ type: "connected", value: false });
+        if (relaySignInSite()) void sessionState().then((state) => {
+          if (state === "gone") return leaveSignedOut();
+        });
       },
       onSnapshotRequired: (cursor) => {
         clearTimeout(hydrationFallback);
@@ -2578,6 +2679,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         settling.current.clear();
         // a held resume's task.resume frame may be lost in the gap
         for (const settle of pendingTaskResumes.current.values()) settle(null);
+        noteJoinedFrame(null);
         // The mount's deferred load covers the first boundary; a later one may follow a missed instances frame.
         const instances = partByKey.get("instances");
         if (snapshotBoundaries++ > 0 && instances) {
@@ -2587,6 +2689,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       onFrame: (frame) => {
         receivedAt.set(frame, Date.now());
+        if (frame.kind === "joined") {
+          const roomId = (frame as { roomId?: unknown }).roomId;
+          noteJoinedFrame(typeof roomId === "string" ? roomId : null);
+        }
         if (!hydrated) {
           pendingFrames.push(frame);
           return;
@@ -2597,6 +2703,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (frame.replayed) flushDeltas();
       },
     });
+    reconnectLiveRef.current = stopLive.reconnect;
     if (canPrefetchChat(window.location)) {
       prefetchStarted = true;
       snapshots.prefetch();
@@ -2623,6 +2730,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       for (const refresh of peripheralRefresh.values()) {
         if (refresh.timer) clearTimeout(refresh.timer);
       }
+      reconnectLiveRef.current = null;
       stopLive();
     };
   }, []);
@@ -2740,8 +2848,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [botPatchQueue],
   );
   const value = useMemo(
-    () => ({ state, dispatch, flushBotPatches, refreshInstances, instancesVersion, turnOrigin }),
-    [state, dispatch, flushBotPatches, refreshInstances, turnOrigin],
+    () => ({ state, dispatch, reconnectLive, flushBotPatches, refreshInstances, instancesVersion, turnOrigin }),
+    [state, dispatch, reconnectLive, flushBotPatches, refreshInstances, turnOrigin],
   );
   return (
     <StoreContext.Provider value={value}>

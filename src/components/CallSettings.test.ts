@@ -88,6 +88,54 @@ async function holdCall(onCall = vi.fn()) {
   return { host, onCall, call: button(host, "Call Ada")! };
 }
 
+async function swipe(target: Element, flick = false) {
+  const events: Event[] = [];
+  await act(async () => {
+    for (const [type, x, y, time] of flick
+      ? [["touchstart", 200, 100, 0], ["touchmove", 225, 135, 20], ["touchend", 225, 135, 25]] as const
+      : [["touchstart", 200, 100, 0], ["touchmove", 200, 300, 200], ["touchend", 200, 300, 400]] as const) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperties(event, {
+        touches: { value: type === "touchend" ? [] : [{ clientX: x, clientY: y }] },
+        timeStamp: { value: time },
+      });
+      target.dispatchEvent(event);
+      events.push(event);
+    }
+  });
+  return events;
+}
+
+it.each([true, false])("only closes on a downward swipe at the top on phone=%s", async (phone) => {
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("max-width") && phone }));
+  const { call, onCall } = await holdCall();
+  await act(async () => call.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+  const panel = menu()!;
+  Object.defineProperty(panel, "offsetHeight", { value: 400 });
+  const list = panel.querySelector<HTMLElement>("[data-call-voices]")!;
+  list.scrollTop = 30;
+  const scrolled = await swipe(list);
+  expect(scrolled[1]!.defaultPrevented).toBe(false);
+  expect(panel.dataset.closing).toBeUndefined();
+  list.scrollTop = 0;
+  const atTop = await swipe(list);
+  expect(panel.dataset.closing).toBe(phone ? "true" : undefined);
+  expect(atTop[1]!.defaultPrevented).toBe(phone);
+  expect(onCall).not.toHaveBeenCalled();
+});
+
+it.each(["Speed", "Volume"])("keeps the menu open on a steep %s slider drag", async (label) => {
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("max-width") }));
+  const { call } = await holdCall();
+  await act(async () => call.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+  const panel = menu()!;
+  Object.defineProperty(panel, "offsetHeight", { value: 100 });
+  const events = await swipe(panel.querySelector(`input[aria-label="${label}"]`)!, true);
+  expect(panel.dataset.closing).toBeUndefined();
+  expect(events[1]!.defaultPrevented).toBe(false);
+  expect(events[2]!.defaultPrevented).toBe(false);
+});
+
 it("right-click on Call opens the panel and a left-click still calls", async () => {
   const { onCall, call } = await holdCall();
   await act(async () => call.click());
@@ -327,4 +375,46 @@ it("labels the panel in Korean", async () => {
   expect(button(host, "언어")!.textContent).toBe("자동 감지");
   expect(button(host, "Jenn 들어보기")).not.toBeNull();
   expect(host.querySelector('[role="radiogroup"][aria-label="목소리"]')).not.toBeNull();
+});
+
+it("an older answer pick that lands late never undoes the newer one", async () => {
+  type Config = { liveCall: { voice: string; answer: string } };
+  store.config = { liveCall: { voice: "Aoede" } };
+  const landed: Array<(config: Config) => void> = [];
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => landed.push((config) => resolve(Response.json(config))))));
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const radios = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="Answered by"] [role="radio"]')];
+  await act(async () => radios[0]!.click());
+  await act(async () => radios[1]!.click());
+  await act(async () => landed[0]!({ liveCall: { voice: "Kore", answer: "bot" } }));
+  expect(store.dispatch).not.toHaveBeenCalledWith({ type: "configStatus", config: { liveCall: { voice: "Kore", answer: "bot" } } });
+  await act(async () => landed[1]!({ liveCall: { voice: "Kore", answer: "gemini" } }));
+  expect(store.dispatch).toHaveBeenLastCalledWith({ type: "configStatus", config: { liveCall: { voice: "Kore", answer: "gemini" } } });
+});
+
+it("a call placed while the answer pick is still saving already uses it, and a failed save puts it back", async () => {
+  const answers: Array<(response: Response) => void> = [];
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => answers.push(resolve))));
+  store.config = { liveCall: { voice: "Aoede" } };
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const radios = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="Answered by"] [role="radio"]')];
+  await act(async () => radios[0]!.click());
+  expect(store.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "configStatus", config: { liveCall: { voice: "Aoede", answer: "bot" } } });
+  await act(async () => answers[0]!(Response.json({ error: "no" }, { status: 500 })));
+  expect(store.dispatch).toHaveBeenLastCalledWith({ type: "configStatus", config: { liveCall: { voice: "Aoede" } } });
+});
+
+it("picks who answers calls for the whole app, Gemini voice until he flips it", async () => {
+  const fetch = vi.fn(async (_path: string, _init?: RequestInit) => Response.json({ liveCall: { voice: "Aoede", answer: "bot" } }));
+  vi.stubGlobal("fetch", fetch);
+  const host = await render(createElement(CallSettings, { bot: ada }));
+  const group = host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Answered by"]')!;
+  const radios = [...group.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+  expect(radios.map((radio) => [radio.textContent, radio.getAttribute("aria-checked")])).toEqual([["Same bot", "false"], ["Gemini voice", "true"]]);
+  await act(async () => radios[0]!.click());
+  const [path, init] = fetch.mock.calls[0]!;
+  expect(path).toBe("/api/config");
+  expect(init).toMatchObject({ method: "PATCH" });
+  expect(JSON.parse(String(init!.body))).toEqual({ liveCall: { answer: "bot" } });
+  await vi.waitFor(() => expect(store.dispatch).toHaveBeenCalledWith({ type: "configStatus", config: { liveCall: { voice: "Aoede", answer: "bot" } } }));
 });

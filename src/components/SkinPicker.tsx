@@ -10,6 +10,7 @@ import { LIGHT_SKIN_IDS, SKINS, SKIN_CHANGE_EVENT, applySkin, readSkin, readTrie
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { reducedMotion } from "@/lib/phone-swipe";
+import { revealOnOpen } from "@/lib/reveal-on-open";
 import { startScene, type SceneHost } from "@/scenes/scene-host";
 import { sceneOf, type SceneId } from "./ChatScene";
 import { startTogether } from "./mini-scene-batch";
@@ -18,7 +19,7 @@ import { Fold } from "./Fold";
 
 // Newest release first: the grid opens on these, ahead of the older featured themes. Precision Dimmed stays under More themes.
 const NEW_SKIN_IDS: readonly SkinId[] = ["samurai-ink", "night-rain", "warp", "circuit", "neon-grid", "lagoon", "lagoon-night", "snow", "snow-night", "precision-dimmed", "bronze", "dim-sand"];
-const FEATURED_SKIN_IDS: readonly SkinId[] = [...NEW_SKIN_IDS.filter((id) => id !== "precision-dimmed"), "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "wink-day", "notebook"];
+const FEATURED_SKIN_IDS: readonly SkinId[] = [...NEW_SKIN_IDS.filter((id) => id !== "precision-dimmed"), "precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "merlot", "wink-day", "notebook", "messenger"];
 
 /** An animated theme's own scene, looping in its tile while mounted; a still tile under reduced motion. */
 function MiniScene({ scene }: { scene: SceneId }) {
@@ -124,6 +125,7 @@ export function SkinPicker({ reveal }: { reveal?: readonly SkinId[] | null }) {
   // A theme picked from the open fold stays put until the fold closes, so keyboard focus is not lost.
   const [picked, setPicked] = useState<SkinId | null>(null);
   const moreId = useId();
+  const more = useRef<HTMLDivElement>(null);
   const [tried, setTried] = useState(readTriedSkins);
   useEffect(() => {
     if (!reveal?.length) return;
@@ -214,8 +216,8 @@ export function SkinPicker({ reveal }: { reveal?: readonly SkinId[] | null }) {
         {t("settings.skin.more", { count: extra.length })}
         <ChevronDown size={16} className={cn("shrink-0 transition-transform", expanded && "rotate-180")} />
       </button>
-      <Fold open={expanded} id={moreId} className="-mt-4">
-        <div className="flex flex-col gap-4 pt-4">{renderGroups(extra, true)}</div>
+      <Fold open={expanded} id={moreId} className="-mt-4" onOpened={() => revealOnOpen(more.current?.querySelector<HTMLElement>("[data-skin-tile]") ?? null)}>
+        <div ref={more} className="flex flex-col gap-4 pt-4">{renderGroups(extra, true)}</div>
       </Fold>
     </div>
   );
