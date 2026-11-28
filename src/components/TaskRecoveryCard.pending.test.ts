@@ -96,8 +96,7 @@ describe("held task resume card", () => {
     const posts = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith(`/tasks/${bot.threadId}/recovery`));
     expect(posts.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ updatedAt: 1, flushReason: "stop" }]);
     expect(f.host.querySelector("[data-dock-card]")!.hasAttribute("data-closing")).toBe(true);
-    await act(() => new Promise((done) => setTimeout(done, 200)));
-    expect(f.host.querySelector('[role="status"]')).toBeNull();
+    await vi.waitFor(() => expect(f.host.querySelector('[role="status"]')).toBeNull());
   });
 
   it.each(["en", "ko"] as const)("keeps %s pending copy until the resumed turn starts", async (locale) => {

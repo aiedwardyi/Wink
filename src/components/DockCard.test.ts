@@ -3,7 +3,6 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { DockCard } from "./DockCard";
 
 let host: HTMLDivElement;
@@ -13,7 +12,6 @@ const screen = (phone: boolean, reduce = false) => vi.spyOn(window, "matchMedia"
 const render = (open: boolean, props: { id?: string; onDismiss?: () => void } = {}) =>
   act(async () => root.render(createElement(DockCard, { open, ...props, children: open ? createElement("p", null, props.id ?? "Question") : null })));
 const dock = () => host.querySelector<HTMLElement>("[data-dock-card]");
-const wait = (ms: number) => act(() => new Promise<void>((done) => setTimeout(done, ms)));
 // a finger pulled straight down, lifting where it stopped
 const pull = (target: Element, dy: number, ms = 200) => act(async () => {
   for (const [type, y, at] of [["touchstart", 100, 0], ["touchmove", 100 + dy, ms / 2], ["touchend", 100 + dy, ms]] as const) {
@@ -46,7 +44,7 @@ it("shows at once when open at mount and pops in when it opens later on a phone"
   await render(true);
   expect(dock()!.className).not.toContain("animate-pop-in");
   await render(false);
-  await wait(PRESENCE_EXIT_MS + 20);
+  await vi.waitFor(() => expect(dock()).toBeNull());
   await render(true);
   expect(dock()!.className).toContain("animate-pop-in");
 });
@@ -58,8 +56,7 @@ it("keeps its last card for the closing fade on a phone, then unmounts", async (
   expect(dock()!.hasAttribute("data-closing")).toBe(true);
   expect(dock()!.hasAttribute("inert")).toBe(true);
   expect(dock()!.textContent).toBe("Question");
-  await wait(PRESENCE_EXIT_MS + 20);
-  expect(dock()).toBeNull();
+  await vi.waitFor(() => expect(dock()).toBeNull());
 });
 
 it("opens and closes at once on desktop", async () => {

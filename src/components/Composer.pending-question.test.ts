@@ -703,8 +703,7 @@ describe("pinned ask_user question", () => {
     await rerender({ bot: bot([{ ...question, card: { ...question.card!, dismissed: true } }]) });
     expect(pin()!.closest("[data-dock-card]")!.hasAttribute("data-closing")).toBe(true);
     expect(pin()!.closest<HTMLElement>("[data-dock-card]")!.style.translate).toBe("0 200px");
-    await settle();
-    expect(pin()).toBeNull();
+    await vi.waitFor(() => expect(pin()).toBeNull());
     expect(dot()).toBeNull();
   });
 
@@ -713,7 +712,6 @@ describe("pinned ask_user question", () => {
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(300);
     await mount({ bot: bot([question]) });
     await pull(card()!, 60, 600);
-    await settle();
     expect(calls).toEqual([]);
     expect(card()).not.toBeNull();
     expect(row()).toBeNull();
