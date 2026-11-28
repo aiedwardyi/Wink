@@ -167,6 +167,10 @@ export class CallAudio {
     return Math.sqrt(sum / this.samples.length);
   }
 
+  sound() {
+    return { ctx: this.ctx.state, paused: this.output.paused };
+  }
+
   get playing(): boolean {
     return this.sources.size > 0;
   }

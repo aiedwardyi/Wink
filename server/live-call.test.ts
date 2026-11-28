@@ -946,6 +946,13 @@ describe("call lines and end", () => {
     expect(lines).toEqual([{ receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...stats }, { receivedAt: expect.any(String), callId: "c-0123456789ab", botId: h.bot.id, model: LIVE_MODEL, ...full }]);
   });
 
+  it("keeps the start steps and drops speech text from them", async () => {
+    const h = harness();
+    const start = { setupMs: 900, greetMs: 900, heardMs: 4_100, answerMs: 5_200, audioMs: 5_300, playMs: 5_350, greet: "sent", ctx: "running", paused: false, noSound: false, volume: 0.6, voiceAsked: "Puck", voiceLive: "Aoede" };
+    await h.post("end", { callId: "c-0123456789ab", stats: { ms: 9_000, start: { ...start, text: "hello there" } } });
+    expect(JSON.parse(readFileSync(join(h.dir, LIVE_CALL_FILE), "utf8").trim()).start).toEqual(start);
+  });
+
   it("the stats line names the voice the call used", async () => {
     const h = harness({ liveCall: { voice: "Alnilam" } });
     const { callId } = (await h.post("token")).data;

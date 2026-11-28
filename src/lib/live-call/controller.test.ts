@@ -1132,6 +1132,60 @@ describe("LiveCall", () => {
     expect(end.stats).toMatchObject({ device: "phone", userLines: 1, hangulShare: 1, usage: { total: 120 }, orders: { proposed: 0 } });
   });
 
+  it("writes when each start step happened, timed from the tap", async () => {
+    let t = 1_000;
+    const audio = { ...fakeAudio(), sound: () => ({ ctx: "running" as const, paused: false }) };
+    const { call, engine, posts } = setup({}, audio, () => t);
+    call.retune({ voice: "Puck" }, 0.6);
+    await call.start();
+    t = 1_900;
+    engine().events.ready();
+    t = 2_500;
+    engine().events.answering();
+    engine().events.audio(new Int16Array([500]));
+    audio.onStart();
+    engine().events.turnDone();
+    t = 4_000;
+    engine().events.heard("Can you hear me?");
+    call.end();
+    await flush();
+    const stats = posts.find((p) => p.path.endsWith("/call/end"))!.body.stats;
+    expect(stats.start).toEqual({ setupMs: 900, greet: "sent", greetMs: 900, ctx: "running", paused: false, answerMs: 1_500, audioMs: 1_500, playMs: 1_500, heardMs: 3_000, volume: 0.6, voiceAsked: "Puck" });
+  });
+
+  it("a start that never got a model turn says the greeting went and nothing came back", async () => {
+    let t = 1_000;
+    const { call, engine, posts } = setup({ "/call/token": { status: 200, data: { callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m", voice: "Aoede" } } }, fakeAudio(), () => t);
+    await call.start();
+    t = 1_400;
+    engine().events.ready();
+    t = 6_000;
+    engine().events.heard("Hello?");
+    call.end();
+    await flush();
+    const { start } = posts.find((p) => p.path.endsWith("/call/end"))!.body.stats;
+    expect(start).toEqual({ setupMs: 400, greet: "sent", greetMs: 400, heardMs: 5_000, volume: 1, voiceLive: "Aoede" });
+  });
+
+  it("a greeting dropped for his early words says so", async () => {
+    vi.useFakeTimers();
+    let frame!: (pcm: ArrayBuffer) => void;
+    const audio = { ...fakeAudio(), async capture(onFrame: (pcm: ArrayBuffer) => void) { frame = onFrame; } };
+    const { call, engine, posts } = setup({}, audio);
+    const starting = call.start();
+    await flush();
+    frame(new Int16Array(640).fill(8_000).buffer);
+    frame(new Int16Array(640).fill(8_000).buffer);
+    await starting;
+    engine().events.ready();
+    engine().events.heard("Check the build");
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(engine().texts).toEqual([]);
+    call.end();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(posts.find((p) => p.path.endsWith("/call/end"))!.body.stats.start).toMatchObject({ greet: "dropped" });
+  });
+
   it("ends the call only after its last lines are saved", async () => {
     let save!: () => void;
     const { call, engine, posts } = await started({ "/call/lines": () => new Promise((resolve) => { save = () => resolve({ status: 200, data: {} }); }) });
