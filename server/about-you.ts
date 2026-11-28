@@ -253,7 +253,8 @@ function localEdits(raw: string): AboutYouState {
     if (ids.length) rememberIds(state, hash, ids);
   }
   const presentIds = new Set([...hashes].flatMap((hash) => [...(state.adds.get(hash) ?? [])]));
-  for (const previous of [last, state]) for (const [hash, ids] of previous.adds) {
+  // a hand delete leaves the line's add mark behind; an editor's old copy has neither, so what arrived since is kept
+  for (const [hash, ids] of state.adds) {
     if (hashes.has(hash)) continue;
     for (const id of ids) if (!presentIds.has(id)) state.removes.add(id);
   }

@@ -168,6 +168,30 @@ it("keeps a line typed back after an import saved its erase, on both PCs", () =>
   }
 });
 
+it("keeps another PC's import when an editor saves the copy it opened before that import, on both PCs", () => {
+  const root = mkdtempSync(join(tmpdir(), "orbit-about-you-stale-"));
+  try {
+    const w = retypeWorld(root);
+    const opened = readFileSync(file(w.a), "utf8");
+    pc.dir = w.b;
+    addToAboutYou("- Peer fact one.\n- Peer fact two.\nSource: Beacon", "2026-11-21");
+    w.pass(w.b);
+    w.pass(w.a);
+    writeFileSync(file(w.a), `${opened}- Typed in the old copy.\n`);
+    for (let round = 0; round < 4; round++) {
+      w.pass(w.a);
+      w.pass(w.b);
+    }
+    for (const data of [w.a, w.b]) {
+      pc.dir = data;
+      expect(aboutYouSources().flatMap(({ facts }) => facts).sort()).toEqual(["Control stays here.", "Peer fact one.", "Peer fact two.", "Typed in the old copy.", typed].sort());
+      expect(aboutYouPrompt()).toContain("- Peer fact one. (noted 2026-11-21)");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it("keeps a line typed back unless a later hand Remove took it, in all 360 orders of erase, import, Remove, retype and syncs", () => {
   const root = mkdtempSync(join(tmpdir(), "orbit-about-you-retype-order-"));
   const failures: string[] = [];
