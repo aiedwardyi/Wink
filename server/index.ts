@@ -286,15 +286,13 @@ import {
 import "../shared/task-resume.ts";
 import { ASKS_LIST, asksNudge, fileLeftovers, isStatusTurn, MORE_PROMISES, rotatedAsks, shownVerdicts, TASK_ASKS_PROMPT, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
 import "./task-state.ts";
-import { readTaskArtifactOverflow, type TaskResumePacket } from "./task-state.ts";
-import { writeTaskPlanSidecar } from "./task-plan-sidecar.ts";
+import type { TaskResumePacket } from "./task-state.ts";
 import { sweepDroppedAsks } from "./task-dropped.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import {
   buildResumeFallback,
   buildTurnContext,
-  builtListPath,
   chatMemory,
   countLastTurnToolRounds,
   countSessionToolRounds,
@@ -343,7 +341,6 @@ import {
   ensureWorkspace,
   goalsOf,
   workspaceDir,
-  memoryFileRaw,
   memoryHealth,
   memorySystemPrompt,
   supportsWorkspaceFiles,
@@ -3049,15 +3046,12 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
   return store.taskPacket(threadId);
 }
 
-/** Saved paths, never file contents, for a new provider session's first turn. */
+/** Saved paths, never file contents, for a new provider session's first turn; built from memory only, so a turn touches no disk for it. */
 function freshSessionMemory(botId: string, threadId: string, record: TaskResumePacket | null, messages: readonly Message[]): string {
   return chatMemory({
     record,
-    overflow: readTaskArtifactOverflow(threadId),
     messages,
     cwd: store.taskByThread(botId, threadId)?.cwd ?? undefined,
-    savePlanSidecar: (paths) => writeTaskPlanSidecar(threadId, paths),
-    builtList: builtListPath(memoryFileRaw(botId)),
     work: unlandedWork.work(threadId),
   });
 }

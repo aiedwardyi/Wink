@@ -1,6 +1,5 @@
-import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { redactSecretsInText } from "./redact.ts";
 import { asksBlock, type TaskAsk } from "./task-asks.ts";
@@ -533,168 +532,33 @@ const MEMORY_PLAN_PREFIX = "Read first, your plan: ";
 const DOC_PATH = /(?:[A-Za-z]:)?[\p{L}\p{M}\p{N}\p{Pc}.~\\/-]*\.(?:md|txt|docx?|pdf)(?!\w)/giu;
 // a quoted path may hold spaces, so it is read whole before DOC_PATH
 const QUOTED_DOC_PATH = /(["'`])([^"'`\n]+\.(?:md|txt|docx?|pdf))\1/gi;
-// CJK prose runs into names with no space, so every name the text or the files on disk support is pinned; DOC_PATH guesses the rest
-const NAME_RUN = /[\p{L}\p{M}\p{N}\p{Pc}\p{S}.:\\/-]+/gu;
 const DOC_EXT = /\.(?:md|txt|docx?|pdf)(?!\w)/gi;
-// Windows finds review.txt for "review.txt.", so a name ends only after an extension
-const NAME_END = /\.[A-Za-z\d]+(?!\.*[\w~\\/-])/g;
 // in CJK prose a name may start where Latin letters follow another script
-const LATIN_START = /(?<=^|(?!\p{Script=Latin})\p{L})\p{Script=Latin}/gu;
-const BUILT_PATH = /(?:[A-Za-z]:[\\/]|~[\\/]|\/)[^\n"'`<>|*?]*?built\.md/gi;
+const LATIN_START = /(?<=(?!\p{Script=Latin})\p{L})\p{Script=Latin}/gu;
 
 function localPath(ref: string, cwd: string | undefined): string | null {
   const path = ref.trim();
   if (!path || /^\w{2,}:\/\//.test(path)) return null;
   if (/^~[\\/]/.test(path)) return join(homedir(), path.slice(2));
   if (isAbsolute(path)) return resolve(path);
-  if (cwd && !/[\\/:~]/.test(path)) {
-    if (based[0] !== cwd) based = [cwd, resolve(cwd)];
-    return based[1].endsWith(sep) ? based[1] + path : based[1] + sep + path;
-  }
   return cwd ? resolve(cwd, path) : null;
 }
-let based: [string | undefined, string] = [undefined, ""];
 
-// rule 0 reads a run as c9206fd80 did, 1 as 9c19449a1, 2 as 2f3162357; each kept a name another dropped, so planFiles pins what any of them reads
-function runFiles(run: string, cwd: string | undefined, listed: (dir: string) => Set<string>, rule: number): [number, string][] {
-  const ends = [...run.matchAll(NAME_END)].map((match) => match.index + match[0].length).reverse();
-  const refs: [number, string][] = [];
-  let rest = run;
-  let from = 0;
-  const starts = [0];
-  const latin = [...run.matchAll(LATIN_START)].map((match) => match.index);
-  const named = [...latin, ...[...run.matchAll(/[\\/]/g)].map((match) => match.index)];
-  const real: number[] = [];
-  for (const hit of run.matchAll(DOC_EXT)) {
-    if (hit.index < from) continue;
-    const after = hit.index + hit[0].length;
-    const tails = ends.filter((end) => end >= after && !/[\\/]/.test(run.slice(after, end)));
-    let best: [number, number] | undefined;
-    for (let start = from; start <= hit.index && tails.length > 0 && (!best || tails[0]! - start > best[1] - best[0]); start++) {
-      // a name starts after a character no ASCII name holds, so release-plan.md never pins plan.md
-      if (start && (!rule || start !== starts.at(-1)) && /[\w.~:\\/-]/.test(run[start - 1]!) || /[\uDC00-\uDFFF]/.test(run[start]!)) continue;
-      const head = localPath(run.slice(start, after), cwd);
-      if (!head || !listed(dirname(head)).has(fileKey(basename(head)))) continue;
-      for (const end of tails) {
-        if (best && end - start <= best[1] - best[0]) break;
-        const path = localPath(run.slice(start, end), cwd)!;
-        if (listed(dirname(path)).has(fileKey(basename(path))) && existsSync(path)) {
-          best = [start, end];
-          break;
-        }
-      }
-    }
-    if (best) real.push(best[1]);
-    const spans = best ? [best] : [];
-    if (ends.includes(after)) {
-      // 请先读plan.md is prose then a name, 新draft.md and 計画.md改訂.md one name each, and no rule tells them apart, so the token and each start since the name before this one are pinned up to this end; only a file on disk ending at a name end or starting a later name (a Latin start, a folder) shows plan.md和review.txt is two names, so only then does no reading run past that end
-      const token = [...run.slice(0, after).matchAll(DOC_PATH)].at(-1)!;
-      const next = Math.max(best?.[0] ?? 0, ...named.filter((at) => at < hit.index));
-      const cut = rule ? ends.find((end) => end <= next && (rule < 2 || real.includes(end) || best && best[0] >= end)) ?? 0 : 0;
-      const lead = Math.max(token.index, cut);
-      const near = rule ? Math.max(lead, starts.at(-2) ?? 0) : lead;
-      for (const start of new Set([lead, ...[...starts, ...latin].filter((start) => start >= near)])) {
-        if (start < hit.index) spans.push([start, after]);
-      }
-    }
-    if (!spans.length) {
-      // a folder like notes.md/ ends no name, so the next name may still start before it
-      if (tails.length) from = after;
-      continue;
-    }
-    from = Math.max(...spans.map(([, end]) => end));
-    starts.push(from);
-    for (const [start, end] of spans) refs.push([start, run.slice(start, end)]);
-    const blank = Math.min(...spans.map(([start]) => start));
-    rest = rest.slice(0, blank) + " ".repeat(from - blank) + rest.slice(from);
-  }
-  for (const match of rest.matchAll(DOC_PATH)) refs.push([match.index, match[0]]);
-  return refs;
+// CJK prose runs into names with no space (请先读plan.md, plan.md和review.txt) and the turn reads no folder to split them,
+// so the whole token and each name from a start (a name end, Latin after another script) to the next name end are pinned
+function docNames(token: string): string[] {
+  const ends = [...token.matchAll(DOC_EXT)].map((match) => match.index + match[0].length).filter((at) => at === token.length || !/[\\/]/.test(token[at]!));
+  const starts = [0, ...ends, ...[...token.matchAll(LATIN_START)].map((match) => match.index)].filter((start) => start < token.length && !/[.\\/]/.test(token[start]!));
+  return [token, ...starts.map((start) => token.slice(start, ends.find((end) => end > start)))];
 }
 
-function fileKey(name: string): string {
-  return name.normalize("NFC").toUpperCase();
-}
-
-// a CJK plan tries a name start per character, so folders are listed once and walked down from cwd or the drive root, never a stat per guess
-function listedFiles(cwd: string | undefined): (dir: string) => Set<string> {
-  const base = cwd ? resolve(cwd) : undefined;
-  const listed = new Map<string, Set<string>>();
-  const none = new Set<string>();
-  const read = (dir: string) => {
-    let names = listed.get(dir);
-    if (!names) {
-      names = new Set();
-      listed.set(dir, names);
-      try {
-        for (const name of readdirSync(dir)) {
-          const key = fileKey(name);
-          names.add(key);
-          // a name start goes on only when a file name begins with it up to its extension
-          for (const match of key.matchAll(DOC_EXT)) names.add(key.slice(0, match.index + match[0].length));
-        }
-      } catch {}
-    }
-    return names;
-  };
-  return (dir) => {
-    let at = base && (dir === base || dir.startsWith(base + sep)) ? base : parse(dir).root;
-    for (const part of dir.slice(at.length).split(sep)) {
-      if (!part) continue;
-      if (!read(at).has(fileKey(part))) return none;
-      at = join(at, part);
-    }
-    return read(at);
-  };
-}
-
-/** Files the record names as its plan: artifacts labeled or named plan, and any document path the goal or plan steps cite. */
+/** Files the record names as its plan: artifacts labeled or named plan, and any document path the goal or plan steps cite. Text only, never the disk. */
 export function planFiles(record: Pick<TaskRecordContext, "goal" | "plan" | "artifacts">, cwd?: string): string[] {
   const refs = (record.artifacts ?? []).filter((item) => /plan/i.test(item.label) || /plan/i.test(basename(item.ref))).map((item) => item.ref);
   const cited = [record.goal, ...record.plan.map((item) => item.step)].join("\n").replace(/\w{2,}:\/\/\S+/g, "");
   for (const match of cited.matchAll(QUOTED_DOC_PATH)) refs.push(match[2]!);
-  const listed = listedFiles(cwd);
-  const keys = new Map<string, boolean>();
-  const keyed = (name: string) => {
-    let has = keys.get(name);
-    if (has === undefined) {
-      const path = localPath(name, cwd);
-      keys.set(name, has = !!path && listed(dirname(path)).has(fileKey(basename(path))));
-    }
-    return has;
-  };
-  // listed holds every name up to each of its extensions, so a reading whose name up to its first extension is unlisted is not on disk
-  const onDisk = (name: string) => {
-    const [ext] = name.matchAll(DOC_EXT);
-    return keyed(ext ? name.slice(0, ext.index + ext[0].length) : name) && keyed(name) && existsSync(localPath(name, cwd)!);
-  };
-  for (const run of cited.replace(QUOTED_DOC_PATH, " ").match(NAME_RUN) ?? []) {
-    const seen = new Set<number>();
-    const readings = [0, 1, 2].flatMap((rule) => runFiles(run, cwd, listed, rule)).sort(([a], [b]) => a - b)
-      .filter(([at, name]) => !seen.has(at * (run.length + 1) + name.length) && !!seen.add(at * (run.length + 1) + name.length));
-    const disk = readings.map(([, name]) => onDisk(name));
-    const firstEnd = new Map<number, number>();
-    const lastStart = new Map<number, number>();
-    for (const [index, [at, name]] of readings.entries()) {
-      if (!disk[index]) continue;
-      firstEnd.set(at, Math.min(firstEnd.get(at) ?? Infinity, at + name.length));
-      lastStart.set(at + name.length, Math.max(lastStart.get(at + name.length) ?? -1, at));
-    }
-    // only files on disk prove plan.md和review.txt is two names, so a reading missing from disk is dropped only when it runs exactly from one to the other
-    for (const [index, [at, name]] of readings.entries()) {
-      if (disk[index] || !((firstEnd.get(at) ?? Infinity) <= (lastStart.get(at + name.length) ?? -1))) refs.push(name);
-    }
-  }
+  for (const match of cited.replace(QUOTED_DOC_PATH, " ").matchAll(DOC_PATH)) refs.push(...docNames(match[0]));
   return [...new Set(refs.map((ref) => localPath(ref, cwd)).filter((path): path is string => path !== null))];
-}
-
-/** The first path in the bot's notes that ends in built.md and exists. */
-export function builtListPath(notes: string, exists: (path: string) => boolean = existsSync): string | null {
-  for (const match of notes.matchAll(BUILT_PATH)) {
-    const path = match[0].startsWith("~") ? join(homedir(), match[0].slice(2)) : match[0];
-    if (exists(path)) return path;
-  }
-  return null;
 }
 
 export interface MemoryBlockInput {
@@ -702,14 +566,12 @@ export interface MemoryBlockInput {
   files: readonly string[];
   cwd?: string;
   plans?: readonly string[];
-  savePlanSidecar?: (paths: readonly string[]) => string;
-  builtList?: string | null;
   /** the open-work line unlanded.ts built */
   work?: string;
   home?: string;
 }
 
-function memoryPlanLines(paths: readonly string[], savePlanSidecar: MemoryBlockInput["savePlanSidecar"]): string[] {
+function memoryPlanLines(paths: readonly string[]): string[] {
   const shown: string[] = [];
   let bytes = Buffer.byteLength(MEMORY_PLAN_PREFIX);
   for (const path of paths) {
@@ -717,16 +579,11 @@ function memoryPlanLines(paths: readonly string[], savePlanSidecar: MemoryBlockI
     if (bytes > MAX_MEMORY_PLAN_BYTES) break;
     shown.push(path);
   }
-  const lines = shown.length ? [MEMORY_PLAN_PREFIX + shown.join("; ")] : [];
   const more = paths.length - shown.length;
-  if (more) {
-    if (!savePlanSidecar) throw new Error("plan memory overflow needs a sidecar");
-    lines.push(`+${more} more paths in ${savePlanSidecar(paths)}`);
-  }
-  return lines;
+  return [...shown.length ? [MEMORY_PLAN_PREFIX + shown.join("; ")] : [], ...more ? [`+${more} more plan paths`] : []];
 }
 
-/** Paths only: plan refs, the built list, the newest MEMORY_FOLDERS folders, then a count of the rest. */
+/** Paths only: plan refs, the newest MEMORY_FOLDERS folders, then a count of the rest. */
 export function memoryBlock(input: MemoryBlockInput): string {
   const newest = new Map<string, true>();
   for (const ref of input.files) {
@@ -752,8 +609,7 @@ export function memoryBlock(input: MemoryBlockInput): string {
   const rest = [...folders.values()].slice(MEMORY_FOLDERS);
   if (rest.length) shown.push(`+${rest.length} older folders (${rest.reduce((total, folder) => total + folder.count, 0)} files)`);
   const lines = [
-    ...memoryPlanLines(input.plans ?? [], input.savePlanSidecar),
-    ...(input.builtList ? [`Built list: ${input.builtList}`] : []),
+    ...memoryPlanLines(input.plans ?? []),
     ...(shown.length ? [`Files, newest ${MEMORY_FOLDERS} folders: ${shown.join("; ")}`] : []),
     ...(input.work ? [input.work] : []),
   ];
@@ -765,26 +621,20 @@ type RecordedFile = { ref: string; label: string };
 
 export interface ChatMemoryInput {
   record: Pick<TaskRecordContext, "goal" | "plan" | "artifacts"> | null;
-  /** artifacts the record moved to its sidecar, oldest first */
-  overflow: readonly RecordedFile[];
   messages: readonly { recorded?: RecordedFile[]; tool?: { writes?: string[]; made?: string[] } }[];
   cwd?: string;
-  savePlanSidecar?: MemoryBlockInput["savePlanSidecar"];
-  builtList?: string | null;
   work?: string;
 }
 
-/** memoryBlock for a chat: the record and its sidecar on this PC, plus what synced rows recorded or wrote. */
+/** memoryBlock for a chat: the record on this PC, plus what synced rows recorded or wrote. */
 export function chatMemory(input: ChatMemoryInput): string {
   const rows = input.messages.flatMap((message) => message.recorded ?? []);
-  const recorded = [...input.overflow, ...input.record?.artifacts ?? [], ...rows];
+  const recorded = [...input.record?.artifacts ?? [], ...rows];
   return memoryBlock({
-    files: [...input.overflow, ...input.record?.artifacts ?? []].map((item) => item.ref)
+    files: (input.record?.artifacts ?? []).map((item) => item.ref)
       .concat(input.messages.flatMap((message) => [...(message.recorded ?? []).map((item) => item.ref), ...message.tool?.writes ?? [], ...message.tool?.made ?? []])),
     cwd: input.cwd,
     plans: planFiles({ goal: input.record?.goal ?? "", plan: input.record?.plan ?? [], artifacts: recorded }, input.cwd),
-    savePlanSidecar: input.savePlanSidecar,
-    builtList: input.builtList,
     work: input.work,
   });
 }

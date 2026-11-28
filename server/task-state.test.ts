@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -23,7 +23,6 @@ import {
   assignTaskNextAction,
   deleteTaskResumePacket,
   groundTaskArtifacts,
-  readTaskArtifactOverflow,
   readTaskResumePacket,
   settleTaskResumePacket,
   stageTaskResumePacket,
@@ -34,7 +33,6 @@ import {
   writeTaskResumePacket,
   type TaskResumePacket,
 } from "./task-state.ts";
-import { writeTaskPlanSidecar } from "./task-plan-sidecar.ts";
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket } from "./task-state-fold.ts";
 import { taskAskSchema, type TaskAsk } from "./task-asks.ts";
 
@@ -729,9 +727,9 @@ describe("task state clipping", () => {
     expect(parsed.data.plan?.map((item) => item.step)).toEqual(Array.from({ length: 20 }, (_, index) => `step ${index}`));
     expect(parsed.data.plan?.filter((item) => item.status === "active")).toHaveLength(1);
     expect(parsed.data.blockers?.[0]?.note).toBe("blocker 2");
-    expect(parsed.data.artifacts).toHaveLength(22);
+    expect(parsed.data.artifacts).toHaveLength(20);
     expect(parsed.data.asks).toHaveLength(30);
-    expect(clipped).toEqual(["plan (25 > 20)", "plan (2 active > 1, later ones set to pending)", "blockers (12 > 10)"]);
+    expect(clipped).toEqual(["plan (25 > 20)", "plan (2 active > 1, later ones set to pending)", "blockers (12 > 10)", "artifacts (22 > 20)"]);
   });
 
   it("keeps every plan step and leaves only the first active one active", () => {
@@ -746,82 +744,5 @@ describe("task state clipping", () => {
       { step: "a", status: "done" }, { step: "b", status: "active" }, { step: "c", status: "pending" }, { step: "d", status: "pending" },
     ]);
     expect(clipped).toEqual(["plan (3 active > 1, later ones set to pending)"]);
-  });
-});
-
-describe("artifact overflow", () => {
-  let dir: string;
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "task-overflow-")); });
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
-
-  it("names the plan sidecar by an absolute path from a relative data dir", () => {
-    const relativeDir = relative(process.cwd(), mkdtempSync(join(process.cwd(), "plan-sidecar-")));
-    try {
-      const path = writeTaskPlanSidecar("thread-1", ["plan.md"], { dir: relativeDir });
-      expect(isAbsolute(path)).toBe(true);
-      expect(path).toBe(resolve(relativeDir, "thread-1.plans.jsonl"));
-    } finally {
-      rmSync(relativeDir, { recursive: true, force: true });
-    }
-  });
-
-  it("skips reading the sidecar when all artifacts fit", () => {
-    const old = JSON.stringify({ ref: "older/plan.md", label: "Saved plan" });
-    writeFileSync(join(dir, "thread-1.artifacts.jsonl"), old + "\n");
-    const parse = vi.spyOn(JSON, "parse");
-    try {
-      writeTaskResumePacket(packet(), { dir });
-      expect(parse).not.toHaveBeenCalledWith(old);
-    } finally {
-      parse.mockRestore();
-    }
-    expect(readTaskArtifactOverflow("thread-1", { dir })).toEqual([JSON.parse(old)]);
-  });
-
-  it("moves artifacts past the cap to the overflow file instead of deleting them", () => {
-    const shots = Array.from({ length: 25 }, (_, index) => ({ ref: join(dir, "shots", `shot-${index}.png`), label: `Shot ${index}` }));
-    const saved = writeTaskResumePacket(packet({ artifacts: shots }), { dir });
-    expect(saved.artifacts.map((item) => item.label)).toEqual(shots.slice(5).map((item) => item.label));
-    expect(readTaskArtifactOverflow("thread-1", { dir })).toEqual(shots.slice(0, 5));
-    writeTaskResumePacket(saved, { dir });
-    expect(readTaskArtifactOverflow("thread-1", { dir })).toEqual(shots.slice(0, 5));
-    expect(deleteTaskResumePacket("thread-1", { dir })).toBe(true);
-    expect(readTaskArtifactOverflow("thread-1", { dir })).toEqual([]);
-  });
-
-  it("keeps artifacts the byte budget prunes", () => {
-    const long = Array.from({ length: 20 }, (_, index) => ({ ref: join(dir, "x".repeat(380), `file-${index}.md`), label: "l".repeat(200) }));
-    const completed = Array.from({ length: 30 }, (_, index) => ({ note: `${index} ${"n".repeat(290)}`, at: index }));
-    const saved = writeTaskResumePacket(packet({ artifacts: long, completed }), { dir });
-    expect(saved.artifacts.length).toBeLessThan(20);
-    const kept = new Set(saved.artifacts.map((item) => item.ref));
-    expect(readTaskArtifactOverflow("thread-1", { dir })).toEqual(long.filter((item) => !kept.has(item.ref)));
-  });
-
-  it("stays readable past the 8 MiB read cap and keeps every ref", () => {
-    const sidecar = join(dir, "thread-1.artifacts.jsonl");
-    const lines: string[] = [];
-    let bytes = 0;
-    // fill by bytes, not a fixed margin: temp paths differ by OS and the append must cross the cap on all of them
-    for (;;) {
-      const line = `${JSON.stringify({ ref: join(dir, "history", `file-${lines.length}.md`), label: "p".repeat(185) })}\n`;
-      if (bytes + Buffer.byteLength(line) > 8 * 1024 * 1024 - 100) break;
-      lines.push(line);
-      bytes += Buffer.byteLength(line);
-    }
-    writeFileSync(sidecar, lines.join(""));
-    expect(readTaskArtifactOverflow("thread-1", { dir })).toHaveLength(lines.length);
-    const later = Array.from({ length: 30 }, (_, index) => ({ ref: join(dir, "later", `shot-${index}.png`), label: `Shot ${index}` }));
-    writeTaskResumePacket(packet({ artifacts: later }), { dir });
-    expect(statSync(sidecar).size).toBeLessThanOrEqual(8 * 1024 * 1024);
-    expect(statSync(join(dir, "thread-1.artifacts.1.jsonl")).size).toBeLessThanOrEqual(8 * 1024 * 1024);
-    const read = readTaskArtifactOverflow("thread-1", { dir });
-    expect(read).toHaveLength(lines.length + 10);
-    expect(read[0]!.ref).toBe(join(dir, "history", "file-0.md"));
-    expect(read.slice(-10)).toEqual(later.slice(0, 10));
-    writeTaskResumePacket(packet({ artifacts: later }), { dir });
-    expect(readTaskArtifactOverflow("thread-1", { dir })).toHaveLength(lines.length + 10);
-    expect(deleteTaskResumePacket("thread-1", { dir })).toBe(true);
-    expect(existsSync(join(dir, "thread-1.artifacts.1.jsonl"))).toBe(false);
   });
 });

@@ -1,13 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, sep } from "node:path";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import {
   buildResumeFallback,
   buildTurnContext,
-  builtListPath,
   countLastTurnToolRounds,
   countSessionToolRounds,
   engineIsFresh,
@@ -35,10 +34,7 @@ import {
 } from "./turn-context.ts";
 import { isRecoveringPacket, unsettledRequest } from "./task-recovery-flush.ts";
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket, stampTaskResumePacket } from "./task-state-fold.ts";
-import { deleteTaskResumePacket, type TaskResumePacket } from "./task-state.ts";
-import { writeTaskPlanSidecar } from "./task-plan-sidecar.ts";
-import { planFiles as oldPlanFiles } from "./testing/plan-files-c9206fd80.ts";
-import { planFiles as prevPlanFiles } from "./testing/plan-files-9c19449a1.ts";
+import type { TaskResumePacket } from "./task-state.ts";
 import { testHome } from "./testing/test-home.ts";
 import { applyPicks } from "./picks.ts";
 import { asksBlock } from "./task-asks.ts";
@@ -1276,12 +1272,13 @@ describe("fresh-session memory block", () => {
   const shots = Array.from({ length: 11 }, (_, index) => join(home, "launch", "real-shots", `workers-${String(index + 1).padStart(2, "0")}.png`));
   const plan = join(home, "launch", "paste", "03-thursday.md");
   const tokens = (text: string) => Math.ceil(Buffer.byteLength(text, "utf8") / 3);
+  const stepPins = (step: string) => planFiles({ goal: "Ship it", plan: [{ step, status: "active" }] }, cwd);
+  const named = (...names: string[]) => names.map((name) => join(cwd, name));
 
   it("names the plan first, then each folder with its count and newest files, newest folder first", () => {
-    expect(memoryBlock({ files: [...shots, shots[0]!, "notes/a.md"], cwd, plans: [plan], builtList: join(home, "built.md"), work: "Your work: #12 merged" })).toBe([
+    expect(memoryBlock({ files: [...shots, shots[0]!, "notes/a.md"], cwd, plans: [plan], work: "Your work: #12 merged" })).toBe([
       "[Wink memory - open these before answering about the plan or what is built or merged, or starting new work:]",
       `Read first, your plan: ${plan}`,
-      `Built list: ${join(home, "built.md")}`,
       `Files, newest 4 folders: notes 1 (a.md); ${join(home, "launch", "real-shots")} 11 (workers-01.png, workers-11.png)`,
       "Your work: #12 merged",
     ].join("\n"));
@@ -1300,28 +1297,15 @@ describe("fresh-session memory block", () => {
     for (const path of plans) expect(text).toContain(path);
   });
 
-  it("keeps 1,000 full plan paths on disk and shows a bounded list with a pointer", () => {
-    const dir = join(testHome(), "plan-state");
-    const threadId = "large-plan";
+  it("cuts a long plan list inline and counts the rest, with no sidecar", () => {
     const paths = Array.from({ length: 1000 }, (_, index) => join(cwd, "계획".repeat(30), `release-${index}.md`));
-    const sidecar = join(dir, `${threadId}.plans.jsonl`);
-    const text = chatMemory({
-      record: null, messages: [], cwd,
-      overflow: paths.map((ref) => ({ ref, label: "Launch plan" })),
-      savePlanSidecar: (refs) => writeTaskPlanSidecar(threadId, refs, { dir }),
-    });
-    const prefix = "Read first, your plan: ";
-    const [, line = "", pointer] = text.split("\n");
-    expect(line).toMatch(/^Read first, your plan: /);
-    const shown = line.slice(prefix.length).split("; ");
+    const [, line = "", more, ...rest] = memoryBlock({ files: [], plans: paths }).split("\n");
+    const shown = line.slice("Read first, your plan: ".length).split("; ");
     expect(shown).toEqual(paths.slice(0, shown.length));
     expect(Buffer.byteLength(line)).toBeLessThanOrEqual(MAX_MEMORY_PLAN_BYTES);
     expect(Buffer.byteLength(`${line}; ${paths[shown.length]}`)).toBeGreaterThan(MAX_MEMORY_PLAN_BYTES);
-    expect(pointer).toBe(`+${paths.length - shown.length} more paths in ${sidecar}`);
-    expect(text).not.toContain(paths.at(-1));
-    expect(readFileSync(sidecar, "utf8").trimEnd().split("\n").map((row) => JSON.parse(row))).toEqual(paths);
-    deleteTaskResumePacket(threadId, { dir });
-    expect(existsSync(sidecar)).toBe(false);
+    expect(more).toBe(`+${paths.length - shown.length} more plan paths`);
+    expect(rest).toEqual([]);
   });
 
   it("stays small", () => {
@@ -1330,7 +1314,6 @@ describe("fresh-session memory block", () => {
     const typical = memoryBlock({
       files: [...shots.map((path) => path.replace(join(home, "launch"), real)), `${real}\\paste\\03-thursday.md`, `${real}\\paste\\02-wednesday.md`],
       plans: [`${real}\\paste\\03-thursday.md`],
-      builtList: `${real}\\built.md`,
       home: someone,
       work: "Your work, newest 4: #1842 fix: show the plan (open PR); #1841 fix: name the shots (merged); fix/launch-post abc1234 (unfinished branch)",
     });
@@ -1381,271 +1364,25 @@ describe("fresh-session memory block", () => {
     }, cwd)).toEqual([join(cwd, "plan.md"), join(cwd, "review.txt")]);
   });
 
-  const taskFolder = (name: string, files: string[]) => {
-    const folder = join(testHome(), name);
-    for (const file of files) {
-      mkdirSync(dirname(join(folder, file)), { recursive: true });
-      writeFileSync(join(folder, file), file);
-    }
-    return folder;
-  };
-  const stepPins = (step: string, folder: string) => planFiles({ goal: "Ship it", plan: [{ step, status: "active" }] }, folder);
-
-  it("pins both files a CJK conjunction joins", () => {
-    const folder = taskFolder("joined", ["plan.md", "review.txt", "회의록.md", "메모.pdf"]);
-    for (const [step, ...both] of [
-      ["plan.md和review.txt都要更新。", "plan.md", "review.txt"],
-      ["plan.mdとreview.txt", "plan.md", "review.txt"],
-      ["plan.md와review.txt", "plan.md", "review.txt"],
-      ["회의록.md메모.pdf", "회의록.md", "메모.pdf"],
-    ]) {
-      const pins = stepPins(step!, folder);
-      expect(pins, step).toEqual(expect.arrayContaining(both.map((name) => join(folder, name))));
-      expect(pins.filter((pin) => both.every((name) => pin.includes(name))), step).toEqual([]);
-    }
+  it("pins the whole token and each name CJK prose runs into it", () => {
+    for (const [step, ...names] of [
+      ["请先读plan.md，再打开review.txt。", "请先读plan.md", "plan.md", "再打开review.txt", "review.txt"],
+      ["plan.md和review.txt都要更新。", "plan.md和review.txt", "plan.md", "和review.txt", "review.txt"],
+      ["plan.mdとreview.txt", "plan.mdとreview.txt", "plan.md", "とreview.txt", "review.txt"],
+      ["회의록.md메모.pdf", "회의록.md메모.pdf", "회의록.md", "메모.pdf"],
+      ["新plan.md版.md", "新plan.md版.md", "新plan.md", "版.md", "plan.md"],
+      ["docs/計画.md改訂.md", "docs/計画.md改訂.md", "docs/計画.md", "改訂.md"],
+      ["请先读notes.md/plan.txt。", "请先读notes.md/plan.txt", "notes.md/plan.txt"],
+      ["release-plan.md", "release-plan.md"],
+    ]) expect(stepPins(step!), step).toEqual(named(...names));
   });
 
-  it("pins both files a joiner separates, and the joined name too unless both files are on disk", () => {
-    for (const [index, files] of [["plan.md", "review.txt"], ["plan.md"], ["review.txt"]].entries()) {
-      const folder = taskFolder(`joiner-${index}`, files);
-      for (const joiner of ["和", "と", "와", " and ", ",", "，", "、"]) {
-        const step = `plan.md${joiner}review.txt`;
-        const pins = stepPins(step, folder);
-        expect(pins, step).toEqual(expect.arrayContaining([join(folder, "plan.md"), join(folder, "review.txt")]));
-        expect(pins.filter((pin) => pin.includes("plan.md") && pin.includes("review.txt")), step).toEqual(files.length < 2 && /^\p{L}$/u.test(joiner) ? [join(folder, step)] : []);
-      }
-    }
-  });
-
-  it("pins the files CJK prose runs into", () => {
-    const folder = taskFolder("prefixed", ["plan.md", "review.txt"]);
-    expect(stepPins("请先读plan.md，再打开review.txt。", folder)).toEqual(expect.arrayContaining([join(folder, "plan.md"), join(folder, "review.txt")]));
-  });
-
-  it("pins an archive whose name holds a document name", () => {
-    const folder = taskFolder("archive", ["report.md旧版.zip"]);
-    expect(stepPins("Archive report.md旧版.zip tomorrow.", folder)).toContain(join(folder, "report.md旧版.zip"));
-  });
-
-  const names = ["plan.md", "review.txt", "회의록.md", "v2/計画-final.md", "résumé.txt", "資料/発売.txt", "🚀draft.md", "report.md旧版.zip", "메모.pdf", "会議メモ.docx"];
-  const randomText = (seed: number) => {
-    const random = (count: number) => (seed = seed * 48271 % 2147483647) % count;
-    const scripts = [[0xac00, 0xd7a3], [0x3041, 0x3096], [0x30a1, 0x30fa], [0x4e00, 0x9fff]] as const;
-    const prose = (least: number) => {
-      const [first, last] = scripts[random(scripts.length)]!;
-      return Array.from({ length: least + random(8) }, () => random(6) ? String.fromCodePoint(first + random(last - first + 1)) : " ，。、"[random(4)]).join("");
-    };
-    const word = () => Array.from({ length: 1 + random(8) }, () => String.fromCharCode(97 + random(26))).join("");
-    return { random, prose, word };
-  };
-  const planned = ["draft.md", "docs/plan.md", "next-review.txt", "v2/draft.md", "notes.md/todo.txt"];
-  const expectPins = (text: string, named: string[], folder: string) => {
-    const [goal, ...steps] = text.split("\n");
-    const record = { goal: goal!, plan: steps.map((step) => ({ step, status: "active" as const })) };
-    const pins = planFiles(record, folder);
-    expectOldReadingsKept(record, folder);
-    expect(pins, text).toEqual(expect.arrayContaining(named.map((name) => join(folder, name))));
-    for (const pin of pins) {
-      const name = relative(folder, pin).split(sep).join("/");
-      expect(text, pin).toContain(name);
-    }
-  };
-
-  // c9206fd80 and 9c19449a1 each pinned a name the other dropped; only a name missing from disk that runs from one file on disk to another, as plan.md和review.txt does, may leave the pinned set
-  function expectOldReadingsKept(record: { goal: string; plan: { step: string; status: "active" }[] }, folder: string) {
-    const text = [record.goal, ...record.plan.map((item) => item.step)].join("\n");
-    const pins = new Set(planFiles(record, folder));
-    const files = [...pins].filter((pin) => existsSync(pin)).map((pin) => relative(folder, pin).split(sep).join("/"));
-    for (const pin of new Set([...oldPlanFiles(record, folder), ...prevPlanFiles(record, folder)])) {
-      const name = relative(folder, pin).split(sep).join("/");
-      const joined = !existsSync(pin) && files.some((first) => name.startsWith(first) && files.some((last) => name.endsWith(last) && first.length + last.length <= name.length));
-      if (!joined) expect(pins.has(pin), `${name} in ${text}`).toBe(true);
-    }
-  }
-
-  it("keeps every reading c9206fd80 and 9c19449a1 pinned but a name missing from disk that runs from one file on disk to another", () => {
-    const archived: [string[], string[]][] = [];
-    const add = (step: string, ...states: string[][]) => { for (const files of states) archived.push([[step], files]); };
-    for (const joiner of ["和", "と", "와", " and ", ",", "，", "、", "and"]) add(`plan.md${joiner}review.txt`, ["plan.md", "review.txt"], ["plan.md"], ["review.txt"], []);
-    for (const name of ["plan.md新Review.md", "docs/plan.md新Review.md", "計画.md改訂Final.md", "資料.md新規/計画.md", "계획.md수정.md새.md최종.md", "plan.md改訂.md", "新plan.md版.md", "计划.txt改订.json新版.md", "报告.md新版.md", "計画.md改訂.md", "계획.md수정.md", "docs/报告.md新版.md", "docs/計画.md改訂.md", "docs/계획.md수정.md"]) {
-      add(name, [], [name]);
-      add(`"${name}"`, [], [name]);
-    }
-    add("Create 新plan.md版.md tomorrow", ["plan.md"], ["plan.md", "plan.md版.md"], ["plan.md", "新plan.md版.md", "plan.md版.md"]);
-    add("Then 请先读plan.md改訂.md", ["plan.md"], ["plan.md", "请先读plan.md改訂.md"], ["plan.md", "plan.md改訂.md", "请先读plan.md改訂.md"]);
-    add("Save notes.md.bak", [], ["notes.md.bak"]);
-    add("Then 请先读2027.md", [], ["2027.md"]);
-    add("Please read release notes.md", [], ["release notes.md"]);
-    for (const [read, and, prefix, old, tail] of [["请先读", "和", "新", "旧版", "都要更新"], ["まず読む", "と", "仮", "旧版", "を開く"], ["먼저읽기", "와", "새", "구버전", "를열기"]]) {
-      add(`plan.md${and}review.txt${tail}`, ["plan.md", "review.txt"]);
-      add(`${read}plan.md，${read}review.txt。`, ["plan.md", "review.txt"]);
-      add(`${read}report.md${old}.zip`, [`report.md${old}.zip`]);
-      add(`${read}draft.md${tail}`, [], ["draft.md"]);
-      add(`${read}plan.md${and}draft.md${tail}`, ["plan.md"], ["plan.md", "draft.md"]);
-      add(`Create ${prefix}draft.md tomorrow`, ["draft.md"], ["draft.md", `${prefix}draft.md`]);
-      add(`Then ${read}brief.md`, ["brief.md"]);
-      add(`Then ${read} "brief.md"`, ["brief.md"]);
-      add(`Then ${read}plan.md`, ["plan.md"]);
-      add(`Then ${read}draft.md`, []);
-      for (const name of [`${prefix}draft.md`, `docs/${prefix}draft.md`, `${prefix}agenda.md`, `docs/${prefix}agenda.md`]) add(name, [], [name]);
-    }
-    add("Create future.md", []);
-    add('Create "新draft.md" tomorrow', ["draft.md"]);
-    add('先读"release notes.md"和"v2/check list.txt"。', ["release notes.md", "v2/check list.txt"]);
-    add("先读release notes.md。", ["release notes.md"]);
-    add("请先读a/plan.md和b/plan.md。", ["a/plan.md", "b/plan.md"]);
-    add("Read a/plan.md and b/plan.md", ["a/plan.md", "b/plan.md"]);
-    add("请先读notes.md/plan.txt。", [], ["notes.md/plan.txt"]);
-    add("请先读docs/plan.md。", [], ["docs/plan.md"]);
-    add("Read report.md旧版.zip", ["report.md", "report.md旧版.zip"]);
-    add('Then 请先读"plan.md"', ["plan.md"]);
-    const glued: [string, string, string][] = [
-      ["plan.md新Review.md", "plan.md新Review.md", "plan.md"],
-      ["資料.md新規/計画.md", "資料.md新規/計画.md", "資料.md"],
-      ["계획.md수정.md새.md최종.md", "수정.md새.md최종.md", "계획.md"],
-      ["계획.md수정.md새.md최종.md", "계획.md수정.md새.md최종.md", "계획.md"],
-      ["请创建Draft.md新版.md校对.md", "Draft.md新版.md校对.md", "Draft.md"],
-      ["请创建Draft.md新版.md", "Draft.md新版.md", "Draft.md"],
-      ["更新release.md新版Final.txt", "release.md新版Final.txt", "release.md"],
-      ["Create guide.md版/spec.pdf", "guide.md版/spec.pdf", "guide.md"],
-      ["Read 旧版.zip新Review.md", "新Review.md", "旧版.zip"],
-      ["Create Report.md新Final.pdf", "Report.md新Final.pdf", "Final.pdf"],
-      ["Read notes.md旧稿/Release.pdf", "notes.md旧稿/Release.pdf", "Release.pdf"],
-    ];
-    for (const [step, name, other] of glued) {
-      add(step, [], ["other.txt"], [other], [name], [other, name]);
-      add(`Read "${name}"`, [other]);
-    }
-    archived.push([Array.from({ length: 20 }, (_, index) => `${"先".repeat(125)}查阅file${index}.md和review.txt。`), [...Array.from({ length: 20 }, (_, index) => `file${index}.md`), "review.txt"]]);
-    archived.forEach(([steps, files], index) => expectOldReadingsKept({ goal: "Ship it", plan: steps.map((step) => ({ step, status: "active" as const })) }, taskFolder(`kept-${index}`, files)));
-  });
-
-  it("pins every name 계획.md수정.md새.md최종.md may hold with nothing on disk", () => {
-    const folder = taskFolder("bound", []);
-    const step = "계획.md수정.md새.md최종.md";
-    const kept = ["계획.md", "계획.md수정.md", "계획.md수정.md새.md", "계획.md수정.md새.md최종.md", "수정.md", "수정.md새.md", "수정.md새.md최종.md", "새.md", "새.md최종.md", "최종.md"];
-    expect(stepPins(step, folder)).toEqual(kept.map((name) => join(folder, name)));
-  });
-
-  it("pins every existing file that random CJK prose touches", () => {
-    const folder = taskFolder("generated", names);
-    const { random, prose } = randomText(2006);
-    for (let index = 0; index < 500; index++) {
-      const named = Array.from({ length: 1 + random(4) }, () => names[random(names.length)]!);
-      const text = named.map((name, at) => (at && random(3) === 0 ? "\n" : "") + prose(at ? 1 : 0) + [name, name, `"${name}"`, `「${name}」`][random(4)]).join("") + prose(0);
-      expectPins(text, named, folder);
-    }
-  });
-
-  it("an ambiguous token pins every path it supports (the full token with its directory, and the longest suffix that exists on disk); no reading the step text supports is ever dropped", () => {
-    const lifecycle = taskFolder("lifecycle", ["draft.md"]);
-    for (const prefix of ["新", "別", "새"]) {
-      const step = `Create ${prefix}draft.md tomorrow`;
-      const draft = join(lifecycle, `${prefix}draft.md`);
-      expect(stepPins(step, lifecycle)).toContain(draft);
-      writeFileSync(draft, step);
-      expect(stepPins(step, lifecycle)).toContain(draft);
-      rmSync(draft);
-      expect(stepPins(step, lifecycle)).toContain(draft);
-    }
-    const future = taskFolder("future", ["plan.md", "notes.md/plan.txt"]);
-    for (const [step, ...pinned] of [
-      ["请先读draft.md都要更新", "draft.md"],
-      ["请先读plan.md和draft.md都要更新", "plan.md", "draft.md"],
-      ["まず読むdraft.mdを開く", "draft.md"],
-      ["まず読むplan.mdとdraft.mdを開く", "plan.md", "draft.md"],
-      ["먼저읽기draft.md를열기", "draft.md"],
-      ["먼저읽기plan.md와draft.md를열기", "plan.md", "draft.md"],
-      ["请先读notes.md/plan.txt。", "notes.md/plan.txt"],
-      ["请先读docs/plan.md。", "docs/plan.md"],
-      ["Then 请先读plan.md", "plan.md"],
-      ["Then まず読むplan.md", "plan.md"],
-      ["Then 먼저읽기plan.md", "plan.md"],
-      ["Then 请先读draft.md", "draft.md"],
-    ]) expect(stepPins(step!, future), step).toEqual(expect.arrayContaining(pinned.map((name) => join(future, name))));
-    for (const prefix of ["新", "仮", "새"]) {
-      for (const name of [`${prefix}agenda.md`, `docs/${prefix}agenda.md`]) {
-        const agenda = join(future, name);
-        expect(stepPins(name, future), name).toContain(agenda);
-        mkdirSync(dirname(agenda), { recursive: true });
-        writeFileSync(agenda, name);
-        expect(stepPins(name, future), name).toContain(agenda);
-      }
-    }
-    const folder = taskFolder("planned", names);
-    const { random, prose, word } = randomText(2015);
-    const prefixed = ["新plan.md", "새회의록.md", "別메모.pdf", "新docs/review.txt"];
-    for (let index = 0; index < 500; index++) {
-      const lines = Array.from({ length: 1 + random(3) }, () => {
-        const latin = random(2) === 0;
-        const pool = [...names, ...planned, ...latin ? prefixed : []];
-        const named = Array.from({ length: 1 + random(3) }, () => pool[random(pool.length)]!);
-        const text = latin
-          ? named.map((name) => `${word()} ${[name, name, `"${name}"`][random(3)]}`).join(" ") + ` ${word()}`
-          : named.map((name, at) => prose(at ? 1 : 0) + [name, name, `"${name}"`, `「${name}」`][random(4)]).join("") + prose(0);
-        return { text, named };
-      });
-      expectPins(lines.map((line) => line.text).join("\n"), lines.flatMap((line) => line.named), folder);
-    }
-  });
-
-  it("pins every name in Latin-word steps with CJK glued on and in filename-only steps with folders", () => {
-    const folder = taskFolder("glued", names);
-    const { random, prose, word } = randomText(2016);
-    const filed = ["docs/新agenda.md", "資料/仮draft.md", "v2/새review.txt", "新agenda.md", "v2/計画-final.md", "資料/発売.txt", "docs/plan.md", "notes.md/todo.txt"];
-    for (let index = 0; index < 500; index++) {
-      const lines = Array.from({ length: 1 + random(3) }, () => {
-        if (random(2)) {
-          const name = filed[random(filed.length)]!;
-          return { text: name, named: [name] };
-        }
-        const named = Array.from({ length: 1 + random(3) }, () => [...names, ...planned][random(names.length + planned.length)]!);
-        return { text: named.map((name) => `${word()} ${prose(1).replace(/[ ，。、]/gu, "")}${name}`).join(" ") + ` ${word()}`, named };
-      });
-      expectPins(lines.map((line) => line.text).join("\n"), lines.flatMap((line) => line.named), folder);
-    }
-  });
-
-  it("the pinned set always includes the full token up to its last path extension; inner extensions never cut a planned path", () => {
-    const compound = taskFolder("compound", []);
-    for (const name of ["报告.md新版.md", "計画.md改訂.md", "계획.md수정.md", "plan.md新Review.md", "資料.md新規/計画.md"]) {
-      for (const step of [name, `docs/${name}`]) {
-        const path = join(compound, step);
-        expect(stepPins(step, compound), step).toContain(path);
-        mkdirSync(dirname(path), { recursive: true });
-        writeFileSync(path, step);
-        expect(stepPins(step, compound), step).toContain(path);
-      }
-    }
-    const made = ["報告.md新版.md", "計画.json改訂.txt", "계획.md수정.txt새.md", "資料/會議.txt草稿.md"];
-    const glued = ["plan.md改訂.md", "brief.txt新版.json草稿.md", "notes.json수정.txt", "docs/計画.md改訂.md", "v2/계획.json수정.md새.txt"];
-    const spaced = ["新plan.md版.md", "資料/報告.md新版.txt", "计划.txt改订.json新版.md", "새.md수정.md"];
-    const folder = taskFolder("compounds", [...names, ...made]);
-    const { random, prose, word } = randomText(2017);
-    for (let index = 0; index < 500; index++) {
-      const lines = Array.from({ length: 1 + random(3) }, () => {
-        const style = random(3);
-        if (!style) {
-          const name = [...made, ...glued, ...spaced][random(made.length + glued.length + spaced.length)]!;
-          return { text: name, named: [name] };
-        }
-        const pool = [...made, ...glued, ...style === 1 ? spaced : [], ...names, ...planned];
-        const named = Array.from({ length: 1 + random(3) }, () => pool[random(pool.length)]!);
-        const text = style === 1
-          ? named.map((name) => `${word()} ${[name, name, `"${name}"`][random(3)]}`).join(" ") + ` ${word()}`
-          : named.map((name, at) => prose(at ? 1 : 0) + [name, name, `"${name}"`, `「${name}」`][random(4)]).join("") + prose(0);
-        return { text, named };
-      });
-      expectPins(lines.map((line) => line.text).join("\n"), lines.flatMap((line) => line.named), folder);
-    }
-  });
-
-  it("reads a max-size CJK plan within the restart budget", () => {
-    const folder = taskFolder("budget", ["plan.md", "review.txt", "회의록.md"]);
-    const glued = (ends: number) => "가".repeat(3 * ends) + ".md" + ".a가".repeat(ends);
+  it("reads a max-size CJK plan in well under a millisecond per step", () => {
+    const glued = Array.from({ length: 50 }, (_, index) => `가${index}.md`).join("");
     const started = performance.now();
-    planFiles({ goal: glued(82), plan: Array.from({ length: 20 }, () => ({ step: glued(32), status: "active" as const })) }, folder);
-    expect(performance.now() - started).toBeLessThan(100);
+    const pins = planFiles({ goal: glued, plan: Array.from({ length: 20 }, () => ({ step: glued, status: "active" as const })) }, cwd);
+    expect(performance.now() - started).toBeLessThan(20);
+    expect(pins).toHaveLength(51);
   });
 
   it("expands home-relative plan files with or without a task folder", () => {
@@ -1659,37 +1396,30 @@ describe("fresh-session memory block", () => {
     expect(planFiles(record)).toEqual(expected);
   });
 
-  it("pins a plan the record moved to its sidecar", () => {
-    const shotsRecorded = shots.map((ref, index) => ({ ref, label: `Shot ${index + 1}` }));
-    const text = chatMemory({
-      record: { goal: "Ship the launch", plan: [], artifacts: shotsRecorded.slice(1) },
-      overflow: [{ ref: plan, label: "Thursday launch plan" }, shotsRecorded[0]!],
-      messages: [],
-      cwd,
-    });
-    expect(text).toContain(`Read first, your plan: ${plan}`);
-  });
-
   it("names files and the plan from synced rows when this PC has no record", () => {
     const recorded = [{ ref: plan, label: "Thursday launch plan" }, ...shots.map((ref, index) => ({ ref, label: `Shot ${index + 1}` }))];
-    const text = chatMemory({ record: null, overflow: [], messages: [{ recorded }, { tool: { writes: [join(home, "notes.md")] } }], cwd });
+    const text = chatMemory({ record: null, messages: [{ recorded }, { tool: { writes: [join(home, "notes.md")] } }], cwd });
     expect(text).toContain(`Read first, your plan: ${plan}`);
     expect(text).toContain(`${join(home, "launch", "real-shots")} 11 (workers-11.png, workers-10.png)`);
     expect(text).toContain(`${home} 1 (notes.md)`);
-    expect(chatMemory({ record: null, overflow: [], messages: [], cwd })).toBe("");
+    expect(chatMemory({ record: null, messages: [], cwd })).toBe("");
+  });
+
+  it("reads nothing from disk, so a share path in the plan cannot stall a turn", () => {
+    const source = readFileSync(new URL("./turn-context.ts", import.meta.url), "utf8");
+    expect(source, "build the block from the task packet and rows already in memory; a turn must not list folders or write a sidecar").not.toMatch(/from "node:fs"/);
+    const share = "\\\\share-probe\\offline\\plans";
+    const text = chatMemory({
+      record: { goal: `Open ${share}\\launch.md`, plan: [{ step: `请先读${share}\\計画.md`, status: "active" }], artifacts: [{ ref: `${share}\\brief.md`, label: "Launch plan" }] },
+      messages: [{ recorded: [{ ref: `${share}\\shot.png`, label: "Shot" }] }],
+      cwd,
+    });
+    for (const name of ["launch.md", "計画.md", "brief.md", "shot.png"]) expect(text).toContain(name);
   });
 
   it("names files a shell command made that no call recorded", () => {
-    const text = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: shots } }], cwd });
+    const text = chatMemory({ record: null, messages: [{ tool: { made: shots } }], cwd });
     expect(text).toContain(`${join(home, "launch", "real-shots")} 11 (workers-11.png, workers-10.png)`);
-  });
-
-  it("finds the built list path in the bot's notes, only when the file exists", () => {
-    const built = join(home, "My Drive", "Orbit", "built.md");
-    const notes = `- Feature list: ${built} (one line per feature)\n- other: built.md is in the vault`;
-    expect(builtListPath(notes, (path) => path === built)).toBe(built);
-    expect(builtListPath(notes, () => false)).toBeNull();
-    expect(builtListPath("no list here", () => true)).toBeNull();
   });
 });
 

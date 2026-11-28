@@ -42,7 +42,7 @@ function recordedThread(late = false): Message[] {
   return rows.map((row) => row.id === patch!.id ? { ...row, recorded: patch!.recorded } : row);
 }
 
-const memoryOnB = (messages: readonly Message[]) => chatMemory({ record: null, overflow: [], messages });
+const memoryOnB = (messages: readonly Message[]) => chatMemory({ record: null, messages });
 
 it("keeps recorded files when the call's row completes", () => {
   const [, row] = recordedThread();
@@ -91,4 +91,22 @@ it.each([false, true])("carries recorded files to the other PC on V2 sync, late 
   const text = memoryOnB((await b.scan(scope.threadId)).messages);
   expect(text).toContain(`Read first, your plan: ${plan}`);
   expect(text).toContain(`${join(launch, "real-shots")} 11 (workers-11.png, workers-10.png)`);
+});
+
+it("scrubs a credential from a recorded label before it reaches the other PC", async () => {
+  const folder = temp();
+  const scope = { botSyncId: "marketing", threadId: "t1" };
+  const a = new ThreadSyncV2({ folder, dataDir: temp(), deviceId: "pc-a" });
+  const b = new ThreadSyncV2({ folder, dataDir: temp(), deviceId: "pc-b" });
+  clients.push(a, b);
+  const marker = "ghp_" + "J7k9U3v8N5w2Z6t4X1r0M9s8K7j6H5g4F3d2";
+  const row: Message = { id: "b1", role: "bot", kind: "text", text: "Saved the plan.", at: 1, parentId: null, recorded: [{ ref: plan, label: `Plan ${marker}` }] };
+  await a.commit(scope, [{ kind: "row", value: row }, { kind: "metadata", value: { title: "Marketing", createdAt: 1 } }, { kind: "head", value: "b1" }]);
+  await a.flush(scope);
+  await b.pull(scope);
+  const [local, peer] = await Promise.all([a.scan(scope.threadId), b.scan(scope.threadId)]);
+  for (const { messages } of [local, peer]) {
+    expect(messages.flatMap((message) => message.recorded ?? []).map((item) => item.ref)).toEqual([plan]);
+    expect(JSON.stringify(messages)).not.toContain(marker);
+  }
 });

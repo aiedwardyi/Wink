@@ -60,7 +60,7 @@ it("names a folder past the listing bound even when its first entries are untouc
   utimesSync(made.at(-1)!, new Date(since), new Date(since));
   const found = shellMade(`Get-ChildItem -LiteralPath '${shots}' -Filter '514.png' | ForEach-Object { Add-Content -LiteralPath $_.FullName -Value 'more' }`, cwd, since);
   expect(found).toContain(shots);
-  const memory = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: found } }], cwd });
+  const memory = chatMemory({ record: null, messages: [{ tool: { made: found } }], cwd });
   expect(memory).toContain("launch outside task 1 (real-shots)");
 });
 
@@ -71,7 +71,7 @@ it("keeps every file past the listing bound in a folder made long before, and th
   for (const path of late) utimesSync(path, new Date(since), new Date(since));
   const found = shellMade(`cp source/*.png "${shots}"`, cwd, since);
   expect(found.slice().sort()).toEqual([...late, shots].sort());
-  const memory = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: found } }], cwd });
+  const memory = chatMemory({ record: null, messages: [{ tool: { made: found } }], cwd });
   expect(memory).toContain(`${join("launch outside task", "real-shots")} 11 (`);
   expect(memory).toContain("launch outside task 1 (real-shots)");
   for (const path of made) utimesSync(path, new Date(since), new Date(since));
@@ -97,7 +97,7 @@ it("leaves out a folder past the listing bound that only a walk base misread lis
   const command = [...outputs.map(copy), `Push-Location -Path '${join(cwd, "launch outside task")}'`, copy("real-shots"), "Pop-Location", "Get-ChildItem -Path 'big-old' | Out-Null"].join("\n");
   const found = shellMade(command, cwd, since);
   expect(found.slice().sort()).toEqual(made.slice().sort());
-  const memory = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: found } }], cwd });
+  const memory = chatMemory({ record: null, messages: [{ tool: { made: found } }], cwd });
   for (const folder of [...outputs, join("launch outside task", "real-shots")]) expect(memory).toContain(`${folder} 11 (`);
   expect(memory).not.toContain("big-old");
   expect(shellMade("Get-ChildItem -Path 'big-old' | Out-Null", cwd, since)).toEqual([big]);
@@ -135,7 +135,7 @@ it("follows a folder the command left and then removed", () => {
   ].join("\n");
   const found = shellMade(command, cwd, since);
   expect(found.slice().sort()).toEqual(made);
-  const memory = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: found } }], cwd });
+  const memory = chatMemory({ record: null, messages: [{ tool: { made: found } }], cwd });
   expect(memory).toContain(`${join("launch outside task", "real-shots")} 11 (`);
 });
 
@@ -181,6 +181,6 @@ it.each(twoDestinations)("reads each relative destination in the active folder w
   const [first, second] = locations(one, two);
   const found = shellMade(`${first}; ${copy}; ${second}; ${copy}`, cwd, since);
   expect(found.slice().sort()).toEqual(made.slice().sort());
-  const memory = chatMemory({ record: null, overflow: [], messages: [{ tool: { made: found } }], cwd });
+  const memory = chatMemory({ record: null, messages: [{ tool: { made: found } }], cwd });
   for (const folder of ["one", "two"]) expect(memory).toContain(`${join(folder, "real-shots")} 11 (`);
 });

@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -179,6 +179,7 @@ interface TaskStateFields {
   goal?: string;
   plan?: Array<{ step: string; status: "pending" | "active" | "done" | "skipped" }>;
   asks?: Array<{ id?: string; ask?: string; status: string }>;
+  artifacts?: Array<{ ref: string; label: string }>;
 }
 
 type ApiBody =
@@ -891,11 +892,8 @@ describe("context compaction e2e", () => {
       flushReason: "progress",
       turnsAtWrite: 0,
     }));
-    mkdirSync(join(dataDir, "workspaces", MARKETING.botId), { recursive: true });
     mkdirSync(launch, { recursive: true });
-    writeFileSync(join(launch, "built.md"), "- launch posts\n");
     for (const name of ["plan.md", "review.txt", "draft.md", "brief.md"]) writeFileSync(join(launch, name), name);
-    writeFileSync(join(dataDir, "workspaces", MARKETING.botId, "MEMORY.md"), `Built list = ${join(launch, "built.md")}, one line per feature.\n`);
     writeFileSync(join(dataDir, "task-state", `${CLAUDE_FAT_STOP.threadId}.json`), JSON.stringify({
       v: 1,
       threadId: CLAUDE_FAT_STOP.threadId,
@@ -1127,7 +1125,7 @@ describe("context compaction e2e", () => {
     expect(prompt).toContain("tree inspected");
   }, 30_000);
 
-  it("names its plan, shots folder and built list after a fresh session, and adds nothing to the next turn", async () => {
+  it("names its plan and shots folder after a fresh session, and adds nothing to the next turn", async () => {
     const send = async (text: string) => {
       expect((await api("POST", `/api/bots/${MARKETING.botId}/messages`, { text })).status).toBe(202);
       await waitFor(async () => (await botById(MARKETING.botId))?.busy === false);
@@ -1141,9 +1139,7 @@ describe("context compaction e2e", () => {
     const fresh = { dump, prompt: String(dump.prompt.message.content) };
     expect(fresh.dump.argv).not.toContain("--resume");
     expect(pinned(fresh.prompt)).toEqual(expect.arrayContaining(plans));
-    expect(pinned(fresh.prompt)).not.toContain(join(launch, "plan.md和review.txt"));
     expect(fresh.prompt).toMatch(/real-shots 11 \(workers-11\.png, workers-10\.png\)/);
-    expect(fresh.prompt).toContain(`Built list: ${join(launch, "built.md")}`);
     expect(fresh.prompt).not.toContain("search_my_chats");
     expect(fresh.dump.mcpConfig.mcpServers.agents.env.OMB_OWNER_CHATS).not.toBe("1");
     await send("and friday?");
@@ -1191,6 +1187,36 @@ describe("context compaction e2e", () => {
       .filter((line) => line.pid === dump.pid).at(-1)!;
     expect(fresh).toContain("real-shots 1 (cover.png)");
     expect(next.text).toBe("what should I do next?");
+  }, 30_000);
+
+  it("sends a warm turn past the inline plan cap and writes nothing beside the task record", async () => {
+    const { botId, threadId } = MARKETING;
+    const send = (text: string) => api("POST", `/api/bots/${botId}/messages`, { text });
+    const idle = () => waitFor(async () => (await botById(botId))?.busy === false);
+    const latest = () => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(readFileSync(claudePromptLogPath, "utf8").trim().split("\n").at(-1)!));
+    expect((await send("warm the session")).status).toBe(202);
+    await idle();
+    const steps = Array.from({ length: 20 }, (_, index) => join("planning", `${"weekly-launch-review-".repeat(6)}${index}.md`));
+    expect((await botTaskState(botId, threadId, { plan: steps.map((step) => ({ step, status: "pending" as const })) })).status).toBe(200);
+    const taskState = join(home, ".orbit", "task-state");
+    const files = readdirSync(taskState).sort();
+    const warm = latest();
+    expect((await send("thanks for the warm plan")).status).toBe(202);
+    await idle();
+    expect(latest()).toEqual({ pid: warm.pid, text: "thanks for the warm plan" });
+    expect(readdirSync(taskState).sort()).toEqual(files);
+  }, 30_000);
+
+  it("scrubs a credential from a recorded file label before the row is saved", async () => {
+    const { botId, threadId } = MARKETING;
+    expect((await api("POST", `/api/bots/${botId}/messages`, { text: "record the weekly launch plan" })).status).toBe(202);
+    await waitFor(async () => (await botById(botId))?.busy === false);
+    const marker = "ghp_" + "J7k9U3v8N5w2Z6t4X1r0M9s8K7j6H5g4F3d2";
+    expect((await botTaskState(botId, threadId, { artifacts: [{ ref: join(home, "launch", "plan.md"), label: `Plan ${marker}` }] })).status).toBe(200);
+    const rows = (await botById(botId)).messages.flatMap((message: { recorded?: { ref: string; label: string }[] }) => message.recorded ?? []);
+    expect(rows.some((row: { ref: string }) => row.ref.endsWith("plan.md"))).toBe(true);
+    expect(JSON.stringify(rows)).not.toContain(marker);
+    expect(JSON.stringify(storedTaskPacket(threadId).artifacts)).not.toContain(marker);
   }, 30_000);
 
   it("still --resumes Stop recovery on an uncompacted fat Claude soak", async () => {

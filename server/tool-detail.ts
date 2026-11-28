@@ -68,7 +68,9 @@ function redactPreview(text: string): string {
   return redactSecretsInText(safe);
 }
 
-export function redactToolMessage<T extends Pick<Message, "tool">>(message: T): T {
+export function redactToolMessage<T extends Pick<Message, "tool" | "recorded">>(message: T): T {
+  // every row write and sync passes here, so a task-state label is scrubbed as the task packet scrubs it
+  if (message.recorded) message = { ...message, recorded: message.recorded.map(({ ref, label }) => ({ ref: redactSecretsInText(ref), label: redactSecretsInText(label) })) };
   const source = message.tool?.detail;
   if (!source) return message;
   const input = normalize(source.input ?? "");
