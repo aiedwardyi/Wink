@@ -5,7 +5,7 @@
 // approvals + userInput answers. Effort/model switching and account usage
 // windows build on the same channel. Never extend acp/core.ts.
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os, { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -253,14 +253,18 @@ const guestDesk = (threadId: string): string => {
   mkdirSync(dir, { recursive: true });
   return dir;
 };
-/** The session a guest's turn last started in this chat's desk, kept beside it across restarts. */
-const deskSession = (threadId: string): string => `${deskPath(threadId)}.session`;
-const guestStarted = (threadId: string): string | null => {
+/** The session an owner's turn last opened in the project, kept beside a chat's desk across restarts. */
+const ownerMark = (threadId: string): string => `${deskPath(threadId)}.owner`;
+const ownerSession = (threadId: string): string | null => {
   try {
-    return readFileSync(deskSession(threadId), "utf8");
+    return readFileSync(ownerMark(threadId), "utf8");
   } catch {
     return null;
   }
+};
+// a chat with no desk never had a guest's turn, so every session in it is rooted in the project
+const markOwner = (threadId: string, sessionId: string) => {
+  if (existsSync(deskPath(threadId))) writeFileSync(ownerMark(threadId), sessionId);
 };
 
 export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConfig> {
@@ -528,11 +532,11 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         };
         // a resumed session keeps the root it started in, the host's project: someone else's words start over
         if (typeof shape.resumeCursor === "string" && !guestText(shape)) {
-          // a session a guest's turn started in its empty folder moves to this turn's root (Muse 1.4.25+).
-          // Muse refuses any root for a session it still holds loaded, as it does an owner's own after a
-          // restart, so only that one resume names it. One that can't move starts fresh below, never there.
-          const relocate = guestStarted(shape.threadId) === shape.resumeCursor;
-          if (relocate) rmSync(deskSession(shape.threadId), { force: true });
+          // a guest's turn may have started this session in its empty folder: Muse 1.4.25+ moves it to this
+          // turn's root. Muse refuses any root for a session it still holds loaded, as it does an owner's own
+          // after a restart, so only a session an owner's turn opened in the project resumes without one. One
+          // that can't move starts fresh below, never in the old root.
+          const relocate = existsSync(deskPath(shape.threadId)) && ownerSession(shape.threadId) !== shape.resumeCursor;
           try {
             const resumed: any = await request(
               "session/resume",
@@ -556,8 +560,8 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           ));
           // the fallback text carries the history the skipped resume would have
           if (typeof shape.resumeCursor === "string") host.fellBack = true;
-          if (guestText(shape)) writeFileSync(deskSession(shape.threadId), host.sessionId!);
         }
+        if (!guestText(shape)) markOwner(shape.threadId, host.sessionId!);
         if (model && model !== host.model) {
           // Mid-session switch (cursor.ts configureSession is the ACP
           // twin): unlike cursor there is no argv pin to fall back on,
@@ -968,6 +972,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             );
             const freshId = typeof started?.session?.sessionId === "string" ? started.session.sessionId : null;
             if (!freshId) return false;
+            markOwner(threadId, freshId);
             state.sessionId = freshId;
             state.mspTurnId = null;
             state.model = typeof started?.session?.modelId === "string" ? started.session.modelId : null;

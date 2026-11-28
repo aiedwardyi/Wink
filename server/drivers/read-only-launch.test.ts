@@ -1,5 +1,6 @@
 // Every engine's read-only turn, launched for real against its fake CLI on its most permissive
 // instance (full auto / bypass): the restriction must show in the launch itself, not just a flag.
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -336,6 +337,88 @@ describe("a room guest's read-only turn reads no host file", () => {
     // the owner's session, rooted in the project, is the one a guest's ask would resume
     expect(await read("t-muse-owner", OWNER_TURN)).toBe(CANARY);
     expect(await read("t-muse-guest-resumed", { ...GUEST_ASK, resumeCursor: "fake-msp-session" })).toBeNull();
+  });
+
+  describe("Muse: an owner's turn never runs in a guest's desk", () => {
+    const out = () => join(scratch, "muse-read.txt");
+    const desk = (threadId: string) => join(DATA_DIR, "guest-desks", createHash("sha256").update(threadId).digest("hex").slice(0, 16));
+    let instance: ProviderInstance | undefined;
+    const boot = async () => {
+      if (instance) {
+        live.splice(live.indexOf(instance), 1);
+        await instance.dispose();
+      }
+      instance = await MspMuseAgentDriver.create({ instanceId: "desk-muse", displayName: undefined, environment: {}, enabled: true, config: { cli: fake("fake-msp-cli.ts"), fullAuto: true } });
+      live.push(instance);
+      return reader(instance, hostProject(), out());
+    };
+    const turn = async (threadId: string, access: Partial<SendTurnInput>) => {
+      const recorder = recordEvents(instance!.adapter);
+      await instance!.adapter.sendTurn({ threadId, text: "read notes.txt", cwd: hostProject(), approval: "auto", integrations: { agents }, ...access });
+      const done = await recorder.until((e) => e.type === "turn.completed" && e.threadId === threadId);
+      recorder.stop();
+      return { done, events: recorder.events };
+    };
+    beforeEach(() => {
+      instance = undefined;
+      setEnv("META_API_KEY", "meta-key");
+      setEnv("FAKE_MSP_MODE", "read");
+      setEnv("FAKE_MSP_READ_OUT", out());
+      setEnv("FAKE_MSP_SESSION_ID", "muse-guest");
+    });
+
+    it.each(["missing", "empty", "naming another session"])("returns a guest's session to the project after an upgrade, its desk file %s", async (how) => {
+      const threadId = `t-desk-upgrade-${how}`;
+      expect(await (await boot())(threadId, GUEST_ASK)).toBeNull();
+      // the file a build before this one kept, or none at all
+      const file = `${desk(threadId)}.session`;
+      if (how === "missing") rmSync(file, { force: true });
+      else writeFileSync(file, how === "empty" ? "" : "muse-other");
+      const read = await boot();
+      setEnv("FAKE_MSP_SESSION_ID", "muse-owner");
+      expect(await read(threadId, { ...OWNER_TURN, resumeCursor: "muse-guest" })).toBe(CANARY);
+    });
+
+    it("returns a guest's session to the project on an owner's retry after a failed fresh start", async () => {
+      const threadId = "t-desk-retry";
+      expect(await (await boot())(threadId, GUEST_ASK)).toBeNull();
+      const read = await boot();
+      setEnv("FAKE_MSP_LOADED", "1");
+      setEnv("FAKE_MSP_START_FAILS", "1");
+      expect((await turn(threadId, { ...OWNER_TURN, resumeCursor: "muse-guest" })).done).toMatchObject({ ok: false });
+      setEnv("FAKE_MSP_START_FAILS", "0");
+      setEnv("FAKE_MSP_SESSION_ID", "muse-owner");
+      expect(await read(threadId, { ...OWNER_TURN, resumeCursor: "muse-guest" })).toBe(CANARY);
+    });
+
+    it("returns the last guest's session to the project after a later guest's setup failed", async () => {
+      const threadId = "t-desk-setup";
+      expect(await (await boot())(threadId, GUEST_ASK)).toBeNull();
+      setEnv("FAKE_MSP_SESSION_ID", "muse-guest-2");
+      setEnv("FAKE_MSP_REFUSE_MODEL", "muse-gone");
+      const failed = await turn(threadId, { ...GUEST_ASK, resumeCursor: "muse-guest", model: "muse-gone" });
+      expect(failed.done).toMatchObject({ ok: false });
+      expect(failed.events.some((e) => e.type === "session.started")).toBe(false);
+      setEnv("FAKE_MSP_REFUSE_MODEL", "");
+      const read = await boot();
+      setEnv("FAKE_MSP_SESSION_ID", "muse-owner");
+      expect(await read(threadId, { ...OWNER_TURN, resumeCursor: "muse-guest" })).toBe(CANARY);
+    });
+
+    it("resumes the owner's session as is after a restart in a chat a guest worked in", async () => {
+      const threadId = "t-desk-owner";
+      const first = await boot();
+      expect(await first(threadId, GUEST_ASK)).toBeNull();
+      expect(await first(threadId, { ...OWNER_TURN, resumeCursor: "muse-guest" })).toBe(CANARY);
+      await boot();
+      setEnv("FAKE_MSP_LOADED", "1");
+      setEnv("FAKE_MSP_SESSION_ID", "muse-fresh");
+      rmSync(out(), { force: true });
+      const { done, events } = await turn(threadId, { ...OWNER_TURN, resumeCursor: "muse-guest" });
+      expect(done).toMatchObject({ ok: true });
+      expect(events.find((e) => e.type === "session.started")).toMatchObject({ sessionId: "muse-guest" });
+      expect(readFileSync(out(), "utf8")).toBe(CANARY);
+    });
   });
 
   it("agy: a guest's ask denies every file read; the owner's lane keeps its workspace", async () => {
