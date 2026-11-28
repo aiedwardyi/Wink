@@ -7342,7 +7342,7 @@ async function runClaimedGroupMemberTurn(
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
   if (!group || !bot || !ownsThread || hostedTurnRefused(group, threadId, botId, authority)) return false;
   spoken.add(botId);
-  // a person typed the message this hop answers: no chained hop, routine, resume or connector line
+  // a person typed the message this hop answers, as keepGoing reads it: no chained hop, routine, resume or connector line
   const typed = hop === 0 && !cardContinuation;
   const userName = cfg.profile?.name?.trim() || "User";
   if (bot.busy && !lane) {
@@ -7542,7 +7542,7 @@ async function runClaimedGroupMemberTurn(
   if (!lane) {
     store.setActivity(bot.id, "working", threadId);
     dispatchedThreads.set(bot.id, threadId);
-    keepGoing.turnStarted(bot.id, threadId, typed);
+    keepGoing.turnStarted(bot.id, threadId, hop === 0 && !cardContinuation);
   }
   const releaseStarting = takeStartingHold(turnKey);
   releaseTurnStart?.();
