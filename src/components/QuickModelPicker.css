@@ -57,29 +57,18 @@
   --quick-accent-ink: color-mix(in srgb, var(--quick-accent) 72%, white);
   --quick-radius: calc(var(--radius-xl, 8px) + 6px);
   --mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
-  position: fixed; z-index: 50; display: flex; flex-direction: column; overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--color-hairline) 75%, transparent);
+  position: fixed; z-index: 50; display: flex; flex-direction: column; overflow: clip;
+  border: 1px solid color-mix(in srgb, color-mix(in srgb, var(--quick-accent) 72%, white) calc(var(--effort-heat, 0) * 100%), color-mix(in srgb, var(--color-hairline) 75%, transparent));
   border-radius: var(--quick-radius);
   background: color-mix(in srgb, var(--color-panel) 96%, var(--color-app));
   color: var(--color-ink);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.065), 0 22px 54px rgb(0 0 0 / 0.48), 0 4px 14px rgb(0 0 0 / 0.28);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, color-mix(in srgb, var(--quick-accent) 52%, white) calc(var(--effort-heat, 0) * 100%), rgb(255 255 255 / 0.065)),
+    0 0 0 1px color-mix(in srgb, var(--quick-accent) calc(var(--effort-heat, 0) * 38%), transparent),
+    0 0 calc(var(--effort-heat, 0) * 38px) calc(var(--effort-heat, 0) * -2px) color-mix(in srgb, var(--quick-accent) calc(var(--effort-heat, 0) * 46%), transparent),
+    0 22px 54px rgb(0 0 0 / calc(0.48 + var(--effort-heat, 0) * 0.06)),
+    0 4px 14px rgb(0 0 0 / calc(0.28 - var(--effort-heat, 0) * 0.28));
   transform-origin: right top; outline: none; user-select: none;
-}
-.quick-card[data-flow="xhigh"] {
-  border-color: color-mix(in srgb, var(--quick-accent) 44%, var(--color-hairline));
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--quick-accent) 26%, rgb(255 255 255 / 0.14)),
-    0 0 0 1px color-mix(in srgb, var(--quick-accent) 18%, transparent),
-    0 0 22px -4px color-mix(in srgb, var(--quick-accent) 24%, transparent),
-    0 22px 54px rgb(0 0 0 / 0.5);
-}
-.quick-card[data-flow="max"] {
-  border-color: color-mix(in srgb, var(--quick-accent) 72%, white);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--quick-accent) 52%, white),
-    0 0 0 1px color-mix(in srgb, var(--quick-accent) 38%, transparent),
-    0 0 38px -2px color-mix(in srgb, var(--quick-accent) 46%, transparent),
-    0 22px 54px rgb(0 0 0 / 0.54);
 }
 .quick-card[data-closing] { animation: quick-close var(--motion-fast) var(--ease-exit) forwards; pointer-events: none; }
 @keyframes quick-close { to { opacity: 0; transform: translateY(-6px) scale(0.975); } }
@@ -89,70 +78,34 @@
   background: radial-gradient(320px 140px at 82% 0%, color-mix(in srgb, var(--quick-view-accent) 14%, transparent), transparent 72%);
 }
 .quick-head-glow {
-  position: absolute; inset: 0 -10% auto -10%; height: 156px; pointer-events: none; opacity: 0; transform-origin: 50% 0%;
+  position: absolute; inset: 0 -10% auto -10%; height: 156px; pointer-events: none; opacity: var(--effort-heat, 0); transform-origin: 50% 0%;
   background:
     radial-gradient(380px 140px at 56% 0%, color-mix(in srgb, var(--quick-accent) 46%, transparent), transparent 74%),
     linear-gradient(180deg, color-mix(in srgb, var(--quick-accent) 22%, transparent) 0%, transparent 100%);
   transition: opacity var(--motion-moderate) var(--ease-standard);
   will-change: opacity, transform;
+  animation: quick-glow-drift 5.2s ease-in-out infinite;
 }
-.quick-head-glow[data-flow="xhigh"] {
-  opacity: 0.42;
-  animation: quick-glow-drift-quiet 9s ease-in-out infinite;
-}
-.quick-head-glow[data-flow="max"] {
-  opacity: 1;
-  animation: quick-glow-drift-max 5.2s ease-in-out infinite;
-}
-@keyframes quick-glow-drift-quiet {
-  0%, 100% { opacity: 0.32; transform: translateX(-4%) scale(0.99); }
-  50% { opacity: 0.48; transform: translateX(4%) scale(1.015); }
-}
-@keyframes quick-glow-drift-max {
-  0%, 100% { opacity: 0.72; transform: translateX(-7%) scale(0.99); }
-  50% { opacity: 1; transform: translateX(7%) scale(1.04); }
+@keyframes quick-glow-drift {
+  0%, 100% { opacity: calc(var(--effort-heat, 0) * 0.72); transform: translateX(-7%) scale(0.99); }
+  50% { opacity: var(--effort-heat, 0); transform: translateX(7%) scale(1.04); }
 }
 
-/* Border flow: mounted only at Extra High and Max. */
+/* Border flow: as strong as the effort heat. */
 .quick-card-neon {
-  position: absolute; inset: 0; border-radius: inherit; padding: 1.5px; pointer-events: none; z-index: 4; overflow: hidden;
+  position: absolute; inset: 0; border-radius: inherit; padding: 2px; pointer-events: none; z-index: 4; overflow: hidden; opacity: var(--effort-heat, 0);
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude; -webkit-mask-composite: xor;
+  animation: quick-neon-pulse 3.2s ease-in-out infinite;
   will-change: opacity;
 }
-.quick-card-neon[data-flow="xhigh"] {
-  padding: 1.5px;
-  animation: quick-xhigh-pulse 4.8s ease-in-out infinite;
-}
-.quick-card-neon[data-flow="max"] {
-  padding: 2px;
-  animation: quick-apex-pulse 3.2s ease-in-out infinite;
-}
-@keyframes quick-xhigh-pulse {
-  0%, 100% { opacity: 0.52; }
-  50% { opacity: 0.72; }
-}
-@keyframes quick-apex-pulse {
-  0%, 100% { opacity: 0.84; }
-  50% { opacity: 1; }
+@keyframes quick-neon-pulse {
+  0%, 100% { opacity: calc(var(--effort-heat, 0) * 0.84); }
+  50% { opacity: var(--effort-heat, 0); }
 }
 .quick-card-neon::before {
   content: ""; position: absolute; inset: -65%; will-change: transform;
-}
-.quick-card-neon[data-flow="xhigh"]::before {
-  background: conic-gradient(
-    from 0deg,
-    color-mix(in srgb, var(--quick-accent) 12%, transparent) 0deg,
-    color-mix(in srgb, var(--quick-accent) 18%, transparent) 165deg,
-    color-mix(in srgb, var(--quick-accent) 68%, transparent) 235deg,
-    color-mix(in srgb, var(--quick-accent) 72%, white) 275deg,
-    color-mix(in srgb, var(--quick-accent) 56%, transparent) 315deg,
-    color-mix(in srgb, var(--quick-accent) 12%, transparent) 360deg
-  );
-  animation: quick-neon-spin 11s linear infinite;
-}
-.quick-card-neon[data-flow="max"]::before {
   background: conic-gradient(
     from 0deg,
     color-mix(in srgb, var(--quick-accent) 28%, transparent) 0deg,
@@ -212,6 +165,13 @@
 .quick-lab-live { position: absolute; top: 4px; right: 5px; width: 4px; height: 4px; border-radius: 999px; background: var(--quick-dot); }
 
 .quick-models-scroll { position: relative; z-index: 1; min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 2px 12px 9px; }
+.quick-models-head { position: relative; display: flex; justify-content: flex-end; gap: 8px; height: 16px; padding: 0 38px 0 12px; }
+.quick-score-head { align-self: center; font-size: 10.5px; font-weight: 500; line-height: 1; color: var(--color-ink-secondary); cursor: help; -webkit-touch-callout: none; }
+.quick-score-tip {
+  position: absolute; top: calc(100% + 2px); right: 12px; z-index: 5; max-width: calc(100% - 24px); padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--color-hairline) 60%, transparent); border-radius: 8px;
+  background: var(--color-panel); color: var(--color-ink); font-size: 12px; line-height: 1.35; box-shadow: 0 6px 18px rgb(0 0 0 / 0.32);
+}
 .quick-models { position: relative; display: flex; flex-direction: column; gap: 2px; }
 .quick-hover-pill {
   position: absolute; top: 0; left: 0; right: 0; height: 34px; border-radius: 8px; pointer-events: none; opacity: 0;
@@ -243,17 +203,10 @@
 .quick-setup-wrap { margin-top: 8px; }
 
 .quick-effort-deck {
-  position: relative; z-index: 1; flex-shrink: 0; overflow: hidden; padding: 11px 12px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--color-hairline) 52%, transparent);
+  position: relative; z-index: 1; flex-shrink: 0; overflow: clip; padding: 11px 12px 12px;
+  border-top: 1px solid color-mix(in srgb, color-mix(in srgb, var(--quick-accent) 68%, white) calc(var(--effort-heat, 0) * 100%), color-mix(in srgb, var(--color-hairline) 52%, transparent));
   background: color-mix(in srgb, var(--color-inset) 48%, var(--color-panel));
-}
-.quick-effort-deck[data-flow="xhigh"] {
-  border-top-color: color-mix(in srgb, var(--quick-accent) 40%, var(--color-hairline));
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--quick-accent) 18%, transparent);
-}
-.quick-effort-deck[data-flow="max"] {
-  border-top-color: color-mix(in srgb, var(--quick-accent) 68%, white);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--quick-accent) 44%, white);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, color-mix(in srgb, var(--quick-accent) 44%, white) calc(var(--effort-heat, 0) * 100%), transparent);
 }
 .quick-deck-glow {
   position: absolute; left: 0; bottom: -26px; width: 196px; height: 118px; border-radius: 50%; pointer-events: none;
@@ -263,7 +216,7 @@
   will-change: transform, opacity;
 }
 .quick-deck-aurora {
-  position: absolute; left: -40%; top: -110%; width: 180%; height: 320%; pointer-events: none; opacity: 0.44;
+  position: absolute; left: -40%; top: -110%; width: 180%; height: 320%; pointer-events: none; opacity: calc(var(--effort-heat, 0) * 0.44);
   background: conic-gradient(
     from 0deg,
     transparent 0deg,
@@ -275,8 +228,8 @@
   filter: blur(26px); animation: quick-neon-spin 6.5s linear infinite, quick-aurora-pulse 3.2s ease-in-out infinite; will-change: transform, opacity;
 }
 @keyframes quick-aurora-pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 0.5; }
+  0%, 100% { opacity: calc(var(--effort-heat, 0) * 0.3); }
+  50% { opacity: calc(var(--effort-heat, 0) * 0.5); }
 }
 .quick-deck-sweep {
   position: absolute; inset: 0; width: 48%; pointer-events: none; opacity: 0; will-change: transform, opacity;
@@ -299,9 +252,8 @@
 
 .quick-effort-head { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .quick-effort-meta { display: flex; min-width: 0; align-items: baseline; gap: 7px; }
-.quick-effort-label { font: 600 10.5px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-ink-secondary); }
-.quick-effort-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--color-ink-secondary); }
-.quick-effort-deck[data-flow="xhigh"] .quick-effort-note { color: color-mix(in srgb, var(--quick-accent-ink) 74%, var(--color-ink-secondary)); }
+.quick-effort-label { flex-shrink: 0; white-space: nowrap; font-size: 12.5px; font-weight: 600; letter-spacing: 0.01em; color: var(--color-ink); }
+.quick-effort-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: color-mix(in srgb, var(--quick-accent-ink) calc(var(--effort-heat, 0) * 74%), var(--color-ink-secondary)); }
 .quick-effort-deck[data-flow="max"] .quick-effort-note { color: var(--quick-accent-ink); font-weight: 500; }
 .quick-effort-status { display: inline-flex; flex-shrink: 0; align-items: center; gap: 8px; }
 
@@ -331,8 +283,7 @@
 }
 @keyframes quick-bar-breathe { 0%, 100% { transform: scaleY(0.94); opacity: 0.9; } 50% { transform: scaleY(1.04); opacity: 1; } }
 
-.quick-effort-readout { display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; color: var(--color-ink); transform-origin: right center; }
-.quick-effort-deck[data-flow="xhigh"] .quick-effort-readout { color: color-mix(in srgb, var(--quick-accent-ink) 78%, var(--color-ink)); }
+.quick-effort-readout { display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; color: color-mix(in srgb, var(--quick-accent-ink) calc(var(--effort-heat, 0) * 78%), var(--color-ink)); transform-origin: right center; }
 .quick-effort-deck[data-flow="max"] .quick-effort-readout {
   color: var(--quick-accent-ink);
   text-shadow: 0 0 12px color-mix(in srgb, var(--quick-accent) 52%, transparent);
@@ -340,10 +291,7 @@
 
 .quick-effort-track {
   position: relative; z-index: 2; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); padding: 3px 3px 9px;
-  border: 1px solid color-mix(in srgb, var(--color-hairline) 62%, transparent); border-radius: 10px; background: var(--color-inset); overflow: hidden;
-}
-.quick-effort-deck[data-flow="xhigh"] .quick-effort-track {
-  border-color: color-mix(in srgb, var(--quick-accent) 28%, var(--color-hairline));
+  border: 1px solid color-mix(in srgb, var(--quick-accent) calc(var(--effort-heat, 0) * 44%), color-mix(in srgb, var(--color-hairline) 62%, transparent)); border-radius: 10px; background: var(--color-inset); overflow: hidden;
 }
 .quick-effort-deck[data-flow="max"] .quick-effort-track {
   border-color: color-mix(in srgb, var(--quick-accent) 44%, var(--color-hairline));
@@ -376,13 +324,9 @@
 }
 .quick-thumb-body {
   position: relative; width: 100%; height: 100%; border-radius: inherit; overflow: hidden;
-  background: var(--color-raised); border: 1px solid color-mix(in srgb, var(--quick-accent) 32%, var(--color-hairline));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1), 0 2px 8px rgb(0 0 0 / 0.32);
-}
-.quick-effort-deck[data-flow="xhigh"] .quick-thumb-body {
-  border-color: color-mix(in srgb, var(--quick-accent) 54%, var(--color-hairline));
-  background: color-mix(in srgb, var(--quick-accent) 11%, var(--color-raised));
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--quick-accent) 32%, white), 0 0 12px color-mix(in srgb, var(--quick-accent) 24%, transparent);
+  background: color-mix(in srgb, var(--quick-accent) calc(var(--effort-heat, 0) * 14%), var(--color-raised));
+  border: 1px solid color-mix(in srgb, var(--quick-accent) calc(24% + var(--effort-heat, 0) * 40%), var(--color-hairline));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, color-mix(in srgb, var(--quick-accent) 32%, white) calc(var(--effort-heat, 0) * 100%), rgb(255 255 255 / 0.1)), 0 2px 8px rgb(0 0 0 / 0.32), 0 0 calc(var(--effort-heat, 0) * 14px) color-mix(in srgb, var(--quick-accent) calc(var(--effort-heat, 0) * 30%), transparent);
 }
 .quick-effort-deck[data-flow="max"] .quick-thumb-body {
   border-color: transparent; background: transparent;
@@ -441,25 +385,16 @@
 .quick-card[data-light] {
   --quick-accent-ink: oklch(from var(--quick-accent) min(l, 0.44) c h);
   background: color-mix(in srgb, var(--color-card) 98%, white);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.85), 0 18px 44px color-mix(in srgb, var(--color-ink) 14%, transparent), 0 3px 10px color-mix(in srgb, var(--color-ink) 8%, transparent);
-}
-.quick-card[data-light][data-flow="xhigh"] {
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.88),
-    0 0 0 1px color-mix(in srgb, var(--quick-accent) 22%, transparent),
-    0 0 16px -4px color-mix(in srgb, var(--quick-accent) 18%, transparent),
-    0 18px 44px color-mix(in srgb, var(--color-ink) 14%, transparent);
-}
-.quick-card[data-light][data-flow="max"] {
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.9),
-    0 0 0 1px color-mix(in srgb, var(--quick-accent) 36%, transparent),
-    0 0 24px -2px color-mix(in srgb, var(--quick-accent) 26%, transparent),
-    0 18px 44px color-mix(in srgb, var(--color-ink) 14%, transparent);
+    inset 0 1px 0 rgb(255 255 255 / calc(0.85 + var(--effort-heat, 0) * 0.05)),
+    0 0 0 1px color-mix(in srgb, var(--quick-accent) calc(var(--effort-heat, 0) * 36%), transparent),
+    0 0 calc(var(--effort-heat, 0) * 24px) calc(var(--effort-heat, 0) * -2px) color-mix(in srgb, var(--quick-accent) calc(var(--effort-heat, 0) * 26%), transparent),
+    0 18px 44px color-mix(in srgb, var(--color-ink) 14%, transparent),
+    0 3px 10px color-mix(in srgb, var(--color-ink) calc(8% - var(--effort-heat, 0) * 8%), transparent);
 }
 .quick-card[data-light] .quick-lab-thumb, .quick-card[data-light] .quick-thumb-body { background: var(--color-card); box-shadow: 0 1px 4px color-mix(in srgb, var(--color-ink) 10%, transparent); }
 .quick-card[data-light] .quick-thumb-core { background: color-mix(in srgb, var(--quick-accent) 14%, var(--color-card)); }
-.quick-card[data-light] .quick-deck-aurora { opacity: 0.18; }
+.quick-card[data-light] .quick-deck-aurora { opacity: calc(var(--effort-heat, 0) * 0.18); }
 .quick-card[data-light] .quick-effort-deck[data-flow="max"] .quick-effort-readout { text-shadow: none; }
 .quick-card[data-light] .quick-bar-slot {
   background: color-mix(in srgb, var(--color-ink-secondary) 16%, transparent);
@@ -469,6 +404,6 @@
 /* Reduced motion: no flow, only the still glow. */
 @media (prefers-reduced-motion: reduce) {
   .quick-card-neon, .quick-deck-aurora, .quick-thumb-neon, .quick-thumb-pulse, .quick-hdr-flourish { display: none !important; }
-  .quick-head-glow[data-flow], .quick-effort-deck[data-flow="max"] .quick-bar-slot[data-lit] { animation: none !important; }
+  .quick-head-glow, .quick-effort-deck[data-flow="max"] .quick-bar-slot[data-lit] { animation: none !important; }
   .quick-card[data-closing], .quick-head-glow, .quick-lab-thumb, .quick-hover-pill, .quick-effort-thumb, .quick-bar-fill, .quick-effort-step-fill, .quick-deck-glow, .quick-model-check { transition: none !important; animation: none !important; }
 }
