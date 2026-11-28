@@ -233,7 +233,7 @@ it("fades the voice grid while more voices sit below, and drops the fade at the 
   expect(grid.hasAttribute("data-cut")).toBe(false);
 });
 
-it("folds Captions, Speed, Style, and Language behind More and keeps common controls one tap away", async () => {
+it("folds Captions, Speed and Language behind More and keeps common controls one tap away", async () => {
   const host = await render(createElement(CallSettings, { bot: ada }));
   expect(host.querySelector('input[aria-label="Volume"]')).not.toBeNull();
   expect(host.querySelector('[role="radiogroup"][aria-label="Answered by"]')).not.toBeNull();
@@ -246,7 +246,7 @@ it("folds Captions, Speed, Style, and Language behind More and keeps common cont
   await openMore(host);
   expect(host.querySelector('button[role="switch"][aria-label="Captions"]')).not.toBeNull();
   expect(host.querySelector('input[aria-label="Speed"]')).not.toBeNull();
-  expect(host.querySelector('[role="radiogroup"][aria-label="Style"]')).not.toBeNull();
+  expect(host.querySelector('[role="radiogroup"][aria-label="Style"]')).toBeNull();
   expect(button(host, "Language")).not.toBeNull();
 });
 
@@ -266,14 +266,12 @@ it("patches the bot with the whole merged call object", async () => {
   await openVoices(host);
   await openMore(host);
   await act(async () => radio(host, "Kore").click());
-  await act(async () => radio(host, "Lively").click());
   await slide(host.querySelector<HTMLInputElement>('input[aria-label="Speed"]')!, 0.8);
   await act(async () => button(host, "Language")!.click());
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((b) => b.textContent === "한국어")!.click());
   expect(store.dispatch.mock.calls.every(([action]) => action.type === "updateBot" && action.botId === "bot-1")).toBe(true);
   expect(patches()).toEqual([
     { voice: "Kore", speed: 1.2 },
-    { voice: "Puck", speed: 1.2, style: "lively" },
     { voice: "Puck", speed: 0.8 },
     { voice: "Puck", speed: 1.2, language: "ko" },
   ]);
@@ -302,7 +300,6 @@ it("shows the speed and picks the app voice until the bot has its own", async ()
   expect(host.querySelectorAll("[data-call-voice]")).toHaveLength(30);
   await openMore(host);
   expect(host.textContent).toContain("1.0x");
-  expect(radio(host, "Normal").getAttribute("aria-checked")).toBe("true");
   expect(button(host, "Language")!.textContent).toBe("Auto-detect");
 });
 
@@ -358,19 +355,17 @@ it("Speed changes the sample while it plays and the next one", async () => {
   expect(clips[1]!.playbackRate).toBe(1.3);
 });
 
-it("Style changes the sample's pace while it plays, never its level, as on a call", async () => {
-  const { host, clip, moved } = await playJenn();
-  await openMore(host);
-  await moved(() => act(async () => radio(host, "Lively").click()));
-  expect(clip.playbackRate).toBe(1.1);
-  expect(clip.volume).toBeCloseTo(0.7);
-  await moved(() => act(async () => radio(host, "Calm").click()));
-  expect(clip.playbackRate).toBe(0.88);
-  expect(clip.volume).toBeCloseTo(0.7);
-  expect(clip.paused).toBe(false);
-  await act(async () => button(host, "Play Eddie")!.click());
-  expect(clips[1]!.playbackRate).toBe(0.88);
-  expect(clips[1]!.volume).toBeCloseTo(0.7);
+it("a saved Calm or Lively style plays the sample at the Normal pace", async () => {
+  setCallVolume(1);
+  for (const style of ["calm", "lively"] as const) {
+    clips.length = 0;
+    const saved = { ...ada, call: { style } } as Bot;
+    store.bots = [saved];
+    const host = await render(createElement(CallSettings, { bot: saved }));
+    await act(async () => button(host, "Play Jenn")!.click());
+    expect(clips[0]!.playbackRate).toBe(1);
+    expect(clips[0]!.volume).toBeCloseTo(0.7);
+  }
 });
 
 it("resets the preview button when the clip will not play, and stops on unmount", async () => {
@@ -407,8 +402,7 @@ it("labels the panel in Korean", async () => {
   await openVoices(host);
   expect(host.textContent).toContain("밝고 산뜻한");
   await openMore(host);
-  for (const label of ["자막", "속도", "말투", "언어"]) expect(host.textContent).toContain(label);
-  expect(radio(host, "생기 있게")).toBeDefined();
+  for (const label of ["자막", "속도", "언어"]) expect(host.textContent).toContain(label);
   expect(button(host, "언어")!.textContent).toBe("자동 감지");
 });
 

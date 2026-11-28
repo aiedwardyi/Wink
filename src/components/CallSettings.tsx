@@ -17,7 +17,7 @@ import { guardMenuTouch, useListMenuDismiss } from "@/lib/use-hold-menu";
 import { usePresence } from "@/lib/use-presence";
 import { useIsPhone, useSheetSwipe } from "@/lib/use-phone-swipe";
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "@/lib/use-touch-drag";
-import { CALL_SPEED, CALL_STYLES, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallAnswer, type CallPrefs, type CallStyle, type LiveVoice } from "../../shared/live-call";
+import { CALL_SPEED, LIVE_VOICE, LIVE_VOICES, OUTPUT_GAIN, callPace, type CallAnswer, type CallPrefs, type LiveVoice } from "../../shared/live-call";
 import { BotAvatar } from "./Avatar";
 import { DetailsSwitch } from "./BotDetailsRows";
 import { Fold } from "./Fold";
@@ -26,7 +26,6 @@ import { SegmentedRow } from "./Segmented";
 import { AccountPicker } from "./UsageAccounts";
 
 const LABEL = "shrink-0 text-[14px] font-medium text-ink";
-const PILL = "rounded-[max(0px,calc(var(--radius-lg)_-_3px))]";
 const FEATURED_VOICES: readonly LiveVoice[] = LIVE_VOICES.slice(0, 3);
 const MORE_VOICES: readonly LiveVoice[] = LIVE_VOICES.slice(3);
 const SLIDER = cn(
@@ -43,14 +42,13 @@ function useCallPrefs(bot: Bot) {
   return {
     voice: call?.voice ?? state.config?.liveCall?.voice ?? LIVE_VOICE,
     speed: call?.speed ?? 1,
-    style: call?.style ?? "normal",
     language: call?.language,
     set: (change: CallPrefs) => dispatch({ type: "updateBot", botId: bot.id, patch: { call: { ...call, ...change } } }),
   };
 }
 
 /** No preview during a call: it would play into the open mic, and a pick is heard on the next words anyway. */
-function usePreview(language: "en" | "ko", speed: number, style: CallStyle): { playing: LiveVoice | null; preview?: (name: LiveVoice) => void } {
+function usePreview(language: "en" | "ko", speed: number): { playing: LiveVoice | null; preview?: (name: LiveVoice) => void } {
   const onCall = Boolean(useActiveCall());
   const [playing, setPlaying] = useState<LiveVoice | null>(null);
   const clip = useRef<HTMLAudioElement | null>(null);
@@ -63,7 +61,7 @@ function usePreview(language: "en" | "ko", speed: number, style: CallStyle): { p
   useEffect(() => () => clip.current?.pause(), []);
   // the call's own level and pitch-kept speed, so the sample sounds like the call
   const level = OUTPUT_GAIN * useCallVolume();
-  const pace = callPace({ speed, style });
+  const pace = callPace({ speed });
   useEffect(() => {
     if (!clip.current) return;
     clip.current.volume = level;
@@ -215,7 +213,7 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
   const prefs = useCallPrefs(bot);
   const volume = useCallVolume();
   const captions = useCallCaptions();
-  const { playing, preview } = usePreview(prefs.language ?? (locale === "ko" ? "ko" : "en"), prefs.speed, prefs.style);
+  const { playing, preview } = usePreview(prefs.language ?? (locale === "ko" ? "ko" : "en"), prefs.speed);
   const [voicesOpen, setVoicesOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const voicesId = useId();
@@ -266,18 +264,6 @@ export function CallSettings({ bot, language = true, className }: { bot: Bot; la
             </div>
             <Slider label={t("callMenu.speed")} value={prefs.speed} range={CALL_SPEED} text={`${prefs.speed.toFixed(1)}x`}
               onChange={(speed) => prefs.set({ speed: Math.round(speed * 10) / 10 })} />
-            <div className="flex items-center justify-between gap-3">
-              <span className={LABEL}>{t("callMenu.style")}</span>
-              <div role="radiogroup" aria-label={t("callMenu.style")} className="flex gap-0.5 rounded-lg bg-inset p-[3px]">
-                {CALL_STYLES.map((style) => (
-                  <button key={style} type="button" role="radio" aria-checked={style === prefs.style} onClick={() => prefs.set({ style })}
-                    className={cn("px-2 py-0.5 text-[12px] font-medium max-md:min-h-8", PILL,
-                      style === prefs.style ? "bg-raised text-ink shadow-sm ring-1 ring-hairline/60" : "text-ink-secondary hover:text-ink")}>
-                    {t(`callMenu.style.${style}`)}
-                  </button>
-                ))}
-              </div>
-            </div>
             {language && (
               <div className="flex items-center justify-between gap-3">
                 <span className={LABEL}>{t("callMenu.language")}</span>
