@@ -1,8 +1,8 @@
 import { existsSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
 
 import type { TaskRecordContext } from "../turn-context.ts";
+import { testHome } from "./test-home.ts";
 
 // only an ASCII word char extends the extension: Korean and Japanese particles attach to the filename
 const DOC_PATH = /(?:[A-Za-z]:)?[\p{L}\p{M}\p{N}\p{Pc}.~\\/-]*\.(?:md|txt|docx?|pdf)(?!\w)/giu;
@@ -19,7 +19,7 @@ const LATIN_START = /(?<=^|(?!\p{Script=Latin})\p{L})\p{Script=Latin}/gu;
 function localPath(ref: string, cwd: string | undefined): string | null {
   const path = ref.trim();
   if (!path || /^\w{2,}:\/\//.test(path)) return null;
-  if (/^~[\\/]/.test(path)) return join(homedir(), path.slice(2));
+  if (/^~[\\/]/.test(path)) return join(testHome(), path.slice(2));
   if (isAbsolute(path)) return resolve(path);
   return cwd ? resolve(cwd, path) : null;
 }

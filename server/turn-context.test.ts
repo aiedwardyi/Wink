@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -38,6 +38,7 @@ import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket, stam
 import { deleteTaskResumePacket, writeTaskPlanSidecar, type TaskResumePacket } from "./task-state.ts";
 import { planFiles as oldPlanFiles } from "./testing/plan-files-c9206fd80.ts";
 import { planFiles as prevPlanFiles } from "./testing/plan-files-9c19449a1.ts";
+import { testHome } from "./testing/test-home.ts";
 import { applyPicks } from "./picks.ts";
 import { asksBlock } from "./task-asks.ts";
 import { ensureWorkspace, memorySystemPrompt } from "./workspace.ts";
@@ -1299,7 +1300,7 @@ describe("fresh-session memory block", () => {
   });
 
   it("keeps 1,000 full plan paths on disk and shows a bounded list with a pointer", () => {
-    const dir = join(homedir(), "plan-state");
+    const dir = join(testHome(), "plan-state");
     const threadId = "large-plan";
     const paths = Array.from({ length: 1000 }, (_, index) => join(cwd, "계획".repeat(30), `release-${index}.md`));
     const sidecar = join(dir, `${threadId}.plans.jsonl`);
@@ -1380,7 +1381,7 @@ describe("fresh-session memory block", () => {
   });
 
   const taskFolder = (name: string, files: string[]) => {
-    const folder = join(homedir(), name);
+    const folder = join(testHome(), name);
     for (const file of files) {
       mkdirSync(dirname(join(folder, file)), { recursive: true });
       writeFileSync(join(folder, file), file);
@@ -1652,7 +1653,7 @@ describe("fresh-session memory block", () => {
       plan: [{ step: 'Open "~/More Plans/brief.txt"', status: "active" as const }],
       artifacts: [{ ref: "~/plans/checklist.txt", label: "Release plan" }],
     };
-    const expected = [join(homedir(), "plans", "checklist.txt"), join(homedir(), "More Plans", "brief.txt"), join(homedir(), "plans", "release.md")];
+    const expected = [join(testHome(), "plans", "checklist.txt"), join(testHome(), "More Plans", "brief.txt"), join(testHome(), "plans", "release.md")];
     expect(planFiles(record, cwd)).toEqual(expected);
     expect(planFiles(record)).toEqual(expected);
   });

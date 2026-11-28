@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,14 +9,14 @@ import { loadThreadSyncLedger, pullThread, saveThreadSyncLedger, uploadThread, t
 import { ThreadSyncV2 } from "./thread-sync-v2.ts";
 import { completedTool, recordedArtifactsPatch } from "./tool-activity.ts";
 import { chatMemory } from "./turn-context.ts";
-import { testHome } from "./testing/test-home.ts";
+import { removeTestData, testHome } from "./testing/test-home.ts";
 
 const roots: string[] = [];
 const clients: ThreadSyncV2[] = [];
 
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTestData(root);
 });
 
 function temp(): string {
