@@ -52,6 +52,20 @@ interface Probe {
   models?: ModelCatalog;
 }
 
+// The last confirmed sign-in: a check that could not tell (a timeout, a missing CLI) never changes it. Cleared with the probe, so a new account starts unconfirmed.
+class Probes extends Map<InstanceId, Probe> {
+  private confirmed = new Map<InstanceId, boolean>();
+  override set(id: InstanceId, probe: Probe) {
+    const { state, authenticated } = probe.snapshot;
+    if (authenticated !== undefined) this.confirmed.set(id, authenticated);
+    else if (state === "available" && this.confirmed.has(id)) probe.snapshot = { ...probe.snapshot, authenticated: this.confirmed.get(id) };
+    return super.set(id, probe);
+  }
+  override delete(id: InstanceId) { this.confirmed.delete(id); return super.delete(id); }
+  override clear() { this.confirmed.clear(); super.clear(); }
+  signedIn(id: InstanceId) { return this.confirmed.get(id); }
+}
+
 const CHECKING: Probe = { snapshot: { state: "checking" }, cliCandidates: [] };
 // Settled: a stopped account offers Sign In instead of waiting on a check that never runs.
 const BLOCKED: Probe = { snapshot: { state: "unavailable", authChecked: true }, cliCandidates: [] };
@@ -115,7 +129,7 @@ export class ProviderRegistry {
   private cliByInstance = new Map<InstanceId, string>();
   private modelRefreshAt = new Map<InstanceId, number>();
   private modelRefreshInFlight = new Map<InstanceId, Promise<void>>();
-  private probed = new Map<InstanceId, Probe>();
+  private probed = new Probes();
   private blockedChecks = new Map<InstanceId, Probe>();
   private probing = new Map<InstanceId, Promise<Probe>>();
   private probedListeners = new Set<(instanceId: InstanceId) => void>();
@@ -320,12 +334,6 @@ export class ProviderRegistry {
     this.probeVersion += 1;
     for (const listener of this.probedListeners) listener(id);
   }
-  // A check that could not tell (a slow CLI) keeps a confirmed sign-out: only a confirmed sign-in clears it.
-  private keepSignedOut(id: string, snapshot: ProviderSnapshot): ProviderSnapshot {
-    const last = this.probed.get(id)?.snapshot;
-    return snapshot.state === "available" && snapshot.authenticated === undefined && last?.state === "available" && last.authenticated === false
-      ? { ...snapshot, authenticated: false } : snapshot;
-  }
   // A signed-out account keeps showing the address it was signed in as.
   private keepAddress(id: string, snapshot: ProviderSnapshot): ProviderSnapshot {
     const account = this.probed.get(id)?.snapshot.account;
@@ -333,6 +341,7 @@ export class ProviderRegistry {
   }
   // An account under a check never shows an earlier probe: its sign-in may have changed since.
   private known(id: string) { return this.checkingAccounts.has(id) ? CHECKING : this.blockedChecks.get(id) ?? this.probed.get(id); }
+  signedIn(id: string) { return this.probed.signedIn(id); }
   cliMissing(id: string) { return this.probed.get(id)?.snapshot.cliMissing === true; }
   async retryAccount(id: string) {
     const entry = this.byId.get(id);
@@ -512,7 +521,7 @@ export class ProviderRegistry {
     const live = this.get(instanceId);
     if (!live || live.account || this.signingOut.has(instanceId) || this.logins.generation(instanceId) !== generation) return undefined;
     let since = this.holdIdentity(instanceId, "refresh");
-    const snapshot = this.keepSignedOut(instanceId, await live.snapshot({ refresh: true }));
+    const snapshot = await live.snapshot({ refresh: true });
     if (this.get(instanceId) !== live || this.signingOut.has(instanceId) || this.logins.generation(instanceId) !== generation) return snapshot;
     const previous = this.probed.get(instanceId);
     this.probing.delete(instanceId);
@@ -785,7 +794,7 @@ export class ProviderRegistry {
     }
     if (snapshot.state === "available") snapshot = { ...snapshot, authChecked: true };
     return {
-      snapshot: this.keepAddress(entry.instanceId, this.keepSignedOut(entry.instanceId, snapshot)),
+      snapshot: this.keepAddress(entry.instanceId, snapshot),
       // every copy of the driver's default binary on the augmented PATH -
       // the dropdown's "detected" entries. Snapshotted per probe so a
       // newly installed CLI shows up on the next refresh.
