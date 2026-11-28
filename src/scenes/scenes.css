@@ -65,6 +65,18 @@ main[data-scene="snow"] > [data-chat-scene], [data-mini-scene="snow"][data-live]
 [data-skin="night-rain"] > [data-mini-thread] { background: url("./tiles/night-rain.jpg") center / cover; }
 [data-skin="warp"] > [data-mini-thread] { background: url("./tiles/warp.jpg") center / cover; }
 [data-skin="circuit"] > [data-mini-thread] { background: url("./tiles/circuit.jpg") center / cover; }
+/* A phone's still is its scene's first frame in a phone tile, so the live scene takes over without a jump. */
+@media (orientation: portrait) {
+  [data-skin="lagoon-night"] > [data-mini-thread] { background-image: url("./tiles/lagoon-night-tall.jpg"); }
+  [data-skin="lagoon"] > [data-mini-thread] { background-image: url("./tiles/lagoon-tall.jpg"); }
+  [data-skin="snow-night"] > [data-mini-thread] { background-image: url("./tiles/snow-night-tall.jpg"); }
+  [data-skin="snow"] > [data-mini-thread] { background-image: url("./tiles/snow-tall.jpg"); }
+  [data-skin="neon-grid"] > [data-mini-thread] { background-image: url("./tiles/neon-grid-tall.jpg"); }
+  [data-skin="samurai-ink"] > [data-mini-thread] { background-image: url("./tiles/samurai-ink-tall.jpg"); }
+  [data-skin="night-rain"] > [data-mini-thread] { background-image: url("./tiles/night-rain-tall.jpg"); }
+  [data-skin="warp"] > [data-mini-thread] { background-image: url("./tiles/warp-tall.jpg"); }
+  [data-skin="circuit"] > [data-mini-thread] { background-image: url("./tiles/circuit-tall.jpg"); }
+}
 
 /* While the theme picker is open the scene itself runs over that still: laid out at chat scale, shrunk to the tile. */
 [data-mini-scene] { position: absolute; top: 0; left: 0; z-index: -1; width: calc(100% / var(--mini-scale)); height: calc(100% / var(--mini-scale)); transform: scale(var(--mini-scale)); transform-origin: 0 0; overflow: hidden; contain: strict; pointer-events: none; }

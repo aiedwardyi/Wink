@@ -1,4 +1,7 @@
 import "./ProfileFields.test-dom.ts";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -454,6 +457,15 @@ describe("Moving tiles", () => {
     await painted();
     expect(sections()[0]).toEqual({ title: "Animated", skins: movingOrder });
     expect(running).toHaveLength(0);
+  });
+
+  it("gives every animated tile a phone still", () => {
+    const scenes = join(dirname(fileURLToPath(import.meta.url)), "..", "scenes");
+    const phone = readFileSync(join(scenes, "scenes.css"), "utf8").split("@media (orientation: portrait)")[1] ?? "";
+    for (const skin of animated) {
+      expect(phone, "capture the scene's first frame in a 390 px phone tile as tiles/<skin>-tall.jpg").toContain(`[data-skin="${skin}"] > [data-mini-thread] { background-image: url("./tiles/${skin}-tall.jpg"); }`);
+      expect(existsSync(join(scenes, "tiles", `${skin}-tall.jpg`))).toBe(true);
+    }
   });
 });
 

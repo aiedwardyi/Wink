@@ -16,6 +16,16 @@ const PLATES = {
 };
 type Plate = (typeof PLATES)["wide"];
 
+// By the window, not the layer: theme tiles are landscape on phones too, so each device loads one plate.
+const platePick = () => (innerWidth > innerHeight ? PLATES.wide : PLATES.tall);
+const decode = (p: Plate) => {
+  const img = new Image();
+  img.src = p.url;
+  return img.decode().then(() => img, () => null);
+};
+// Decoded before this module resolves, like the other plate scenes: a canvas up before its plate shows black over the tile's still.
+const first = "WebGLRenderingContext" in globalThis ? { plate: platePick(), img: await decode(platePick()) } : null;
+
 const VERT = "attribute vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }";
 const HASH = `
 float h1(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
@@ -172,23 +182,20 @@ function create(api: SceneApi) {
   let shown: Plate | null = null;
   let wanted: Plate | null = null;
   let ready = false;
-  // By the window, not the layer: theme tiles are landscape on phones too, so each device loads one plate.
+  const upload = (p: Plate, img: HTMLImageElement | null) => {
+    if (!gl || !ready || wanted !== p || !img?.naturalWidth) return;
+    gl.bindTexture(gl.TEXTURE_2D, plate);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
+    shown = p;
+    render();
+  };
   const load = () => {
-    const p = innerWidth > innerHeight ? PLATES.wide : PLATES.tall;
+    const p = platePick();
     if (!gl || wanted === p) return;
     wanted = p;
-    const img = new Image();
-    img.src = p.url;
-    // Decoded off the main thread while the shader compiles; an onload image would decode inside texImage2D, on the pick's first frame.
-    void img.decode().catch(() => undefined).then(() => {
-      if (!ready || wanted !== p || !img.naturalWidth) return;
-      gl.bindTexture(gl.TEXTURE_2D, plate);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
-      shown = p;
-      render();
-    });
+    if (p === first?.plate && first.img) upload(p, first.img);
+    else void decode(p).then((img) => upload(p, img));
   };
-  load();
   if (gl) {
     const program = (frag: string) => {
       const p = gl.createProgram();
