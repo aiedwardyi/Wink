@@ -63,6 +63,7 @@ import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
 import { Presence, usePresence } from "@/lib/use-presence";
 import { lazyView, useStaleBuildReload } from "@/lib/stale-build";
 import { warmViews } from "@/lib/warm-views";
+import { watchDeadTaps } from "@/lib/chat-switch-diag";
 import { markColdOpen, noteCacheShown, noteChatShown, noteTerminalOpened, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
@@ -593,6 +594,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   useEffect(() => {
     if (webPushSupported()) void closeReadAlerts(() => [...latestState.current.bots, ...latestState.current.groups, ...joinedReadState(latestJoined.current)]).catch(() => {});
   }, [readChats]);
+  useEffect(() => watchDeadTaps(() => conversationRef.current), []);
   // The PC drops a subscription it can't tie to a signed-in phone, so every open sends this one again.
   useEffect(() => {
     if (webPushSupported()) void syncWebPushRooms().catch(() => {});
