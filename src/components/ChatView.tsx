@@ -35,6 +35,7 @@ import {
 } from "@/state/store";
 import { EngineSetup, needsCli, needsSignIn, setupErrorAction } from "./EngineSetup";
 import { AccountSignInCard, SignedInCard, SignInCard } from "./SignInCard";
+import { DockCard } from "./DockCard";
 import { BotAvatar } from "./Avatar";
 import { TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -1992,9 +1993,9 @@ export const ChatView = memo(function ChatView({ bot, hidden = false, focusCompo
         <ChatPeekPart part="composer">
         {calls.bar}
         {!preview && <CallWidgetSlot className="px-3 pb-2 md:hidden" />}
-        {signInEngine && !bot.busy && needsSignIn(signInEngine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn) && (
-          <div className="px-5 pb-2"><SignInCard instance={signInEngine} help={t("chat.signInHelp", { name: bot.name })} /></div>
-        )}
+        <DockCard open={Boolean(signInEngine && !bot.busy && needsSignIn(signInEngine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn))}>
+          {signInEngine && <div className="px-5 pb-2"><SignInCard instance={signInEngine} help={t("chat.signInHelp", { name: bot.name })} /></div>}
+        </DockCard>
         <TaskRecoveryCard
           key={`${bot.id}:${activeTask?.threadId ?? bot.threadId}`}
           bot={bot}
