@@ -107,6 +107,7 @@ export const KEPT_LIMITS: Limits = {
   "server/thread-events.ts": { MAX_LIMIT: FILE, MAX_TAIL_BYTES: FILE },
   "server/thread-sync-v2-engine.ts": { "Sync batches are limited to 128 changes": "Crash: one sync transaction size across PCs." },
   "server/thread-sync-v2.ts": { "Sync batches are limited to 128 changes": "Crash: one sync transaction size across PCs." },
+  "server/turn-context.ts": { MAX_MEMORY_RECORDED_BYTES: "Crash: recorded refs can fill the prompt; the rest are counted, and the record still lists its newest files." },
   "server/uploads.ts": { MAX_NAME_CHARS: "Crash: Windows path length for the saved file name; the name is shortened, never refused." },
   "server/verify-app.ts": { MAX_URLS: AUTO },
   "server/verify-doc.ts": { MAX_BYTES: "Crash: the whole document zip is parsed in memory." },

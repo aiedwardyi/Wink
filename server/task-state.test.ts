@@ -585,29 +585,32 @@ describe("task state clipping", () => {
 
   it("drops an artifact outside the task folder and keeps the rest", () => {
     const outsideFile = join(outside, "notes.md");
+    const device = "\\\\?\\Z:\\nope\\notes.md";
     const result = submit({
       artifacts: [
         { ref: "brief.md", label: "Brief" },
         { ref: outsideFile, label: "Notes" },
         { ref: join(cwd, "repro"), label: "Repro folder" },
+        { ref: device, label: "Device" },
+        { ref: join(outside, "gone.md"), label: "Gone" },
       ],
     });
     expect(result).not.toHaveProperty("error");
     expect(result.kept).toEqual([{ ref: realpathSync(join(cwd, "brief.md")), label: "Brief" }]);
-    expect(result.dropped).toEqual([outsideFile, join(cwd, "repro")]);
+    expect(result.dropped).toEqual([outsideFile, join(cwd, "repro"), device, join(outside, "gone.md")]);
   });
 
   it("saves a mixed update and reports the clip and the drop in one line", () => {
-    const outsideFile = join(outside, "notes.md");
+    const missing = join(outside, "gone.md");
     const result = submit({
       completed_note: "n".repeat(354),
       plan: [{ step: "a", status: "done" }, { step: "b".repeat(228), status: "active" }],
-      artifacts: [{ ref: "brief.md", label: "Brief" }, { ref: outsideFile, label: "Notes" }],
+      artifacts: [{ ref: "brief.md", label: "Brief" }, { ref: missing, label: "Notes" }],
     });
     expect(result).not.toHaveProperty("error");
     expect(result.kept).toHaveLength(1);
     expect(taskStateNotice(result.clipped, result.dropped, cwd)).toBe(
-      `Clipped to fit: plan.1.step (228 > 200), completed_note (354 > 300). Dropped artifacts that are not files inside ${cwd}: ${outsideFile}.`,
+      `Clipped to fit: plan.1.step (228 > 200), completed_note (354 > 300). Dropped artifacts that are not files inside ${cwd}: ${missing}.`,
     );
   });
 

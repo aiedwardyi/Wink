@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -68,6 +68,14 @@ const CLAUDE_FAT = {
   threadId: "compaction-claude-fat-thread",
   fatSession: "fat-soak-session",
 };
+// made a plan and saved 11 shots outside its task folder, then 50 more tool rounds
+const MARKETING = {
+  botId: "compaction-marketing-bot",
+  threadId: "compaction-marketing-thread",
+  fatSession: "marketing-fat-session",
+};
+const ENGINE_SWITCH = { botId: "engine-switch-bot", threadId: "engine-switch-thread" };
+const ENGINE_SWITCH_BRANCH = { botId: "engine-switch-branch-bot", threadId: "engine-switch-branch-thread" };
 const CLAUDE_FAT_STOP = {
   botId: "compaction-claude-fat-stop-bot",
   threadId: "compaction-claude-fat-stop-thread",
@@ -93,6 +101,8 @@ function claudeResumeBot(input: {
   name: string;
   color: string;
   session: string;
+  cwd?: string;
+  previousSelection?: { instanceId: string; model: string };
   /** a spare task whose fresh turn shows the system text the server sends this bot */
   probeThreadId?: string;
 }) {
@@ -111,12 +121,13 @@ function claudeResumeBot(input: {
     tasks: [{
       threadId: input.threadId,
       title: "Release",
+      cwd: input.cwd,
       createdAt: 1,
       resumeCursors: { claude: input.session },
       // a prior turn certified this session with no summary
       resumeSeed: { instanceId: "claude", cursor: input.session, compactionId: null },
-      lastInstanceId: "claude",
-      lastModel: "claude-fake",
+      lastInstanceId: input.previousSelection?.instanceId ?? "claude",
+      lastModel: input.previousSelection?.model ?? "claude-fake",
     }, ...(input.probeThreadId
       ? [{ threadId: input.probeThreadId, title: "Probe", createdAt: 2, resumeCursors: {} }]
       : [])],
@@ -167,6 +178,7 @@ interface TaskStateFields {
   goal?: string;
   plan?: Array<{ step: string; status: "pending" | "active" | "done" | "skipped" }>;
   asks?: Array<{ id?: string; ask?: string; status: string }>;
+  artifacts?: Array<{ ref: string; label: string }>;
 }
 
 type ApiBody =
@@ -175,7 +187,8 @@ type ApiBody =
   | { threadId: string }
   | { memberIds: string[] }
   | { modelSelection: { mode: "pinned"; instanceId: string; model: string; effort: string } }
-  | { cwd: string | null };
+  | { cwd: string | null }
+  | { messageId: string };
 
 describe("context compaction e2e", () => {
   let child: ChildProcess;
@@ -368,6 +381,30 @@ describe("context compaction e2e", () => {
         name: "Fat soak recycle",
         color: "orange",
         session: CLAUDE_FAT.fatSession,
+      }),
+      claudeResumeBot({
+        id: MARKETING.botId,
+        threadId: MARKETING.threadId,
+        name: "Marketing",
+        color: "pink",
+        session: MARKETING.fatSession,
+        cwd: join(home, "launch"),
+      }),
+      claudeResumeBot({
+        id: ENGINE_SWITCH.botId,
+        threadId: ENGINE_SWITCH.threadId,
+        name: "Engine switch",
+        color: "pink",
+        session: "older-claude-session",
+        previousSelection: { instanceId: "codex", model: "gpt-fake-default" },
+      }),
+      claudeResumeBot({
+        id: ENGINE_SWITCH_BRANCH.botId,
+        threadId: ENGINE_SWITCH_BRANCH.threadId,
+        name: "Engine switch branch",
+        color: "pink",
+        session: "older-claude-branch-session",
+        previousSelection: { instanceId: "codex", model: "gpt-fake-default" },
       }),
       claudeResumeBot({
         id: CLAUDE_FAT_STOP.botId,
@@ -795,7 +832,7 @@ describe("context compaction e2e", () => {
     const slimMessages = [
       { id: "s0", at: 1, parentId: null, role: "user", kind: "text", text: "say hi" },
       { id: "st0", at: 2, parentId: "s0", role: "bot", kind: "activity", tool: { name: "Read: readme.md", ok: true } },
-      { id: "st1", at: 3, parentId: "st0", role: "bot", kind: "activity", tool: { name: "Read: note.md", ok: true } },
+      { id: "st1", at: 3, parentId: "st0", role: "bot", kind: "activity", tool: { name: "Write", ok: true, writes: [join(home, "launch", "real-shots", "cover.png")] } },
       { id: "sa", at: 4, parentId: "st1", role: "bot", kind: "text", text: "hello" },
     ];
     writeFileSync(join(dataDir, `messages-${CLAUDE_FAT.threadId}.json`), JSON.stringify({
@@ -806,12 +843,55 @@ describe("context compaction e2e", () => {
       activeLeafId: "fa",
       messages: fatMessages,
     }));
-    for (const threadId of [CLAUDE_SLIM.threadId, CLAUDE_UPDATE_DAY.threadId]) {
+    for (const threadId of [CLAUDE_SLIM.threadId, CLAUDE_UPDATE_DAY.threadId, ENGINE_SWITCH.threadId]) {
       writeFileSync(join(dataDir, `messages-${threadId}.json`), JSON.stringify({
         activeLeafId: "sa",
         messages: slimMessages,
       }));
     }
+    writeFileSync(join(dataDir, `messages-${ENGINE_SWITCH_BRANCH.threadId}.json`), JSON.stringify({
+      activeLeafId: "alternate",
+      messages: [...slimMessages, { id: "alternate", at: 5, parentId: "s0", role: "bot", kind: "text", text: "other branch" }],
+    }));
+    const launch = join(home, "launch");
+    const shots = Array.from({ length: 11 }, (_, index) => join(launch, "real-shots", `workers-${index + 1}.png`));
+    const marketingMessages = [
+      { id: "k0", at: 1, parentId: null, role: "user", kind: "text", text: "plan the launch posts and keep the worker shots" },
+      { id: "kp", at: 2, parentId: "k0", role: "bot", kind: "activity", tool: { name: "Write", ok: true, writes: [join(launch, "paste", "03-thursday.md")] } },
+      // copied with Bash, so only the task record knows them
+      ...shots.map((_, index) => ({ id: `ks${index}`, at: index + 3, parentId: index ? `ks${index - 1}` : "kp", role: "bot", kind: "activity", tool: { name: "Bash", ok: true } })),
+      ...Array.from({ length: 50 }, (_, index) => ({
+        id: `kr${index}`,
+        at: index + 20,
+        parentId: index ? `kr${index - 1}` : "ks10",
+        role: "bot",
+        kind: "activity",
+        tool: { name: `Read: src-${index}.ts`, ok: true },
+      })),
+      { id: "ka", at: 80, parentId: "kr49", role: "bot", kind: "text", text: "all set" },
+    ];
+    writeFileSync(join(dataDir, `messages-${MARKETING.threadId}.json`), JSON.stringify({ activeLeafId: "ka", messages: marketingMessages }));
+    writeFileSync(join(dataDir, "task-state", `${MARKETING.threadId}.json`), JSON.stringify({
+      v: 1,
+      threadId: MARKETING.threadId,
+      botId: MARKETING.botId,
+      goal: "Run the Reddit launch",
+      plan: [{ step: "Post Thursday", status: "active" }, { step: `Follow ${join(launch, "My Drive", "release.md")}`, status: "pending" }],
+      completed: [],
+      evidence: [],
+      artifacts: [
+        { ref: join(launch, "paste", "03-thursday.md"), label: "Reddit launch plan" },
+        ...shots.map((ref, index) => ({ ref, label: `Worker shot ${index + 1}` })),
+        ...[1, 2, 3].map((index) => ({ ref: join(launch, "drafts", `draft-${index}.md`), label: `Draft ${index}` })),
+      ],
+      blockers: [],
+      nextAction: "Post Thursday",
+      updatedAt: 1,
+      updatedBy: "harness",
+      flushReason: "progress",
+      turnsAtWrite: 0,
+    }));
+    mkdirSync(launch, { recursive: true });
     writeFileSync(join(dataDir, "task-state", `${CLAUDE_FAT_STOP.threadId}.json`), JSON.stringify({
       v: 1,
       threadId: CLAUDE_FAT_STOP.threadId,
@@ -1043,6 +1123,103 @@ describe("context compaction e2e", () => {
     expect(prompt).toContain("tree inspected");
   }, 30_000);
 
+  it("names its recorded files after a fresh session, and adds nothing to the next turn", async () => {
+    const send = async (text: string) => {
+      expect((await api("POST", `/api/bots/${MARKETING.botId}/messages`, { text })).status).toBe(202);
+      await waitFor(async () => (await botById(MARKETING.botId))?.busy === false);
+    };
+    const launch = join(home, "launch");
+    const recordedLine = (prompt: string) => prompt.match(/^Recorded files, newest first: (.*)$/m)?.[1]?.split("; ") ?? [];
+    rmSync(claudeDumpPath, { force: true });
+    await send("post thursday");
+    const dump = JSON.parse(readFileSync(claudeDumpPath, "utf8"));
+    const fresh = { dump, prompt: String(dump.prompt.message.content) };
+    expect(fresh.dump.argv).not.toContain("--resume");
+    const shots = Array.from({ length: 11 }, (_, index) => join(launch, "real-shots", `workers-${index + 1}.png`));
+    expect(recordedLine(fresh.prompt)).toEqual(expect.arrayContaining([join(launch, "paste", "03-thursday.md"), ...shots]));
+    // a path in step text rides in the task record, never on the recorded line
+    expect(recordedLine(fresh.prompt)).not.toContain(join(launch, "My Drive", "release.md"));
+    expect(fresh.prompt).toContain(`Follow ${join(launch, "My Drive", "release.md")}`);
+    expect(fresh.prompt).not.toContain("search_my_chats");
+    expect(fresh.dump.mcpConfig.mcpServers.agents.env.OMB_OWNER_CHATS).not.toBe("1");
+    await send("and friday?");
+    const next = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
+      .map((line) => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(line)))
+      .filter((line) => line.pid === dump.pid).at(-1)!;
+    expect(next.text).toBe("and friday?");
+  }, 60_000);
+
+  it("names saved files on an engine switch and adds nothing to the next resumed turn", async () => {
+    const send = async (text: string) => {
+      expect((await api("POST", `/api/bots/${ENGINE_SWITCH.botId}/messages`, { text })).status).toBe(202);
+      await waitFor(async () => (await botById(ENGINE_SWITCH.botId))?.busy === false);
+    };
+    rmSync(claudeDumpPath, { force: true });
+    await send("continue with Claude");
+    const dump = JSON.parse(readFileSync(claudeDumpPath, "utf8"));
+    expect(dump.argv).not.toContain("--resume");
+    const fresh = String(dump.prompt.message.content);
+    expect(fresh).toContain("The conversation so far");
+    expect(fresh).not.toContain("Wink compacted this conversation");
+    await send("what should I do next?");
+    const next = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
+      .map((line) => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(line)))
+      .filter((line) => line.pid === dump.pid).at(-1)!;
+    expect(fresh).toContain("real-shots 1 (cover.png)");
+    expect(next.text).toBe("what should I do next?");
+  }, 30_000);
+
+  it("names saved files on an engine switch after selecting a branch, and adds nothing to the next turn", async () => {
+    const send = async (text: string) => {
+      expect((await api("POST", `/api/bots/${ENGINE_SWITCH_BRANCH.botId}/messages`, { text })).status).toBe(202);
+      await waitFor(async () => (await botById(ENGINE_SWITCH_BRANCH.botId))?.busy === false);
+    };
+    expect((await api("POST", `/api/bots/${ENGINE_SWITCH_BRANCH.botId}/active-branch`, { messageId: "sa" })).status).toBe(200);
+    rmSync(claudeDumpPath, { force: true });
+    await send("continue with Claude");
+    const dump = JSON.parse(readFileSync(claudeDumpPath, "utf8"));
+    expect(dump.argv).not.toContain("--resume");
+    const fresh = String(dump.prompt.message.content);
+    expect(fresh).toContain("The user rewound this conversation");
+    await send("what should I do next?");
+    const next = readFileSync(claudePromptLogPath, "utf8").trim().split("\n")
+      .map((line) => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(line)))
+      .filter((line) => line.pid === dump.pid).at(-1)!;
+    expect(fresh).toContain("real-shots 1 (cover.png)");
+    expect(next.text).toBe("what should I do next?");
+  }, 30_000);
+
+  it("sends a warm turn after a long plan update and writes nothing beside the task record", async () => {
+    const { botId, threadId } = MARKETING;
+    const send = (text: string) => api("POST", `/api/bots/${botId}/messages`, { text });
+    const idle = () => waitFor(async () => (await botById(botId))?.busy === false);
+    const latest = () => z.object({ pid: z.number(), text: z.string() }).parse(JSON.parse(readFileSync(claudePromptLogPath, "utf8").trim().split("\n").at(-1)!));
+    expect((await send("warm the session")).status).toBe(202);
+    await idle();
+    const steps = Array.from({ length: 20 }, (_, index) => join("planning", `${"weekly-launch-review-".repeat(6)}${index}.md`));
+    expect((await botTaskState(botId, threadId, { plan: steps.map((step) => ({ step, status: "pending" as const })) })).status).toBe(200);
+    const taskState = join(home, ".orbit", "task-state");
+    const files = readdirSync(taskState).sort();
+    const warm = latest();
+    expect((await send("thanks for the warm plan")).status).toBe(202);
+    await idle();
+    expect(latest()).toEqual({ pid: warm.pid, text: "thanks for the warm plan" });
+    expect(readdirSync(taskState).sort()).toEqual(files);
+  }, 30_000);
+
+  it("scrubs a credential from a recorded file label before the row is saved", async () => {
+    const { botId, threadId } = MARKETING;
+    expect((await api("POST", `/api/bots/${botId}/messages`, { text: "record the weekly launch plan" })).status).toBe(202);
+    await waitFor(async () => (await botById(botId))?.busy === false);
+    const marker = "ghp_" + "J7k9U3v8N5w2Z6t4X1r0M9s8K7j6H5g4F3d2";
+    writeFileSync(join(home, "launch", "plan.md"), "plan");
+    expect((await botTaskState(botId, threadId, { artifacts: [{ ref: join(home, "launch", "plan.md"), label: `Plan ${marker}` }] })).status).toBe(200);
+    const rows = (await botById(botId)).messages.flatMap((message: { recorded?: { ref: string; label: string }[] }) => message.recorded ?? []);
+    expect(rows.some((row: { ref: string }) => row.ref.endsWith("plan.md"))).toBe(true);
+    expect(JSON.stringify(rows)).not.toContain(marker);
+    expect(JSON.stringify(storedTaskPacket(threadId).artifacts)).not.toContain(marker);
+  }, 30_000);
+
   it("still --resumes Stop recovery on an uncompacted fat Claude soak", async () => {
     const system = await seedSessionSystem(CLAUDE_FAT_STOP, CLAUDE_FAT_STOP.fatSession);
     rmSync(claudeDumpPath, { force: true });
@@ -1086,6 +1263,7 @@ describe("context compaction e2e", () => {
     expect(dump.argv).toContain("--resume");
     expect(dump.argv).toContain(CLAUDE_SLIM.session);
     const prompt = typeof dump.prompt === "string" ? dump.prompt : JSON.stringify(dump.prompt);
+    expect(prompt).not.toContain("[Wink memory");
     expect(prompt).not.toContain("fresh provider session");
     expect(prompt).not.toContain("Wink compacted this conversation");
     expect(dump.systemPrompt).toBe(system);

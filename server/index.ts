@@ -293,6 +293,7 @@ import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import {
   buildResumeFallback,
   buildTurnContext,
+  chatMemory,
   countLastTurnToolRounds,
   countSessionToolRounds,
   engineIsFresh,
@@ -3043,6 +3044,16 @@ function taskPacketForWrite(threadId: string): TaskResumePacket | null {
     pendingTaskPackets.delete(threadId);
   }
   return store.taskPacket(threadId);
+}
+
+/** Saved paths, never file contents, for a new provider session's first turn; built from memory only, so a turn touches no disk for it. */
+function freshSessionMemory(botId: string, threadId: string, record: TaskResumePacket | null, messages: readonly Message[]): string {
+  return chatMemory({
+    record,
+    messages,
+    cwd: store.taskByThread(botId, threadId)?.cwd ?? undefined,
+    work: unlandedWork.work(threadId),
+  });
 }
 
 function saveHarnessAsks(threadId: string, change: (book: AskBook | undefined) => SavedAsks | null): void {
@@ -5992,6 +6003,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...roomEchoes, ...callLines, ...closedAsk, ...askNotes, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
+  // a room turn answers everyone there, so the owner's saved paths stay out
+  const memoryText = commsDepth === 0 && !notOwnerChats().has(threadId) ? freshSessionMemory(bot.id, threadId, taskRecord, activeMessages) : "";
   const elsewhereAsks = commsDepth === 0 ? store.otherChatAsks(bot.id, threadId, notOwnerChats()) : [];
   // the durable record holds only this chat's asks
   const recordText = [durableTaskRecordText, asksNudge(undefined, Date.now(), text, elsewhereAsks)].filter(Boolean).join("\n") || undefined;
@@ -6012,6 +6025,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
     asksText: commsDepth === 0 ? asksNudge(taskRecord?.asks, Date.now(), text, elsewhereAsks, turnStartedByUser(opts)) : "",
+    memoryText,
   });
   const resumeFallback = buildResumeFallback({
     driverKind: instance.driverKind,
@@ -6019,7 +6033,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     text: turnPrompt,
     transcript: turnTranscript,
     taskRecord: taskRecord ?? undefined,
-    taskRecordText: recordText,
+    taskRecordText: [recordText, memoryText].filter(Boolean).join("\n") || undefined,
   });
   const systemRecycleText = (compaction = false) => buildTurnContext({
     driverKind: instance.driverKind,
@@ -6035,6 +6049,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     taskRecordText: recordText,
     recovering: recovering || Boolean(unsettled),
     currentRequestText: recoveryLatestUserText,
+    memoryText,
   }).turnText;
 
   const persona = [

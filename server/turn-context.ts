@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+
 import { redactSecretsInText } from "./redact.ts";
 import { asksBlock, type TaskAsk } from "./task-asks.ts";
 import { readContextCompaction } from "../shared/context-compaction.ts";
@@ -88,6 +91,8 @@ export interface TurnContextInput {
   currentRequestText?: string;
   /** the asks list for a turn the record does not ride */
   asksText?: string;
+  /** memoryBlock text; rides every turn once the chat has had a fresh session */
+  memoryText?: string;
 }
 
 export interface TaskRecordContext {
@@ -519,6 +524,97 @@ function replayPreamble(input: TurnContextInput): string {
   return FRESH_PREAMBLE;
 }
 
+const MEMORY_FOLDERS = 4;
+const MEMORY_NAMES = 2;
+export const MAX_MEMORY_RECORDED_BYTES = 4096;
+const MEMORY_RECORDED_PREFIX = "Recorded files, newest first: ";
+function localPath(ref: string, cwd: string | undefined): string | null {
+  const path = ref.trim();
+  if (!path || /^\w{2,}:\/\//.test(path)) return null;
+  if (/^~[\\/]/.test(path)) return join(homedir(), path.slice(2));
+  if (isAbsolute(path)) return resolve(path);
+  return cwd ? resolve(cwd, path) : null;
+}
+
+export interface MemoryBlockInput {
+  /** saved file paths, oldest first */
+  files: readonly string[];
+  cwd?: string;
+  /** paths the bot recorded with update_task_state, newest first */
+  recorded?: readonly string[];
+  /** the open-work line unlanded.ts built */
+  work?: string;
+  home?: string;
+}
+
+function memoryRecordedLines(paths: readonly string[]): string[] {
+  const shown: string[] = [];
+  let bytes = Buffer.byteLength(MEMORY_RECORDED_PREFIX);
+  for (const path of paths) {
+    bytes += Buffer.byteLength(path) + (shown.length ? 2 : 0);
+    if (bytes > MAX_MEMORY_RECORDED_BYTES) break;
+    shown.push(path);
+  }
+  const more = paths.length - shown.length;
+  return [...shown.length ? [MEMORY_RECORDED_PREFIX + shown.join("; ")] : [], ...more ? [`+${more} more recorded files`] : []];
+}
+
+/** Paths only: recorded refs, then the newest MEMORY_FOLDERS folders, then a count of the rest. */
+export function memoryBlock(input: MemoryBlockInput): string {
+  const recorded = new Set(input.recorded);
+  const newest = new Map<string, true>();
+  for (const ref of input.files) {
+    const path = localPath(ref, input.cwd);
+    if (!path || recorded.has(path)) continue;
+    newest.delete(path);
+    newest.set(path, true);
+  }
+  const folders = new Map<string, { count: number; names: string[] }>();
+  for (const path of [...newest.keys()].reverse()) {
+    const dir = dirname(path);
+    const folder = folders.get(dir) ?? { count: 0, names: [] };
+    folder.count++;
+    if (folder.names.length < MEMORY_NAMES) folder.names.push(basename(path));
+    folders.set(dir, folder);
+  }
+  const shown = [...folders].slice(0, MEMORY_FOLDERS).map(([dir, { count, names }]) => {
+    const label = input.cwd && resolve(input.cwd) === dir ? "task folder" : [input.cwd, input.home ?? homedir()].map((root) => root ? relative(root, dir) : "")
+      .map((inside, index) => inside && !inside.startsWith("..") && !isAbsolute(inside) ? (index ? join("~", inside) : inside) : "")
+      .find(Boolean) ?? dir;
+    return `${label} ${count} (${names.join(", ")})`;
+  });
+  const rest = [...folders.values()].slice(MEMORY_FOLDERS);
+  if (rest.length) shown.push(`+${rest.length} older folders (${rest.reduce((total, folder) => total + folder.count, 0)} files)`);
+  const lines = [
+    ...memoryRecordedLines(input.recorded ?? []),
+    ...(shown.length ? [`Files, newest ${MEMORY_FOLDERS} folders: ${shown.join("; ")}`] : []),
+    ...(input.work ? [input.work] : []),
+  ];
+  if (!lines.length) return "";
+  return redactSecretsInText(["[Wink memory - open these before answering about what is built or merged, or starting new work:]", ...lines].join("\n"));
+}
+
+type RecordedFile = { ref: string; label: string };
+
+export interface ChatMemoryInput {
+  record: Pick<TaskRecordContext, "artifacts"> | null;
+  messages: readonly { recorded?: RecordedFile[]; tool?: { writes?: string[] } }[];
+  cwd?: string;
+  work?: string;
+}
+
+/** memoryBlock for a chat: the record on this PC, plus what synced rows recorded or wrote. */
+export function chatMemory(input: ChatMemoryInput): string {
+  const recorded = [...input.record?.artifacts ?? [], ...input.messages.flatMap((message) => message.recorded ?? [])]
+    .map((item) => localPath(item.ref, input.cwd)).filter((path): path is string => path !== null).reverse();
+  return memoryBlock({
+    files: input.messages.flatMap((message) => message.tool?.writes ?? []),
+    cwd: input.cwd,
+    recorded: [...new Set(recorded)],
+    work: input.work,
+  });
+}
+
 export const TASK_RESUME_PROMPT =
   "The previous turn was interrupted. Continue from the conversation.";
 
@@ -667,7 +763,7 @@ export function buildTurnContext(input: TurnContextInput): {
   /** false when the native session must not be resumed */
   resume: boolean;
 } {
-  const { text, transcript, rewound, fresh, recycled = false, replaysNatively, taskRecord, taskRecordText, contextCapped = false, recovering = false, currentRequestText, asksText = "" } = input;
+  const { text, transcript, rewound, fresh, recycled = false, replaysNatively, taskRecord, taskRecordText, contextCapped = false, recovering = false, currentRequestText, asksText = "", memoryText = "" } = input;
   const resume = !rewound && !fresh && !recycled;
   const replay = !resume && !replaysNatively && transcript.length > 0;
   // The caller already sized its block for the model window and knows this
@@ -683,9 +779,9 @@ export function buildTurnContext(input: TurnContextInput): {
         : undefined)
       : ""
   );
-  const record = durableRecord && (rewound || fresh || recycled || contextCapped || recovering)
+  const record = [durableRecord && (rewound || fresh || recycled || contextCapped || recovering)
     ? durableRecord
-    : asksText;
+    : asksText, resume ? "" : memoryText].filter(Boolean).join("\n");
   if (!replay && !record) return { turnText: text, resume };
   if (!replay) return { turnText: `${record}\n\n${text}`, resume };
   const history = [

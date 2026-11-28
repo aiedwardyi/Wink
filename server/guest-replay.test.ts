@@ -83,6 +83,7 @@ const fakeCli = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-a
 const model = "fake-model";
 const fakeMsp = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-msp-cli.ts");
 const CANARY = "host-only file: canary GJR-7731";
+const SAVED_PATHS = "[Wink memory - open these first:]\nBuilt list: C:\\owner\\built.md";
 let scratch: string;
 const live: ProviderInstance[] = [];
 const exits: Promise<unknown>[] = [];
@@ -178,7 +179,7 @@ const rig = async (engine: "grok" | "muse" = "grok") => {
     rmSync(out, { force: true });
     const recorder = recordEvents(instance.adapter);
     await runDispatch({
-      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge, stampShownAsks: () => {}, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), tracePart, trace: currentTurnTrace(),
+      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge, stampShownAsks: () => {}, freshSessionMemory: () => SAVED_PATHS, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), tracePart, trace: currentTurnTrace(),
       store, bot, threadId, task: store.taskByThread(bot.id, threadId)!, instanceId, model, instance,
       text: prompt, userMessage, activeMessages, skipTranscript, transcript: prepared.transcript, prepared,
       compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined, nativeAt: null,
@@ -187,7 +188,7 @@ const rig = async (engine: "grok" | "muse" = "grok") => {
       rewound: false, recovering: rec.recovering, unsettled: rec.unsettled, recoveryLatestUserText: rec.recoveryLatestUserText,
       opts, cfg: {}, reactions: {}, guestSessions: ref.sessions, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, modelContextWindow: 200_000, closes: { notes: () => [] },
       taskRecord: rec.taskRecord ?? undefined, durableTaskRecordText: rec.durableTaskRecordText,
-      providerReload: { started: () => instance }, aboutYouPrompt: () => "", roomTaskThreads: () => new Set([threadId]), notOwnerChats: () => new Set(), importPins: { forTurn: () => false }, privateWorkspace: false, opensHostFiles: () => false,
+      providerReload: { started: () => instance }, aboutYouPrompt: () => "", roomTaskThreads: () => new Set([threadId]), notOwnerChats: () => new Set([threadId]), importPins: { forTurn: () => false }, privateWorkspace: false, opensHostFiles: () => false,
       accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
       paneNoteTurnThreads: new Set(), routineTurnThreads: new Set(),
       persona: "You are Pete.", cwd: project, projectFolderPrompt: () => "", projectNotesPrompt: () => "",
@@ -322,6 +323,27 @@ it("a guest's Muse turn after a guest's failed setup still starts over in its de
   expect(again.sent.resumeCursor).toBeUndefined();
   expect(again).toMatchObject({ read: null, cursor: "desk:guest-desk" });
 }, 30_000);
+
+// GATE-REVIEW-2006X must-fix 2: a joined room's answer goes to everyone there
+it("a joined room's turns that start over carry none of the owner's saved paths", async () => {
+  const r = await rig();
+  await r.send("owner", "@Pete-Coder hi");
+  const guest = await r.send("guest", "@Pete-Coder and you?");
+  await r.restart();
+  setEnv("FAKE_ACP_LOAD_FAILS", "1");
+  const owner = await r.send("owner", "@Pete-Coder still there?");
+  expect(guest.sent.resumeCursor).toBeUndefined();
+  expect(owner.sent.resumeFallback).toBeDefined();
+  for (const sent of [guest.sent, owner.sent]) {
+    for (const text of [sent.text, sent.resumeFallback?.text, sent.nativeReplayPrefix]) expect(text ?? "").not.toContain("built.md");
+  }
+}, 30_000);
+
+it("builds the owner's saved paths once, behind the owner-chat gate", () => {
+  const calls = source.split("\n").filter((line) => line.includes("freshSessionMemory(") && !line.startsWith("function "));
+  expect(calls, "build them once in startClaimedTurn as memoryText, behind !notOwnerChats().has(threadId), so no room turn carries the owner's paths").toHaveLength(1);
+  expect(calls[0]).toContain("commsDepth === 0 && !notOwnerChats().has(threadId) ? freshSessionMemory(");
+});
 
 it("reads a room task's rows for the model through taskRows", () => {
   const turn = section("async function startClaimedTurn(", "\nasync function ");

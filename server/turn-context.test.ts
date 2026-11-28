@@ -1,5 +1,7 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,12 +10,15 @@ import {
   countLastTurnToolRounds,
   countSessionToolRounds,
   engineIsFresh,
+  MAX_MEMORY_RECORDED_BYTES,
   NATIVE_PROMPT_BUDGET_CAP,
   nativePromptBudget,
   nativeSessionTokenBudget,
   replayMessageText,
   PRE_COMPACT_SESSION_TOOL_ROUND_LIMIT,
   PRE_COMPACT_TOOL_ROUND_LIMIT,
+  chatMemory,
+  memoryBlock,
   resumeSessionUnseeded,
   sessionPromptFor,
   shouldRecycleProviderSession,
@@ -29,6 +34,7 @@ import {
 import { isRecoveringPacket, unsettledRequest } from "./task-recovery-flush.ts";
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket, stampTaskResumePacket } from "./task-state-fold.ts";
 import type { TaskResumePacket } from "./task-state.ts";
+import { testHome } from "./testing/test-home.ts";
 import { applyPicks } from "./picks.ts";
 import { asksBlock } from "./task-asks.ts";
 import { ensureWorkspace, memorySystemPrompt } from "./workspace.ts";
@@ -1256,6 +1262,110 @@ describe("replay engine provenance", () => {
     expect(replayMessageText(message, engine)).toBe(message.text);
     expect(replayMessageText({ ...message, engine: undefined }, driverKind)).toBe(message.text);
     expect(replayMessageText({ ...message, role: "user" }, driverKind)).toBe(message.text);
+  });
+});
+
+describe("fresh-session memory block", () => {
+  const home = join(tmpdir(), "marketing");
+  const cwd = join(home, "workspace");
+  const shots = Array.from({ length: 11 }, (_, index) => join(home, "launch", "real-shots", `workers-${String(index + 1).padStart(2, "0")}.png`));
+  const plan = join(home, "launch", "paste", "03-thursday.md");
+  const tokens = (text: string) => Math.ceil(Buffer.byteLength(text, "utf8") / 3);
+
+  it("names recorded files first, then each folder with its count and newest files, newest folder first", () => {
+    expect(memoryBlock({ files: [...shots, shots[0]!, "notes/a.md", plan], cwd, recorded: [plan], work: "Your work: #12 merged" })).toBe([
+      "[Wink memory - open these before answering about what is built or merged, or starting new work:]",
+      `Recorded files, newest first: ${plan}`,
+      `Files, newest 4 folders: notes 1 (a.md); ${join(home, "launch", "real-shots")} 11 (workers-01.png, workers-11.png)`,
+      "Your work: #12 merged",
+    ].join("\n"));
+    expect(memoryBlock({ files: [] })).toBe("");
+    expect(memoryBlock({ files: ["notes/a.md"] })).toBe("");
+    expect(memoryBlock({ files: ["MEMORY.md"], cwd })).toContain("Files, newest 4 folders: task folder 1 (MEMORY.md)");
+  });
+
+  it("lists four folders and counts the rest, keeping recorded paths inline", () => {
+    const files = Array.from({ length: 7 }, (_, index) => join(home, `dir-${index}`, "a.md")).concat(join(home, "dir-6", "b.md"));
+    const plans = Array.from({ length: 6 }, (_, index) => join(home, "plans", `plan-${index}.md`));
+    const text = memoryBlock({ files, recorded: plans });
+    expect(text).toContain(`${join(home, "dir-6")} 2 (b.md, a.md); ${join(home, "dir-5")} 1`);
+    expect(text).not.toContain("dir-2");
+    expect(text).toContain("; +3 older folders (3 files)");
+    for (const path of plans) expect(text).toContain(path);
+  });
+
+  it("cuts a long recorded list inline and counts the rest, with no sidecar", () => {
+    const paths = Array.from({ length: 1000 }, (_, index) => join(cwd, "계획".repeat(30), `release-${index}.md`));
+    const [, line = "", more, ...rest] = memoryBlock({ files: [], recorded: paths }).split("\n");
+    const shown = line.slice("Recorded files, newest first: ".length).split("; ");
+    expect(shown).toEqual(paths.slice(0, shown.length));
+    expect(Buffer.byteLength(line)).toBeLessThanOrEqual(MAX_MEMORY_RECORDED_BYTES);
+    expect(Buffer.byteLength(`${line}; ${paths[shown.length]}`)).toBeGreaterThan(MAX_MEMORY_RECORDED_BYTES);
+    expect(more).toBe(`+${paths.length - shown.length} more recorded files`);
+    expect(rest).toEqual([]);
+  });
+
+  it("stays small", () => {
+    const someone = "C:\\Users\\someone";
+    const real = `${someone}\\Desktop\\launch`;
+    const typical = memoryBlock({
+      files: [...shots.map((path) => path.replace(join(home, "launch"), real)), `${real}\\paste\\03-thursday.md`, `${real}\\paste\\02-wednesday.md`],
+      recorded: [`${real}\\paste\\03-thursday.md`],
+      home: someone,
+      work: "Your work, newest 4: #1842 fix: show the plan (open PR); #1841 fix: name the shots (merged); fix/launch-post abc1234 (unfinished branch)",
+    });
+    expect(tokens(typical)).toBeLessThanOrEqual(180);
+  });
+
+  it("lists a recorded photo beside the recorded plan without naming either the plan", () => {
+    const photo = join(home, "launch", "airplane.jpg");
+    const release = join(home, "launch", "My Drive", "release.md");
+    const text = chatMemory({ record: { artifacts: [{ ref: photo, label: "Showroom reference photo" }, { ref: release, label: "Current release plan" }] }, messages: [], cwd });
+    expect(text).toContain(`Recorded files, newest first: ${release}; ${photo}`);
+    expect(text).not.toMatch(/your plan|Read first/i);
+  });
+
+  it("resolves recorded refs from home and the task folder", () => {
+    const artifacts = [{ ref: "~/plans/checklist.txt", label: "Checklist" }, { ref: "paste/03-thursday.md", label: "Thursday post" }];
+    expect(chatMemory({ record: { artifacts }, messages: [], cwd })).toContain(`Recorded files, newest first: ${join(cwd, "paste", "03-thursday.md")}; ${join(testHome(), "plans", "checklist.txt")}`);
+  });
+
+  it("rides only a turn that starts a provider session and names no chat search tool", () => {
+    const memoryText = memoryBlock({ files: [], recorded: [plan] });
+    const transcript = [{ role: "user" as const, text: "plan it" }, { role: "assistant" as const, text: "done" }];
+    const recycled = buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: true, recycleReason: "session-fat", replaysNatively: false, memoryText });
+    expect(recycled.turnText).toContain("03-thursday.md");
+    expect(recycled.turnText).not.toContain("search_my_chats");
+    const resumed = buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: false, replaysNatively: false, memoryText });
+    expect(resumed.turnText).toBe("post it");
+    expect(buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: false, replaysNatively: false }).turnText).toBe("post it");
+  });
+
+  it("names recorded and saved files from synced rows when this PC has no record", () => {
+    const recorded = [{ ref: plan, label: "Thursday launch plan" }, ...shots.map((ref, index) => ({ ref, label: `Shot ${index + 1}` }))];
+    const text = chatMemory({ record: null, messages: [{ recorded }, { tool: { writes: [join(home, "notes.md")] } }], cwd });
+    expect(text).toContain(`Recorded files, newest first: ${[...shots].reverse().join("; ")}; ${plan}`);
+    expect(text).toContain(`Files, newest 4 folders: ${home} 1 (notes.md)`);
+    expect(chatMemory({ record: null, messages: [], cwd })).toBe("");
+  });
+
+  it("names every recorded file, past the folder summary, with no plan label", () => {
+    const artifacts = Array.from({ length: 18 }, (_, index) => ({ ref: join(home, `dir-${index % 6}`, `file-${index}.md`), label: index ? `File ${index}` : "Release plan" }));
+    const text = chatMemory({ record: { artifacts }, messages: [], cwd });
+    for (const { ref } of artifacts) expect(text).toContain(ref);
+    expect(text).not.toMatch(/your plan/i);
+  });
+
+  it("reads nothing from disk, so a share path in the plan cannot stall a turn", () => {
+    const source = readFileSync(new URL("./turn-context.ts", import.meta.url), "utf8");
+    expect(source, "build the block from the task packet and rows already in memory; a turn must not list folders or write a sidecar").not.toMatch(/from "node:fs"/);
+    const share = "\\\\share-probe\\offline\\plans";
+    const text = chatMemory({
+      record: { artifacts: [{ ref: `${share}\\brief.md`, label: "Launch plan" }] },
+      messages: [{ recorded: [{ ref: `${share}\\shot.png`, label: "Shot" }] }],
+      cwd,
+    });
+    for (const name of ["brief.md", "shot.png"]) expect(text).toContain(name);
   });
 });
 

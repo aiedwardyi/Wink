@@ -571,7 +571,11 @@ function clipText(text: string, max: number): string {
   return `${cut.trimEnd()}…`;
 }
 
+const NETWORK_PATH = /^[\\/]{2}/;
+
 function groundedTaskArtifact(cwd: string, ref: string): string | null {
+  // a share can block the event loop, so refuse before any fs call
+  if (NETWORK_PATH.test(ref)) return null;
   try {
     const root = realpathSync(cwd);
     const candidate = realpathSync(resolve(root, ref));

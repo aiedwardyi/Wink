@@ -40,6 +40,7 @@ import { agentRoster, sectionKey, type BotRecord, type GroupDefaultResponder, ty
 import { isRecoveryFlushReason } from "./task-recovery-flush.ts";
 import { mergeTaskAsks, type TaskAsk } from "./task-asks.ts";
 import { foldCompletedNextAction } from "./task-state-fold.ts";
+import { recordedArtifactsPatch } from "./tool-activity.ts";
 import { assignTaskNextAction, groundTaskArtifacts, taskStateNotice, taskStateUpdateError, taskStateUpdateSchema, type TaskResumePacket } from "./task-state.ts";
 import { workspaceDir } from "./workspace.ts";
 
@@ -244,6 +245,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!isRecoveryFlushReason(current.flushReason)) next.flushReason = "progress";
       next.turnsAtWrite = task?.usage?.turns ?? next.turnsAtWrite;
       const saved = persistTaskPacket(next, {}, asks?.trimmed);
+      // the record stays on this PC; a 1:1 row syncs to the owner's other PCs, a room row would reach guests
+      const row = saved && artifacts.length && !conversation.group ? recordedArtifactsPatch(store.messagesFor(body.fromThreadId), artifacts) : null;
+      if (row) store.patchMessage(body.fromThreadId, row.id, { recorded: row.recorded });
       if (saved && body.blockers !== undefined) {
         deps.botCalls?.blockers(bot, body.fromThreadId, current.blockers, saved.blockers);
         try {

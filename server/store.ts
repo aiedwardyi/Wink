@@ -184,6 +184,8 @@ export interface Message {
     /** Sleep's morning line: the run it archived and how many lines */
     tidy?: { runId: string; count?: number; undoneAt?: number };
   };
+  /** Files a task-state call recorded; the record stays on this PC, the row syncs. */
+  recorded?: Array<{ ref: string; label: string }>;
   /** user messages sent INTO a running turn (capabilities.queueing): the
    * model saw it mid-turn, so the transcript marks it — a reader should
    * know the reply above it may already account for this line */
