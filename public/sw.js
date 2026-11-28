@@ -1,7 +1,8 @@
 // Push worker. An open the network has not answered in SHELL_WAIT_MS gets the last app page and its
 // hashed assets; every network answer refreshes that copy. On a relay origin a page load that
 // cannot reach the PC at all gets offline.html.
-const OFFLINE_CACHE = "wink-offline-v2";
+// A new name makes an installed worker update and fetch the current offline page.
+const OFFLINE_CACHE = "wink-offline-v3";
 const OFFLINE_URL = "/offline.html";
 const SHELL_CACHE = "wink-shell-v1";
 const SHELL_URL = "/";
@@ -73,7 +74,12 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.registration.navigationPreload?.enable());
+  event.waitUntil(
+    Promise.all([
+      self.registration.navigationPreload?.enable(),
+      caches.keys().then((names) => Promise.all(names.filter((name) => name.startsWith("wink-offline-") && name !== OFFLINE_CACHE).map((name) => caches.delete(name)))),
+    ]),
+  );
 });
 
 self.addEventListener("fetch", (event) => {

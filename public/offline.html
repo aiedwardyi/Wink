@@ -169,7 +169,7 @@
         const statusUrl = `https://relay.${base}/v1/status/${label}`;
         let down = false;
 
-        /** Any answer from this PC, even an error page, means its address and certificate work now. */
+        // Any answer from this PC, even an error page, means its address and certificate work now.
         async function pcAnswers() {
           try {
             await fetch("/manifest.json", { cache: "no-store" });
@@ -179,7 +179,7 @@
           }
         }
 
-        /** Loads the page again unless this tab already did in the last minute, so a lasting fault cannot loop. */
+        // Loads the page again unless this tab already did in the last minute, so a lasting fault cannot loop.
         function loadAgain() {
           try {
             const last = Number(sessionStorage.getItem(RETRY_KEY));
@@ -211,6 +211,8 @@
               location.reload();
               return null;
             }
+            // Set first, so a probe that stalls past the panel's hold still shows the hint.
+            detail.textContent = t("online");
             if ((await pcAnswers()) && loadAgain()) return null;
             return t("online");
           }
