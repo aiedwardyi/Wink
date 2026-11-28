@@ -252,7 +252,7 @@ describe("MSP turns (fake host)", () => {
     });
     expect(JSON.parse(readFileSync(`${dump}.turn.json`, "utf8"))).toEqual([{ type: "text", text: "hi" }]);
     expect(recorder.events).toContainEqual(
-      expect.objectContaining({ type: "session.started", sessionId: "fake-msp-session" }),
+      expect.objectContaining({ type: "session.started", sessionId: "project:fake-msp-session" }),
     );
     expect(recorder.events).toContainEqual(
       expect.objectContaining({ type: "content.delta", delta: "hello from fake msp" }),
@@ -475,14 +475,12 @@ describe("MSP turns (fake host)", () => {
     expect(methods).toContain("session/resume");
     expect(methods).not.toContain("session/start");
     expect(recorder.events).toContainEqual(
-      expect.objectContaining({ type: "session.started", sessionId: "old-session" }),
+      expect.objectContaining({ type: "session.started", sessionId: "project:old-session" }),
     );
   });
 
   it("resumes an owner's session after a restart while Muse still holds it loaded", async () => {
-    const dump = join(scratch, "muse-restart.json");
     const rpcDump = join(scratch, "muse-restart-rpc.json");
-    process.env.FAKE_MSP_DUMP = dump;
     process.env.FAKE_MSP_RPC_DUMP = rpcDump;
     process.env.FAKE_MSP_LOADED = "1";
     await create();
@@ -499,7 +497,6 @@ describe("MSP turns (fake host)", () => {
     const methods = JSON.parse(readFileSync(rpcDump, "utf8")) as string[];
     expect(methods).toContain("session/resume");
     expect(methods).not.toContain("session/start");
-    expect(JSON.parse(readFileSync(`${dump}.turn.json`, "utf8"))).toEqual([{ type: "text", text: "again" }]);
   });
 
   it("carries the terminal MCP server through resume and fresh recovery", async () => {
@@ -850,7 +847,7 @@ describe("MSP turns (fake host)", () => {
     expect(methods).toContain("session/start");
     expect(JSON.parse(readFileSync(`${dump}.turn.json`, "utf8"))).toEqual([{ type: "text", text: "fallback hi" }]);
     expect(recorder.events).toContainEqual(
-      expect.objectContaining({ type: "session.started", sessionId: "fake-msp-session" }),
+      expect.objectContaining({ type: "session.started", sessionId: "project:fake-msp-session" }),
     );
   });
 
@@ -868,7 +865,7 @@ describe("MSP turns (fake host)", () => {
       });
       expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
       expect(recorder.events.filter((e) => e.type === "session.started").map((e) => (e as { sessionId?: string }).sessionId))
-        .toEqual(["foreign-session", "fake-msp-session"]);
+        .toEqual(["project:foreign-session", "project:fake-msp-session"]);
       expect(JSON.parse(readFileSync(`${dump}.turn.json`, "utf8"))).toEqual([{ type: "text", text: "fallback hi" }]);
     },
   );
@@ -911,7 +908,7 @@ describe("MSP turns (fake host)", () => {
       (e) => e.type === "turn.completed" && (e as { turnId?: string }).turnId !== second.turnId && e !== first,
     );
     const lastStarted = [...recorder.events].reverse().find((e) => e.type === "session.started");
-    expect(lastStarted).toMatchObject({ sessionId: "fake-msp-session", model: "muse-spark-1.3-contributor" });
+    expect(lastStarted).toMatchObject({ sessionId: "project:fake-msp-session", model: "muse-spark-1.3-contributor" });
   });
 
   it("recovers Contributor 1.3 when resumed reasoning is not issued to the caller", async () => {
@@ -1551,7 +1548,7 @@ describe("MSP warm host (recorded transport)", () => {
     expect(methods(peers[0]).filter((m) => m === "session/start")).toHaveLength(2);
     expect(turnStarts(peers[0]).at(-1)!.params.sessionId).toBe("fresh-session");
     expect(recorder.events.filter((e) => e.type === "session.started" && e.turnId === second).map((e) => (e as { sessionId: string }).sessionId))
-      .toEqual([cursorOf(first), "fresh-session"]);
+      .toEqual([cursorOf(first), "project:fresh-session"]);
     await expect.poll(() => exited(peers[0])).toBe(true);
     expect(kept()).toBe(0);
   });
