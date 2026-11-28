@@ -183,8 +183,28 @@ describe("install terminal script", () => {
   it("checks npm and bootstraps Node before installing", () => {
     const script = terminal.buildInstallScript(descriptor, "win32");
     expect(script).toContain("Get-Command npm -ErrorAction SilentlyContinue");
-    expect(script).toContain("winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements");
+    expect(script).toContain("winget install -e --id OpenJS.NodeJS.LTS --source winget --accept-source-agreements --accept-package-agreements");
     expect(script.indexOf("winget install")).toBeLessThan(script.indexOf(encodedCommand));
+  });
+
+  it("pins the Node install to the winget source and says what to do when a step fails", () => {
+    const lines = terminal.buildInstallScript(descriptor, "win32").split("\n");
+    const winget = lines.findIndex((line) => line.startsWith("winget install"));
+    expect(lines[winget]).toBe("winget install -e --id OpenJS.NodeJS.LTS --source winget --accept-source-agreements --accept-package-agreements");
+    expect(lines[winget + 1]).toMatch(/^if \(-not \$\? -or \$LASTEXITCODE -ne 0\) \{ Write-Host ".*https:\/\/nodejs\.org.*"; return \}$/);
+    const failures = lines.filter((line) => line.includes("return"));
+    expect(failures).toHaveLength(2);
+    for (const line of failures) expect(line).toMatch(/Write-Host "[^"]+"; return \}$/);
+  });
+
+  it("keeps a Claude install free of the Node step", () => {
+    const signIn = "claude auth login";
+    const lines = terminal.buildInstallScript({ driverKind: "claudeAgent", command: "irm https://claude.ai/install.ps1 | iex", needsNode: false, signInCommand: signIn }, "win32").split("\n");
+    expect(lines.join("\n")).not.toMatch(/winget|nodejs/i);
+    expect(lines[0]).toBe("$ErrorActionPreference='Stop'");
+    expect(lines[1]).toBe(`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedSignIn("$ErrorActionPreference='Stop'\nirm https://claude.ai/install.ps1 | iex")}`);
+    expect(lines[2]).toMatch(/^if \(\$LASTEXITCODE -ne 0\) \{ Write-Host "[^"]+"; return \}$/);
+    expect(lines.at(-1)).toBe(`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedSignIn(`$env:Path=(Join-Path $HOME '.local/bin')+';'+$env:Path; ${signIn}`)}`);
   });
 
   it("refreshes registry PATH before the npm check", () => {

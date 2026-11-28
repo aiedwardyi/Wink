@@ -122,13 +122,13 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
       ...(needsNode && /^\s*npm(?:\s|$)/.test(command) ? [
         refreshPath,
         "if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {",
-        "winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements",
-        "if (-not $? -or $LASTEXITCODE -ne 0) { return }",
+        "winget install -e --id OpenJS.NodeJS.LTS --source winget --accept-source-agreements --accept-package-agreements",
+        `if (-not $? -or $LASTEXITCODE -ne 0) { Write-Host "Node.js didn't install. Install Node.js LTS from https://nodejs.org, then try the install again in Wink."; return }`,
         refreshPath,
         "}",
       ] : []),
       `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`$ErrorActionPreference='Stop'\n${command}`, "utf16le").toString("base64")}`,
-      "if ($LASTEXITCODE -ne 0) { return }",
+      `if ($LASTEXITCODE -ne 0) { Write-Host "The install didn't finish. See the error above, then try the install again in Wink."; return }`,
       refreshPath,
       ...(signIn ? [`powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`${signInEnv}${signIn}`, "utf16le").toString("base64")}`] : []),
     ].join("\n");

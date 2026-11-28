@@ -52,6 +52,8 @@ for (const shell of ["powershell.exe", "pwsh.exe"]) {
         assert.deepEqual(calls, expected, `${result.stdout}\n${result.stderr}`);
         if (["success", "installer exit"].includes(scenario)) assert.match(result.stdout, /parent-alive/);
         if (scenario === "installer exit") assert.match(result.stdout, /installer-output/);
+        if (scenario === "winget failure") assert.match(result.stdout, /Node\.js didn't install\..*https:\/\/nodejs\.org/);
+        if (["failure", "installer exit"].includes(scenario)) assert.match(result.stdout, /The install didn't finish\./);
         if (["winget missing", "irm failure"].includes(scenario)) assert.ok(result.stderr, "PowerShell error stays visible");
       } finally { rmSync(dir, { recursive: true, force: true }); }
     });
