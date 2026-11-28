@@ -241,7 +241,8 @@ export const PendingQuestionPanel = memo(function PendingQuestionPanel({
           }}
           onTouchStart={(event) => {
             touch.current = null;
-            if (event.touches.length !== 1 || (event.target as Element).closest("button")) return;
+            // on a phone a swipe down closes the card as its x does (DockCard), so only desktop folds on it
+            if (event.touches.length !== 1 || isPhone() || (event.target as Element).closest("button")) return;
             for (let el = event.target as Element | null; el && el !== event.currentTarget; el = el.parentElement) {
               if (el.scrollTop > 0) return;
             }

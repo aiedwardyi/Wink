@@ -28,6 +28,19 @@ const packet: TaskResumePacket = {
 };
 let unmount: (() => Promise<void>) | null = null;
 
+// a finger pulled straight down, lifting where it stopped
+const pull = (target: Element, dy: number, ms = 200) => act(async () => {
+  for (const [type, y, at] of [["touchstart", 100, 0], ["touchmove", 100 + dy, ms / 2], ["touchend", 100 + dy, ms]] as const) {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperties(event, {
+      touches: { value: type === "touchend" ? [] : [{ clientX: 100, clientY: y }] },
+      changedTouches: { value: [{ clientX: 100, clientY: y }] },
+      timeStamp: { value: at },
+    });
+    target.dispatchEvent(event);
+  }
+});
+
 afterEach(async () => {
   await unmount?.();
   unmount = null;
@@ -75,6 +88,18 @@ async function mount(post: () => Promise<Response> = async () => Response.json({
 }
 
 describe("held task resume card", () => {
+  it.each(["x", "swipe down"] as const)("closes with its %s on a phone and records the dismiss", async (how) => {
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+    const f = await mount();
+    if (how === "x") await act(async () => f.host.querySelector<HTMLButtonElement>('[aria-label="Dismiss saved task reminder"]')!.click());
+    else await pull(f.host.querySelector('[role="status"]')!, 200);
+    const posts = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith(`/tasks/${bot.threadId}/recovery`));
+    expect(posts.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ updatedAt: 1, flushReason: "stop" }]);
+    expect(f.host.querySelector("[data-dock-card]")!.hasAttribute("data-closing")).toBe(true);
+    await act(() => new Promise((done) => setTimeout(done, 200)));
+    expect(f.host.querySelector('[role="status"]')).toBeNull();
+  });
+
   it.each(["en", "ko"] as const)("keeps %s pending copy until the resumed turn starts", async (locale) => {
     applyLocale(locale);
     const f = await mount();

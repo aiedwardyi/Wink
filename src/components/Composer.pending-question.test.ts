@@ -161,6 +161,18 @@ const swipe = (target: Element, dx: number, dy = 0) => act(async () => {
   touch("touchmove", 100 + dx / 2, 100 + dy / 2);
   touch("touchend", 100 + dx, 100 + dy);
 });
+// a finger pulled straight down, lifting where it stopped
+const pull = (target: Element, dy: number, ms = 200) => act(async () => {
+  for (const [type, y, at] of [["touchstart", 100, 0], ["touchmove", 100 + dy, ms / 2], ["touchend", 100 + dy, ms]] as const) {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperties(event, {
+      touches: { value: type === "touchend" ? [] : [{ clientX: 100, clientY: y }] },
+      changedTouches: { value: [{ clientX: 100, clientY: y }] },
+      timeStamp: { value: at },
+    });
+    target.dispatchEvent(event);
+  }
+});
 const sent = (method: string, path: string) => calls.filter((call) => call.method === method && call.path === path);
 
 describe("pinned ask_user question", () => {
@@ -678,6 +690,62 @@ describe("pinned ask_user question", () => {
     await swipe(row()!, 200);
     expect(row()).toBeNull();
     expect(dot()?.textContent).toBe("1");
+    expect(calls).toEqual([]);
+  });
+
+  it.each(["card", "row"] as const)("dismisses on a swipe down across the %s on a phone, exactly as its x", async (form) => {
+    screen(true);
+    await mount({ bot: bot([question]) });
+    if (form === "row") await shrink();
+    await pull(form === "row" ? row()! : card()!, 200);
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]);
+    expect(sent("POST", "/api/bots/asker/messages")).toEqual([]);
+    await rerender({ bot: bot([{ ...question, card: { ...question.card!, dismissed: true } }]) });
+    expect(pin()!.closest("[data-dock-card]")!.hasAttribute("data-closing")).toBe(true);
+    expect(pin()!.closest<HTMLElement>("[data-dock-card]")!.style.translate).toBe("0 200px");
+    await settle();
+    expect(pin()).toBeNull();
+    expect(dot()).toBeNull();
+  });
+
+  it("springs back from a short slow pull on a phone, still the open card", async () => {
+    screen(true);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(300);
+    await mount({ bot: bot([question]) });
+    await pull(card()!, 60, 600);
+    await settle();
+    expect(calls).toEqual([]);
+    expect(card()).not.toBeNull();
+    expect(row()).toBeNull();
+  });
+
+  it("leaves a scrolled question's text, a sideways swipe and a tapped choice to do what they did on a phone", async () => {
+    screen(true);
+    await mount({ bot: bot([question]) });
+    const body = card()!.querySelector<HTMLElement>("[data-question-body]")!;
+    body.scrollTop = 30;
+    await pull(body, 200);
+    await swipe(card()!, 200);
+    expect(calls).toEqual([]);
+    expect(card()).not.toBeNull();
+    await act(async () => pinButton("Prod").click());
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ answered: "Prod" }]);
+  });
+
+  it("closes at once on a swipe down with reduced motion", async () => {
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width") || query.includes("reduce"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+    await mount({ bot: bot([question]) });
+    await pull(card()!, 200);
+    expect(sent("PATCH", `/api/bots/asker/cards/${question.id}`).map((call) => call.body)).toEqual([{ dismissed: true }]);
+    await rerender({ bot: bot([{ ...question, card: { ...question.card!, dismissed: true } }]) });
+    expect(pin()).toBeNull();
+  });
+
+  it("still folds on a swipe down on desktop, and never dismisses there", async () => {
+    screen(false);
+    await mount({ bot: bot([question]) });
+    await pull(card()!, 200);
+    expect(row()).not.toBeNull();
     expect(calls).toEqual([]);
   });
 
