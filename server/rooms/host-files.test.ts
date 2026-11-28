@@ -175,7 +175,7 @@ describe("a host bot's picture in a room with people", () => {
   async function showCat(caption = " A cat ") {
     const bot = store.bot(group.memberIds[0]!)!;
     const routes = createInternalRoutes({
-      readOnlyTurn: () => false, ownerTurn: () => false,
+      readOnlyTurn: () => false,
       cfg: {},
       store,
       connectorThread: () => ({ group }),

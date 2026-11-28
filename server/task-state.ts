@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
-import { inScope, type FileScope } from "./attachments.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ThreadId } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
@@ -572,29 +571,25 @@ function clipText(text: string, max: number): string {
   return `${cut.trimEnd()}…`;
 }
 
-const NETWORK_PATH = /^[\\/]{2}/;
-
-function groundedTaskArtifact(cwd: string, ref: string, scope: FileScope): string | null {
-  // a share can block the event loop, so refuse before any fs call
-  const path = resolve(cwd, ref);
-  if (NETWORK_PATH.test(ref) || NETWORK_PATH.test(path)) return null;
+function groundedTaskArtifact(cwd: string, ref: string): string | null {
   try {
-    const candidate = realpathSync(path);
-    if (NETWORK_PATH.test(candidate)) return null;
-    const real = realpathSync.native(candidate);
-    return !NETWORK_PATH.test(real) && inScope(scope, real) && statSync(candidate).isFile() ? candidate : null;
+    const root = realpathSync(cwd);
+    const candidate = realpathSync(resolve(root, ref));
+    const fromRoot = relative(root, candidate);
+    if (fromRoot.startsWith("..") || isAbsolute(fromRoot) || !statSync(candidate).isFile()) return null;
+    return candidate;
   } catch {
     return null;
   }
 }
 
-/** Keeps the artifacts that are local files, resolved to their real path; relative refs start at the task folder. */
-export function groundTaskArtifacts(artifacts: TaskArtifact[], cwd: string, scope: FileScope) {
+/** Keeps the artifacts that are files inside the task folder, resolved to their real path. */
+export function groundTaskArtifacts(artifacts: TaskArtifact[], cwd: string) {
   const kept: TaskArtifact[] = [];
   const dropped: string[] = [];
   for (const artifact of artifacts) {
     if (artifact.ref.length > LIMITS.ref) { dropped.push(artifact.ref); continue; }
-    const ref = groundedTaskArtifact(cwd, artifact.ref, scope);
+    const ref = groundedTaskArtifact(cwd, artifact.ref);
     if (ref) kept.push({ ref, label: artifact.label });
     else dropped.push(artifact.ref);
   }
@@ -602,10 +597,9 @@ export function groundTaskArtifacts(artifacts: TaskArtifact[], cwd: string, scop
 }
 
 /** One line for the bot when an update saved with something clipped or dropped. Empty on a clean save. */
-export function taskStateNotice(clipped: string[], dropped: string[], scope: FileScope): string {
+export function taskStateNotice(clipped: string[], dropped: string[], cwd: string): string {
   const parts: string[] = [];
-  const where = scope.kind === "roots" ? ` inside ${scope.roots.join(", ")}` : "";
   if (clipped.length) parts.push(`Clipped to fit: ${clipped.join(", ")}.`);
-  if (dropped.length) parts.push(`Dropped artifacts that are not files${where}: ${dropped.join(", ")}.`);
+  if (dropped.length) parts.push(`Dropped artifacts that are not files inside ${cwd}: ${dropped.join(", ")}.`);
   return parts.join(" ");
 }

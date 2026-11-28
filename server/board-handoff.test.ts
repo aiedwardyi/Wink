@@ -61,7 +61,7 @@ beforeEach(() => {
     boardCalls,
     taskPacketForWrite: (threadId: string) => structuredClone(packets.get(threadId)!),
     persistTaskPacket: (next: TaskResumePacket) => (packets.set(next.threadId, next), next),
-    readOnlyTurn: () => false, ownerTurn: () => false,
+    readOnlyTurn: () => false,
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
 });
 
