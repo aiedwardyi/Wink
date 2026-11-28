@@ -246,6 +246,18 @@ describe("install terminal script", () => {
       } else expect(args.join(" ")).toContain("do script");
     }
   });
+
+  const engines = BUILT_IN_DRIVERS.filter((driver) => driver.install?.command).flatMap((driver) =>
+    ["win32", "darwin"].filter((platform) => driver.install.command[platform]).map((platform) => [driver.driverKind, platform, driver]));
+  it.each(engines)("says what %s is installing before any slow step on %s", (_kind, platform, driver) => {
+    const install = { ...driver.install, command: driver.install.command[platform], driverKind: driver.driverKind };
+    const lines = terminal.buildInstallScript(install, platform).split("\n");
+    const first = platform === "win32" ? 1 : 0;
+    expect(lines.slice(0, first)).toEqual(platform === "win32" ? ["$ErrorActionPreference='Stop'"] : []);
+    expect(lines[first]).toMatch(platform === "win32" ? /^Write-Host '[^']+'$/ : /^echo '[^']+'$/);
+    expect(lines[first]).toContain(`Installing ${driver.metadata.displayName}`.replace(/^Installing Claude$/, "Installing Claude Code"));
+    expect(lines[first]).toContain("This can take 1-2 minutes...");
+  });
 });
 
 // Each official installer's real target dir; they edit rc files but never the shell that ran them.
