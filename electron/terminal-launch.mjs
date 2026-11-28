@@ -122,8 +122,8 @@ export function buildInstallScript({ command, needsNode, signInCommand, driverKi
       ...(needsNode && /^\s*npm(?:\s|$)/.test(command) ? [
         refreshPath,
         "if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {",
-        "winget install -e --id OpenJS.NodeJS.LTS --source winget --accept-source-agreements --accept-package-agreements",
-        `if (-not $? -or $LASTEXITCODE -ne 0) { Write-Host "Node.js didn't install. Install Node.js LTS from https://nodejs.org, then try the install again in Wink."; return }`,
+        "$node = $false; try { winget install -e --id OpenJS.NodeJS.LTS --source winget --accept-source-agreements --accept-package-agreements; $node = $LASTEXITCODE -eq 0 } catch {}",
+        `if (-not $node) { Write-Host "Node.js didn't install. Install Node.js LTS from https://nodejs.org, then try the install again in Wink."; return }`,
         refreshPath,
         "}",
       ] : []),
