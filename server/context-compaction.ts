@@ -626,6 +626,14 @@ function replayUnits(
     if (isContextNote(message) && message.text?.trim()) {
       return [{ id: message.id, pathIndex, role: "user", text: wakeNoteText(message), label: "Pane note: " }];
     }
+    if (message.kind === "screen" && message.shown) {
+      const name = message.roomFiles?.[0]?.name ?? message.image;
+      if (!name) return [];
+      const caption = message.text?.trim();
+      const line = `[showed image: ${name}${caption ? ` - ${caption}` : ""}]`;
+      const speaker = message.from?.name ?? "Bot";
+      return [{ id: message.id, pathIndex, role: "assistant", text: redactSecretsInText(includeSpeakers ? `${speaker}: ${line}` : line), label: includeSpeakers ? "" : "Assistant: " }];
+    }
     const delegation = delegations.get(message.id);
     if (message.kind === "activity" && message.tool && (message.tool.ok !== undefined || delegation)) {
       // An approval chip repeats the call it answered, command text included.

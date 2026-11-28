@@ -72,7 +72,7 @@ function summarizedChat() {
     const turn = prepare({
       ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge, notOwnerChats: () => new Set(), stampShownAsks: () => {},
       store, bot, threadId, task: store.taskByThread(bot.id, threadId)!, instanceId, model, instance,
-      text, userMessage, activeMessages, skipTranscript, prepared,
+      text, ride: "", userMessage, activeMessages, skipTranscript, prepared,
       latestCompactionId: ready.compactionId ?? null, sessionPrompt: undefined, nativeAt,
       currentTurnEpoch: () => 0, epoch: 1,
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,

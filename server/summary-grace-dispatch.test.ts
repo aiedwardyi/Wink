@@ -180,7 +180,7 @@ describe("summary grace dispatch", () => {
       }
       const seed = { cursor: "session" as unknown, compactionId: null as string | null };
       const scope = {
-        currentTurnEpoch: () => 1, epoch: 1, tracePart, trace: currentTurnTrace(),
+        currentTurnEpoch: () => 1, epoch: 1, ride: "", tracePart, trace: currentTurnTrace(),
         accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
         providerReload: { started: () => {
           if (fold === "dispatch") enqueue();
@@ -331,7 +331,7 @@ describe("summary grace dispatch", () => {
     const instance = { driverKind: "codex", adapter: live.adapter };
     const seed: { cursor: unknown; compactionId: string | null; nativeReplay?: true } = { cursor: undefined, compactionId: null, nativeReplay: true };
     const scope = {
-      currentTurnEpoch: () => 1, epoch: 1, tracePart, trace: currentTurnTrace(),
+      currentTurnEpoch: () => 1, epoch: 1, ride: "", tracePart, trace: currentTurnTrace(),
       accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
       providerReload: { started: () => {
         queueSteeredMessage("bot", "thread", payload);

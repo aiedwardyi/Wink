@@ -67,6 +67,7 @@ import { hostedRoomView, isHostedThread, linkedFilesClosed, sharedTurn } from ".
 import { ASK_DENY_NOTE, askById, askFromHost, askRiders, asksWork, cantWorkLine, configureRoomAsks, endAsk, failInterruptedAsks, failTeammateAskTurn, handOffRefused, hostedTurnRefused, readOnlyAskTurn, startAsk, teammateAskTurn, type HostedGroup } from "./rooms/asks.ts";
 import { askNote, laneAsk, publishTurnAnswer, teammatesLine } from "./rooms/multiplayer.ts";
 import { roomTurnMessages } from "./rooms/turn-images.ts";
+import { imageRide } from "./image-ride.ts";
 import { dropOwnJoins, ownRoomGroup } from "./rooms/own-room.ts";
 import { peopleOnlyRoom } from "./rooms/people-only.ts";
 import { captureHostBotPicture, hostSend, liveBotChain } from "./rooms/send.ts";
@@ -5613,6 +5614,17 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
 
   // the model context below reads the whole chat: an unloaded one loads off the server thread, joining a load Map started
   if (!store.loaded(threadId)) await coldLoad(store, threadId);
+  const ride = turnStartedByUser(opts)
+    ? await imageRide({
+        rows: store.activePath(threadId),
+        current: userMessage,
+        replyTo: opts?.replyTo,
+        botId: bot.id,
+        roots: botOutputRoots(bot, threadId, store.conversationForBot(bot.id, threadId)?.group?.id),
+        userName: cfg.profile?.name?.trim() || "User",
+        readOnly: opts?.readOnly,
+      })
+    : "";
 
   // Model context follows the active branch only. The durable transcript is
   // never pruned; only this provider-facing projection is bounded.
@@ -5965,7 +5977,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // a wake or routine in it too, so its engine env matches the typed turns'
   const importOpen = importEligible && turnStartedByUser(opts) && importMemoryTool(activeMessages);
   let importMemory = importEligible && importPins.forTurn(threadId, instanceId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, importOpen);
-  const currentPrompt = [composeUserTurnPrompt(text, turnOpts), ...folded].join("\n\n");
+  const currentPrompt = [composeUserTurnPrompt(text, turnOpts), ...folded, ...(ride ? [ride] : [])].join("\n\n");
   let { notes: paneNotes, newestId: newestPaneNoteId, ids: paneNoteIds, tokens: paneTokens } = paneNotesForTurn(
     activeMessages,
     skipTranscript,
@@ -7498,6 +7510,19 @@ async function runClaimedGroupMemberTurn(
     if (authority) void endAsk(authority, "failed", cantWorkLine(bot.name, userName));
     return true;
   }
+  const rows = store.activePath(threadId);
+  const hostRow = typed && !guestAsked && !lane ? rows.findLast((row) => row.role === "user" && row.kind === "text") : undefined;
+  const ride = hostRow
+    ? await imageRide({
+        rows,
+        current: hostRow,
+        replyTo: hostRow.replyToId ? store.row(threadId, hostRow.replyToId) : undefined,
+        botId: bot.id,
+        roomId: group.hosted?.roomId,
+        roots: botOutputRoots(bot, threadId, group.id),
+        userName,
+      })
+    : "";
   const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
   if (!lane && works && bot.shareTerminalWithChat !== false) {
     const terminal = terminalIntegration(bot.id);
@@ -7616,7 +7641,7 @@ async function runClaimedGroupMemberTurn(
   const topics = searchable ? ownerTopics(store.activePath(bot.threadId), userName) : "";
   const text = `${roomContext}\n\n${askNote(authority, bot.name, riders)}${
     cardContinuation ? `\n\n${cardContinuation}` : ""
-  }`;
+  }${ride ? `\n\n${ride}` : ""}`;
 
   // same workspace + memory as a 1:1 turn — the room is a different
   // conversation, not a different bot

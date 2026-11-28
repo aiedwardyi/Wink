@@ -180,7 +180,7 @@ const rig = async (engine: "grok" | "muse" = "grok") => {
     await runDispatch({
       ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, roomEchoesSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, asksNudge, stampShownAsks: () => {}, foldPeerQueuedSends: (store: Parameters<typeof foldQueuedSends>[0], botId: string, threadId: string, since: number) => foldQueuedSends(store, botId, threadId, since), tracePart, trace: currentTurnTrace(),
       store, bot, threadId, task: store.taskByThread(bot.id, threadId)!, instanceId, model, instance,
-      text: prompt, userMessage, activeMessages, skipTranscript, transcript: prepared.transcript, prepared,
+      text: prompt, ride: "", userMessage, activeMessages, skipTranscript, transcript: prepared.transcript, prepared,
       compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined, nativeAt: null,
       currentTurnEpoch: () => 1, epoch: 1, claimMark: queueMark(), isSendCancelled: () => false,
       clearUnattended: () => {}, resumePaneWakes: () => {},
