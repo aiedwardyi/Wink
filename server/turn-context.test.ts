@@ -1272,8 +1272,6 @@ describe("fresh-session memory block", () => {
   const shots = Array.from({ length: 11 }, (_, index) => join(home, "launch", "real-shots", `workers-${String(index + 1).padStart(2, "0")}.png`));
   const plan = join(home, "launch", "paste", "03-thursday.md");
   const tokens = (text: string) => Math.ceil(Buffer.byteLength(text, "utf8") / 3);
-  const stepPins = (step: string) => planFiles({ goal: "Ship it", plan: [{ step, status: "active" }] }, cwd);
-  const named = (...names: string[]) => names.map((name) => join(cwd, name));
 
   it("names the plan first, then each folder with its count and newest files, newest folder first", () => {
     expect(memoryBlock({ files: [...shots, shots[0]!, "notes/a.md"], cwd, plans: [plan], work: "Your work: #12 merged" })).toBe([
@@ -1320,12 +1318,9 @@ describe("fresh-session memory block", () => {
     expect(tokens(typical)).toBeLessThanOrEqual(180);
   });
 
-  it("finds the plan from labeled artifacts and paths the goal or plan cite", () => {
-    expect(planFiles({
-      goal: "Post the Reddit launch from paste/03-thursday.md, see https://x.com/plan.md",
-      plan: [{ step: `Follow ${join(home, "launch", "order.md")} and ${join(home, "RUNNER~1", "a.md")}`, status: "active" }],
-      artifacts: [{ ref: shots[0]!, label: "Shot 1" }, { ref: join(home, "brief.md"), label: "Launch plan" }, { ref: "paste/03-thursday.md", label: "Thursday post" }],
-    }, cwd)).toEqual([join(home, "brief.md"), join(cwd, "paste", "03-thursday.md"), join(home, "launch", "order.md"), join(home, "RUNNER~1", "a.md")]);
+  it("finds the plan only in recorded artifacts, never in paths the goal or steps cite", () => {
+    const artifacts = [{ ref: shots[0]!, label: "Shot 1" }, { ref: join(home, "brief.md"), label: "Launch plan" }, { ref: "~/plans/checklist.txt", label: "Release plan" }, { ref: "paste/03-thursday.md", label: "Thursday post" }];
+    expect(planFiles(artifacts, cwd)).toEqual([join(home, "brief.md"), join(testHome(), "plans", "checklist.txt")]);
   });
 
   it("rides only a turn that starts a provider session and names no chat search tool", () => {
@@ -1337,63 +1332,6 @@ describe("fresh-session memory block", () => {
     const resumed = buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: false, replaysNatively: false, memoryText });
     expect(resumed.turnText).toBe("post it");
     expect(buildTurnContext({ text: "post it", transcript, rewound: false, fresh: false, recycled: false, replaysNatively: false }).turnText).toBe("post it");
-  });
-
-  it("pins a quoted plan path that holds spaces", () => {
-    const spaced = join(home, "task folder", "Launch Plan", "release.md");
-    expect(planFiles({ goal: `Follow the plan at "${spaced}" and notes.md`, plan: [], artifacts: [] }, cwd)).toEqual([spaced, join(cwd, "notes.md")]);
-  });
-
-  it("pins a quoted plan file name that holds spaces", () => {
-    expect(planFiles({ goal: `Follow "Launch Plan.md" step by step`, plan: [], artifacts: [] }, cwd)).toEqual([join(cwd, "Launch Plan.md")]);
-  });
-
-  it("pins unquoted Unicode paths from the goal and plan", () => {
-    const document = join(home, "準備", "계획.md");
-    const relative = join("資料", "発売.txt");
-    expect(planFiles({
-      goal: `Follow ${document} and ignore https://example.com/계획.md`,
-      plan: [{ step: `Open ${relative}`, status: "active" }],
-    }, cwd)).toEqual([document, join(cwd, relative)]);
-  });
-
-  it("pins a filename with a CJK particle glued on", () => {
-    expect(planFiles({
-      goal: "plan.md를 읽어 주세요.",
-      plan: [{ step: "review.txtを開いてください。", status: "active" }],
-    }, cwd)).toEqual([join(cwd, "plan.md"), join(cwd, "review.txt")]);
-  });
-
-  it("pins the whole token and each name CJK prose runs into it", () => {
-    for (const [step, ...names] of [
-      ["请先读plan.md，再打开review.txt。", "请先读plan.md", "plan.md", "再打开review.txt", "review.txt"],
-      ["plan.md和review.txt都要更新。", "plan.md和review.txt", "plan.md", "和review.txt", "review.txt"],
-      ["plan.mdとreview.txt", "plan.mdとreview.txt", "plan.md", "とreview.txt", "review.txt"],
-      ["회의록.md메모.pdf", "회의록.md메모.pdf", "회의록.md", "메모.pdf"],
-      ["新plan.md版.md", "新plan.md版.md", "新plan.md", "版.md", "plan.md"],
-      ["docs/計画.md改訂.md", "docs/計画.md改訂.md", "docs/計画.md", "改訂.md"],
-      ["请先读notes.md/plan.txt。", "请先读notes.md/plan.txt", "notes.md/plan.txt"],
-      ["release-plan.md", "release-plan.md"],
-    ]) expect(stepPins(step!), step).toEqual(named(...names));
-  });
-
-  it("reads a max-size CJK plan in well under a millisecond per step", () => {
-    const glued = Array.from({ length: 50 }, (_, index) => `가${index}.md`).join("");
-    const started = performance.now();
-    const pins = planFiles({ goal: glued, plan: Array.from({ length: 20 }, () => ({ step: glued, status: "active" as const })) }, cwd);
-    expect(performance.now() - started).toBeLessThan(20);
-    expect(pins).toHaveLength(51);
-  });
-
-  it("expands home-relative plan files with or without a task folder", () => {
-    const record = {
-      goal: "Follow ~/plans/release.md",
-      plan: [{ step: 'Open "~/More Plans/brief.txt"', status: "active" as const }],
-      artifacts: [{ ref: "~/plans/checklist.txt", label: "Release plan" }],
-    };
-    const expected = [join(testHome(), "plans", "checklist.txt"), join(testHome(), "More Plans", "brief.txt"), join(testHome(), "plans", "release.md")];
-    expect(planFiles(record, cwd)).toEqual(expected);
-    expect(planFiles(record)).toEqual(expected);
   });
 
   it("names files and the plan from synced rows when this PC has no record", () => {
@@ -1410,11 +1348,11 @@ describe("fresh-session memory block", () => {
     expect(source, "build the block from the task packet and rows already in memory; a turn must not list folders or write a sidecar").not.toMatch(/from "node:fs"/);
     const share = "\\\\share-probe\\offline\\plans";
     const text = chatMemory({
-      record: { goal: `Open ${share}\\launch.md`, plan: [{ step: `请先读${share}\\計画.md`, status: "active" }], artifacts: [{ ref: `${share}\\brief.md`, label: "Launch plan" }] },
+      record: { artifacts: [{ ref: `${share}\\brief.md`, label: "Launch plan" }] },
       messages: [{ recorded: [{ ref: `${share}\\shot.png`, label: "Shot" }] }],
       cwd,
     });
-    for (const name of ["launch.md", "計画.md", "brief.md", "shot.png"]) expect(text).toContain(name);
+    for (const name of ["brief.md", "shot.png"]) expect(text).toContain(name);
   });
 });
 

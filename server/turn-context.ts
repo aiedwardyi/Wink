@@ -528,14 +528,6 @@ const MEMORY_FOLDERS = 4;
 const MEMORY_NAMES = 2;
 export const MAX_MEMORY_PLAN_BYTES = 4096;
 const MEMORY_PLAN_PREFIX = "Read first, your plan: ";
-// only an ASCII word char extends the extension: Korean and Japanese particles attach to the filename
-const DOC_PATH = /(?:[A-Za-z]:)?[\p{L}\p{M}\p{N}\p{Pc}.~\\/-]*\.(?:md|txt|docx?|pdf)(?!\w)/giu;
-// a quoted path may hold spaces, so it is read whole before DOC_PATH
-const QUOTED_DOC_PATH = /(["'`])([^"'`\n]+\.(?:md|txt|docx?|pdf))\1/gi;
-const DOC_EXT = /\.(?:md|txt|docx?|pdf)(?!\w)/gi;
-// in CJK prose a name may start where Latin letters follow another script
-const LATIN_START = /(?<=(?!\p{Script=Latin})\p{L})\p{Script=Latin}/gu;
-
 function localPath(ref: string, cwd: string | undefined): string | null {
   const path = ref.trim();
   if (!path || /^\w{2,}:\/\//.test(path)) return null;
@@ -544,20 +536,9 @@ function localPath(ref: string, cwd: string | undefined): string | null {
   return cwd ? resolve(cwd, path) : null;
 }
 
-// CJK prose runs into names with no space (请先读plan.md, plan.md和review.txt) and the turn reads no folder to split them,
-// so the whole token and each name from a start (a name end, Latin after another script) to the next name end are pinned
-function docNames(token: string): string[] {
-  const ends = [...token.matchAll(DOC_EXT)].map((match) => match.index + match[0].length).filter((at) => at === token.length || !/[\\/]/.test(token[at]!));
-  const starts = [0, ...ends, ...[...token.matchAll(LATIN_START)].map((match) => match.index)].filter((start) => start < token.length && !/[.\\/]/.test(token[start]!));
-  return [token, ...starts.map((start) => token.slice(start, ends.find((end) => end > start)))];
-}
-
-/** Files the record names as its plan: artifacts labeled or named plan, and any document path the goal or plan steps cite. Text only, never the disk. */
-export function planFiles(record: Pick<TaskRecordContext, "goal" | "plan" | "artifacts">, cwd?: string): string[] {
-  const refs = (record.artifacts ?? []).filter((item) => /plan/i.test(item.label) || /plan/i.test(basename(item.ref))).map((item) => item.ref);
-  const cited = [record.goal, ...record.plan.map((item) => item.step)].join("\n").replace(/\w{2,}:\/\/\S+/g, "");
-  for (const match of cited.matchAll(QUOTED_DOC_PATH)) refs.push(match[2]!);
-  for (const match of cited.replace(QUOTED_DOC_PATH, " ").matchAll(DOC_PATH)) refs.push(...docNames(match[0]));
+/** Files the bot recorded as its plan: artifacts labeled or named plan. Never a path read out of the goal or step text. */
+export function planFiles(artifacts: readonly RecordedFile[], cwd?: string): string[] {
+  const refs = artifacts.filter((item) => /plan/i.test(item.label) || /plan/i.test(basename(item.ref))).map((item) => item.ref);
   return [...new Set(refs.map((ref) => localPath(ref, cwd)).filter((path): path is string => path !== null))];
 }
 
@@ -620,7 +601,7 @@ export function memoryBlock(input: MemoryBlockInput): string {
 type RecordedFile = { ref: string; label: string };
 
 export interface ChatMemoryInput {
-  record: Pick<TaskRecordContext, "goal" | "plan" | "artifacts"> | null;
+  record: Pick<TaskRecordContext, "artifacts"> | null;
   messages: readonly { recorded?: RecordedFile[]; tool?: { writes?: string[] } }[];
   cwd?: string;
   work?: string;
@@ -634,7 +615,7 @@ export function chatMemory(input: ChatMemoryInput): string {
     files: (input.record?.artifacts ?? []).map((item) => item.ref)
       .concat(input.messages.flatMap((message) => [...(message.recorded ?? []).map((item) => item.ref), ...message.tool?.writes ?? []])),
     cwd: input.cwd,
-    plans: planFiles({ goal: input.record?.goal ?? "", plan: input.record?.plan ?? [], artifacts: recorded }, input.cwd),
+    plans: planFiles(recorded, input.cwd),
     work: input.work,
   });
 }

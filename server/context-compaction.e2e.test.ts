@@ -73,7 +73,6 @@ const MARKETING = {
   botId: "compaction-marketing-bot",
   threadId: "compaction-marketing-thread",
   fatSession: "marketing-fat-session",
-  compounds: ["报告.md新版.md", "計画.md改訂.md", "계획.md수정.md"].flatMap((name) => [name, `docs/${name}`]),
 };
 const ENGINE_SWITCH = { botId: "engine-switch-bot", threadId: "engine-switch-thread" };
 const ENGINE_SWITCH_BRANCH = { botId: "engine-switch-branch-bot", threadId: "engine-switch-branch-thread" };
@@ -877,7 +876,7 @@ describe("context compaction e2e", () => {
       threadId: MARKETING.threadId,
       botId: MARKETING.botId,
       goal: "Run the Reddit launch",
-      plan: [{ step: "Post Thursday", status: "active" }, { step: "plan.md和review.txt都要更新。", status: "pending" }, { step: "Create 新draft.md tomorrow", status: "pending" }, { step: "Then 请先读brief.md", status: "pending" }, { step: "docs/新agenda.md", status: "pending" }, ...MARKETING.compounds.map((step) => ({ step, status: "pending" }))],
+      plan: [{ step: "Post Thursday", status: "active" }, { step: `Follow ${join(launch, "My Drive", "release.md")}`, status: "pending" }],
       completed: [],
       evidence: [],
       artifacts: [
@@ -893,7 +892,6 @@ describe("context compaction e2e", () => {
       turnsAtWrite: 0,
     }));
     mkdirSync(launch, { recursive: true });
-    for (const name of ["plan.md", "review.txt", "draft.md", "brief.md"]) writeFileSync(join(launch, name), name);
     writeFileSync(join(dataDir, "task-state", `${CLAUDE_FAT_STOP.threadId}.json`), JSON.stringify({
       v: 1,
       threadId: CLAUDE_FAT_STOP.threadId,
@@ -1125,20 +1123,21 @@ describe("context compaction e2e", () => {
     expect(prompt).toContain("tree inspected");
   }, 30_000);
 
-  it("names its plan and shots folder after a fresh session, and adds nothing to the next turn", async () => {
+  it("names its recorded plan and shots folder after a fresh session, and adds nothing to the next turn", async () => {
     const send = async (text: string) => {
       expect((await api("POST", `/api/bots/${MARKETING.botId}/messages`, { text })).status).toBe(202);
       await waitFor(async () => (await botById(MARKETING.botId))?.busy === false);
     };
     const launch = join(home, "launch");
-    const plans = [join(launch, "paste", "03-thursday.md"), join(launch, "plan.md"), join(launch, "review.txt"), join(launch, "新draft.md"), join(launch, "brief.md"), join(launch, "docs", "新agenda.md"), ...MARKETING.compounds.map((name) => join(launch, name))];
     const pinned = (prompt: string) => prompt.match(/^Read first, your plan: (.*)$/m)?.[1]?.split("; ");
     rmSync(claudeDumpPath, { force: true });
     await send("post thursday");
     const dump = JSON.parse(readFileSync(claudeDumpPath, "utf8"));
     const fresh = { dump, prompt: String(dump.prompt.message.content) };
     expect(fresh.dump.argv).not.toContain("--resume");
-    expect(pinned(fresh.prompt)).toEqual(expect.arrayContaining(plans));
+    // a path in step text rides in the task record, never on the plan line
+    expect(pinned(fresh.prompt)).toEqual([join(launch, "paste", "03-thursday.md")]);
+    expect(fresh.prompt).toContain(`Follow ${join(launch, "My Drive", "release.md")}`);
     expect(fresh.prompt).toMatch(/real-shots 11 \(workers-11\.png, workers-10\.png\)/);
     expect(fresh.prompt).not.toContain("search_my_chats");
     expect(fresh.dump.mcpConfig.mcpServers.agents.env.OMB_OWNER_CHATS).not.toBe("1");
@@ -1189,7 +1188,7 @@ describe("context compaction e2e", () => {
     expect(next.text).toBe("what should I do next?");
   }, 30_000);
 
-  it("sends a warm turn past the inline plan cap and writes nothing beside the task record", async () => {
+  it("sends a warm turn after a long plan update and writes nothing beside the task record", async () => {
     const { botId, threadId } = MARKETING;
     const send = (text: string) => api("POST", `/api/bots/${botId}/messages`, { text });
     const idle = () => waitFor(async () => (await botById(botId))?.busy === false);
@@ -1212,6 +1211,7 @@ describe("context compaction e2e", () => {
     expect((await api("POST", `/api/bots/${botId}/messages`, { text: "record the weekly launch plan" })).status).toBe(202);
     await waitFor(async () => (await botById(botId))?.busy === false);
     const marker = "ghp_" + "J7k9U3v8N5w2Z6t4X1r0M9s8K7j6H5g4F3d2";
+    writeFileSync(join(home, "launch", "plan.md"), "plan");
     expect((await botTaskState(botId, threadId, { artifacts: [{ ref: join(home, "launch", "plan.md"), label: `Plan ${marker}` }] })).status).toBe(200);
     const rows = (await botById(botId)).messages.flatMap((message: { recorded?: { ref: string; label: string }[] }) => message.recorded ?? []);
     expect(rows.some((row: { ref: string }) => row.ref.endsWith("plan.md"))).toBe(true);
