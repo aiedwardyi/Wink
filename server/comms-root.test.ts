@@ -52,7 +52,7 @@ function request(askBotAndWait = vi.fn(async (..._args: unknown[]) => ({ replied
   req.headers = { authorization: `Bearer ${callers.token(from.id, from.threadId)}` };
   let body = "";
   const res = { writeHead() {}, getHeader() {}, setHeader() {}, end(value: string) { body = value; } } as unknown as ServerResponse;
-  const routes = createInternalRoutes({ readOnlyTurn: () => false, ownerTurn: () => false, store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
+  const routes = createInternalRoutes({ readOnlyTurn: () => false, store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
     connectorThread: (botId: string, threadId: string) => store.conversationForBot(botId, threadId),
     askBotAndWait, resolveCommsCaller: (header: string | string[] | undefined) => callers.resolve(header),
   } as unknown as Parameters<typeof createInternalRoutes>[0]);

@@ -16,7 +16,7 @@ function harness(readOnly = false) {
     store: { bot: (id: string) => bots[id] },
     connectorThread: (botId: string, threadId: string) => (bots[botId]?.threadId === threadId ? {} : undefined),
     botOutputRoots: () => [],
-    readOnlyTurn: () => readOnly, ownerTurn: () => false,
+    readOnlyTurn: () => readOnly,
     resolveCommsCaller: (header: string | string[] | undefined) => callers.resolve(header),
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
   const post = async (authorization: string | undefined, body: object) => {
