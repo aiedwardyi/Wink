@@ -346,13 +346,8 @@ export function readTaskArtifactOverflow(threadId: ThreadId, options: TaskStateO
   return overflowOf(taskStatePath(threadId, options.dir ?? TASK_STATE_DIR));
 }
 
-export function writeTaskPlanSidecar(threadId: ThreadId, paths: readonly string[], options: TaskStateOptions = {}): string {
-  const dir = options.dir ?? TASK_STATE_DIR;
-  const path = planSidecarPath(taskStatePath(threadId, dir));
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileAtomic(path, paths.map((ref) => JSON.stringify(ref)).join("\n") + "\n", { mode: 0o600 });
-  // the bot opens this from the task's cwd, not the server's
-  return resolve(path);
+export function taskPlanSidecarPath(threadId: ThreadId, options: TaskStateOptions = {}): string {
+  return planSidecarPath(taskStatePath(threadId, options.dir ?? TASK_STATE_DIR));
 }
 
 function fileText(path: string, maxBytes = TASK_STATE_READ_MAX_BYTES): string | null {

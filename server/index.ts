@@ -286,7 +286,8 @@ import {
 import "../shared/task-resume.ts";
 import { ASKS_LIST, asksNudge, fileLeftovers, isStatusTurn, MORE_PROMISES, rotatedAsks, shownVerdicts, TASK_ASKS_PROMPT, type AskBook, type SavedAsks, type TaskAsk } from "./task-asks.ts";
 import "./task-state.ts";
-import { readTaskArtifactOverflow, writeTaskPlanSidecar, type TaskResumePacket } from "./task-state.ts";
+import { readTaskArtifactOverflow, type TaskResumePacket } from "./task-state.ts";
+import { writeTaskPlanSidecar } from "./task-plan-sidecar.ts";
 import { sweepDroppedAsks } from "./task-dropped.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";

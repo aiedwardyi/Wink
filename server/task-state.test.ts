@@ -31,10 +31,10 @@ import {
   taskStateNotice,
   taskStateUpdateError,
   taskStateUpdateSchema,
-  writeTaskPlanSidecar,
   writeTaskResumePacket,
   type TaskResumePacket,
 } from "./task-state.ts";
+import { writeTaskPlanSidecar } from "./task-plan-sidecar.ts";
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket } from "./task-state-fold.ts";
 import { taskAskSchema, type TaskAsk } from "./task-asks.ts";
 

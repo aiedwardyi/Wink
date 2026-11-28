@@ -35,7 +35,8 @@ import {
 } from "./turn-context.ts";
 import { isRecoveringPacket, unsettledRequest } from "./task-recovery-flush.ts";
 import { recordTaskCompletion, recordTaskInstruction, seedTaskResumePacket, stampTaskResumePacket } from "./task-state-fold.ts";
-import { deleteTaskResumePacket, writeTaskPlanSidecar, type TaskResumePacket } from "./task-state.ts";
+import { deleteTaskResumePacket, type TaskResumePacket } from "./task-state.ts";
+import { writeTaskPlanSidecar } from "./task-plan-sidecar.ts";
 import { planFiles as oldPlanFiles } from "./testing/plan-files-c9206fd80.ts";
 import { planFiles as prevPlanFiles } from "./testing/plan-files-9c19449a1.ts";
 import { testHome } from "./testing/test-home.ts";
