@@ -5,7 +5,7 @@
 // approvals + userInput answers. Effort/model switching and account usage
 // windows build on the same channel. Never extend acp/core.ts.
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os, { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -246,11 +246,21 @@ const isSettledApprovalError = (err: unknown): boolean =>
 const isDecideSettlementError = (err: unknown): boolean =>
   err instanceof Error && /approval decide settlement failed/.test(err.message);
 
+const deskPath = (threadId: string): string => join(DATA_DIR, "guest-desks", createHash("sha256").update(threadId).digest("hex").slice(0, 16));
 /** An empty folder of its own per chat, where a guest's read-only turn works. */
 const guestDesk = (threadId: string): string => {
-  const dir = join(DATA_DIR, "guest-desks", createHash("sha256").update(threadId).digest("hex").slice(0, 16));
+  const dir = deskPath(threadId);
   mkdirSync(dir, { recursive: true });
   return dir;
+};
+/** The session a guest's turn last started in this chat's desk, kept beside it across restarts. */
+const deskSession = (threadId: string): string => `${deskPath(threadId)}.session`;
+const guestStarted = (threadId: string): string | null => {
+  try {
+    return readFileSync(deskSession(threadId), "utf8");
+  } catch {
+    return null;
+  }
 };
 
 export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConfig> {
@@ -506,7 +516,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       const openSession = async (
         host: Host,
         request: Request,
-        shape: Pick<SendTurnInput, "resumeCursor" | "model"> & Partial<Pick<SendTurnInput, "readOnly" | "ownerText">>,
+        shape: Pick<SendTurnInput, "threadId" | "resumeCursor" | "model"> & Partial<Pick<SendTurnInput, "readOnly" | "ownerText">>,
         sessionRoot: string,
         sessionConfig: object,
       ) => {
@@ -518,12 +528,15 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         };
         // a resumed session keeps the root it started in, the host's project: someone else's words start over
         if (typeof shape.resumeCursor === "string" && !guestText(shape)) {
+          // a session a guest's turn started in its empty folder moves to this turn's root (Muse 1.4.25+).
+          // Muse refuses any root for a session it still holds loaded, as it does an owner's own after a
+          // restart, so only that one resume names it. One that can't move starts fresh below, never there.
+          const relocate = guestStarted(shape.threadId) === shape.resumeCursor;
+          if (relocate) rmSync(deskSession(shape.threadId), { force: true });
           try {
-            // a guest's turn may have started this session in its empty folder: Muse 1.4.25+ moves it
-            // to this turn's root. A resume that can't move starts fresh below, never in the old root.
             const resumed: any = await request(
               "session/resume",
-              { commandId: uuidv7(), sessionId: shape.resumeCursor, workspaceRoot: sessionRoot, ...sessionConfig },
+              { commandId: uuidv7(), sessionId: shape.resumeCursor, workspaceRoot: relocate ? sessionRoot : undefined, ...sessionConfig },
               SESSION_TIMEOUT,
             );
             host.sessionId = typeof resumed?.session?.sessionId === "string" ? resumed.session.sessionId : shape.resumeCursor;
@@ -543,6 +556,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           ));
           // the fallback text carries the history the skipped resume would have
           if (typeof shape.resumeCursor === "string") host.fellBack = true;
+          if (guestText(shape)) writeFileSync(deskSession(shape.threadId), host.sessionId!);
         }
         if (model && model !== host.model) {
           // Mid-session switch (cursor.ts configureSession is the ACP

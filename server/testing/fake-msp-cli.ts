@@ -64,6 +64,9 @@
 //                   handling one inbound message and write them as a single
 //                   stdout chunk, the framing a busy real host produces.
 //   FAKE_MSP_RPC_DUMP  path to write the method sequence seen this run.
+//   FAKE_MSP_LOADED  1: every session is still loaded on the host, as Muse 1.4.25's
+//                   shared host keeps one past a restart, so a session/resume
+//                   naming workspaceRoot is refused with its error.
 //   FAKE_MSP_USAGE     JSON result for usage/read.
 //   FAKE_MSP_USAGE_CHANGED  JSON params for a usage/changed notification.
 //   FAKE_MSP_ITEMS     JSON item notifications before the scripted turn.
@@ -362,6 +365,11 @@ function handle(msg: any) {
       recordConfig({ method: "session/resume", params: msg.params ?? null });
       if (mode === "resume-fails") {
         out({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } });
+        break;
+      }
+      if (process.env.FAKE_MSP_LOADED === "1" && msg.params?.workspaceRoot !== undefined) {
+        const message = "invalid session/resume params: workspaceRoot/workspaceRoots cannot relocate a session already loaded on this host; omit them to attach, or resume cold after this session unloads";
+        out({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message } });
         break;
       }
       const resumedId = msg.params?.sessionId ?? SESSION_ID;

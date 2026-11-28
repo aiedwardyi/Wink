@@ -122,6 +122,7 @@ describe("MSP turns (fake host)", () => {
     delete process.env.FAKE_MSP_DUMP;
     delete process.env.FAKE_MSP_STATE;
     delete process.env.FAKE_MSP_RPC_DUMP;
+    delete process.env.FAKE_MSP_LOADED;
     delete process.env.FAKE_MSP_USAGE;
     delete process.env.FAKE_MSP_USAGE_CHANGED;
     delete process.env.FAKE_MSP_ITEMS;
@@ -476,6 +477,29 @@ describe("MSP turns (fake host)", () => {
     expect(recorder.events).toContainEqual(
       expect.objectContaining({ type: "session.started", sessionId: "old-session" }),
     );
+  });
+
+  it("resumes an owner's session after a restart while Muse still holds it loaded", async () => {
+    const dump = join(scratch, "muse-restart.json");
+    const rpcDump = join(scratch, "muse-restart-rpc.json");
+    process.env.FAKE_MSP_DUMP = dump;
+    process.env.FAKE_MSP_RPC_DUMP = rpcDump;
+    process.env.FAKE_MSP_LOADED = "1";
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-restart", text: "first" });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    // SAFETY: the driver emits session.started with the host's sessionId before the turn completes.
+    const started = recorder.events.find((e) => e.type === "session.started") as { sessionId: string };
+    recorder.stop();
+    await instance.dispose();
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-restart", text: "again", resumeCursor: started.sessionId, resumeFallback: { text: "fallback hi" } });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    // SAFETY: the fake writes the method names it saw as a JSON string array.
+    const methods = JSON.parse(readFileSync(rpcDump, "utf8")) as string[];
+    expect(methods).toContain("session/resume");
+    expect(methods).not.toContain("session/start");
+    expect(JSON.parse(readFileSync(`${dump}.turn.json`, "utf8"))).toEqual([{ type: "text", text: "again" }]);
   });
 
   it("carries the terminal MCP server through resume and fresh recovery", async () => {
