@@ -88,7 +88,7 @@ function interruptRig() {
   const interruptedTurnIds = new Set<string>();
   const liveTurnIdByThread = new Map<string, string>();
   const pendingInterruptThreads = load("pendingInterruptThreads", { PendingTurnInterrupts: recovery.PendingTurnInterrupts, interruptedTurnIds });
-  const deps = { interruptedTurnIds, liveTurnIdByThread, pendingInterruptThreads, turnInterruptedAt: new Map(), tickTurnClock: () => 1 };
+  const deps = { interruptedTurnIds, liveTurnIdByThread, pendingInterruptThreads, turnInterruptedAt: new Map(), tickTurnClock: () => 1, importGate: { stop() {} } };
   return {
     interruptedTurnIds,
     liveTurnIdByThread,
