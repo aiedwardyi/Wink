@@ -120,6 +120,31 @@ describe("harness playbook", () => {
     for (const name of ["SHA", "PR", "SEARCHED", "NEW", "BUILD"]) expect(await gate.hold("s1", launch(name)), name).toBeUndefined();
   });
 
+  it("spawns a read-only review card whose Purpose names fixes and still holds a fix card", async () => {
+    const card = (title: string, purpose: string) => `# ${title}\n## Purpose\n${purpose}\n## Already built\n- open PRs: none related (searched: gate)\n## Files\n- a.ts\n`;
+    const cards = new Map([
+      [String.raw`C:\cards\GATE.md`, card("GATE-REVIEW-2195A | Neon | high | FRESH", "Read-only merge gate for PR 2195. It fixes the folded row.")],
+      [String.raw`C:\cards\AUDIT.md`, card("SIGNIN-AUDIT | read-only audit | FRESH", "Find the few root fixes that make sign-in just work.")],
+      [String.raw`C:\cards\REVIEW.md`, card("PLAN-REVIEW | review only | FRESH", "Review the 7 root fixes before any code.")],
+      [String.raw`C:\cards\FIX.md`, card("FIX-2195B | opus | high | FRESH", "Fix the must-fix the read-only gate found.")],
+    ]);
+    const gate = createPlaybookGate("BODY", (path) => cards.get(path));
+    gate.read("s1");
+    const launch = (name: string) => `claude --model x 'Read C:\\cards\\${name}.md and do it.'`;
+    for (const name of ["GATE", "AUDIT", "REVIEW"]) expect(await gate.hold("s1", launch(name)), name).toBeUndefined();
+    expect(await gate.hold("s1", launch("FIX"))).toContain("is a fix card that names no change to undo");
+  });
+
+  it.each([
+    ["a read-only title nickname", "FIX-X read-only", "Fix the regression in the header."],
+    ["a Purpose opening on a read-only feature", "ROOM-GUESTS | opus | high | FRESH", "Read-only rooms broke after #2239: guests can edit. Fix it."],
+    ["a Purpose opening on review-only cards", "SPAWN-HOLD | opus | high | FRESH", "Review-only cards are held by the spawn hook. Fix the hold."],
+  ])("holds a fix card with %s and no Undo first", async (_, title, purpose) => {
+    const gate = createPlaybookGate("BODY", () => `# ${title}\n## Purpose\n${purpose}\n## Already built\n- none found (searched: x)\n## Files\n- a.ts\n`);
+    gate.read("s1");
+    expect(await gate.hold("s1", "claude --model x 'Read C:\\cards\\FIX.md and do it.'")).toContain("is a fix card that names no change to undo");
+  });
+
   it("finds a relative card in the spawn's cwd and skips it without one", async () => {
     const cwd = String.raw`D:\wt\site`;
     const gate = createPlaybookGate("BODY", (path) => (path === join(cwd, "CARD.md") ? "# CARD\n## Already built\n" : undefined));

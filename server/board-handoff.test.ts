@@ -269,15 +269,15 @@ describe("a bot's own open Stuck post", () => {
     expect(await blockers(BOTS.astra!, [])).toBe("");
   });
 
-  it("names a call post an older build left on the thread, one post at a time", async () => {
+  it("skips a call post an older build left on the thread and still names the bot's own Stuck", async () => {
     const old = olderCall(board, "astra", "ta", X("14:05"));
-    expect(await blockers(BOTS.astra!, [])).toContain(old.id);
+    expect(await blockers(BOTS.astra!, [])).toBe("");
     vi.advanceTimersByTime(1_000);
     const id = await stuckBy(BOTS.astra!, "post_to_group is missing from the Wink tools");
     const notice = await blockers(BOTS.astra!, []);
     expect([notice.includes(id), notice.includes(old.id)]).toEqual([true, false]);
     posted(BOTS.astra!, id, "post_to_group shipped in #2231.");
-    expect(await blockers(BOTS.astra!, [])).toContain(old.id);
+    expect(await blockers(BOTS.astra!, [])).toBe("");
   });
 
   it("a merge alone closes nothing and adds no line", async () => {

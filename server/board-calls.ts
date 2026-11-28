@@ -142,11 +142,10 @@ export function createBoardCalls(deps: BoardCallDeps) {
       deps.held?.({ kind: "ask", botId, threadId, postIds: posts.map((post) => post.id) });
       return `Not asked yet: the Forum may answer this:\n${posts.map((post) => boardLine(post, HIT_CHARS)).join("\n")}\nIf it answers you, close this question with ask_user close:true. If not, it posts when your turn ends.`;
     },
-    /** The bot's newest open Stuck post on this thread, named on each task write until a fix reply under it solves it. */
+    /** The bot's newest open Stuck post on this thread, named on each task write until a fix reply under it solves it. A call copy is the user's to answer, so it is never named. */
     ownStuck(botId: string, threadId: string): string {
       if (deps.room(threadId)) return "";
-      const refs = [`tool:${threadId}:`, callRef(threadId)];
-      const own = deps.board.list().find((post) => post.author_bot_id === botId && post.kind === "stuck" && post.status === "open" && post.parent_id === null && refs.some((ref) => post.source_ref.startsWith(ref)));
+      const own = deps.board.list().find((post) => post.author_bot_id === botId && post.kind === "stuck" && post.status === "open" && post.parent_id === null && post.source_ref.startsWith(`tool:${threadId}:`));
       return own ? `Your Forum post ${own.id} is still open. Once it is solved, reply with board_post kind fix and parent_id ${own.id}.` : "";
     },
     /** The bot cleared the one blocker it called on, with a note: that note is the fix. The user's chat is never the fix. */
