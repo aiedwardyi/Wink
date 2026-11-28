@@ -13,19 +13,21 @@ import { createFixtureHome, removeTestData } from "./testing/test-home.ts";
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const fake = (name: string) => join(SERVER_DIR, "testing", name);
 const HOOK = fake("spawn-log-hook.ts");
-const PORT = 18800 + Math.floor(Math.random() * 10_000);
-const BASE = `http://127.0.0.1:${PORT}`;
+const FIRST_PORT = 18800 + Math.floor(Math.random() * 10_000);
 
 const ENGINES = {
   claude: { driver: "claudeAgent", cli: "fake-claude-cli.ts", model: "claude-sonnet-5", env: {} },
   codex: { driver: "codex", cli: "fake-codex-app-server.ts", model: "gpt-5.5", env: {} },
-  gemini: { driver: "antigravityAgent", cli: "fake-agy-cli.ts", model: "gemini-3-pro", env: {} },
+  // one agy per turn: the next turn's standby starts once the last turn's agy exits
+  gemini: { driver: "antigravityAgent", cli: "fake-agy-cli.ts", model: "gemini-3-pro", env: {}, standby: true },
   grok: { driver: "grokAgent", cli: "fake-acp-cli.ts", model: "grok-4.6", env: { FAKE_ACP_MODE: "happy" } },
 } as const;
 const ENGINE_NAMES = ["claude", "codex", "gemini", "grok"] as const;
 type Engine = (typeof ENGINE_NAMES)[number];
 
-describe("import_memory closing keeps the warm engine", () => {
+// one server per engine: the warm pool's slots are shared across engines
+describe.each(ENGINE_NAMES)("import_memory closing keeps the warm engine on %s", (engine) => {
+  const BASE = `http://127.0.0.1:${FIRST_PORT + ENGINE_NAMES.indexOf(engine)}`;
   let child: ChildProcess;
   let home: string;
   let log: string;
@@ -39,9 +41,15 @@ describe("import_memory closing keeps the warm engine", () => {
     });
     return { status: res.status, body: await res.json() };
   };
-  const spawns = (engine: Engine) => existsSync(log)
-    ? readFileSync(log, "utf8").split("\n").filter(Boolean).filter((line) => JSON.parse(line).fake === ENGINES[engine].cli).length
-    : 0;
+  const processes = (engine: Engine) => {
+    const lines = existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+    const mine = lines.filter((line) => line.fake === ENGINES[engine].cli);
+    const ids = new Set(mine.filter((line) => line.event === "spawn").map((line) => line.id));
+    const gone = new Set(mine.filter((line) => line.event === "exit").map((line) => line.id));
+    const prompted = new Set(mine.filter((line) => line.event === "stdin").map((line) => line.id));
+    const live = [...ids].filter((id) => !gone.has(id));
+    return { spawned: ids.size, live: live.length, unprompted: live.filter((id) => !prompted.has(id)).length };
+  };
   const waitFor = async (predicate: () => Promise<boolean>, what: string) => {
     const deadline = Date.now() + 30_000;
     while (!(await predicate())) {
@@ -49,16 +57,14 @@ describe("import_memory closing keeps the warm engine", () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   };
-  // a standby or kept host starts after the reply lands
+  // the engine is between turns once one process is left, and for one-per-turn engines that one is the next standby
   const settledSpawns = async (engine: Engine) => {
-    let last = -1;
-    let count = spawns(engine);
-    while (count !== last) {
-      last = count;
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
-      count = spawns(engine);
-    }
-    return count;
+    const standby = "standby" in ENGINES[engine];
+    await waitFor(async () => {
+      const { live, unprompted } = processes(engine);
+      return live === 1 && (!standby || unprompted === 1);
+    }, `${engine} to settle between turns`);
+    return processes(engine).spawned;
   };
 
   beforeAll(async () => {
@@ -68,13 +74,11 @@ describe("import_memory closing keeps the warm engine", () => {
     // Grok keeps a session warm only for a signed-in account
     mkdirSync(join(home, ".grok"), { recursive: true });
     writeFileSync(join(home, ".grok", "auth.json"), JSON.stringify({ key: "fixture" }));
-    const instances = Object.fromEntries(ENGINE_NAMES.map((engine) => {
-      const spec = ENGINES[engine];
-      chmodSync(fake(spec.cli), 0o755);
-      return [engine, { driver: spec.driver, environment: spec.env, config: { cli: fake(spec.cli), fullAuto: true } }];
-    }));
+    const spec = ENGINES[engine];
+    chmodSync(fake(spec.cli), 0o755);
+    const instances = { [engine]: { driver: spec.driver, environment: spec.env, config: { cli: fake(spec.cli), fullAuto: true } } };
     writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({ instances }));
-    const env: NodeJS.ProcessEnv = { HOME: home, USERPROFILE: home, OMB_PORT: String(PORT), SPAWN_LOG: log };
+    const env: NodeJS.ProcessEnv = { HOME: home, USERPROFILE: home, OMB_PORT: String(FIRST_PORT + ENGINE_NAMES.indexOf(engine)), SPAWN_LOG: log };
     if (process.env.PATH) env.PATH = process.env.PATH;
     // Without SystemRoot, winsock fails to initialize in the child.
     if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
@@ -103,10 +107,10 @@ describe("import_memory closing keeps the warm engine", () => {
     removeTestData(home);
   });
 
-  it.each(ENGINE_NAMES)("message 4 on %s starts no engine process message 3 did not", async (engine) => {
+  it("message 4 starts no engine process message 3 did not", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     expect((await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: engine, model: ENGINES[engine].model } })).status).toBe(200);
-    const counts = [await settledSpawns(engine)];
+    const counts = [processes(engine).spawned];
     for (let i = 1; i <= 5; i++) {
       const text = `message ${i} on ${engine}`;
       expect((await api("POST", `/api/bots/${bot.id}/messages`, { text })).status).toBe(202);
@@ -118,6 +122,5 @@ describe("import_memory closing keeps the warm engine", () => {
     }
     const started = counts.slice(1).map((count, i) => count - counts[i]);
     expect(started.slice(2), `engine processes started per message: ${started.join(", ")}`).toEqual([started[2], started[2], started[2]]);
-    await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
   }, 120_000);
 });
